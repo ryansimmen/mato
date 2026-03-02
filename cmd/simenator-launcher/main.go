@@ -67,23 +67,23 @@ func run(repoRoot string, simenatorArgs []string) error {
 	if err := lockFile(counterLockFile); err != nil {
 		return fmt.Errorf("lock counter: %w", err)
 	}
+	defer unlockFile(counterLockFile)
+
+	start, err := readCounter(counterPath)
+	if err != nil {
+		return err
+	}
 
 	worktrees, err := listWorktreePaths(repoRoot)
 	if err != nil {
-		_ = unlockFile(counterLockFile)
 		return err
 	}
-	agentID, err := nextAvailableAgentID(1, worktreesRoot, worktrees)
+	agentID, err := nextAvailableAgentID(start, worktreesRoot, worktrees)
 	if err != nil {
-		_ = unlockFile(counterLockFile)
 		return err
 	}
 	if err := os.WriteFile(counterPath, []byte(fmt.Sprintf("%d\n", agentID+1)), 0o644); err != nil {
-		_ = unlockFile(counterLockFile)
 		return fmt.Errorf("write counter: %w", err)
-	}
-	if err := unlockFile(counterLockFile); err != nil {
-		return fmt.Errorf("unlock counter: %w", err)
 	}
 
 	instanceLockPath := filepath.Join(locksDir, fmt.Sprintf("agent%d.lock", agentID))

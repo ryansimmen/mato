@@ -10,6 +10,9 @@ bin/*
 # Coverage and test outputs
 *.out
 
+# Local SDK clone
+.copilot-sdk/
+
 # Environment files
 .env
 .envrc
