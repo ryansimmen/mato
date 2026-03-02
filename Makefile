@@ -3,6 +3,7 @@
 .PHONY: all build build-launcher clean clean-worktrees fmt help run run-launcher test
 
 BIN_DIR := bin
+WORKTREE_REPO ?= /home/ryansimmen/staging-labs
 
 all: fmt build test ## Run formatting, build, and tests
 
@@ -19,7 +20,8 @@ clean: ## Remove build artifacts
 
 clean-worktrees: ## Remove launcher agent worktrees and worktrees folder
 	@set -eu; \
-	repo_root=$$(git -C "$${SIMENATOR_WORKTREE_REPO:-/home/ryansimmen/staging-labs}" rev-parse --show-toplevel); \
+	if [ -z "$(WORKTREE_REPO)" ]; then echo "WORKTREE_REPO is required"; exit 1; fi; \
+	repo_root=$$(git -C "$(WORKTREE_REPO)" rev-parse --show-toplevel); \
 	worktrees_root="$$repo_root.worktrees"; \
 	echo "Cleaning worktrees under $$worktrees_root"; \
 	git -C "$$repo_root" worktree list --porcelain | awk '/^worktree /{print substr($$0,10)}' | while IFS= read -r wt; do \
@@ -35,7 +37,8 @@ run: ## Run simenator chat app
 	go run ./cmd/simenator
 
 run-launcher: ## Run docker worktree launcher
-	go run ./cmd/simenator-launcher
+	@if [ -z "$(WORKTREE_REPO)" ]; then echo "WORKTREE_REPO is required"; exit 1; fi
+	go run ./cmd/simenator-launcher --worktree-repo "$(WORKTREE_REPO)"
 
 test: ## Run tests
 	go test ./...

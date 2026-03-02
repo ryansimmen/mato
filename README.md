@@ -18,7 +18,7 @@ go run ./cmd/simenator
 ## Docker launcher (worktree per instance)
 
 ```bash
-go run ./cmd/simenator-launcher
+make run-launcher
 ```
 
 - Creates `../staging-labs.worktrees/agent#` as a git worktree if missing.
@@ -29,11 +29,11 @@ go run ./cmd/simenator-launcher
 - Mounts host Go toolchain + module/build caches so launcher reuses local dependencies in the container.
 - Mounts host `copilot` CLI and `gh` CLI into the container.
 - Mounts host CA certificates (`/etc/ssl/certs`) when available for TLS in Ubuntu containers.
-- Forwards extra args to simenator, e.g. `go run ./cmd/simenator-launcher -- -model GPT-5.3-Codex`.
+- Requires `--worktree-repo` (Makefile passes this via `WORKTREE_REPO`).
+- Forwards extra args to simenator, e.g. `go run ./cmd/simenator-launcher --worktree-repo /path/to/repo -- -model GPT-5.3-Codex`.
 - Defaults to `ubuntu:24.04` and mounts the host Go toolchain at `/usr/local/go` (override with `SIMENATOR_DOCKER_IMAGE`).
-- Uses `/home/ryansimmen/staging-labs` as the worktree source repo by default (override with `SIMENATOR_WORKTREE_REPO`).
 - Uses the current working directory as the simenator app repo by default (override with `SIMENATOR_APP_REPO`).
-- Cleanup all launcher worktrees with `make clean-worktrees`.
+- Cleanup all launcher worktrees with `make clean-worktrees` (override repo with `WORKTREE_REPO=/path/to/worktree-source-repo`).
 
 ## Notes
 
