@@ -27,7 +27,7 @@ make run-launcher
 - Mounts that agent worktree into the container at `/workspace` and runs simenator from the launcher repo mounted at `/simenator`.
 - Sets simenator runtime working directory to `/workspace`, so prompts operate on the agent worktree.
 - Mounts host Go toolchain + module/build caches so launcher reuses local dependencies in the container.
-- Mounts host `copilot` CLI and `gh` CLI into the container.
+- Mounts host `copilot` CLI, `gh` CLI, and `~/.copilot/skills` into the container.
 - Mounts host CA certificates (`/etc/ssl/certs`) when available for TLS in Ubuntu containers.
 - Requires `--worktree-repo` (Makefile passes this via `WORKTREE_REPO`).
 - Forwards extra args to simenator, e.g. `go run ./cmd/simenator-launcher --worktree-repo /path/to/repo -- -model GPT-5.3-Codex`.
