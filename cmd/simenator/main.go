@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	copilot "github.com/github/copilot-sdk/go"
 )
@@ -18,7 +20,8 @@ func main() {
 		}
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	client := copilot.NewClient(nil)
 
 	if err := client.Start(ctx); err != nil {
@@ -37,6 +40,9 @@ func main() {
 	fmt.Println("Chat with Copilot (Ctrl+D to exit)")
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
+		if ctx.Err() != nil {
+			break
+		}
 		fmt.Print("You: ")
 		if !scanner.Scan() {
 			break
@@ -47,6 +53,9 @@ func main() {
 		}
 		reply, err := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: input})
 		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			log.Printf("send message: %v", err)
 			continue
 		}
@@ -56,6 +65,9 @@ func main() {
 	}
 
 	if err := scanner.Err(); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		log.Fatalf("read input: %v", err)
 	}
 }
