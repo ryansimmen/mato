@@ -23,11 +23,11 @@ go run ./cmd/simenator-launcher
 
 - Creates `../staging-labs.worktrees/agent#` as a git worktree if missing.
 - Allocates `#` from a file-based lock + counter under `../staging-labs.worktrees`.
+- Reuses the lowest available `agent#` whose container is not currently running.
 - Mounts that agent worktree into the container at `/workspace` and runs simenator from the launcher repo mounted at `/simenator`.
 - Sets simenator runtime working directory to `/workspace`, so prompts operate on the agent worktree.
 - Mounts host Go toolchain + module/build caches so launcher reuses local dependencies in the container.
-- Mounts host `copilot` CLI (and `~/.copilot` when present) into the container.
-- Mounts host `gh` CLI (and `~/.config/gh` when present) into the container.
+- Mounts host `copilot` CLI and `gh` CLI into the container.
 - Mounts host CA certificates (`/etc/ssl/certs`) when available for TLS in Ubuntu containers.
 - Forwards extra args to simenator, e.g. `go run ./cmd/simenator-launcher -- -model GPT-5.3-Codex`.
 - Defaults to `ubuntu:24.04` and mounts the host Go toolchain at `/usr/local/go` (override with `SIMENATOR_DOCKER_IMAGE`).
