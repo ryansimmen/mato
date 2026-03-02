@@ -147,12 +147,12 @@ func run(repoRoot string, simenatorArgs []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-	copilotConfigDir := filepath.Join(homeDir, ".copilot")
+	copilotSkillsDir := filepath.Join(homeDir, ".copilot", "skills")
 	ghConfigDir := filepath.Join(homeDir, ".config", "gh")
-	hasCopilotConfig := false
+	hasCopilotSkills := false
 	hasGhConfig := false
-	if info, statErr := os.Stat(copilotConfigDir); statErr == nil && info.IsDir() {
-		hasCopilotConfig = true
+	if info, statErr := os.Stat(copilotSkillsDir); statErr == nil && info.IsDir() {
+		hasCopilotSkills = true
 	}
 	if info, statErr := os.Stat(ghConfigDir); statErr == nil && info.IsDir() {
 		hasGhConfig = true
@@ -175,8 +175,8 @@ func run(repoRoot string, simenatorArgs []string) error {
 		"-e", "GOCACHE=/tmp/go-build",
 		"-e", fmt.Sprintf("SIMENATOR_SESSION_CWD=%s", workdir),
 	}
-	if hasCopilotConfig {
-		args = append(args, "-v", fmt.Sprintf("%s:/root/.copilot:ro", copilotConfigDir))
+	if hasCopilotSkills {
+		args = append(args, "-v", fmt.Sprintf("%s:/root/.copilot/skills:ro", copilotSkillsDir))
 	}
 	if hasGhConfig {
 		args = append(args, "-v", fmt.Sprintf("%s:/root/.config/gh:ro", ghConfigDir))
