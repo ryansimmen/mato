@@ -67,17 +67,12 @@ func run(simenatorArgs []string) error {
 		return fmt.Errorf("lock counter: %w", err)
 	}
 
-	agentID, err := readCounter(counterPath)
-	if err != nil {
-		_ = unlockFile(counterLockFile)
-		return err
-	}
 	worktrees, err := listWorktreePaths(repoRoot)
 	if err != nil {
 		_ = unlockFile(counterLockFile)
 		return err
 	}
-	agentID, err = nextAvailableAgentID(agentID, worktreesRoot, worktrees)
+	agentID, err := nextAvailableAgentID(1, worktreesRoot, worktrees)
 	if err != nil {
 		_ = unlockFile(counterLockFile)
 		return err
@@ -180,10 +175,10 @@ func run(simenatorArgs []string) error {
 		"-e", fmt.Sprintf("SIMENATOR_SESSION_CWD=%s", workdir),
 	}
 	if hasCopilotConfig {
-		args = append(args, "-v", fmt.Sprintf("%s:/root/.copilot", copilotConfigDir))
+		args = append(args, "-v", fmt.Sprintf("%s:/root/.copilot:ro", copilotConfigDir))
 	}
 	if hasGhConfig {
-		args = append(args, "-v", fmt.Sprintf("%s:/root/.config/gh", ghConfigDir))
+		args = append(args, "-v", fmt.Sprintf("%s:/root/.config/gh:ro", ghConfigDir))
 	}
 	if hasSystemCerts {
 		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", systemCertsDir))
@@ -248,8 +243,17 @@ func readCounter(counterPath string) (int, error) {
 func nextAvailableAgentID(start int, worktreesRoot string, repoWorktrees map[string]struct{}) (int, error) {
 	id := start
 	for {
+		running, err := isAgentContainerRunning(id)
+		if err != nil {
+			return 0, err
+		}
+		if running {
+			id++
+			continue
+		}
+
 		agentDir := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", id))
-		agentDir, err := filepath.Abs(agentDir)
+		agentDir, err = filepath.Abs(agentDir)
 		if err != nil {
 			return 0, fmt.Errorf("resolve agent directory: %w", err)
 		}
@@ -269,6 +273,16 @@ func nextAvailableAgentID(start int, worktreesRoot string, repoWorktrees map[str
 		}
 		id++
 	}
+}
+
+func isAgentContainerRunning(id int) (bool, error) {
+	nameFilter := fmt.Sprintf("name=^/simenator-agent%d$", id)
+	cmd := exec.Command("docker", "ps", "-q", "--filter", nameFilter)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("docker ps for agent%d: %w (%s)", id, err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)) != "", nil
 }
 
 func listWorktreePaths(repoRoot string) (map[string]struct{}, error) {
