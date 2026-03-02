@@ -14,13 +14,18 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	repoRoot, simenatorArgs, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "launcher error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := run(repoRoot, simenatorArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "launcher error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(simenatorArgs []string) error {
+func run(repoRoot string, simenatorArgs []string) error {
 	appRepo := os.Getenv("SIMENATOR_APP_REPO")
 	if appRepo == "" {
 		var err error
@@ -35,10 +40,6 @@ func run(simenatorArgs []string) error {
 	}
 	appRepo = strings.TrimSpace(appRepo)
 
-	repoRoot := os.Getenv("SIMENATOR_WORKTREE_REPO")
-	if repoRoot == "" {
-		repoRoot = "/home/ryansimmen/staging-labs"
-	}
 	repoRoot, err = gitOutput(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
@@ -195,6 +196,35 @@ func run(simenatorArgs []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func parseArgs(args []string) (string, []string, error) {
+	var repoRoot string
+	simenatorArgs := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			simenatorArgs = append(simenatorArgs, args[i+1:]...)
+			break
+		}
+		if strings.HasPrefix(arg, "--worktree-repo=") {
+			repoRoot = strings.TrimSpace(strings.TrimPrefix(arg, "--worktree-repo="))
+			continue
+		}
+		if arg == "--worktree-repo" {
+			if i+1 >= len(args) {
+				return "", nil, errors.New("--worktree-repo requires a value")
+			}
+			i++
+			repoRoot = strings.TrimSpace(args[i])
+			continue
+		}
+		simenatorArgs = append(simenatorArgs, arg)
+	}
+	if repoRoot == "" {
+		return "", nil, errors.New("--worktree-repo is required")
+	}
+	return repoRoot, simenatorArgs, nil
 }
 
 func ensureWorktree(repoRoot, agentDir string) error {
