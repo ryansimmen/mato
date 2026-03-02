@@ -1,0 +1,15 @@
+# Binaries
+bin/*
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Coverage and test outputs
+*.out
+
+# Environment files
+.env
+.envrc

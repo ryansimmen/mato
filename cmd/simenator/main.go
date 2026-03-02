@@ -12,6 +12,12 @@ import (
 )
 
 func main() {
+	if sessionCwd := os.Getenv("SIMENATOR_SESSION_CWD"); sessionCwd != "" {
+		if err := os.Chdir(sessionCwd); err != nil {
+			log.Fatalf("set session working directory: %v", err)
+		}
+	}
+
 	ctx := context.Background()
 	client := copilot.NewClient(nil)
 
