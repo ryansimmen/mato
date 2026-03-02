@@ -1,0 +1,55 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+
+	copilot "github.com/github/copilot-sdk/go"
+)
+
+func main() {
+	ctx := context.Background()
+	client := copilot.NewClient(nil)
+
+	if err := client.Start(ctx); err != nil {
+		log.Fatalf("start client: %v", err)
+	}
+	defer client.Stop()
+
+	session, err := client.CreateSession(ctx, &copilot.SessionConfig{
+		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+	})
+	if err != nil {
+		log.Fatalf("create session: %v", err)
+	}
+	defer session.Destroy()
+
+	fmt.Println("Chat with Copilot (Ctrl+D to exit)")
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("You: ")
+		if !scanner.Scan() {
+			break
+		}
+		input := strings.TrimSpace(scanner.Text())
+		if input == "" {
+			continue
+		}
+		reply, err := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: input})
+		if err != nil {
+			log.Printf("send message: %v", err)
+			continue
+		}
+		if reply != nil && reply.Data.Content != nil {
+			fmt.Printf("Assistant: %s\n\n", *reply.Data.Content)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("read input: %v", err)
+	}
+}
