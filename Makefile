@@ -1,17 +1,13 @@
 .DEFAULT_GOAL := help
 
-.PHONY: all build build-launcher clean fmt help run run-launcher run-task test
+.PHONY: all build clean fmt help run-launcher test
 
 BIN_DIR := bin
 REPO ?= /home/ryansimmen/staging-labs
 
 all: fmt build test ## Run formatting, build, and tests
 
-build: ## Build simenator binary
-	mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/simenator ./cmd/simenator
-
-build-launcher: ## Build simenator launcher binary
+build: ## Build launcher binary
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/simenator-launcher ./cmd/simenator-launcher
 
@@ -21,13 +17,7 @@ clean: ## Remove build artifacts
 fmt: ## Format Go source files
 	go fmt ./...
 
-run: ## Run simenator chat app
-	go run ./cmd/simenator
-
-run-task: ## Run simenator in autonomous task mode
-	go run ./cmd/simenator -task
-
-run-launcher: ## Run docker launcher
+run-launcher: ## Run agent in Docker (use -- to pass args to copilot, e.g. -- --model claude-opus-4.6)
 	@if [ -z "$(REPO)" ]; then echo "REPO is required"; exit 1; fi
 	go run ./cmd/simenator-launcher --repo "$(REPO)"
 

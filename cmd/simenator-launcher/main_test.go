@@ -6,12 +6,11 @@ import (
 
 func TestParseArgs(t *testing.T) {
 	tests := []struct {
-		name          string
-		args          []string
-		wantRepo      string
-		wantArgs      []string
-		wantSeparator bool
-		wantErr       bool
+		name     string
+		args     []string
+		wantRepo string
+		wantArgs []string
+		wantErr  bool
 	}{
 		{
 			name:     "repo equals syntax",
@@ -26,29 +25,16 @@ func TestParseArgs(t *testing.T) {
 			wantArgs: []string{},
 		},
 		{
-			name:     "worktree-repo backwards compat equals",
+			name:     "worktree-repo backwards compat",
 			args:     []string{"--worktree-repo=/tmp/repo"},
 			wantRepo: "/tmp/repo",
 			wantArgs: []string{},
 		},
 		{
-			name:     "worktree-repo backwards compat space",
-			args:     []string{"--worktree-repo", "/tmp/repo"},
+			name:     "with passthrough args",
+			args:     []string{"--repo=/tmp/repo", "--", "--model", "gpt-5.2"},
 			wantRepo: "/tmp/repo",
-			wantArgs: []string{},
-		},
-		{
-			name:          "with passthrough args",
-			args:          []string{"--repo=/tmp/repo", "--", "-model", "gpt-4"},
-			wantRepo:      "/tmp/repo",
-			wantArgs:      []string{"-model", "gpt-4"},
-			wantSeparator: true,
-		},
-		{
-			name:     "extra args before separator",
-			args:     []string{"--repo=/tmp/repo", "extra"},
-			wantRepo: "/tmp/repo",
-			wantArgs: []string{"extra"},
+			wantArgs: []string{"--model", "gpt-5.2"},
 		},
 		{
 			name:    "missing required flag",
@@ -69,7 +55,7 @@ func TestParseArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, args, hasSep, err := parseArgs(tt.args)
+			repo, args, err := parseArgs(tt.args)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -78,9 +64,6 @@ func TestParseArgs(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
-			}
-			if hasSep != tt.wantSeparator {
-				t.Errorf("hasSeparator = %v, want %v", hasSep, tt.wantSeparator)
 			}
 			if repo != tt.wantRepo {
 				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
@@ -92,6 +75,38 @@ func TestParseArgs(t *testing.T) {
 				if args[i] != tt.wantArgs[i] {
 					t.Errorf("args[%d] = %q, want %q", i, args[i], tt.wantArgs[i])
 				}
+			}
+		})
+	}
+}
+
+func TestHasModelArg(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{
+			name: "no model flag",
+			args: []string{"--autopilot"},
+			want: false,
+		},
+		{
+			name: "model with value",
+			args: []string{"--model", "gpt-5"},
+			want: true,
+		},
+		{
+			name: "model equals syntax",
+			args: []string{"--model=gpt-5"},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasModelArg(tt.args); got != tt.want {
+				t.Fatalf("hasModelArg(%v) = %v, want %v", tt.args, got, tt.want)
 			}
 		})
 	}
