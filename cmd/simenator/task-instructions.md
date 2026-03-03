@@ -114,7 +114,7 @@ Move the task file to `completed/`:
 mv ".tasks/in-progress/<filename>" ".tasks/completed/<filename>"
 ```
 
-You are now done. Report what you accomplished and the branch name where your changes live. The launcher will automatically merge your branch into main.
+You are now done. Report what you accomplished and the branch name where your changes live. Simenator will automatically merge your branch into main.
 
 ### On Failure
 

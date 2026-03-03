@@ -21,11 +21,11 @@ var taskInstructions string
 func main() {
 	repoRoot, copilotArgs, err := parseArgs(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "launcher error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "simenator error: %v\n", err)
 		os.Exit(1)
 	}
 	if err := run(repoRoot, copilotArgs); err != nil {
-		fmt.Fprintf(os.Stderr, "launcher error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "simenator error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -44,7 +44,7 @@ func run(repoRoot string, copilotArgs []string) error {
 		}
 	}
 
-	// Recover any tasks left in in-progress by a previous crashed launcher.
+	// Recover any tasks left in in-progress by a previous crashed run.
 	recoverOrphanedTasks(tasksDir)
 
 	// Ensure .tasks is gitignored so it never pollutes commits or status.
@@ -52,7 +52,7 @@ func run(repoRoot string, copilotArgs []string) error {
 		return err
 	}
 
-	// Create a temporary local clone so multiple launchers can run in
+	// Create a temporary local clone so multiple instances can run in
 	// parallel without conflicting on branch checkouts or index state.
 	cloneDir, err := createClone(repoRoot)
 	if err != nil {
@@ -312,7 +312,7 @@ func ensureGitignored(repoRoot, pattern string) error {
 }
 
 // recoverOrphanedTasks moves any files in in-progress/ back to backlog/.
-// This handles the case where a previous launcher was killed (e.g. Ctrl+C)
+// This handles the case where a previous run was killed (e.g. Ctrl+C)
 // before the agent could clean up. A failure record is appended so the
 // retry-count logic can eventually move it to failed/.
 func recoverOrphanedTasks(tasksDir string) {
@@ -331,7 +331,7 @@ func recoverOrphanedTasks(tasksDir string) {
 		// Append a failure record so the retry count increments.
 		f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err == nil {
-			fmt.Fprintf(f, "\n<!-- failure: launcher-recovery at %s — agent was interrupted -->\n",
+			fmt.Fprintf(f, "\n<!-- failure: simenator-recovery at %s — agent was interrupted -->\n",
 				time.Now().UTC().Format(time.RFC3339))
 			f.Close()
 		}
@@ -395,7 +395,7 @@ func mergeNewBranches(cloneDir, origin string) {
 
 // mergeToMain fetches the latest main from origin, merges the given branch,
 // and pushes the result back. It retries on non-fast-forward failures caused
-// by concurrent launchers updating main at the same time.
+// by concurrent instances updating main at the same time.
 func mergeToMain(cloneDir, origin, branch string) error {
 	const maxRetries = 5
 	for attempt := 1; attempt <= maxRetries; attempt++ {
