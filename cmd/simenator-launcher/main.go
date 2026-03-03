@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 //go:embed task-instructions.md
@@ -33,12 +34,28 @@ func run(repoRoot string, copilotArgs []string) error {
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
 
-	tasksDir := filepath.Join(repoRoot, "tasks")
-	for _, sub := range []string{"backlog", "in-progress", "completed", ".locks"} {
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{"backlog", "in-progress", "completed"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
-			return fmt.Errorf("create tasks subdirectory %s: %w", sub, err)
+			return fmt.Errorf("create .tasks subdirectory %s: %w", sub, err)
 		}
 	}
+
+	// Ensure .tasks is gitignored so it never pollutes commits or status.
+	if err := ensureGitignored(repoRoot, "/.tasks/"); err != nil {
+		return err
+	}
+
+	// Create a temporary local clone so multiple launchers can run in
+	// parallel without conflicting on branch checkouts or index state.
+	cloneDir, err := createClone(repoRoot)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		mergeNewBranches(cloneDir, repoRoot)
+		removeClone(cloneDir)
+	}()
 
 	image := os.Getenv("SIMENATOR_DOCKER_IMAGE")
 	if image == "" {
@@ -89,13 +106,14 @@ func run(repoRoot string, copilotArgs []string) error {
 	}
 
 	// Build the prompt from embedded task instructions.
-	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/tasks")
+	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
 
-	fmt.Printf("Launching agent from %s\n", repoRoot)
+	fmt.Printf("Launching agent from %s (clone: %s)\n", repoRoot, cloneDir)
 	args := []string{
 		"run", "--rm", "-it",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", fmt.Sprintf("%s:%s", repoRoot, workdir),
+		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
+		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", ghPath),
@@ -213,4 +231,101 @@ func hasModelArg(args []string) bool {
 		}
 	}
 	return false
+}
+
+func createClone(repoRoot string) (string, error) {
+	dir, err := os.MkdirTemp("", "simenator-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	if _, err := gitOutput("", "clone", "--quiet", repoRoot, dir); err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("clone repo for isolated worktree: %w", err)
+	}
+	return dir, nil
+}
+
+func removeClone(dir string) {
+	os.RemoveAll(dir)
+}
+
+// ensureGitignored appends pattern to the repo's .gitignore if not already present.
+func ensureGitignored(repoRoot, pattern string) error {
+	gitignorePath := filepath.Join(repoRoot, ".gitignore")
+	data, err := os.ReadFile(gitignorePath)
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) == pattern {
+				return nil
+			}
+		}
+	}
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open .gitignore: %w", err)
+	}
+	defer f.Close()
+	// Add a newline before the pattern if the file doesn't end with one.
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		fmt.Fprintln(f)
+	}
+	fmt.Fprintln(f, pattern)
+	return nil
+}
+
+// mergeNewBranches merges any task branches created in the temporary clone
+// into main on the original repository.
+func mergeNewBranches(cloneDir, origin string) {
+	// Allow pushing to the checked-out branch in the origin repo.
+	// With .tasks/ gitignored the working tree stays clean, so
+	// updateInstead can safely update it on push.
+	gitOutput(origin, "config", "receive.denyCurrentBranch", "updateInstead")
+
+	out, err := gitOutput(cloneDir, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if err != nil {
+		return
+	}
+	for _, branch := range strings.Split(strings.TrimSpace(out), "\n") {
+		branch = strings.TrimSpace(branch)
+		if branch == "" || branch == "main" || branch == "master" {
+			continue
+		}
+		if err := mergeToMain(cloneDir, origin, branch); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to merge %s into main: %v\n", branch, err)
+		}
+	}
+}
+
+// mergeToMain fetches the latest main from origin, merges the given branch,
+// and pushes the result back. It retries on non-fast-forward failures caused
+// by concurrent launchers updating main at the same time.
+func mergeToMain(cloneDir, origin, branch string) error {
+	const maxRetries = 5
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Fetch latest main from the original repo.
+		if _, err := gitOutput(cloneDir, "fetch", origin, "main"); err != nil {
+			return fmt.Errorf("fetch main: %w", err)
+		}
+		// Reset local main to match the fetched head.
+		if _, err := gitOutput(cloneDir, "checkout", "-B", "main", "FETCH_HEAD"); err != nil {
+			return fmt.Errorf("checkout main: %w", err)
+		}
+		// Merge the task branch.
+		if _, err := gitOutput(cloneDir, "merge", "--no-edit", branch); err != nil {
+			gitOutput(cloneDir, "merge", "--abort")
+			return fmt.Errorf("merge conflict: %w", err)
+		}
+		// Push merged main back to the original repo.
+		if _, err := gitOutput(cloneDir, "push", origin, "main"); err != nil {
+			if attempt < maxRetries {
+				fmt.Fprintf(os.Stderr, "main push attempt %d/%d failed, retrying...\n", attempt, maxRetries)
+				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+				continue
+			}
+			return fmt.Errorf("push main after %d attempts: %w", maxRetries, err)
+		}
+		fmt.Printf("Merged %s into main\n", branch)
+		return nil
+	}
+	return nil
 }
