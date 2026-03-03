@@ -1,9 +1,9 @@
 .DEFAULT_GOAL := help
 
-.PHONY: all build build-launcher clean clean-worktrees fmt help run run-launcher test
+.PHONY: all build build-launcher clean fmt help run run-launcher run-task test
 
 BIN_DIR := bin
-WORKTREE_REPO ?= /home/ryansimmen/staging-labs
+REPO ?= /home/ryansimmen/staging-labs
 
 all: fmt build test ## Run formatting, build, and tests
 
@@ -18,27 +18,18 @@ build-launcher: ## Build simenator launcher binary
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)
 
-clean-worktrees: ## Remove launcher agent worktrees and worktrees folder
-	@set -eu; \
-	if [ -z "$(WORKTREE_REPO)" ]; then echo "WORKTREE_REPO is required"; exit 1; fi; \
-	repo_root=$$(git -C "$(WORKTREE_REPO)" rev-parse --show-toplevel); \
-	worktrees_root="$$repo_root.worktrees"; \
-	echo "Cleaning worktrees under $$worktrees_root"; \
-	git -C "$$repo_root" worktree list --porcelain | awk '/^worktree /{print substr($$0,10)}' | while IFS= read -r wt; do \
-		case "$$wt" in "$$worktrees_root"/agent*) echo "Removing $$wt"; git -C "$$repo_root" worktree remove --force "$$wt" ;; esac; \
-	done; \
-	git -C "$$repo_root" worktree prune; \
-	rm -rf "$$worktrees_root"
-
 fmt: ## Format Go source files
 	go fmt ./...
 
 run: ## Run simenator chat app
 	go run ./cmd/simenator
 
-run-launcher: ## Run docker worktree launcher
-	@if [ -z "$(WORKTREE_REPO)" ]; then echo "WORKTREE_REPO is required"; exit 1; fi
-	go run ./cmd/simenator-launcher --worktree-repo "$(WORKTREE_REPO)"
+run-task: ## Run simenator in autonomous task mode
+	go run ./cmd/simenator -task
+
+run-launcher: ## Run docker launcher
+	@if [ -z "$(REPO)" ]; then echo "REPO is required"; exit 1; fi
+	go run ./cmd/simenator-launcher --repo "$(REPO)"
 
 test: ## Run tests
 	go test ./...

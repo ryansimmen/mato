@@ -1,31 +1,28 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
-	"syscall"
 )
 
 func main() {
-	repoRoot, simenatorArgs, err := parseArgs(os.Args[1:])
+	repoRoot, simenatorArgs, hasSeparator, err := parseArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "launcher error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := run(repoRoot, simenatorArgs); err != nil {
+	if err := run(repoRoot, simenatorArgs, hasSeparator); err != nil {
 		fmt.Fprintf(os.Stderr, "launcher error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(repoRoot string, simenatorArgs []string) error {
+func run(repoRoot string, simenatorArgs []string, hasSeparator bool) error {
 	appRepo := os.Getenv("SIMENATOR_APP_REPO")
 	if appRepo == "" {
 		var err error
@@ -46,75 +43,33 @@ func run(repoRoot string, simenatorArgs []string) error {
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
 
-	worktreesRoot := repoRoot + ".worktrees"
-	if err := os.MkdirAll(worktreesRoot, 0o755); err != nil {
-		return fmt.Errorf("create worktrees root: %w", err)
+	tasksDir := filepath.Join(repoRoot, "tasks")
+	for _, sub := range []string{"backlog", "in-progress", "completed", ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			return fmt.Errorf("create tasks subdirectory %s: %w", sub, err)
+		}
 	}
 
-	counterPath := filepath.Join(worktreesRoot, ".agent-counter")
-	counterLockPath := filepath.Join(worktreesRoot, ".agent-counter.lock")
-	locksDir := filepath.Join(worktreesRoot, ".locks")
-	if err := os.MkdirAll(locksDir, 0o755); err != nil {
-		return fmt.Errorf("create locks dir: %w", err)
-	}
-
-	counterLockFile, err := os.OpenFile(counterLockPath, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return fmt.Errorf("open counter lock: %w", err)
-	}
-	defer counterLockFile.Close()
-
-	if err := lockFile(counterLockFile); err != nil {
-		return fmt.Errorf("lock counter: %w", err)
-	}
-	defer unlockFile(counterLockFile)
-
-	start, err := readCounter(counterPath)
-	if err != nil {
-		return err
-	}
-
-	worktrees, err := listWorktreePaths(repoRoot)
-	if err != nil {
-		return err
-	}
-	agentID, err := nextAvailableAgentID(start, worktreesRoot, worktrees)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(counterPath, []byte(fmt.Sprintf("%d\n", agentID+1)), 0o644); err != nil {
-		return fmt.Errorf("write counter: %w", err)
-	}
-
-	instanceLockPath := filepath.Join(locksDir, fmt.Sprintf("agent%d.lock", agentID))
-	instanceLockFile, err := os.OpenFile(instanceLockPath, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return fmt.Errorf("open instance lock: %w", err)
-	}
-	defer instanceLockFile.Close()
-	if err := lockFile(instanceLockFile); err != nil {
-		return fmt.Errorf("lock instance: %w", err)
-	}
-	defer unlockFile(instanceLockFile)
-
-	agentDir := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", agentID))
-	agentDir, err = filepath.Abs(agentDir)
-	if err != nil {
-		return fmt.Errorf("resolve agent path: %w", err)
-	}
-
-	if err := ensureWorktree(repoRoot, agentDir); err != nil {
-		return err
+	if !hasSeparator && len(simenatorArgs) == 0 {
+		simenatorArgs = append(simenatorArgs, "-task")
 	}
 
 	image := os.Getenv("SIMENATOR_DOCKER_IMAGE")
 	if image == "" {
 		image = "ubuntu:24.04"
 	}
-	workdir := os.Getenv("SIMENATOR_CONTAINER_WORKDIR")
-	if workdir == "" {
-		workdir = "/workspace"
+	workdir := "/workspace"
+
+	// Read host git identity for commits made inside the container.
+	gitName, _ := gitOutput(repoRoot, "config", "user.name")
+	gitEmail, _ := gitOutput(repoRoot, "config", "user.email")
+	if n := strings.TrimSpace(gitName); n == "" {
+		gitName, _ = gitOutput("", "config", "--global", "user.name")
 	}
+	if e := strings.TrimSpace(gitEmail); e == "" {
+		gitEmail, _ = gitOutput("", "config", "--global", "user.email")
+	}
+
 	goroot := runtime.GOROOT()
 	if goroot == "" {
 		return errors.New("unable to determine host GOROOT")
@@ -158,11 +113,11 @@ func run(repoRoot string, simenatorArgs []string) error {
 		hasGhConfig = true
 	}
 
-	fmt.Printf("Launching agent%d from %s\n", agentID, agentDir)
+	fmt.Printf("Launching agent from %s\n", repoRoot)
 	args := []string{
 		"run", "--rm", "-it",
-		"--name", fmt.Sprintf("simenator-agent%d", agentID),
-		"-v", fmt.Sprintf("%s:%s", agentDir, workdir),
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"-v", fmt.Sprintf("%s:%s", repoRoot, workdir),
 		"-v", fmt.Sprintf("%s:/simenator:ro", appRepo),
 		"-v", fmt.Sprintf("%s:/usr/local/go:ro", goroot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
@@ -174,12 +129,27 @@ func run(repoRoot string, simenatorArgs []string) error {
 		"-e", "GOMODCACHE=/go/pkg/mod",
 		"-e", "GOCACHE=/tmp/go-build",
 		"-e", fmt.Sprintf("SIMENATOR_SESSION_CWD=%s", workdir),
+		"-e", fmt.Sprintf("SIMENATOR_TASKS_DIR=%s/tasks", workdir),
 	}
+	if n := strings.TrimSpace(gitName); n != "" {
+		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
+	}
+	if e := strings.TrimSpace(gitEmail); e != "" {
+		args = append(args, "-e", "GIT_AUTHOR_EMAIL="+e, "-e", "GIT_COMMITTER_EMAIL="+e)
+	}
+	// Set HOME for the container user and mount the host .copilot dir
+	// so the copilot CLI can extract its bundled package.
+	containerHome := homeDir
+	copilotDir := filepath.Join(homeDir, ".copilot")
+	args = append(args,
+		"-e", fmt.Sprintf("HOME=%s", containerHome),
+		"-v", fmt.Sprintf("%s:%s/.copilot", copilotDir, containerHome),
+	)
 	if hasCopilotSkills {
-		args = append(args, "-v", fmt.Sprintf("%s:/root/.copilot/skills:ro", copilotSkillsDir))
+		args = append(args, "-v", fmt.Sprintf("%s:%s/.copilot/skills:ro", copilotSkillsDir, containerHome))
 	}
 	if hasGhConfig {
-		args = append(args, "-v", fmt.Sprintf("%s:/root/.config/gh:ro", ghConfigDir))
+		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", ghConfigDir, containerHome))
 	}
 	if hasSystemCerts {
 		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", systemCertsDir))
@@ -198,22 +168,37 @@ func run(repoRoot string, simenatorArgs []string) error {
 	return cmd.Run()
 }
 
-func parseArgs(args []string) (string, []string, error) {
+func parseArgs(args []string) (string, []string, bool, error) {
 	var repoRoot string
+	hasSeparator := false
 	simenatorArgs := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
+			hasSeparator = true
 			simenatorArgs = append(simenatorArgs, args[i+1:]...)
 			break
 		}
+		if strings.HasPrefix(arg, "--repo=") {
+			repoRoot = strings.TrimSpace(strings.TrimPrefix(arg, "--repo="))
+			continue
+		}
+		if arg == "--repo" {
+			if i+1 >= len(args) {
+				return "", nil, false, errors.New("--repo requires a value")
+			}
+			i++
+			repoRoot = strings.TrimSpace(args[i])
+			continue
+		}
+		// Backwards compat
 		if strings.HasPrefix(arg, "--worktree-repo=") {
 			repoRoot = strings.TrimSpace(strings.TrimPrefix(arg, "--worktree-repo="))
 			continue
 		}
 		if arg == "--worktree-repo" {
 			if i+1 >= len(args) {
-				return "", nil, errors.New("--worktree-repo requires a value")
+				return "", nil, false, errors.New("--worktree-repo requires a value")
 			}
 			i++
 			repoRoot = strings.TrimSpace(args[i])
@@ -222,128 +207,15 @@ func parseArgs(args []string) (string, []string, error) {
 		simenatorArgs = append(simenatorArgs, arg)
 	}
 	if repoRoot == "" {
-		return "", nil, errors.New("--worktree-repo is required")
+		return "", nil, false, errors.New("--repo is required")
 	}
-	return repoRoot, simenatorArgs, nil
+	return repoRoot, simenatorArgs, hasSeparator, nil
 }
 
-func ensureWorktree(repoRoot, agentDir string) error {
-	worktrees, err := listWorktreePaths(repoRoot)
-	if err != nil {
-		return err
-	}
-	if _, ok := worktrees[agentDir]; ok {
-		return nil
-	}
-
-	info, statErr := os.Stat(agentDir)
-	if statErr == nil && info.IsDir() {
-		return fmt.Errorf("agent directory exists but is not a worktree for this repo: %s", agentDir)
-	}
-	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return fmt.Errorf("check agent directory: %w", statErr)
-	}
-
-	cmd := exec.Command("git", "-C", repoRoot, "worktree", "add", "--detach", agentDir, "HEAD")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func readCounter(counterPath string) (int, error) {
-	content, err := os.ReadFile(counterPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return 1, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("read counter: %w", err)
-	}
-
-	raw := strings.TrimSpace(string(content))
-	if raw == "" {
-		return 1, nil
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 1 {
-		return 1, nil
-	}
-	return n, nil
-}
-
-func nextAvailableAgentID(start int, worktreesRoot string, repoWorktrees map[string]struct{}) (int, error) {
-	id := start
-	for {
-		running, err := isAgentContainerRunning(id)
-		if err != nil {
-			return 0, err
-		}
-		if running {
-			id++
-			continue
-		}
-
-		agentDir := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", id))
-		agentDir, err = filepath.Abs(agentDir)
-		if err != nil {
-			return 0, fmt.Errorf("resolve agent directory: %w", err)
-		}
-		if _, ok := repoWorktrees[agentDir]; ok {
-			return id, nil
-		}
-		info, err := os.Stat(agentDir)
-		if errors.Is(err, os.ErrNotExist) {
-			return id, nil
-		}
-		if err != nil {
-			return 0, fmt.Errorf("check agent directory: %w", err)
-		}
-		if !info.IsDir() {
-			id++
-			continue
-		}
-		id++
-	}
-}
-
-func isAgentContainerRunning(id int) (bool, error) {
-	nameFilter := fmt.Sprintf("name=^/simenator-agent%d$", id)
-	cmd := exec.Command("docker", "ps", "-q", "--filter", nameFilter)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return false, fmt.Errorf("docker ps for agent%d: %w (%s)", id, err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)) != "", nil
-}
-
-func listWorktreePaths(repoRoot string) (map[string]struct{}, error) {
-	listOut, err := gitOutput(repoRoot, "worktree", "list", "--porcelain")
-	if err != nil {
-		return nil, err
-	}
-	worktrees := map[string]struct{}{}
-	scanner := bufio.NewScanner(strings.NewReader(listOut))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "worktree ") {
-			continue
-		}
-		path := strings.TrimPrefix(line, "worktree ")
-		path, err = filepath.Abs(path)
-		if err != nil {
-			return nil, fmt.Errorf("resolve worktree path: %w", err)
-		}
-		worktrees[path] = struct{}{}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read worktree list: %w", err)
-	}
-	return worktrees, nil
-}
-
-func gitOutput(repoRoot string, args ...string) (string, error) {
+func gitOutput(dir string, args ...string) (string, error) {
 	cmdArgs := make([]string, 0, len(args)+2)
-	if repoRoot != "" {
-		cmdArgs = append(cmdArgs, "-C", repoRoot)
+	if dir != "" {
+		cmdArgs = append(cmdArgs, "-C", dir)
 	}
 	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.Command("git", cmdArgs...)
@@ -364,12 +236,4 @@ func goEnv(name string) (string, error) {
 		return "", fmt.Errorf("go env %s returned empty value", name)
 	}
 	return value, nil
-}
-
-func lockFile(file *os.File) error {
-	return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
-}
-
-func unlockFile(file *os.File) error {
-	return syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 }
