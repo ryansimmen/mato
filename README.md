@@ -30,10 +30,36 @@ make run-launcher
 - Mounts host `copilot` CLI, `gh` CLI, and `~/.copilot/skills` into the container.
 - Mounts host CA certificates (`/etc/ssl/certs`) when available for TLS in Ubuntu containers.
 - Requires `--worktree-repo` (Makefile passes this via `WORKTREE_REPO`).
-- Forwards extra args to simenator, e.g. `go run ./cmd/simenator-launcher --worktree-repo /path/to/repo -- -model GPT-5.3-Codex`.
+- Forwards extra args to simenator, e.g. `go run ./cmd/simenator-launcher --worktree-repo /path/to/repo -- -model claude-sonnet-4.5`.
 - Defaults to `ubuntu:24.04` and mounts the host Go toolchain at `/usr/local/go` (override with `SIMENATOR_DOCKER_IMAGE`).
 - Uses the current working directory as the simenator app repo by default (override with `SIMENATOR_APP_REPO`).
 - Cleanup all launcher worktrees with `make clean-worktrees` (override repo with `WORKTREE_REPO=/path/to/worktree-source-repo`).
+
+## Task mode (autonomous)
+
+Simenator can run autonomously with the `-task` flag. In this mode it picks a task from the task queue, works on it, and exits. The agent runs a multi-turn continuation loop (max 50 turns) until the task is complete or the limit is reached.
+
+Task instructions are embedded in the binary via `go:embed` from `cmd/simenator/task-instructions.md`.
+
+### Task queue
+
+Tasks live in a folder structure inside the repository:
+
+```
+tasks/
+  backlog/       # pending task files
+  in-progress/   # tasks currently being worked on
+  completed/     # finished tasks
+  .locks/        # atomic mkdir locks for claiming
+```
+
+When using the launcher, this folder is located in the `WORKTREE_REPO` repository. Task files are markdown with a `# Title` heading followed by the task body/instructions. The agent claims a task via atomic `mkdir` locking, works on a branch, merges to main, and pushes.
+
+### Running in task mode
+
+- **Local:** `make run-task` or `go run ./cmd/simenator -task`
+- **With launcher:** `make run-launcher` (defaults to task mode)
+- Override the tasks directory with the `SIMENATOR_TASKS_DIR` env var.
 
 ## Notes
 
