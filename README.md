@@ -1,68 +1,72 @@
 # simenator
 
-Simple Go example that uses the local Copilot SDK clone in `.copilot-sdk/go` to run a minimal interactive chat.
+Docker launcher that runs autonomous Copilot agents against a task queue. Each agent picks a task, works on it, commits to main, and exits.
 
-## What It Does
+## How It Works
 
-- Starts a Copilot SDK client and session
-- Reads prompts from stdin (`You: ...`)
-- Sends each prompt with `session.SendAndWait`
-- Prints the assistant response and continues until EOF (Ctrl+D)
+1. You add task files (markdown) to `<repo>/tasks/backlog/`
+2. The launcher starts a Docker container with the `copilot` CLI
+3. Copilot picks a task, claims it, creates a branch, does the work, merges to main
+4. The task file moves to `tasks/completed/` and the container exits
 
-## Run
-
-```bash
-go run ./cmd/simenator
-```
-
-## Docker launcher (worktree per instance)
+## Quick Start
 
 ```bash
-make run-launcher
+# Add a task
+cat > /path/to/repo/tasks/backlog/my-task.md << 'EOF'
+# Add a health check endpoint
+
+Add a /healthz endpoint that returns 200 OK.
+EOF
+
+# Run the agent
+make run-launcher REPO=/path/to/repo
 ```
 
-- Creates `../staging-labs.worktrees/agent#` as a git worktree if missing.
-- Allocates `#` from a file-based lock + counter under `../staging-labs.worktrees`.
-- Reuses the lowest available `agent#` whose container is not currently running.
-- Mounts that agent worktree into the container at `/workspace` and runs simenator from the launcher repo mounted at `/simenator`.
-- Sets simenator runtime working directory to `/workspace`, so prompts operate on the agent worktree.
-- Mounts host Go toolchain + module/build caches so launcher reuses local dependencies in the container.
-- Mounts host `copilot` CLI, `gh` CLI, and `~/.copilot/skills` into the container.
-- Mounts host CA certificates (`/etc/ssl/certs`) when available for TLS in Ubuntu containers.
-- Requires `--worktree-repo` (Makefile passes this via `WORKTREE_REPO`).
-- Forwards extra args to simenator, e.g. `go run ./cmd/simenator-launcher --worktree-repo /path/to/repo -- -model claude-sonnet-4.5`.
-- Defaults to `ubuntu:24.04` and mounts the host Go toolchain at `/usr/local/go` (override with `SIMENATOR_DOCKER_IMAGE`).
-- Uses the current working directory as the simenator app repo by default (override with `SIMENATOR_APP_REPO`).
-- Cleanup all launcher worktrees with `make clean-worktrees` (override repo with `WORKTREE_REPO=/path/to/worktree-source-repo`).
+## Task File Format
 
-## Task mode (autonomous)
+```markdown
+# Task title
 
-Simenator can run autonomously with the `-task` flag. In this mode it picks a task from the task queue, works on it, and exits. The agent runs a multi-turn continuation loop (max 50 turns) until the task is complete or the limit is reached.
-
-Task instructions are embedded in the binary via `go:embed` from `cmd/simenator/task-instructions.md`.
-
-### Task queue
-
-Tasks live in a folder structure inside the repository:
-
-```
-tasks/
-  backlog/       # pending task files
-  in-progress/   # tasks currently being worked on
-  completed/     # finished tasks
-  .locks/        # atomic mkdir locks for claiming
+Detailed instructions for the agent.
 ```
 
-When using the launcher, this folder is located in the `WORKTREE_REPO` repository. Task files are markdown with a `# Title` heading followed by the task body/instructions. The agent claims a task via atomic `mkdir` locking, works on a branch, merges to main, and pushes.
+## Task Queue Structure
 
-### Running in task mode
+```
+<repo>/tasks/
+├── backlog/       # pending tasks
+├── in-progress/   # tasks being worked on
+├── completed/     # finished tasks
+└── .locks/        # atomic mkdir locks for claiming
+```
 
-- **Local:** `make run-task` or `go run ./cmd/simenator -task`
-- **With launcher:** `make run-launcher` (defaults to task mode)
-- Override the tasks directory with the `SIMENATOR_TASKS_DIR` env var.
+## Docker Launcher
+
+```bash
+make run-launcher REPO=/path/to/repo
+```
+
+- Mounts the repo at `/workspace` in an `ubuntu:24.04` container (override with `SIMENATOR_DOCKER_IMAGE`).
+- Mounts host `copilot` and `gh` CLIs, `~/.copilot` auth, `~/.config/gh`, and SSL certs.
+- Runs as your host UID/GID so files are owned by you.
+- Passes your git `user.name` and `user.email` for commits.
+- Runs `copilot -p <instructions> --autopilot --allow-all --model claude-opus-4.6` inside the container by default.
+- Pass extra copilot args after `--`, e.g.:
+
+```bash
+go run ./cmd/simenator-launcher --repo /path/to/repo -- --model claude-opus-4.6
+```
+
+## Build
+
+```bash
+make build    # builds bin/simenator-launcher
+make test     # runs tests
+```
 
 ## Notes
 
-- This module is pinned to your local SDK checkout via `replace github.com/github/copilot-sdk/go => ./.copilot-sdk/go`.
-- The sample uses `copilot.PermissionHandler.ApproveAll` for simplicity.
+- Task instructions are embedded in the launcher binary (`cmd/simenator-launcher/task-instructions.md`).
 - Authenticate first with `copilot login`.
+- The agent creates a `task/<name>` branch, merges to main, and resolves conflicts if needed.
