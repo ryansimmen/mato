@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -35,11 +38,14 @@ func run(repoRoot string, copilotArgs []string) error {
 	repoRoot = strings.TrimSpace(repoRoot)
 
 	tasksDir := filepath.Join(repoRoot, ".tasks")
-	for _, sub := range []string{"backlog", "in-progress", "completed"} {
+	for _, sub := range []string{"backlog", "in-progress", "completed", "failed"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			return fmt.Errorf("create .tasks subdirectory %s: %w", sub, err)
 		}
 	}
+
+	// Recover any tasks left in in-progress by a previous crashed launcher.
+	recoverOrphanedTasks(tasksDir)
 
 	// Ensure .tasks is gitignored so it never pollutes commits or status.
 	if err := ensureGitignored(repoRoot, "/.tasks/"); err != nil {
@@ -105,6 +111,11 @@ func run(repoRoot string, copilotArgs []string) error {
 		hasGhConfig = true
 	}
 
+	agentID, err := generateAgentID()
+	if err != nil {
+		return fmt.Errorf("generate agent ID: %w", err)
+	}
+
 	// Build the prompt from embedded task instructions.
 	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
 
@@ -121,6 +132,7 @@ func run(repoRoot string, copilotArgs []string) error {
 		"-e", "GOROOT=/usr/local/go",
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
+	args = append(args, "-e", "SIMENATOR_AGENT_ID="+agentID)
 	if n := strings.TrimSpace(gitName); n != "" {
 		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
 	}
@@ -220,6 +232,32 @@ func gitOutput(dir string, args ...string) (string, error) {
 	return string(out), nil
 }
 
+func generateAgentID() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+var nonAlphanumDash = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
+var multiDash = regexp.MustCompile(`-{2,}`)
+
+func sanitizeBranchName(name string) string {
+	// Strip the .md extension if present.
+	name = strings.TrimSuffix(name, ".md")
+	// Replace non-alphanumeric chars (except dash) with dashes.
+	name = nonAlphanumDash.ReplaceAllString(name, "-")
+	// Collapse consecutive dashes.
+	name = multiDash.ReplaceAllString(name, "-")
+	// Trim leading/trailing dashes.
+	name = strings.Trim(name, "-")
+	if name == "" {
+		name = "unnamed"
+	}
+	return name
+}
+
 func hasModelArg(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
@@ -273,13 +311,68 @@ func ensureGitignored(repoRoot, pattern string) error {
 	return nil
 }
 
-// mergeNewBranches merges any task branches created in the temporary clone
-// into main on the original repository.
+// recoverOrphanedTasks moves any files in in-progress/ back to backlog/.
+// This handles the case where a previous launcher was killed (e.g. Ctrl+C)
+// before the agent could clean up. A failure record is appended so the
+// retry-count logic can eventually move it to failed/.
+func recoverOrphanedTasks(tasksDir string) {
+	inProgress := filepath.Join(tasksDir, "in-progress")
+	entries, err := os.ReadDir(inProgress)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		src := filepath.Join(inProgress, e.Name())
+		dst := filepath.Join(tasksDir, "backlog", e.Name())
+
+		// Append a failure record so the retry count increments.
+		f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err == nil {
+			fmt.Fprintf(f, "\n<!-- failure: launcher-recovery at %s — agent was interrupted -->\n",
+				time.Now().UTC().Format(time.RFC3339))
+			f.Close()
+		}
+
+		if err := os.Rename(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", e.Name(), err)
+			continue
+		}
+		fmt.Printf("Recovered orphaned task %s back to backlog\n", e.Name())
+	}
+}
+
+// completedTaskBranches returns the set of branch names ("task/<safe-name>")
+// that correspond to task files in the completed/ directory.
+func completedTaskBranches(tasksDir string) map[string]bool {
+	completed := filepath.Join(tasksDir, "completed")
+	entries, err := os.ReadDir(completed)
+	if err != nil {
+		return nil
+	}
+	branches := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		branches["task/"+sanitizeBranchName(e.Name())] = true
+	}
+	return branches
+}
+
+// mergeNewBranches merges task branches for completed tasks from the
+// temporary clone into main on the original repository.
 func mergeNewBranches(cloneDir, origin string) {
 	// Allow pushing to the checked-out branch in the origin repo.
 	// With .tasks/ gitignored the working tree stays clean, so
 	// updateInstead can safely update it on push.
 	gitOutput(origin, "config", "receive.denyCurrentBranch", "updateInstead")
+
+	// Determine the tasks directory from the origin repo.
+	tasksDir := filepath.Join(origin, ".tasks")
+	allowed := completedTaskBranches(tasksDir)
 
 	out, err := gitOutput(cloneDir, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
 	if err != nil {
@@ -288,6 +381,10 @@ func mergeNewBranches(cloneDir, origin string) {
 	for _, branch := range strings.Split(strings.TrimSpace(out), "\n") {
 		branch = strings.TrimSpace(branch)
 		if branch == "" || branch == "main" || branch == "master" {
+			continue
+		}
+		if !allowed[branch] {
+			fmt.Printf("Skipping branch %s (task not in completed/)\n", branch)
 			continue
 		}
 		if err := mergeToMain(cloneDir, origin, branch); err != nil {
