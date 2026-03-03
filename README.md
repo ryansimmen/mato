@@ -1,11 +1,11 @@
 # simenator
 
-Docker launcher that runs autonomous Copilot agents against a task queue. Each agent picks a task, works on it, commits to main, and exits.
+Runs autonomous Copilot agents against a task queue in Docker. Each agent picks a task, works on it, commits to main, and exits.
 
 ## How It Works
 
 1. You add task files (markdown) to `<repo>/tasks/backlog/`
-2. The launcher starts a Docker container with the `copilot` CLI
+2. Simenator starts a Docker container with the `copilot` CLI
 3. Copilot picks a task, claims it, creates a branch, does the work, merges to main
 4. The task file moves to `tasks/completed/` and the container exits
 
@@ -20,7 +20,7 @@ Add a /healthz endpoint that returns 200 OK.
 EOF
 
 # Run the agent
-make run-launcher REPO=/path/to/repo
+make run REPO=/path/to/repo
 ```
 
 ## Task File Format
@@ -41,10 +41,10 @@ Detailed instructions for the agent.
 └── .locks/        # atomic mkdir locks for claiming
 ```
 
-## Docker Launcher
+## Docker
 
 ```bash
-make run-launcher REPO=/path/to/repo
+make run REPO=/path/to/repo
 ```
 
 - Mounts the repo at `/workspace` in an `ubuntu:24.04` container (override with `SIMENATOR_DOCKER_IMAGE`).
@@ -55,18 +55,18 @@ make run-launcher REPO=/path/to/repo
 - Pass extra copilot args after `--`, e.g.:
 
 ```bash
-go run ./cmd/simenator-launcher --repo /path/to/repo -- --model claude-opus-4.6
+go run ./cmd/simenator --repo /path/to/repo -- --model claude-opus-4.6
 ```
 
 ## Build
 
 ```bash
-make build    # builds bin/simenator-launcher
+make build    # builds bin/simenator
 make test     # runs tests
 ```
 
 ## Notes
 
-- Task instructions are embedded in the launcher binary (`cmd/simenator-launcher/task-instructions.md`).
+- Task instructions are embedded in the binary (`cmd/simenator/task-instructions.md`).
 - Authenticate first with `copilot login`.
 - The agent creates a `task/<name>` branch, merges to main, and resolves conflicts if needed.
