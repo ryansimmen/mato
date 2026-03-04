@@ -498,16 +498,12 @@ func mergeToMain(cloneDir, origin, branch string) error {
 		if _, err := gitOutput(cloneDir, "checkout", "-B", "main", "FETCH_HEAD"); err != nil {
 			return fmt.Errorf("checkout main: %w", err)
 		}
-		// Merge the task branch.
+		// Merge the task branch. The agent is expected to have already
+		// synced with main and resolved any conflicts before marking the
+		// task complete, so a conflict here is unexpected.
 		if _, err := gitOutput(cloneDir, "merge", "--no-edit", branch); err != nil {
 			gitOutput(cloneDir, "merge", "--abort")
-			// Retry with automatic conflict resolution: prefer the task
-			// branch's changes so completed work is not silently dropped.
-			if _, err := gitOutput(cloneDir, "merge", "--no-edit", "-X", "theirs", branch); err != nil {
-				gitOutput(cloneDir, "merge", "--abort")
-				return fmt.Errorf("merge conflict (auto-resolution failed): %w", err)
-			}
-			fmt.Fprintf(os.Stderr, "note: auto-resolved merge conflicts for %s (kept task branch changes)\n", branch)
+			return fmt.Errorf("merge conflict in %s: agent must resolve conflicts before marking task complete: %w", branch, err)
 		}
 		// Push merged main back to the original repo.
 		if _, err := gitOutput(cloneDir, "push", origin, "main"); err != nil {
