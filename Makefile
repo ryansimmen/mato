@@ -9,7 +9,7 @@ all: fmt build test ## Run formatting, build, and tests
 
 build: ## Build mato binary
 	mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/mato ./cmd/mato
+	go build -o $(BIN_DIR)/mato .
 
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)
@@ -19,7 +19,7 @@ fmt: ## Format Go source files
 
 run: ## Run agent in Docker (use -- to pass args to copilot, e.g. -- --model claude-opus-4.6)
 	@if [ -z "$(REPO)" ]; then echo "REPO is required"; exit 1; fi
-	go run ./cmd/mato --repo "$(REPO)"
+	go run . --repo "$(REPO)"
 
 test: ## Run tests
 	go test ./...
