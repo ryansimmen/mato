@@ -211,7 +211,7 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 	if !strings.Contains(string(data), "# Fix bug") {
 		t.Error("recovered task lost original content")
 	}
-	if !strings.Contains(string(data), "<!-- failure: simenator-recovery") {
+	if !strings.Contains(string(data), "<!-- failure: mato-recovery") {
 		t.Error("recovered task missing failure record")
 	}
 }

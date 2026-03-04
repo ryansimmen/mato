@@ -41,7 +41,7 @@ mv ".tasks/backlog/<filename>" ".tasks/in-progress/<filename>"
 After claiming, record your agent identity and timestamp at the top of the task file so that stuck tasks can be diagnosed later:
 
 ```bash
-AGENT_ID="${SIMENATOR_AGENT_ID:-unknown}"
+AGENT_ID="${MATO_AGENT_ID:-unknown}"
 CLAIMED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TMPF=$(mktemp)
 printf '<!-- claimed-by: %s  claimed-at: %s -->\n' "$AGENT_ID" "$CLAIMED_AT" > "$TMPF"
@@ -114,7 +114,7 @@ Move the task file to `completed/`:
 mv ".tasks/in-progress/<filename>" ".tasks/completed/<filename>"
 ```
 
-You are now done. Report what you accomplished and the branch name where your changes live. Simenator will automatically merge your branch into main.
+You are now done. Report what you accomplished and the branch name where your changes live. Mato will automatically merge your branch into main.
 
 ### On Failure
 
@@ -123,7 +123,7 @@ If you encounter an unrecoverable error at any point:
 1. Switch back to main: `git checkout main`
 2. Append a failure record to the task file so retries can be tracked:
    ```bash
-   AGENT_ID="${SIMENATOR_AGENT_ID:-unknown}"
+   AGENT_ID="${MATO_AGENT_ID:-unknown}"
    FAILED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
    echo "<!-- failure: $AGENT_ID at $FAILED_AT — <brief reason> -->" >> ".tasks/in-progress/<filename>"
    ```

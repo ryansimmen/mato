@@ -21,11 +21,11 @@ var taskInstructions string
 func main() {
 	repoRoot, copilotArgs, err := parseArgs(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "simenator error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
 		os.Exit(1)
 	}
 	if err := run(repoRoot, copilotArgs); err != nil {
-		fmt.Fprintf(os.Stderr, "simenator error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -63,7 +63,7 @@ func run(repoRoot string, copilotArgs []string) error {
 		removeClone(cloneDir)
 	}()
 
-	image := os.Getenv("SIMENATOR_DOCKER_IMAGE")
+	image := os.Getenv("MATO_DOCKER_IMAGE")
 	if image == "" {
 		image = "ubuntu:24.04"
 	}
@@ -132,7 +132,7 @@ func run(repoRoot string, copilotArgs []string) error {
 		"-e", "GOROOT=/usr/local/go",
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
-	args = append(args, "-e", "SIMENATOR_AGENT_ID="+agentID)
+	args = append(args, "-e", "MATO_AGENT_ID="+agentID)
 	if n := strings.TrimSpace(gitName); n != "" {
 		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
 	}
@@ -272,7 +272,7 @@ func hasModelArg(args []string) bool {
 }
 
 func createClone(repoRoot string) (string, error) {
-	dir, err := os.MkdirTemp("", "simenator-*")
+	dir, err := os.MkdirTemp("", "mato-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
@@ -331,7 +331,7 @@ func recoverOrphanedTasks(tasksDir string) {
 		// Append a failure record so the retry count increments.
 		f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err == nil {
-			fmt.Fprintf(f, "\n<!-- failure: simenator-recovery at %s — agent was interrupted -->\n",
+			fmt.Fprintf(f, "\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
 				time.Now().UTC().Format(time.RFC3339))
 			f.Close()
 		}
