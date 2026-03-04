@@ -40,6 +40,7 @@ Detailed instructions for the agent.
 ├── backlog/       # pending tasks
 ├── in-progress/   # tasks being worked on
 ├── completed/     # finished tasks
+├── failed/        # tasks that exceeded retry limit
 └── .locks/        # atomic mkdir locks for claiming
 ```
 
@@ -69,6 +70,6 @@ make test     # runs tests
 
 ## Notes
 
-- Task instructions are embedded in the binary (`cmd/mato/task-instructions.md`).
+- Task instructions are embedded in the binary (`task-instructions.md`).
 - Authenticate first with `copilot login`.
 - The agent creates a `task/<name>` branch, merges to main, and resolves conflicts if needed.
