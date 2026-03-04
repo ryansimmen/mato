@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -251,5 +253,128 @@ func TestCompletedTaskBranches(t *testing.T) {
 	}
 	if branches["task/nonexistent"] {
 		t.Error("unexpected branch in completed set")
+	}
+}
+
+func TestParseClaimedBy(t *testing.T) {
+	dir := t.TempDir()
+
+	// File with claimed-by metadata.
+	withClaim := filepath.Join(dir, "task.md")
+	os.WriteFile(withClaim, []byte("<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->\n# Do stuff\n"), 0o644)
+	if got := parseClaimedBy(withClaim); got != "abc123" {
+		t.Errorf("parseClaimedBy = %q, want %q", got, "abc123")
+	}
+
+	// File without claimed-by.
+	noClaim := filepath.Join(dir, "plain.md")
+	os.WriteFile(noClaim, []byte("# Just a task\n"), 0o644)
+	if got := parseClaimedBy(noClaim); got != "" {
+		t.Errorf("parseClaimedBy = %q, want empty", got)
+	}
+
+	// Non-existent file.
+	if got := parseClaimedBy(filepath.Join(dir, "missing.md")); got != "" {
+		t.Errorf("parseClaimedBy = %q, want empty for missing file", got)
+	}
+}
+
+func TestIsAgentActive(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(locksDir, 0o755)
+
+	// Empty agent ID is never active.
+	if isAgentActive(tasksDir, "") {
+		t.Error("empty agent ID should not be active")
+	}
+
+	// No lock file means not active.
+	if isAgentActive(tasksDir, "no-such-agent") {
+		t.Error("agent without lock file should not be active")
+	}
+
+	// Lock file with our own PID should be active.
+	os.WriteFile(filepath.Join(locksDir, "live.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
+	if !isAgentActive(tasksDir, "live") {
+		t.Error("agent with current PID should be active")
+	}
+
+	// Lock file with a definitely-dead PID should not be active.
+	// PID 2147483647 is almost certainly not running.
+	os.WriteFile(filepath.Join(locksDir, "dead.pid"), []byte("2147483647"), 0o644)
+	if isAgentActive(tasksDir, "dead") {
+		t.Error("agent with dead PID should not be active")
+	}
+}
+
+func TestRegisterAgent(t *testing.T) {
+	tasksDir := t.TempDir()
+
+	cleanup, err := registerAgent(tasksDir, "test-agent")
+	if err != nil {
+		t.Fatalf("registerAgent: %v", err)
+	}
+
+	lockFile := filepath.Join(tasksDir, ".locks", "test-agent.pid")
+	data, err := os.ReadFile(lockFile)
+	if err != nil {
+		t.Fatalf("lock file not created: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != strconv.Itoa(os.Getpid()) {
+		t.Errorf("lock file PID = %q, want %q", got, strconv.Itoa(os.Getpid()))
+	}
+
+	cleanup()
+
+	if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
+		t.Error("cleanup should remove lock file")
+	}
+}
+
+func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"backlog", "in-progress", ".locks"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Place a task claimed by an "active" agent (our own PID).
+	agentID := "active-agent"
+	task := filepath.Join(tasksDir, "in-progress", "active-task.md")
+	content := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: 2026-01-01T00:00:00Z -->\n# Active task\n", agentID)
+	os.WriteFile(task, []byte(content), 0o644)
+
+	// Write a lock file with our PID so it looks alive.
+	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
+
+	recoverOrphanedTasks(tasksDir)
+
+	// Task should still be in in-progress (not recovered).
+	if _, err := os.Stat(task); err != nil {
+		t.Fatal("task claimed by active agent should NOT be recovered")
+	}
+	// Should NOT be in backlog.
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "active-task.md")); err == nil {
+		t.Fatal("task claimed by active agent should NOT appear in backlog")
+	}
+}
+
+func TestCleanStaleLocks(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(locksDir, 0o755)
+
+	// Live lock (our PID).
+	os.WriteFile(filepath.Join(locksDir, "alive.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
+	// Stale lock (dead PID).
+	os.WriteFile(filepath.Join(locksDir, "dead.pid"), []byte("2147483647"), 0o644)
+
+	cleanStaleLocks(tasksDir)
+
+	if _, err := os.Stat(filepath.Join(locksDir, "alive.pid")); err != nil {
+		t.Error("live lock should not be removed")
+	}
+	if _, err := os.Stat(filepath.Join(locksDir, "dead.pid")); !os.IsNotExist(err) {
+		t.Error("stale lock should be removed")
 	}
 }
