@@ -140,6 +140,9 @@ func run(repoRoot string, copilotArgs []string) error {
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
 		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
+		// Mount repoRoot read-only at its own path so the clone's "origin"
+		// remote is reachable inside the container (needed for git fetch).
+		"-v", fmt.Sprintf("%s:%s:ro", repoRoot, repoRoot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", ghPath),
