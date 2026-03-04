@@ -83,13 +83,6 @@ func run(repoRoot string, copilotArgs []string) error {
 		removeClone(cloneDir)
 	}()
 
-	// Refresh the clone's origin/main tracking ref from the live repo so
-	// the agent can merge against current main without needing git-fetch
-	// inside the container (git-upload-pack is not available there).
-	if _, err := gitOutput(cloneDir, "fetch", repoRoot, "main:refs/remotes/origin/main"); err != nil {
-		return fmt.Errorf("refresh origin/main in clone: %w", err)
-	}
-
 	image := os.Getenv("MATO_DOCKER_IMAGE")
 	if image == "" {
 		image = "ubuntu:24.04"
@@ -113,6 +106,20 @@ func run(repoRoot string, copilotArgs []string) error {
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		return fmt.Errorf("find git CLI: %w", err)
+	}
+	// git-upload-pack is spawned by git when fetching from a local-path remote.
+	// Find it via LookPath, falling back to git's exec-path directory.
+	gitUploadPackPath, err := exec.LookPath("git-upload-pack")
+	if err != nil {
+		out, execErr := exec.Command("git", "--exec-path").Output()
+		if execErr != nil {
+			return fmt.Errorf("find git-upload-pack: %w", err)
+		}
+		candidate := filepath.Join(strings.TrimSpace(string(out)), "git-upload-pack")
+		if _, statErr := os.Stat(candidate); statErr != nil {
+			return fmt.Errorf("find git-upload-pack: %w", err)
+		}
+		gitUploadPackPath = candidate
 	}
 	ghPath := "/usr/bin/gh"
 	if info, statErr := os.Stat(ghPath); statErr != nil || info.IsDir() {
@@ -147,14 +154,25 @@ func run(repoRoot string, copilotArgs []string) error {
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
 		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
+		// Mount repoRoot read-only so the clone's "origin" remote is reachable
+		// for git fetch inside the container.
+		"-v", fmt.Sprintf("%s:%s:ro", repoRoot, repoRoot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", gitUploadPackPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", ghPath),
 		"-v", fmt.Sprintf("%s:/usr/local/go:ro", goRoot),
 		"-e", "GOROOT=/usr/local/go",
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
 	args = append(args, "-e", "MATO_AGENT_ID="+agentID)
+	// Trust all directories inside the container — it's ephemeral and the
+	// repoRoot mount may appear owned by a different UID with userns-remap.
+	args = append(args,
+		"-e", "GIT_CONFIG_COUNT=1",
+		"-e", "GIT_CONFIG_KEY_0=safe.directory",
+		"-e", "GIT_CONFIG_VALUE_0=*",
+	)
 	if n := strings.TrimSpace(gitName); n != "" {
 		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
 	}
