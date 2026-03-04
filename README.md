@@ -57,19 +57,25 @@ Failed tasks are retried up to 3 times before being moved to `failed/`.
 
 ## Docker
 
-```bash
-make run REPO=/path/to/repo
-```
+`make run` is a convenience wrapper around `go run . --repo`. The container:
 
 - Mounts the repo at `/workspace` in an `ubuntu:24.04` container (override with `MATO_DOCKER_IMAGE`).
 - Mounts host `copilot` and `gh` CLIs, `~/.copilot` auth, `~/.config/gh`, and SSL certs.
 - Runs as your host UID/GID so files are owned by you.
 - Passes your git `user.name` and `user.email` for commits.
 - Runs `copilot -p <instructions> --autopilot --allow-all --model claude-opus-4.6` inside the container by default.
-- Pass extra copilot args after `--`, e.g.:
+
+Pass extra copilot args after `--`, e.g.:
 
 ```bash
 bin/mato --repo /path/to/repo -- --model claude-opus-4.6
+```
+
+You can also create a `.env` file to avoid passing `REPO` every time:
+
+```bash
+echo "REPO=/path/to/repo" > .env
+make run
 ```
 
 ## Build
