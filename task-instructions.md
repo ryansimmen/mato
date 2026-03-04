@@ -106,37 +106,41 @@ If `git commit` fails or there are no changes staged, debug the issue before con
 
 ### Step 7: Sync with Main and Resolve Any Conflicts
 
-Before marking complete, bring your branch up to date with `main` so that mato can merge it cleanly. Run:
+Before marking complete, bring your branch up to date with `main` so that mato can merge it cleanly.
+
+**CRITICAL: Run these commands exactly as written. Do NOT wrap them in error-handling, do NOT add fallbacks, do NOT skip this step under any circumstances.**
 
 ```bash
 git fetch origin
 git merge origin/main --no-edit
 ```
 
+If `git fetch origin` fails for any reason, **stop immediately and follow the On Failure procedure**. Do NOT proceed to Step 8.
+
 If there are **no conflicts**, the merge will complete automatically. Continue to Step 8.
 
 If there are **merge conflicts**, you must resolve them:
 
-1. For each conflicted file, open it and read both sides of the conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`).
-2. Understand what each side is doing:
+1. Run `git status` to identify all conflicted files (shown as "both modified").
+2. For each conflicted file, open it and read both sides of the conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`):
    - `HEAD` (your task branch): the work you just completed.
    - `origin/main`: changes from another task that merged while you were working.
-3. Produce a correct resolution that preserves the intent of **both** changes. Do not simply discard one side.
-4. After editing each file to resolve conflicts, stage it:
+3. Edit the file to remove all conflict markers and produce a correct result that preserves the intent of **both** changes. Do not simply discard one side.
+4. Stage the resolved file:
    ```bash
    git add <file>
    ```
-5. Once all conflicts are resolved, complete the merge:
+5. Repeat for every conflicted file. When all are resolved:
    ```bash
    git commit --no-edit
    ```
-6. Verify the branch is clean:
+6. Verify the branch is clean — `git status` must show no conflicts and `git log --oneline -3` must show the merge commit:
    ```bash
    git status
    git log --oneline -3
    ```
 
-If you cannot determine a safe resolution, leave a comment in the code explaining the conflict and choose the approach that best preserves correctness.
+If you cannot determine a safe resolution, follow the On Failure procedure. Do NOT mark the task complete with unresolved conflicts.
 
 ### Step 8: Mark Complete
 
