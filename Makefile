@@ -1,9 +1,12 @@
 .DEFAULT_GOAL := help
 
+-include .env
+export
+
 .PHONY: all build clean fmt help run test
 
 BIN_DIR := bin
-REPO ?= /home/ryansimmen/staging-labs
+REPO ?= $(error REPO is not set. Create a .env file with REPO=<path> or pass it on the command line)
 
 all: fmt build test ## Run formatting, build, and tests
 
