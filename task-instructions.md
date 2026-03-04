@@ -109,7 +109,7 @@ If `git commit` fails or there are no changes staged, debug the issue before con
 Before marking complete, bring your branch up to date with `main` so that mato can merge it cleanly. Run:
 
 ```bash
-git fetch origin main
+git fetch origin
 git merge origin/main --no-edit
 ```
 
