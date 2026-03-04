@@ -111,11 +111,8 @@ Before marking complete, bring your branch up to date with `main` so that mato c
 **CRITICAL: Run these commands exactly as written. Do NOT wrap them in error-handling, do NOT add fallbacks, do NOT skip this step under any circumstances.**
 
 ```bash
-git fetch origin
 git merge origin/main --no-edit
 ```
-
-If `git fetch origin` fails for any reason, **stop immediately and follow the On Failure procedure**. Do NOT proceed to Step 8.
 
 If there are **no conflicts**, the merge will complete automatically. Continue to Step 8.
 

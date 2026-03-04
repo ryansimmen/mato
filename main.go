@@ -83,6 +83,13 @@ func run(repoRoot string, copilotArgs []string) error {
 		removeClone(cloneDir)
 	}()
 
+	// Refresh the clone's origin/main tracking ref from the live repo so
+	// the agent can merge against current main without needing git-fetch
+	// inside the container (git-upload-pack is not available there).
+	if _, err := gitOutput(cloneDir, "fetch", repoRoot, "main:refs/remotes/origin/main"); err != nil {
+		return fmt.Errorf("refresh origin/main in clone: %w", err)
+	}
+
 	image := os.Getenv("MATO_DOCKER_IMAGE")
 	if image == "" {
 		image = "ubuntu:24.04"
@@ -140,9 +147,6 @@ func run(repoRoot string, copilotArgs []string) error {
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
 		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
-		// Mount repoRoot read-only at its own path so the clone's "origin"
-		// remote is reachable inside the container (needed for git fetch).
-		"-v", fmt.Sprintf("%s:%s:ro", repoRoot, repoRoot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", ghPath),
@@ -151,13 +155,6 @@ func run(repoRoot string, copilotArgs []string) error {
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
 	args = append(args, "-e", "MATO_AGENT_ID="+agentID)
-	// Allow git to read the repoRoot mount (safe.directory may otherwise block
-	// access when UID mapping differs between host and container).
-	args = append(args,
-		"-e", "GIT_CONFIG_COUNT=1",
-		"-e", fmt.Sprintf("GIT_CONFIG_KEY_0=safe.directory"),
-		"-e", fmt.Sprintf("GIT_CONFIG_VALUE_0=%s", repoRoot),
-	)
 	if n := strings.TrimSpace(gitName); n != "" {
 		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
 	}
