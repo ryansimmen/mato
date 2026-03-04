@@ -6,10 +6,11 @@ Runs autonomous Copilot agents against a task queue in Docker. Each agent picks 
 
 ## Requirements
 
+- Go
 - Docker
-- Go 1.26+
-- [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (`copilot login` to authenticate)
-- [GitHub CLI](https://cli.github.com/) (`gh`)
+- GitHub CLI
+- Copilot CLI
+
 
 ## How It Works
 
