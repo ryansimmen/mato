@@ -4,12 +4,21 @@
 
 Runs autonomous Copilot agents against a task queue in Docker. Each agent picks a task, works on it, commits to main, and exits.
 
+## Requirements
+
+- Docker
+- Go 1.26+
+- [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (`copilot login` to authenticate)
+- [GitHub CLI](https://cli.github.com/) (`gh`)
+
 ## How It Works
 
 1. You add task files (markdown) to `<repo>/.tasks/backlog/`
 2. Mato starts a Docker container with the `copilot` CLI
 3. Copilot picks a task, claims it, creates a branch, does the work, merges to main
-4. The task file moves to `.tasks/completed/` and the container exits
+4. The task file moves to `.tasks/completed/` (or `.tasks/failed/` after too many retries) and the container exits
+
+Multiple mato instances can run in parallel against the same repo. Each agent registers itself with a PID lock, claims tasks atomically, and merges independently.
 
 ## Quick Start
 
@@ -41,8 +50,10 @@ Detailed instructions for the agent.
 ├── in-progress/   # tasks being worked on
 ├── completed/     # finished tasks
 ├── failed/        # tasks that exceeded retry limit
-└── .locks/        # atomic mkdir locks for claiming
+└── .locks/        # PID locks for concurrent agents
 ```
+
+Failed tasks are retried up to 3 times before being moved to `failed/`.
 
 ## Docker
 
@@ -58,7 +69,7 @@ make run REPO=/path/to/repo
 - Pass extra copilot args after `--`, e.g.:
 
 ```bash
-go run ./cmd/mato --repo /path/to/repo -- --model claude-opus-4.6
+bin/mato --repo /path/to/repo -- --model claude-opus-4.6
 ```
 
 ## Build
@@ -73,3 +84,4 @@ make test     # runs tests
 - Task instructions are embedded in the binary (`task-instructions.md`).
 - Authenticate first with `copilot login`.
 - The agent creates a `task/<name>` branch, merges to main, and resolves conflicts if needed.
+- Orphaned tasks (from crashed agents) are automatically recovered on the next run.

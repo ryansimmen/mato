@@ -30,12 +30,6 @@ func TestParseArgs(t *testing.T) {
 			wantArgs: []string{},
 		},
 		{
-			name:     "worktree-repo backwards compat",
-			args:     []string{"--worktree-repo=/tmp/repo"},
-			wantRepo: "/tmp/repo",
-			wantArgs: []string{},
-		},
-		{
 			name:     "with passthrough args",
 			args:     []string{"--repo=/tmp/repo", "--", "--model", "gpt-5.2"},
 			wantRepo: "/tmp/repo",
