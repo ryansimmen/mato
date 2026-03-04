@@ -1,11 +1,13 @@
-# simenator
+# mato
+
+*Multi Agent Task Orchestrator*
 
 Runs autonomous Copilot agents against a task queue in Docker. Each agent picks a task, works on it, commits to main, and exits.
 
 ## How It Works
 
 1. You add task files (markdown) to `<repo>/tasks/backlog/`
-2. Simenator starts a Docker container with the `copilot` CLI
+2. Mato starts a Docker container with the `copilot` CLI
 3. Copilot picks a task, claims it, creates a branch, does the work, merges to main
 4. The task file moves to `tasks/completed/` and the container exits
 
@@ -47,7 +49,7 @@ Detailed instructions for the agent.
 make run REPO=/path/to/repo
 ```
 
-- Mounts the repo at `/workspace` in an `ubuntu:24.04` container (override with `SIMENATOR_DOCKER_IMAGE`).
+- Mounts the repo at `/workspace` in an `ubuntu:24.04` container (override with `MATO_DOCKER_IMAGE`).
 - Mounts host `copilot` and `gh` CLIs, `~/.copilot` auth, `~/.config/gh`, and SSL certs.
 - Runs as your host UID/GID so files are owned by you.
 - Passes your git `user.name` and `user.email` for commits.
@@ -55,18 +57,18 @@ make run REPO=/path/to/repo
 - Pass extra copilot args after `--`, e.g.:
 
 ```bash
-go run ./cmd/simenator --repo /path/to/repo -- --model claude-opus-4.6
+go run ./cmd/mato --repo /path/to/repo -- --model claude-opus-4.6
 ```
 
 ## Build
 
 ```bash
-make build    # builds bin/simenator
+make build    # builds bin/mato
 make test     # runs tests
 ```
 
 ## Notes
 
-- Task instructions are embedded in the binary (`cmd/simenator/task-instructions.md`).
+- Task instructions are embedded in the binary (`cmd/mato/task-instructions.md`).
 - Authenticate first with `copilot login`.
 - The agent creates a `task/<name>` branch, merges to main, and resolves conflicts if needed.
