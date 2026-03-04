@@ -237,19 +237,6 @@ func parseArgs(args []string) (string, []string, error) {
 			repoRoot = strings.TrimSpace(args[i])
 			continue
 		}
-		// Backwards compat
-		if strings.HasPrefix(arg, "--worktree-repo=") {
-			repoRoot = strings.TrimSpace(strings.TrimPrefix(arg, "--worktree-repo="))
-			continue
-		}
-		if arg == "--worktree-repo" {
-			if i+1 >= len(args) {
-				return "", nil, errors.New("--worktree-repo requires a value")
-			}
-			i++
-			repoRoot = strings.TrimSpace(args[i])
-			continue
-		}
 		copilotArgs = append(copilotArgs, arg)
 	}
 	if repoRoot == "" {
@@ -318,7 +305,7 @@ func createClone(repoRoot string) (string, error) {
 	}
 	if _, err := gitOutput("", "clone", "--quiet", repoRoot, dir); err != nil {
 		os.RemoveAll(dir)
-		return "", fmt.Errorf("clone repo for isolated worktree: %w", err)
+		return "", fmt.Errorf("clone repo: %w", err)
 	}
 	return dir, nil
 }
