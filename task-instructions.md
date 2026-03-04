@@ -102,11 +102,45 @@ After committing, verify the commit exists:
 git log --oneline -1
 ```
 
-If `git commit` fails or there are no changes staged, debug the issue before continuing. Do NOT proceed to Step 7 without a successful commit.
+If `git commit` fails or there are no changes staged, debug the issue before continuing. Do NOT proceed to Step 7 without a successful commit on the task branch.
 
-### Step 7: Mark Complete
+### Step 7: Sync with Main and Resolve Any Conflicts
 
-Only proceed here AFTER Step 6 is verified complete.
+Before marking complete, bring your branch up to date with `main` so that mato can merge it cleanly. Run:
+
+```bash
+git fetch origin main
+git merge origin/main --no-edit
+```
+
+If there are **no conflicts**, the merge will complete automatically. Continue to Step 8.
+
+If there are **merge conflicts**, you must resolve them:
+
+1. For each conflicted file, open it and read both sides of the conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`).
+2. Understand what each side is doing:
+   - `HEAD` (your task branch): the work you just completed.
+   - `origin/main`: changes from another task that merged while you were working.
+3. Produce a correct resolution that preserves the intent of **both** changes. Do not simply discard one side.
+4. After editing each file to resolve conflicts, stage it:
+   ```bash
+   git add <file>
+   ```
+5. Once all conflicts are resolved, complete the merge:
+   ```bash
+   git commit --no-edit
+   ```
+6. Verify the branch is clean:
+   ```bash
+   git status
+   git log --oneline -3
+   ```
+
+If you cannot determine a safe resolution, leave a comment in the code explaining the conflict and choose the approach that best preserves correctness.
+
+### Step 8: Mark Complete
+
+Only proceed here AFTER Steps 6 and 7 are verified complete.
 
 Move the task file to `completed/`:
 

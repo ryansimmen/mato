@@ -359,6 +359,63 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	}
 }
 
+func TestMergeToMain_ConflictAutoResolves(t *testing.T) {
+	// Create a bare "origin" repo to act as the push target.
+	origin := t.TempDir()
+	if _, err := gitOutput(origin, "init", "--bare"); err != nil {
+		t.Fatalf("init bare origin: %v", err)
+	}
+	gitOutput(origin, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	// Create a working repo, add initial commit, push to origin.
+	work := t.TempDir()
+	if _, err := gitOutput(work, "init", "-b", "main"); err != nil {
+		t.Fatalf("init work: %v", err)
+	}
+	gitOutput(work, "config", "user.name", "test")
+	gitOutput(work, "config", "user.email", "test@test")
+	gitOutput(work, "remote", "add", "origin", origin)
+	os.WriteFile(filepath.Join(work, "README.md"), []byte("# repo\n"), 0o644)
+	gitOutput(work, "add", "-A")
+	gitOutput(work, "commit", "-m", "init")
+	gitOutput(work, "push", "origin", "main")
+
+	// Branch A: adds main.go with "Hello World".
+	gitOutput(work, "checkout", "-b", "task/hello-world", "main")
+	os.WriteFile(filepath.Join(work, "main.go"), []byte("package main\nfunc main() { println(\"Hello World\") }\n"), 0o644)
+	gitOutput(work, "add", "-A")
+	gitOutput(work, "commit", "-m", "hello world")
+
+	// Branch B: adds main.go with "Hello America" (conflicts with A).
+	gitOutput(work, "checkout", "-b", "task/hello-america", "main")
+	os.WriteFile(filepath.Join(work, "main.go"), []byte("package main\nfunc main() { println(\"Hello America\") }\n"), 0o644)
+	gitOutput(work, "add", "-A")
+	gitOutput(work, "commit", "-m", "hello america")
+
+	// Allow pushing to the checked-out branch.
+	gitOutput(origin, "config", "receive.denyCurrentBranch", "updateInstead")
+
+	// Merge branch A — should succeed cleanly.
+	if err := mergeToMain(work, origin, "task/hello-world"); err != nil {
+		t.Fatalf("mergeToMain(hello-world): %v", err)
+	}
+
+	// Merge branch B — conflicts with A but should auto-resolve.
+	if err := mergeToMain(work, origin, "task/hello-america"); err != nil {
+		t.Fatalf("mergeToMain(hello-america): %v", err)
+	}
+
+	// Verify main now contains the second branch's content.
+	gitOutput(work, "checkout", "main")
+	data, err := os.ReadFile(filepath.Join(work, "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(data), "Hello America") {
+		t.Errorf("expected main.go to contain 'Hello America', got:\n%s", data)
+	}
+}
+
 func TestCleanStaleLocks(t *testing.T) {
 	tasksDir := t.TempDir()
 	locksDir := filepath.Join(tasksDir, ".locks")

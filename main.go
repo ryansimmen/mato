@@ -501,7 +501,13 @@ func mergeToMain(cloneDir, origin, branch string) error {
 		// Merge the task branch.
 		if _, err := gitOutput(cloneDir, "merge", "--no-edit", branch); err != nil {
 			gitOutput(cloneDir, "merge", "--abort")
-			return fmt.Errorf("merge conflict: %w", err)
+			// Retry with automatic conflict resolution: prefer the task
+			// branch's changes so completed work is not silently dropped.
+			if _, err := gitOutput(cloneDir, "merge", "--no-edit", "-X", "theirs", branch); err != nil {
+				gitOutput(cloneDir, "merge", "--abort")
+				return fmt.Errorf("merge conflict (auto-resolution failed): %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "note: auto-resolved merge conflicts for %s (kept task branch changes)\n", branch)
 		}
 		// Push merged main back to the original repo.
 		if _, err := gitOutput(cloneDir, "push", origin, "main"); err != nil {
