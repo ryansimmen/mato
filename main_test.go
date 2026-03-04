@@ -359,7 +359,7 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	}
 }
 
-func TestMergeToMain_ConflictAutoResolves(t *testing.T) {
+func TestMergeToMain_ConflictReturnsError(t *testing.T) {
 	// Create a bare "origin" repo to act as the push target.
 	origin := t.TempDir()
 	if _, err := gitOutput(origin, "init", "--bare"); err != nil {
@@ -400,19 +400,14 @@ func TestMergeToMain_ConflictAutoResolves(t *testing.T) {
 		t.Fatalf("mergeToMain(hello-world): %v", err)
 	}
 
-	// Merge branch B — conflicts with A but should auto-resolve.
-	if err := mergeToMain(work, origin, "task/hello-america"); err != nil {
-		t.Fatalf("mergeToMain(hello-america): %v", err)
+	// Merge branch B — conflicts with A. The agent should have resolved
+	// this before marking complete; mergeToMain must return an error.
+	err := mergeToMain(work, origin, "task/hello-america")
+	if err == nil {
+		t.Fatal("expected mergeToMain(hello-america) to return an error on conflict, got nil")
 	}
-
-	// Verify main now contains the second branch's content.
-	gitOutput(work, "checkout", "main")
-	data, err := os.ReadFile(filepath.Join(work, "main.go"))
-	if err != nil {
-		t.Fatalf("read main.go: %v", err)
-	}
-	if !strings.Contains(string(data), "Hello America") {
-		t.Errorf("expected main.go to contain 'Hello America', got:\n%s", data)
+	if !strings.Contains(err.Error(), "merge conflict") {
+		t.Errorf("expected error to mention 'merge conflict', got: %v", err)
 	}
 }
 
