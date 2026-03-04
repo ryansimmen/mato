@@ -6,16 +6,16 @@ Runs autonomous Copilot agents against a task queue in Docker. Each agent picks 
 
 ## How It Works
 
-1. You add task files (markdown) to `<repo>/tasks/backlog/`
+1. You add task files (markdown) to `<repo>/.tasks/backlog/`
 2. Mato starts a Docker container with the `copilot` CLI
 3. Copilot picks a task, claims it, creates a branch, does the work, merges to main
-4. The task file moves to `tasks/completed/` and the container exits
+4. The task file moves to `.tasks/completed/` and the container exits
 
 ## Quick Start
 
 ```bash
 # Add a task
-cat > /path/to/repo/tasks/backlog/my-task.md << 'EOF'
+cat > /path/to/repo/.tasks/backlog/my-task.md << 'EOF'
 # Add a health check endpoint
 
 Add a /healthz endpoint that returns 200 OK.
@@ -36,7 +36,7 @@ Detailed instructions for the agent.
 ## Task Queue Structure
 
 ```
-<repo>/tasks/
+<repo>/.tasks/
 ├── backlog/       # pending tasks
 ├── in-progress/   # tasks being worked on
 ├── completed/     # finished tasks
