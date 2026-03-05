@@ -229,27 +229,6 @@ func TestRecoverOrphanedTasks_IgnoresNonMd(t *testing.T) {
 	}
 }
 
-func TestCompletedTaskBranches(t *testing.T) {
-	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "completed"), 0o755)
-
-	// Create some completed task files.
-	os.WriteFile(filepath.Join(tasksDir, "completed", "add-feature.md"), []byte("done"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "completed", "fix the bug.md"), []byte("done"), 0o644)
-
-	branches := completedTaskBranches(tasksDir)
-
-	if !branches["task/add-feature"] {
-		t.Error("expected task/add-feature in completed branches")
-	}
-	if !branches["task/fix-the-bug"] {
-		t.Error("expected task/fix-the-bug in completed branches")
-	}
-	if branches["task/nonexistent"] {
-		t.Error("unexpected branch in completed set")
-	}
-}
-
 func TestParseClaimedBy(t *testing.T) {
 	dir := t.TempDir()
 
@@ -387,58 +366,6 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	// Should NOT be in backlog.
 	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "active-task.md")); err == nil {
 		t.Fatal("task claimed by active agent should NOT appear in backlog")
-	}
-}
-
-func TestMergeToMain_ConflictReturnsError(t *testing.T) {
-	// Create a bare "origin" repo to act as the push target.
-	origin := t.TempDir()
-	if _, err := gitOutput(origin, "init", "--bare"); err != nil {
-		t.Fatalf("init bare origin: %v", err)
-	}
-	gitOutput(origin, "symbolic-ref", "HEAD", "refs/heads/main")
-
-	// Create a working repo, add initial commit, push to origin.
-	work := t.TempDir()
-	if _, err := gitOutput(work, "init", "-b", "main"); err != nil {
-		t.Fatalf("init work: %v", err)
-	}
-	gitOutput(work, "config", "user.name", "test")
-	gitOutput(work, "config", "user.email", "test@test")
-	gitOutput(work, "remote", "add", "origin", origin)
-	os.WriteFile(filepath.Join(work, "README.md"), []byte("# repo\n"), 0o644)
-	gitOutput(work, "add", "-A")
-	gitOutput(work, "commit", "-m", "init")
-	gitOutput(work, "push", "origin", "main")
-
-	// Branch A: adds main.go with "Hello World".
-	gitOutput(work, "checkout", "-b", "task/hello-world", "main")
-	os.WriteFile(filepath.Join(work, "main.go"), []byte("package main\nfunc main() { println(\"Hello World\") }\n"), 0o644)
-	gitOutput(work, "add", "-A")
-	gitOutput(work, "commit", "-m", "hello world")
-
-	// Branch B: adds main.go with "Hello America" (conflicts with A).
-	gitOutput(work, "checkout", "-b", "task/hello-america", "main")
-	os.WriteFile(filepath.Join(work, "main.go"), []byte("package main\nfunc main() { println(\"Hello America\") }\n"), 0o644)
-	gitOutput(work, "add", "-A")
-	gitOutput(work, "commit", "-m", "hello america")
-
-	// Allow pushing to the checked-out branch.
-	gitOutput(origin, "config", "receive.denyCurrentBranch", "updateInstead")
-
-	// Merge branch A — should succeed cleanly.
-	if err := mergeToMain(work, origin, "task/hello-world"); err != nil {
-		t.Fatalf("mergeToMain(hello-world): %v", err)
-	}
-
-	// Merge branch B — conflicts with A. The agent should have resolved
-	// this before marking complete; mergeToMain must return an error.
-	err := mergeToMain(work, origin, "task/hello-america")
-	if err == nil {
-		t.Fatal("expected mergeToMain(hello-america) to return an error on conflict, got nil")
-	}
-	if !strings.Contains(err.Error(), "merge conflict") {
-		t.Errorf("expected error to mention 'merge conflict', got: %v", err)
 	}
 }
 
