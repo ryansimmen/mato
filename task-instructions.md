@@ -104,20 +104,20 @@ git log --oneline -1
 
 If `git commit` fails or there are no changes staged, debug the issue before continuing. Do NOT proceed to Step 7 without a successful commit on the task branch.
 
-### Step 7: Sync with Main and Resolve Any Conflicts
+### Step 7: Merge into Main and Push
 
-Before marking complete, bring your branch up to date with `main` so that mato can merge it cleanly.
+You are responsible for merging your work into `main` and pushing it to `origin`. The harness will NOT do this for you — if you skip this step, your changes will be lost.
 
 **CRITICAL: Run these commands exactly as written. Do NOT wrap them in error-handling, do NOT add fallbacks, do NOT skip this step under any circumstances.**
+
+First, fetch the latest main and merge it into your task branch to pick up any concurrent changes:
 
 ```bash
 git fetch origin
 git merge origin/main --no-edit
 ```
 
-If `git fetch origin` fails for any reason, **stop immediately and follow the On Failure procedure**. Do NOT proceed to Step 8.
-
-If there are **no conflicts**, the merge will complete automatically. Continue to Step 8.
+If `git fetch origin` fails for any reason, **stop immediately and follow the On Failure procedure**. Do NOT proceed further.
 
 If there are **merge conflicts**, you must resolve them:
 
@@ -134,17 +134,38 @@ If there are **merge conflicts**, you must resolve them:
    ```bash
    git commit --no-edit
    ```
-6. Verify the branch is clean — `git status` must show no conflicts and `git log --oneline -3` must show the merge commit:
-   ```bash
-   git status
-   git log --oneline -3
-   ```
 
 If you cannot determine a safe resolution, follow the On Failure procedure. Do NOT mark the task complete with unresolved conflicts.
 
+Now switch to main, merge your task branch, and push:
+
+```bash
+git checkout main
+git merge <task-branch> --no-edit
+git push origin main
+```
+
+Replace `<task-branch>` with the name of your branch (e.g. `task/add-feature`).
+
+If `git push origin main` fails due to a non-fast-forward error (another agent pushed while you were merging), retry the entire Step 7 from the top (fetch, merge, push). Retry up to 3 times. If it still fails, follow the On Failure procedure.
+
+Verify the push succeeded:
+
+```bash
+git log --oneline -3
+```
+
+Do NOT proceed to Step 8 unless the push to origin was successful.
+
 ### Step 8: Mark Complete
 
-Only proceed here AFTER Steps 6 and 7 are verified complete.
+Only proceed here AFTER Steps 6 and 7 are verified complete (changes committed, merged into main, and pushed to origin).
+
+Switch back to your task branch before moving the file (the task branch has the `.tasks` directory):
+
+```bash
+git checkout <task-branch>
+```
 
 Move the task file to `completed/`:
 
@@ -152,7 +173,7 @@ Move the task file to `completed/`:
 mv ".tasks/in-progress/<filename>" ".tasks/completed/<filename>"
 ```
 
-You are now done. Report what you accomplished and the branch name where your changes live. Mato will automatically merge your branch into main.
+You are now done. Report what you accomplished and the branch name where your changes live.
 
 ### On Failure
 

@@ -1,6 +1,4 @@
-# mato
-
-*Multi Agent Task Orchestrator*
+# Multi Agent Task Orchestrator (mato)
 
 Runs autonomous Copilot agents against a task queue in Docker. Each agent picks a task, works on it, commits to main, and exits.
 

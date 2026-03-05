@@ -104,6 +104,19 @@ func run(repoRoot string, copilotArgs []string) error {
 		}
 		gitUploadPackPath = candidate
 	}
+	// git-receive-pack is spawned by git when pushing to a local-path remote.
+	gitReceivePackPath, err := exec.LookPath("git-receive-pack")
+	if err != nil {
+		out, execErr := exec.Command("git", "--exec-path").Output()
+		if execErr != nil {
+			return fmt.Errorf("find git-receive-pack: %w", err)
+		}
+		candidate := filepath.Join(strings.TrimSpace(string(out)), "git-receive-pack")
+		if _, statErr := os.Stat(candidate); statErr != nil {
+			return fmt.Errorf("find git-receive-pack: %w", err)
+		}
+		gitReceivePackPath = candidate
+	}
 	ghPath := "/usr/bin/gh"
 	if info, statErr := os.Stat(ghPath); statErr != nil || info.IsDir() {
 		ghPath, err = exec.LookPath("gh")
@@ -156,7 +169,7 @@ func run(repoRoot string, copilotArgs []string) error {
 		}
 
 		if err := runOnce(repoRoot, tasksDir, agentID, copilotArgs, image, workdir, prompt,
-			copilotPath, gitPath, gitUploadPackPath, ghPath, goRoot,
+			copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
 			gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
 			systemCertsDir, hasSystemCerts); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
@@ -173,7 +186,7 @@ func run(repoRoot string, copilotArgs []string) error {
 
 func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 	image, workdir, prompt string,
-	copilotPath, gitPath, gitUploadPackPath, ghPath, goRoot string,
+	copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot string,
 	gitName, gitEmail, homeDir, ghConfigDir string, hasGhConfig bool,
 	systemCertsDir string, hasSystemCerts bool,
 ) error {
@@ -183,10 +196,12 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 	if err != nil {
 		return err
 	}
-	defer func() {
-		mergeNewBranches(cloneDir, repoRoot)
-		removeClone(cloneDir)
-	}()
+	defer removeClone(cloneDir)
+
+	// Allow the LLM agent to push to the checked-out branch in the origin repo.
+	// With .tasks/ gitignored the working tree stays clean, so updateInstead
+	// can safely update it on push.
+	gitOutput(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead")
 
 	containerHome := homeDir
 	copilotDir := filepath.Join(homeDir, ".copilot")
@@ -199,12 +214,13 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
 		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
-		// Mount repoRoot read-only so the clone's "origin" remote is reachable
-		// for git fetch inside the container.
-		"-v", fmt.Sprintf("%s:%s:ro", repoRoot, repoRoot),
+		// Mount repoRoot so the clone's "origin" remote is reachable
+		// for git fetch/push inside the container.
+		"-v", fmt.Sprintf("%s:%s", repoRoot, repoRoot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", gitUploadPackPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", gitReceivePackPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", ghPath),
 		"-v", fmt.Sprintf("%s:/usr/local/go:ro", goRoot),
 		"-e", "GOROOT=/usr/local/go",
@@ -502,89 +518,4 @@ func recoverOrphanedTasks(tasksDir string) {
 		}
 		fmt.Printf("Recovered orphaned task %s back to backlog\n", e.Name())
 	}
-}
-
-// completedTaskBranches returns the set of branch names ("task/<safe-name>")
-// that correspond to task files in the completed/ directory.
-func completedTaskBranches(tasksDir string) map[string]bool {
-	completed := filepath.Join(tasksDir, "completed")
-	entries, err := os.ReadDir(completed)
-	if err != nil {
-		return nil
-	}
-	branches := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		branches["task/"+sanitizeBranchName(e.Name())] = true
-	}
-	return branches
-}
-
-// mergeNewBranches merges task branches for completed tasks from the
-// temporary clone into main on the original repository.
-func mergeNewBranches(cloneDir, origin string) {
-	// Allow pushing to the checked-out branch in the origin repo.
-	// With .tasks/ gitignored the working tree stays clean, so
-	// updateInstead can safely update it on push.
-	gitOutput(origin, "config", "receive.denyCurrentBranch", "updateInstead")
-
-	// Determine the tasks directory from the origin repo.
-	tasksDir := filepath.Join(origin, ".tasks")
-	allowed := completedTaskBranches(tasksDir)
-
-	out, err := gitOutput(cloneDir, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
-	if err != nil {
-		return
-	}
-	for _, branch := range strings.Split(strings.TrimSpace(out), "\n") {
-		branch = strings.TrimSpace(branch)
-		if branch == "" || branch == "main" || branch == "master" {
-			continue
-		}
-		if !allowed[branch] {
-			fmt.Printf("Skipping branch %s (task not in completed/)\n", branch)
-			continue
-		}
-		if err := mergeToMain(cloneDir, origin, branch); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to merge %s into main: %v\n", branch, err)
-		}
-	}
-}
-
-// mergeToMain fetches the latest main from origin, merges the given branch,
-// and pushes the result back. It retries on non-fast-forward failures caused
-// by concurrent instances updating main at the same time.
-func mergeToMain(cloneDir, origin, branch string) error {
-	const maxRetries = 5
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Fetch latest main from the original repo.
-		if _, err := gitOutput(cloneDir, "fetch", origin, "main"); err != nil {
-			return fmt.Errorf("fetch main: %w", err)
-		}
-		// Reset local main to match the fetched head.
-		if _, err := gitOutput(cloneDir, "checkout", "-B", "main", "FETCH_HEAD"); err != nil {
-			return fmt.Errorf("checkout main: %w", err)
-		}
-		// Merge the task branch. The agent is expected to have already
-		// synced with main and resolved any conflicts before marking the
-		// task complete, so a conflict here is unexpected.
-		if _, err := gitOutput(cloneDir, "merge", "--no-edit", branch); err != nil {
-			gitOutput(cloneDir, "merge", "--abort")
-			return fmt.Errorf("merge conflict in %s: agent must resolve conflicts before marking task complete: %w", branch, err)
-		}
-		// Push merged main back to the original repo.
-		if _, err := gitOutput(cloneDir, "push", origin, "main"); err != nil {
-			if attempt < maxRetries {
-				fmt.Fprintf(os.Stderr, "main push attempt %d/%d failed, retrying...\n", attempt, maxRetries)
-				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
-				continue
-			}
-			return fmt.Errorf("push main after %d attempts: %w", maxRetries, err)
-		}
-		fmt.Printf("Merged %s into main\n", branch)
-		return nil
-	}
-	return nil
 }
