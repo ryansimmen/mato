@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -60,28 +61,10 @@ func run(repoRoot string, copilotArgs []string) error {
 	}
 	defer cleanupLock()
 
-	// Recover any tasks left in in-progress by a previous crashed run.
-	// Tasks claimed by a still-active agent are left alone.
-	recoverOrphanedTasks(tasksDir)
-
-	// Remove lock files from agents that are no longer running.
-	cleanStaleLocks(tasksDir)
-
 	// Ensure .tasks is gitignored so it never pollutes commits or status.
 	if err := ensureGitignored(repoRoot, "/.tasks/"); err != nil {
 		return err
 	}
-
-	// Create a temporary local clone so multiple instances can run in
-	// parallel without conflicting on branch checkouts or index state.
-	cloneDir, err := createClone(repoRoot)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		mergeNewBranches(cloneDir, repoRoot)
-		removeClone(cloneDir)
-	}()
 
 	image := os.Getenv("MATO_DOCKER_IMAGE")
 	if image == "" {
@@ -148,6 +131,68 @@ func run(repoRoot string, copilotArgs []string) error {
 	// Build the prompt from embedded task instructions.
 	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
 
+	// Listen for interrupt signals to stop the loop gracefully.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	for {
+		// Recover any tasks left in in-progress by a previous crashed run.
+		// Tasks claimed by a still-active agent are left alone.
+		recoverOrphanedTasks(tasksDir)
+
+		// Remove lock files from agents that are no longer running.
+		cleanStaleLocks(tasksDir)
+
+		if !hasAvailableTasks(tasksDir) {
+			fmt.Println("No tasks found in backlog. Waiting...")
+			select {
+			case <-sigCh:
+				fmt.Println("\nInterrupted. Exiting.")
+				return nil
+			case <-time.After(10 * time.Second):
+				continue
+			}
+		}
+
+		if err := runOnce(repoRoot, tasksDir, agentID, copilotArgs, image, workdir, prompt,
+			copilotPath, gitPath, gitUploadPackPath, ghPath, goRoot,
+			gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
+			systemCertsDir, hasSystemCerts); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
+		}
+
+		select {
+		case <-sigCh:
+			fmt.Println("\nInterrupted. Exiting.")
+			return nil
+		case <-time.After(10 * time.Second):
+		}
+	}
+}
+
+func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
+	image, workdir, prompt string,
+	copilotPath, gitPath, gitUploadPackPath, ghPath, goRoot string,
+	gitName, gitEmail, homeDir, ghConfigDir string, hasGhConfig bool,
+	systemCertsDir string, hasSystemCerts bool,
+) error {
+	// Create a temporary local clone so multiple instances can run in
+	// parallel without conflicting on branch checkouts or index state.
+	cloneDir, err := createClone(repoRoot)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		mergeNewBranches(cloneDir, repoRoot)
+		removeClone(cloneDir)
+	}()
+
+	containerHome := homeDir
+	copilotDir := filepath.Join(homeDir, ".copilot")
+	goModCache := filepath.Join(homeDir, "go", "pkg", "mod")
+	goBuildCache := filepath.Join(homeDir, ".cache", "go-build")
+
 	fmt.Printf("Launching agent from %s (clone: %s)\n", repoRoot, cloneDir)
 	args := []string{
 		"run", "--rm", "-it",
@@ -180,10 +225,6 @@ func run(repoRoot string, copilotArgs []string) error {
 		args = append(args, "-e", "GIT_AUTHOR_EMAIL="+e, "-e", "GIT_COMMITTER_EMAIL="+e)
 	}
 	// Mount host .copilot dir so the copilot CLI can find auth + packages.
-	containerHome := homeDir
-	copilotDir := filepath.Join(homeDir, ".copilot")
-	goModCache := filepath.Join(homeDir, "go", "pkg", "mod")
-	goBuildCache := filepath.Join(homeDir, ".cache", "go-build")
 	args = append(args,
 		"-e", fmt.Sprintf("HOME=%s", containerHome),
 		"-v", fmt.Sprintf("%s:%s/.copilot", copilotDir, containerHome),
@@ -336,6 +377,22 @@ func ensureGitignored(repoRoot, pattern string) error {
 	}
 	fmt.Fprintln(f, pattern)
 	return nil
+}
+
+// hasAvailableTasks reports whether there is at least one .md task file
+// in backlog/. After orphan recovery, any task still in in-progress/
+// belongs to an active agent, so only backlog/ matters for new agents.
+func hasAvailableTasks(tasksDir string) bool {
+	entries, err := os.ReadDir(filepath.Join(tasksDir, "backlog"))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			return true
+		}
+	}
+	return false
 }
 
 var claimedByRe = regexp.MustCompile(`<!-- claimed-by:\s*(\S+)`)
