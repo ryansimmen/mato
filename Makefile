@@ -20,9 +20,9 @@ clean: ## Remove build artifacts
 fmt: ## Format Go source files
 	go fmt ./...
 
-run: ## Run agent in Docker (use -- to pass args to copilot, e.g. -- --model claude-opus-4.6)
+run: ## Run agent in Docker (use COPILOT_ARGS to pass args to copilot, e.g. COPILOT_ARGS="--model gpt-5.3-codex")
 	@if [ -z "$(REPO)" ]; then echo "REPO is required"; exit 1; fi
-	go run . --repo "$(REPO)"
+	go run . --repo "$(REPO)" $(COPILOT_ARGS)
 
 test: ## Run tests
 	go test ./...

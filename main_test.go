@@ -302,6 +302,43 @@ func TestIsAgentActive(t *testing.T) {
 	}
 }
 
+func TestHasAvailableTasks(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"backlog", "in-progress", "completed", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Empty directories — no tasks available.
+	if hasAvailableTasks(tasksDir) {
+		t.Fatal("expected no available tasks in empty dirs")
+	}
+
+	// Add a non-.md file — should still report no tasks.
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "notes.txt"), []byte("hi"), 0o644)
+	if hasAvailableTasks(tasksDir) {
+		t.Fatal("non-.md file should not count as an available task")
+	}
+
+	// Add a .md file to backlog.
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "task1.md"), []byte("# Task 1\n"), 0o644)
+	if !hasAvailableTasks(tasksDir) {
+		t.Fatal("expected available task in backlog")
+	}
+
+	// Tasks only in in-progress should not count (they belong to active agents).
+	os.Remove(filepath.Join(tasksDir, "backlog", "task1.md"))
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task2.md"), []byte("# Task 2\n"), 0o644)
+	if hasAvailableTasks(tasksDir) {
+		t.Fatal("in-progress tasks should not count as available")
+	}
+
+	// Add back to backlog — should report available again.
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "task3.md"), []byte("# Task 3\n"), 0o644)
+	if !hasAvailableTasks(tasksDir) {
+		t.Fatal("expected available task in backlog")
+	}
+}
+
 func TestRegisterAgent(t *testing.T) {
 	tasksDir := t.TempDir()
 
