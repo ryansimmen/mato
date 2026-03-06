@@ -386,12 +386,18 @@ func ensureGitignored(repoRoot, pattern string) error {
 	if err != nil {
 		return fmt.Errorf("open .gitignore: %w", err)
 	}
-	defer f.Close()
 	// Add a newline before the pattern if the file doesn't end with one.
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		fmt.Fprintln(f)
 	}
 	fmt.Fprintln(f, pattern)
+	f.Close()
+	if _, err := gitOutput(repoRoot, "add", ".gitignore"); err != nil {
+		return fmt.Errorf("git add .gitignore: %w", err)
+	}
+	if _, err := gitOutput(repoRoot, "commit", "-m", "chore: add "+pattern+" to .gitignore"); err != nil {
+		return fmt.Errorf("git commit .gitignore: %w", err)
+	}
 	return nil
 }
 
