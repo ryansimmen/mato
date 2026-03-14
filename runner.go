@@ -138,6 +138,7 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	// Build the prompt from embedded task instructions.
 	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
 	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
+	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
 
 	// Listen for interrupt signals to stop the loop gracefully.
 	sigCh := make(chan os.Signal, 1)
@@ -157,6 +158,10 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		reconcileReadyQueue(tasksDir)
 		if err := writeQueueManifest(tasksDir); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
+		}
+		removeOverlappingTasks(tasksDir)
+		if err := writeQueueManifest(tasksDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest after overlap cleanup: %v\n", err)
 		}
 
 		hasBacklogTasks := hasAvailableTasks(tasksDir)

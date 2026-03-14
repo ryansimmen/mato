@@ -10,7 +10,9 @@ import (
 var errHelp = errors.New("help requested")
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `Usage: mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [copilot-args...]
+	fmt.Fprintf(os.Stderr, `Usage:
+  mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [copilot-args...]
+  mato status [--repo <path>] [--tasks-dir <path>]
 
 Runs autonomous Copilot agents against a task queue in Docker.
 
@@ -25,6 +27,14 @@ Any other flags are forwarded to the copilot CLI inside the container.
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "status" {
+		if err := showStatus(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	repoRoot, branch, tasksDir, copilotArgs, err := parseArgs(os.Args[1:])
 	if err == errHelp {
 		usage()

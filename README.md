@@ -1,6 +1,6 @@
 # Multi Agent Task Orchestrator (mato)
 
-Runs autonomous Copilot agents against a task queue in Docker. Each agent picks a task, works on it, commits to the `mato` branch, and exits.
+Runs autonomous Copilot agents against a filesystem-backed task queue in Docker. Agents claim work, coordinate through `.tasks/`, push task branches, and the host merge queue squash-merges completed work into the target branch.
 
 ## Requirements
 
@@ -21,82 +21,103 @@ copilot login
 # cd into the target repo
 cd /path/to/repo
 
-# Add a task
-cat > .tasks/backlog/add-retry-logic.md << 'EOF'
+# Create a task (waiting/ is promoted automatically when deps are met)
+mkdir -p .tasks/waiting
+cat > .tasks/waiting/add-retry-logic.md << 'EOF'
+---
+id: add-retry-logic
+priority: 10
+depends_on: [setup-http-client]
+affects: [pkg/client/http.go]
+tags: [backend]
+---
 # Add retry logic to HTTP client
 
-The fetchData function in pkg/client/http.go does not retry on transient
-failures. Wrap calls in a retry loop with exponential backoff (3 attempts,
-starting at 500ms). Add tests covering retry on 503 and success on second
-attempt.
+Wrap fetchData in a retry loop with exponential backoff and add tests.
 EOF
 
-# Run the agent (defaults to current directory)
+# Run the orchestrator
 mato
+
+# Inspect queue health
+mato status
 ```
 
-Mato will pick up the task, work on it in a Docker container, commit to the `mato` branch, and then poll for the next task. Use `--branch` to target a different branch.
+Useful flags:
+
+- `--repo <path>`: target repository (defaults to the current directory)
+- `--branch <name>`: merge target branch (defaults to `mato`)
+- `--tasks-dir <path>`: custom task queue location (defaults to `<repo>/.tasks`)
+
+## Task Files
+
+Task files are markdown with optional YAML frontmatter. Lower `priority` values run first; if omitted, the default priority is `50`.
+
+```yaml
+---
+id: add-retry-logic
+priority: 10
+depends_on: [setup-http-client]
+affects: [pkg/client/http.go]
+tags: [backend]
+---
+```
+
+After the frontmatter, write normal markdown instructions for the agent.
+
+### Dependencies and priority
+
+- Put blocked tasks in `waiting/`.
+- `depends_on` entries refer to task IDs.
+- On each loop, completed dependencies promote a task from `waiting/` to `backlog/`.
+- Lower numbers mean higher priority.
+- `affects` is used for simple conflict prevention: if two backlog tasks list the exact same path, the lower-priority task is deferred back to `waiting/`.
+
+## Queue Layout
+
+```text
+<repo>/.tasks/
+├── waiting/         # blocked tasks waiting on dependencies or conflicts
+├── backlog/         # ready to run
+├── in-progress/     # claimed by an active agent
+├── ready-to-merge/  # completed by an agent, waiting for host merge
+├── completed/       # merged successfully
+├── failed/          # exceeded retry limit
+├── messages/
+│   ├── events/      # coordination events and status updates
+│   └── presence/    # active agent heartbeats
+└── .locks/          # PID locks for agents and merge queue
+```
+
+Failed tasks are retried up to 3 times before moving to `failed/`.
 
 ## How It Works
 
-1. You add task files (markdown) to `<repo>/.tasks/backlog/`
-2. Mato loops continuously, polling the backlog every 10 seconds
-3. When a task is found, it starts a Docker container with the `copilot` CLI
-4. Copilot picks a task, claims it, creates a branch, does the work, merges to the target branch
-5. The task file moves to `.tasks/completed/` (or `.tasks/failed/` after too many retries) and the container exits
-6. Mato waits 10 seconds then checks for the next task
+1. Add tasks to `waiting/` or `backlog/`.
+2. Mato promotes ready tasks into `backlog/`, orders them by priority, and defers exact `affects` conflicts.
+3. An agent claims a backlog task, works in an isolated clone, and pushes a `task/<name>` branch.
+4. Agents communicate through `.tasks/messages/` so concurrent runs can share intent and completion events.
+5. The host merge queue processes `ready-to-merge/` and squash-merges finished task branches into the target branch.
+6. Tasks move to `completed/` on success or back through the queue on retryable failure.
 
-If the backlog is empty, mato keeps polling until new tasks appear. The loop exits cleanly on `Ctrl+C`.
-
-## Task File Format
-
-```markdown
-# Task title
-
-Detailed instructions for the agent.
-```
-
-## Task Queue Structure
-
-```
-<repo>/.tasks/
-├── backlog/       # pending tasks
-├── in-progress/   # tasks being worked on
-├── completed/     # finished tasks
-├── failed/        # tasks that exceeded retry limit
-└── .locks/        # PID locks for concurrent agents
-```
-
-Failed tasks are retried up to 3 times before being moved to `failed/`.
+If the queue is empty, mato keeps polling until new work appears. The loop exits cleanly on `Ctrl+C`.
 
 ## Running Multiple Agents
 
-To process tasks in parallel, start multiple mato instances in separate terminals:
+Start multiple `mato` processes in separate terminals to process tasks in parallel. Task claiming is atomic (`mv`), active agents are tracked in `.locks/`, and orphaned `in-progress/` tasks are recovered automatically on the next loop.
 
-```bash
-# Terminal 1
-mato
+## Status Command
 
-# Terminal 2
-mato
+`mato status` prints a terminal-friendly snapshot of the queue:
 
-# Terminal 3
-mato
-```
-
-Each instance operates independently — it claims a task from the backlog, works on it in its own temporary clone, and merges to the target branch when done. Task claiming is atomic (filesystem `mv`), so no two agents will work on the same task. If an agent crashes, the next instance to start will recover its orphaned task back to the backlog.
+- counts for `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, `completed/`, and `failed/`
+- active agents from `.locks/`
+- waiting tasks with dependency progress
+- the last 5 coordination messages from `.tasks/messages/events/`
 
 ## Docker
 
-`mato` (or `mato --repo /path/to/repo`) launches a Docker container for each task. The container:
-
-- Mounts the repo at `/workspace` in an `ubuntu:24.04` container (override with `MATO_DOCKER_IMAGE`).
-- Mounts host `copilot` and `gh` CLIs, `~/.copilot` auth, `~/.config/gh`, and SSL certs.
-- Runs as your host UID/GID so files are owned by you.
-- Passes your git `user.name` and `user.email` for commits.
-- Runs `copilot -p <instructions> --autopilot --allow-all --model claude-opus-4.6` inside the container by default.
-
-Pass extra copilot args after `--repo`, e.g. to change the model:
+`mato` launches an `ubuntu:24.04` container by default (override with `MATO_DOCKER_IMAGE`). The container mounts the repo at `/workspace`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
 
 ```bash
 mato --model gpt-5.3-codex
@@ -105,6 +126,5 @@ mato --model gpt-5.3-codex
 ## Notes
 
 - Task instructions are embedded in the binary (`task-instructions.md`).
-- The agent creates a `task/<name>` branch, merges to the target branch (default `mato`), and resolves conflicts if needed.
-- Orphaned tasks (from crashed agents) are automatically recovered on the next run.
-- Run `make test` to run the test suite.
+- The default merge target branch is `mato`.
+- Run `go test ./...` (or `make test`) to run the test suite.
