@@ -36,19 +36,36 @@ func TestParseArgs(t *testing.T) {
 			wantArgs: []string{"--model", "gpt-5.2"},
 		},
 		{
-			name:    "missing required flag",
-			args:    []string{"extra"},
-			wantErr: true,
-		},
-		{
-			name:    "empty args",
-			args:    []string{},
-			wantErr: true,
-		},
-		{
 			name:    "flag without value",
 			args:    []string{"--repo"},
 			wantErr: true,
+		},
+	}
+
+	// Capture the working directory for default-repo tests.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+
+	// When --repo is omitted, parseArgs should default to the working directory.
+	defaultTests := []struct {
+		name     string
+		args     []string
+		wantRepo string
+		wantArgs []string
+	}{
+		{
+			name:     "no args defaults to cwd",
+			args:     []string{},
+			wantRepo: wd,
+			wantArgs: []string{},
+		},
+		{
+			name:     "extra args without repo defaults to cwd",
+			args:     []string{"--model", "gpt-5"},
+			wantRepo: wd,
+			wantArgs: []string{"--model", "gpt-5"},
 		},
 	}
 
@@ -61,6 +78,26 @@ func TestParseArgs(t *testing.T) {
 				}
 				return
 			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if repo != tt.wantRepo {
+				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
+			}
+			for i := range args {
+				if args[i] != tt.wantArgs[i] {
+					t.Errorf("args[%d] = %q, want %q", i, args[i], tt.wantArgs[i])
+				}
+			}
+		})
+	}
+
+	for _, tt := range defaultTests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, args, err := parseArgs(tt.args)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
