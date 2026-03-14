@@ -1,6 +1,6 @@
 # Multi Agent Task Orchestrator (mato)
 
-Runs autonomous Copilot agents against a task queue in Docker. Each agent picks a task, works on it, commits to main, and exits.
+Runs autonomous Copilot agents against a task queue in Docker. Each agent picks a task, works on it, commits to the `mato` branch, and exits.
 
 ## Requirements
 
@@ -35,14 +35,14 @@ EOF
 mato
 ```
 
-Mato will pick up the task, work on it in a Docker container, commit to main, and then poll for the next task.
+Mato will pick up the task, work on it in a Docker container, commit to the `mato` branch, and then poll for the next task. Use `--branch` to target a different branch.
 
 ## How It Works
 
 1. You add task files (markdown) to `<repo>/.tasks/backlog/`
 2. Mato loops continuously, polling the backlog every 10 seconds
 3. When a task is found, it starts a Docker container with the `copilot` CLI
-4. Copilot picks a task, claims it, creates a branch, does the work, merges to main
+4. Copilot picks a task, claims it, creates a branch, does the work, merges to the target branch
 5. The task file moves to `.tasks/completed/` (or `.tasks/failed/` after too many retries) and the container exits
 6. Mato waits 10 seconds then checks for the next task
 
@@ -84,7 +84,7 @@ mato
 mato
 ```
 
-Each instance operates independently — it claims a task from the backlog, works on it in its own temporary clone, and merges to main when done. Task claiming is atomic (filesystem `mv`), so no two agents will work on the same task. If an agent crashes, the next instance to start will recover its orphaned task back to the backlog.
+Each instance operates independently — it claims a task from the backlog, works on it in its own temporary clone, and merges to the target branch when done. Task claiming is atomic (filesystem `mv`), so no two agents will work on the same task. If an agent crashes, the next instance to start will recover its orphaned task back to the backlog.
 
 ## Docker
 
@@ -105,6 +105,6 @@ mato --model gpt-5.3-codex
 ## Notes
 
 - Task instructions are embedded in the binary (`task-instructions.md`).
-- The agent creates a `task/<name>` branch, merges to main, and resolves conflicts if needed.
+- The agent creates a `task/<name>` branch, merges to the target branch (default `mato`), and resolves conflicts if needed.
 - Orphaned tasks (from crashed agents) are automatically recovered on the next run.
 - Run `make test` to run the test suite.

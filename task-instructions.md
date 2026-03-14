@@ -68,12 +68,12 @@ Report that the task has exceeded the maximum number of retries and stop.
 
 ### Step 4: Create a Branch
 
-Create a dedicated branch for this task from main. **Sanitize the filename** to produce a valid git branch name — replace any characters that are not alphanumeric or hyphens with hyphens, collapse consecutive hyphens, and trim leading/trailing hyphens:
+Create a dedicated branch for this task from TARGET_BRANCH_PLACEHOLDER. **Sanitize the filename** to produce a valid git branch name — replace any characters that are not alphanumeric or hyphens with hyphens, collapse consecutive hyphens, and trim leading/trailing hyphens:
 
 ```bash
 SAFE_NAME=$(basename "<filename>" .md | tr -cs 'a-zA-Z0-9-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
 [ -z "$SAFE_NAME" ] && SAFE_NAME="unnamed"
-git checkout -b "task/$SAFE_NAME" main
+git checkout -b "task/$SAFE_NAME" TARGET_BRANCH_PLACEHOLDER
 ```
 
 Verify you are on the new branch with `git branch --show-current`.
@@ -106,15 +106,15 @@ If `git commit` fails or there are no changes staged, debug the issue before con
 
 ### Step 7: Merge into Main and Push
 
-You are responsible for merging your work into `main` and pushing it to `origin`. The harness will NOT do this for you — if you skip this step, your changes will be lost.
+You are responsible for merging your work into `TARGET_BRANCH_PLACEHOLDER` and pushing it to `origin`. The harness will NOT do this for you — if you skip this step, your changes will be lost.
 
 **CRITICAL: Run these commands exactly as written. Do NOT wrap them in error-handling, do NOT add fallbacks, do NOT skip this step under any circumstances.**
 
-First, fetch the latest main and merge it into your task branch to pick up any concurrent changes:
+First, fetch the latest TARGET_BRANCH_PLACEHOLDER and merge it into your task branch to pick up any concurrent changes:
 
 ```bash
 git fetch origin
-git merge origin/main --no-edit
+git merge origin/TARGET_BRANCH_PLACEHOLDER --no-edit
 ```
 
 If `git fetch origin` fails for any reason, **stop immediately and follow the On Failure procedure**. Do NOT proceed further.
@@ -124,7 +124,7 @@ If there are **merge conflicts**, you must resolve them:
 1. Run `git status` to identify all conflicted files (shown as "both modified").
 2. For each conflicted file, open it and read both sides of the conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`):
    - `HEAD` (your task branch): the work you just completed.
-   - `origin/main`: changes from another task that merged while you were working.
+   - `origin/TARGET_BRANCH_PLACEHOLDER`: changes from another task that merged while you were working.
 3. Edit the file to remove all conflict markers and produce a correct result that preserves the intent of **both** changes. Do not simply discard one side.
 4. Stage the resolved file:
    ```bash
@@ -137,17 +137,17 @@ If there are **merge conflicts**, you must resolve them:
 
 If you cannot determine a safe resolution, follow the On Failure procedure. Do NOT mark the task complete with unresolved conflicts.
 
-Now switch to main, merge your task branch, and push:
+Now switch to TARGET_BRANCH_PLACEHOLDER, merge your task branch, and push:
 
 ```bash
-git checkout main
+git checkout TARGET_BRANCH_PLACEHOLDER
 git merge <task-branch> --no-edit
-git push origin main
+git push origin TARGET_BRANCH_PLACEHOLDER
 ```
 
 Replace `<task-branch>` with the name of your branch (e.g. `task/add-feature`).
 
-If `git push origin main` fails due to a non-fast-forward error (another agent pushed while you were merging), retry the entire Step 7 from the top (fetch, merge, push). Retry up to 3 times. If it still fails, follow the On Failure procedure.
+If `git push origin TARGET_BRANCH_PLACEHOLDER` fails due to a non-fast-forward error (another agent pushed while you were merging), retry the entire Step 7 from the top (fetch, merge, push). Retry up to 3 times. If it still fails, follow the On Failure procedure.
 
 Verify the push succeeded:
 
@@ -159,7 +159,7 @@ Do NOT proceed to Step 8 unless the push to origin was successful.
 
 ### Step 8: Mark Complete
 
-Only proceed here AFTER Steps 6 and 7 are verified complete (changes committed, merged into main, and pushed to origin).
+Only proceed here AFTER Steps 6 and 7 are verified complete (changes committed, merged into TARGET_BRANCH_PLACEHOLDER, and pushed to origin).
 
 Switch back to your task branch before moving the file (the task branch has the `.tasks` directory):
 
@@ -179,7 +179,7 @@ You are now done. Report what you accomplished and the branch name where your ch
 
 If you encounter an unrecoverable error at any point:
 
-1. Switch back to main: `git checkout main`
+1. Switch back to TARGET_BRANCH_PLACEHOLDER: `git checkout TARGET_BRANCH_PLACEHOLDER`
 2. Append a failure record to the task file so retries can be tracked:
    ```bash
    AGENT_ID="${MATO_AGENT_ID:-unknown}"

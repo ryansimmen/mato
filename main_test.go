@@ -11,33 +11,56 @@ import (
 
 func TestParseArgs(t *testing.T) {
 	tests := []struct {
-		name     string
-		args     []string
-		wantRepo string
-		wantArgs []string
-		wantErr  bool
+		name       string
+		args       []string
+		wantRepo   string
+		wantBranch string
+		wantArgs   []string
+		wantErr    bool
 	}{
 		{
-			name:     "repo equals syntax",
-			args:     []string{"--repo=/tmp/repo"},
-			wantRepo: "/tmp/repo",
-			wantArgs: []string{},
+			name:       "repo equals syntax",
+			args:       []string{"--repo=/tmp/repo"},
+			wantRepo:   "/tmp/repo",
+			wantBranch: "mato",
+			wantArgs:   []string{},
 		},
 		{
-			name:     "repo space syntax",
-			args:     []string{"--repo", "/tmp/repo"},
-			wantRepo: "/tmp/repo",
-			wantArgs: []string{},
+			name:       "repo space syntax",
+			args:       []string{"--repo", "/tmp/repo"},
+			wantRepo:   "/tmp/repo",
+			wantBranch: "mato",
+			wantArgs:   []string{},
 		},
 		{
-			name:     "with passthrough args",
-			args:     []string{"--repo=/tmp/repo", "--", "--model", "gpt-5.2"},
-			wantRepo: "/tmp/repo",
-			wantArgs: []string{"--model", "gpt-5.2"},
+			name:       "with passthrough args",
+			args:       []string{"--repo=/tmp/repo", "--", "--model", "gpt-5.2"},
+			wantRepo:   "/tmp/repo",
+			wantBranch: "mato",
+			wantArgs:   []string{"--model", "gpt-5.2"},
+		},
+		{
+			name:       "branch equals syntax",
+			args:       []string{"--repo=/tmp/repo", "--branch=develop"},
+			wantRepo:   "/tmp/repo",
+			wantBranch: "develop",
+			wantArgs:   []string{},
+		},
+		{
+			name:       "branch space syntax",
+			args:       []string{"--repo=/tmp/repo", "--branch", "develop"},
+			wantRepo:   "/tmp/repo",
+			wantBranch: "develop",
+			wantArgs:   []string{},
 		},
 		{
 			name:    "flag without value",
 			args:    []string{"--repo"},
+			wantErr: true,
+		},
+		{
+			name:    "branch flag without value",
+			args:    []string{"--branch"},
 			wantErr: true,
 		},
 		{
@@ -60,28 +83,31 @@ func TestParseArgs(t *testing.T) {
 
 	// When --repo is omitted, parseArgs should default to the working directory.
 	defaultTests := []struct {
-		name     string
-		args     []string
-		wantRepo string
-		wantArgs []string
+		name       string
+		args       []string
+		wantRepo   string
+		wantBranch string
+		wantArgs   []string
 	}{
 		{
-			name:     "no args defaults to cwd",
-			args:     []string{},
-			wantRepo: wd,
-			wantArgs: []string{},
+			name:       "no args defaults to cwd",
+			args:       []string{},
+			wantRepo:   wd,
+			wantBranch: "mato",
+			wantArgs:   []string{},
 		},
 		{
-			name:     "extra args without repo defaults to cwd",
-			args:     []string{"--model", "gpt-5"},
-			wantRepo: wd,
-			wantArgs: []string{"--model", "gpt-5"},
+			name:       "extra args without repo defaults to cwd",
+			args:       []string{"--model", "gpt-5"},
+			wantRepo:   wd,
+			wantBranch: "mato",
+			wantArgs:   []string{"--model", "gpt-5"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, args, err := parseArgs(tt.args)
+			repo, branch, args, err := parseArgs(tt.args)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -93,6 +119,9 @@ func TestParseArgs(t *testing.T) {
 			}
 			if repo != tt.wantRepo {
 				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
+			}
+			if branch != tt.wantBranch {
+				t.Errorf("branch = %q, want %q", branch, tt.wantBranch)
 			}
 			if len(args) != len(tt.wantArgs) {
 				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
@@ -107,12 +136,15 @@ func TestParseArgs(t *testing.T) {
 
 	for _, tt := range defaultTests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, args, err := parseArgs(tt.args)
+			repo, branch, args, err := parseArgs(tt.args)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if repo != tt.wantRepo {
 				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
+			}
+			if branch != tt.wantBranch {
+				t.Errorf("branch = %q, want %q", branch, tt.wantBranch)
 			}
 			if len(args) != len(tt.wantArgs) {
 				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
