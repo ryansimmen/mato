@@ -12,17 +12,17 @@ Runs autonomous Copilot agents against a task queue in Docker. Each agent picks 
 ## Quick Start
 
 ```bash
-# Build
-make build
+# Install
+make install
 
 # Authenticate with Copilot
 copilot login
 
-# Configure your target repo
-echo "REPO=/path/to/repo" > .env
+# cd into the target repo
+cd /path/to/repo
 
 # Add a task
-cat > /path/to/repo/.tasks/backlog/add-retry-logic.md << 'EOF'
+cat > .tasks/backlog/add-retry-logic.md << 'EOF'
 # Add retry logic to HTTP client
 
 The fetchData function in pkg/client/http.go does not retry on transient
@@ -31,8 +31,8 @@ starting at 500ms). Add tests covering retry on 503 and success on second
 attempt.
 EOF
 
-# Run the agent
-make run
+# Run the agent (defaults to current directory)
+mato
 ```
 
 Mato will pick up the task, work on it in a Docker container, commit to main, and then poll for the next task.
@@ -75,20 +75,20 @@ To process tasks in parallel, start multiple mato instances in separate terminal
 
 ```bash
 # Terminal 1
-make run
+mato
 
 # Terminal 2
-make run
+mato
 
 # Terminal 3
-make run
+mato
 ```
 
 Each instance operates independently — it claims a task from the backlog, works on it in its own temporary clone, and merges to main when done. Task claiming is atomic (filesystem `mv`), so no two agents will work on the same task. If an agent crashes, the next instance to start will recover its orphaned task back to the backlog.
 
 ## Docker
 
-`make run` is a convenience wrapper around `go run . --repo`. The container:
+`mato` (or `mato --repo /path/to/repo`) launches a Docker container for each task. The container:
 
 - Mounts the repo at `/workspace` in an `ubuntu:24.04` container (override with `MATO_DOCKER_IMAGE`).
 - Mounts host `copilot` and `gh` CLIs, `~/.copilot` auth, `~/.config/gh`, and SSL certs.
@@ -96,10 +96,10 @@ Each instance operates independently — it claims a task from the backlog, work
 - Passes your git `user.name` and `user.email` for commits.
 - Runs `copilot -p <instructions> --autopilot --allow-all --model claude-opus-4.6` inside the container by default.
 
-Pass extra copilot args via `COPILOT_ARGS`, e.g. to change the model:
+Pass extra copilot args after `--repo`, e.g. to change the model:
 
 ```bash
-make run COPILOT_ARGS="--model gpt-5.3-codex"
+mato --model gpt-5.3-codex
 ```
 
 ## Notes

@@ -297,7 +297,11 @@ func parseArgs(args []string) (string, []string, error) {
 		copilotArgs = append(copilotArgs, arg)
 	}
 	if repoRoot == "" {
-		return "", nil, errors.New("--repo is required")
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", nil, fmt.Errorf("get working directory: %w", err)
+		}
+		repoRoot = wd
 	}
 	return repoRoot, copilotArgs, nil
 }
