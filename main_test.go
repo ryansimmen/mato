@@ -64,6 +64,11 @@ func TestParseArgs(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "tasks-dir flag without value",
+			args:    []string{"--tasks-dir"},
+			wantErr: true,
+		},
+		{
 			name:    "help flag",
 			args:    []string{"--help"},
 			wantErr: true,
@@ -107,7 +112,7 @@ func TestParseArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, branch, args, err := parseArgs(tt.args)
+			repo, branch, _, args, err := parseArgs(tt.args)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -136,7 +141,7 @@ func TestParseArgs(t *testing.T) {
 
 	for _, tt := range defaultTests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, branch, args, err := parseArgs(tt.args)
+			repo, branch, _, args, err := parseArgs(tt.args)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
