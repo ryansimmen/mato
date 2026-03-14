@@ -289,3 +289,38 @@ func TestWriteQueueManifest_SortsByPriorityThenFilename(t *testing.T) {
 		t.Fatalf("manifest = %q, want %q", string(data), want)
 	}
 }
+
+func TestRemoveOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	files := map[string]string{
+		"high-priority.md": "---\npriority: 5\naffects: [pkg/client/http.go, README.md]\n---\nKeep me\n",
+		"low-priority.md":  "---\npriority: 20\naffects: [pkg/client/http.go]\n---\nDefer me\n",
+		"independent.md":   "---\npriority: 30\naffects: [docs/guide.md]\n---\nKeep me too\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(tasksDir, "backlog", name), []byte(content), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(%s): %v", name, err)
+		}
+	}
+
+	removeOverlappingTasks(tasksDir)
+
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "high-priority.md")); err != nil {
+		t.Fatalf("high priority task should stay in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "independent.md")); err != nil {
+		t.Fatalf("independent task should stay in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "low-priority.md")); !os.IsNotExist(err) {
+		t.Fatalf("low priority overlapping task should leave backlog, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "low-priority.md")); err != nil {
+		t.Fatalf("low priority overlapping task should move to waiting: %v", err)
+	}
+}

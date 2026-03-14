@@ -210,6 +210,104 @@ type queueEntry struct {
 	priority int
 }
 
+type backlogTask struct {
+	name     string
+	path     string
+	priority int
+	affects  []string
+}
+
+// removeOverlappingTasks checks tasks in backlog/ for overlapping affects: metadata.
+// If two tasks have overlapping affects patterns, only the higher-priority one
+// stays in backlog/; the other is moved back to waiting/.
+func removeOverlappingTasks(tasksDir string) {
+	backlogDir := filepath.Join(tasksDir, "backlog")
+	entries, err := os.ReadDir(backlogDir)
+	if err != nil {
+		return
+	}
+
+	tasks := make([]backlogTask, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+
+		path := filepath.Join(backlogDir, entry.Name())
+		meta, _, err := parseTaskFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for overlap detection: %v\n", entry.Name(), err)
+			continue
+		}
+		tasks = append(tasks, backlogTask{
+			name:     entry.Name(),
+			path:     path,
+			priority: meta.Priority,
+			affects:  meta.Affects,
+		})
+	}
+
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].priority != tasks[j].priority {
+			return tasks[i].priority < tasks[j].priority
+		}
+		return tasks[i].name < tasks[j].name
+	})
+
+	kept := make([]backlogTask, 0, len(tasks))
+	waitingDir := filepath.Join(tasksDir, "waiting")
+	for _, task := range tasks {
+		deferred := false
+		for _, other := range kept {
+			overlap := overlappingAffects(task.affects, other.affects)
+			if len(overlap) == 0 {
+				continue
+			}
+			dst := filepath.Join(waitingDir, task.name)
+			if err := os.Rename(task.path, dst); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not defer overlapping task %s: %v\n", task.name, err)
+				break
+			}
+			fmt.Printf("Deferring task %s (conflicts with higher-priority task %s on files %s)\n",
+				task.name, other.name, strings.Join(overlap, ", "))
+			deferred = true
+			break
+		}
+		if !deferred {
+			kept = append(kept, task)
+		}
+	}
+}
+
+func overlappingAffects(a, b []string) []string {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(a))
+	for _, item := range a {
+		if item == "" {
+			continue
+		}
+		seen[item] = struct{}{}
+	}
+
+	overlap := make([]string, 0)
+	added := make(map[string]struct{})
+	for _, item := range b {
+		if _, ok := seen[item]; !ok {
+			continue
+		}
+		if _, ok := added[item]; ok {
+			continue
+		}
+		added[item] = struct{}{}
+		overlap = append(overlap, item)
+	}
+	sort.Strings(overlap)
+	return overlap
+}
+
 func writeQueueManifest(tasksDir string) error {
 	entries, err := os.ReadDir(filepath.Join(tasksDir, "backlog"))
 	if err != nil {
