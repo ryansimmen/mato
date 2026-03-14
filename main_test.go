@@ -40,6 +40,16 @@ func TestParseArgs(t *testing.T) {
 			args:    []string{"--repo"},
 			wantErr: true,
 		},
+		{
+			name:    "help flag",
+			args:    []string{"--help"},
+			wantErr: true,
+		},
+		{
+			name:    "short help flag",
+			args:    []string{"-h"},
+			wantErr: true,
+		},
 	}
 
 	// Capture the working directory for default-repo tests.

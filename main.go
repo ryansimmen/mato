@@ -21,8 +21,27 @@ import (
 //go:embed task-instructions.md
 var taskInstructions string
 
+var errHelp = errors.New("help requested")
+
+func usage() {
+	fmt.Fprintf(os.Stderr, `Usage: mato [--repo <path>] [copilot-args...]
+
+Runs autonomous Copilot agents against a task queue in Docker.
+
+Options:
+  --repo <path>   Path to the git repository (default: current directory)
+  --help, -h      Show this help message
+
+Any other flags are forwarded to the copilot CLI inside the container.
+`)
+}
+
 func main() {
 	repoRoot, copilotArgs, err := parseArgs(os.Args[1:])
+	if err == errHelp {
+		usage()
+		os.Exit(0)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
 		os.Exit(1)
@@ -281,6 +300,9 @@ func parseArgs(args []string) (string, []string, error) {
 		if arg == "--" {
 			copilotArgs = append(copilotArgs, args[i+1:]...)
 			break
+		}
+		if arg == "--help" || arg == "-h" {
+			return "", nil, errHelp
 		}
 		if strings.HasPrefix(arg, "--repo=") {
 			repoRoot = strings.TrimSpace(strings.TrimPrefix(arg, "--repo="))
