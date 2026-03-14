@@ -159,22 +159,27 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 		}
 
-		if !hasAvailableTasks(tasksDir) {
-			fmt.Println("No tasks found in backlog. Waiting...")
-			select {
-			case <-sigCh:
-				fmt.Println("\nInterrupted. Exiting.")
-				return nil
-			case <-time.After(10 * time.Second):
-				continue
+		hasBacklogTasks := hasAvailableTasks(tasksDir)
+		if hasBacklogTasks {
+			if err := runOnce(repoRoot, tasksDir, agentID, copilotArgs, image, workdir, prompt,
+				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
+				gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
+				systemCertsDir, hasSystemCerts); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
 			}
 		}
 
-		if err := runOnce(repoRoot, tasksDir, agentID, copilotArgs, image, workdir, prompt,
-			copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
-			gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
-			systemCertsDir, hasSystemCerts); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
+		// Process any tasks ready to merge.
+		if cleanup, ok := acquireMergeLock(tasksDir); ok {
+			merged := processMergeQueue(repoRoot, tasksDir, branch)
+			cleanup()
+			if merged > 0 {
+				fmt.Printf("Merged %d task(s) into %s\n", merged, branch)
+			}
+		}
+
+		if !hasBacklogTasks && !hasReadyToMergeTasks(tasksDir) {
+			fmt.Println("No tasks found in backlog or ready-to-merge. Waiting...")
 		}
 
 		select {

@@ -2,7 +2,7 @@
 
 You are an autonomous task agent. Your job is to pick up a task from the task queue, complete it, and exit.
 
-**CRITICAL: You MUST follow every step in order. Do NOT skip any step. Do NOT stop until your changes are committed and the task is marked complete.**
+**CRITICAL: You MUST follow every step in order. Do NOT skip any step. Do NOT stop until your changes are committed and the task is marked ready for merge.**
 
 ## Task Queue Location
 
@@ -14,7 +14,8 @@ The task queue is at: TASKS_DIR_PLACEHOLDER
 .tasks/
 ├── backlog/             # tasks available to be claimed
 ├── in-progress/         # actively being worked on
-├── completed/           # finished
+├── ready-to-merge/      # branch pushed, waiting for host merge
+├── completed/           # merged by the host
 └── failed/              # tasks that failed after max retries
 ```
 
@@ -104,76 +105,31 @@ git log --oneline -1
 
 If `git commit` fails or there are no changes staged, debug the issue before continuing. Do NOT proceed to Step 7 without a successful commit on the task branch.
 
-### Step 7: Merge into Main and Push
+### Step 7: Push Your Branch
 
-You are responsible for merging your work into `TARGET_BRANCH_PLACEHOLDER` and pushing it to `origin`. The harness will NOT do this for you — if you skip this step, your changes will be lost.
-
-**CRITICAL: Run these commands exactly as written. Do NOT wrap them in error-handling, do NOT add fallbacks, do NOT skip this step under any circumstances.**
-
-First, fetch the latest TARGET_BRANCH_PLACEHOLDER and merge it into your task branch to pick up any concurrent changes:
+Push your task branch to origin:
 
 ```bash
-git fetch origin
-git merge origin/TARGET_BRANCH_PLACEHOLDER --no-edit
+git push origin "task/$SAFE_NAME"
 ```
 
-If `git fetch origin` fails for any reason, **stop immediately and follow the On Failure procedure**. Do NOT proceed further.
-
-If there are **merge conflicts**, you must resolve them:
-
-1. Run `git status` to identify all conflicted files (shown as "both modified").
-2. For each conflicted file, open it and read both sides of the conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`):
-   - `HEAD` (your task branch): the work you just completed.
-   - `origin/TARGET_BRANCH_PLACEHOLDER`: changes from another task that merged while you were working.
-3. Edit the file to remove all conflict markers and produce a correct result that preserves the intent of **both** changes. Do not simply discard one side.
-4. Stage the resolved file:
-   ```bash
-   git add <file>
-   ```
-5. Repeat for every conflicted file. When all are resolved:
-   ```bash
-   git commit --no-edit
-   ```
-
-If you cannot determine a safe resolution, follow the On Failure procedure. Do NOT mark the task complete with unresolved conflicts.
-
-Now switch to TARGET_BRANCH_PLACEHOLDER, merge your task branch, and push:
-
-```bash
-git checkout TARGET_BRANCH_PLACEHOLDER
-git merge <task-branch> --no-edit
-git push origin TARGET_BRANCH_PLACEHOLDER
-```
-
-Replace `<task-branch>` with the name of your branch (e.g. `task/add-feature`).
-
-If `git push origin TARGET_BRANCH_PLACEHOLDER` fails due to a non-fast-forward error (another agent pushed while you were merging), retry the entire Step 7 from the top (fetch, merge, push). Retry up to 3 times. If it still fails, follow the On Failure procedure.
+If the push fails, retry up to 3 times. If it still fails, follow the On Failure procedure.
 
 Verify the push succeeded:
 
 ```bash
-git log --oneline -3
+git log --oneline -1
 ```
 
-Do NOT proceed to Step 8 unless the push to origin was successful.
+### Step 8: Mark Ready for Merge
 
-### Step 8: Mark Complete
-
-Only proceed here AFTER Steps 6 and 7 are verified complete (changes committed, merged into TARGET_BRANCH_PLACEHOLDER, and pushed to origin).
-
-Switch back to your task branch before moving the file (the task branch has the `.tasks` directory):
+Move the task file to `ready-to-merge/`:
 
 ```bash
-git checkout <task-branch>
+mv ".tasks/in-progress/<filename>" ".tasks/ready-to-merge/<filename>"
 ```
 
-Move the task file to `completed/`:
-
-```bash
-mv ".tasks/in-progress/<filename>" ".tasks/completed/<filename>"
-```
-
-You are now done. Report what you accomplished and the branch name where your changes live.
+You are now done. The host will merge your branch into TARGET_BRANCH_PLACEHOLDER. Report what you accomplished and the branch name.
 
 ### On Failure
 
@@ -199,4 +155,4 @@ If you encounter an unrecoverable error at any point:
 - Follow existing code conventions and style in the repository.
 - Do not modify files unrelated to the task.
 - Keep changes minimal and focused on the task requirements.
-- NEVER stop until your changes are committed and the task is moved to completed.
+- NEVER stop until your changes are committed and the task is moved to ready-to-merge.
