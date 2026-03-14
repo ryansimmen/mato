@@ -32,10 +32,13 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	if tasksDir == "" {
 		tasksDir = filepath.Join(repoRoot, ".tasks")
 	}
-	for _, sub := range []string{"backlog", "in-progress", "completed", "failed"} {
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			return fmt.Errorf("create .tasks subdirectory %s: %w", sub, err)
 		}
+	}
+	if err := initMessaging(tasksDir); err != nil {
+		return fmt.Errorf("init messaging: %w", err)
 	}
 
 	// Generate agent identity early so the lock can be registered
@@ -148,6 +151,13 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 		// Remove lock files from agents that are no longer running.
 		cleanStaleLocks(tasksDir)
+		cleanStalePresence(tasksDir)
+		cleanOldMessages(tasksDir, 24*time.Hour)
+
+		reconcileReadyQueue(tasksDir)
+		if err := writeQueueManifest(tasksDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
+		}
 
 		if !hasAvailableTasks(tasksDir) {
 			fmt.Println("No tasks found in backlog. Waiting...")
@@ -218,7 +228,11 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 		"-e", "GOROOT=/usr/local/go",
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
-	args = append(args, "-e", "MATO_AGENT_ID="+agentID)
+	args = append(args,
+		"-e", "MATO_AGENT_ID="+agentID,
+		"-e", "MATO_MESSAGING_ENABLED=1",
+		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", workdir),
+	)
 	// Trust all directories inside the container — it's ephemeral and the
 	// repoRoot mount may appear owned by a different UID with userns-remap.
 	args = append(args,

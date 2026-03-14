@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -134,4 +135,113 @@ func recoverOrphanedTasks(tasksDir string) {
 		}
 		fmt.Printf("Recovered orphaned task %s back to backlog\n", e.Name())
 	}
+}
+
+func reconcileReadyQueue(tasksDir string) int {
+	completedIDs := completedTaskIDs(tasksDir)
+	waitingDir := filepath.Join(tasksDir, "waiting")
+	entries, err := os.ReadDir(waitingDir)
+	if err != nil {
+		return 0
+	}
+
+	promoted := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+
+		src := filepath.Join(waitingDir, e.Name())
+		meta, _, err := parseTaskFile(src)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse waiting task %s: %v\n", e.Name(), err)
+			continue
+		}
+
+		ready := true
+		for _, dep := range meta.DependsOn {
+			if _, ok := completedIDs[dep]; ok {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on missing task ID %q\n", e.Name(), dep)
+			ready = false
+		}
+		if !ready {
+			continue
+		}
+
+		dst := filepath.Join(tasksDir, "backlog", e.Name())
+		if err := os.Rename(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not promote waiting task %s: %v\n", e.Name(), err)
+			continue
+		}
+		promoted++
+	}
+
+	return promoted
+}
+
+func completedTaskIDs(tasksDir string) map[string]struct{} {
+	completedDir := filepath.Join(tasksDir, "completed")
+	entries, err := os.ReadDir(completedDir)
+	if err != nil {
+		return map[string]struct{}{}
+	}
+
+	ids := make(map[string]struct{}, len(entries)*2)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(completedDir, e.Name())
+		meta, _, err := parseTaskFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse completed task %s: %v\n", e.Name(), err)
+			continue
+		}
+		ids[taskFileStem(e.Name())] = struct{}{}
+		ids[meta.ID] = struct{}{}
+	}
+	return ids
+}
+
+type queueEntry struct {
+	name     string
+	priority int
+}
+
+func writeQueueManifest(tasksDir string) error {
+	entries, err := os.ReadDir(filepath.Join(tasksDir, "backlog"))
+	if err != nil {
+		return err
+	}
+
+	queue := make([]queueEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		meta, _, err := parseTaskFile(filepath.Join(tasksDir, "backlog", e.Name()))
+		if err != nil {
+			return fmt.Errorf("parse backlog task %s: %w", e.Name(), err)
+		}
+		queue = append(queue, queueEntry{name: e.Name(), priority: meta.Priority})
+	}
+
+	sort.Slice(queue, func(i, j int) bool {
+		if queue[i].priority != queue[j].priority {
+			return queue[i].priority < queue[j].priority
+		}
+		return queue[i].name < queue[j].name
+	})
+
+	lines := make([]string, 0, len(queue))
+	for _, entry := range queue {
+		lines = append(lines, entry.name)
+	}
+	manifest := strings.Join(lines, "\n")
+	if manifest != "" {
+		manifest += "\n"
+	}
+	return os.WriteFile(filepath.Join(tasksDir, ".queue"), []byte(manifest), 0o644)
 }
