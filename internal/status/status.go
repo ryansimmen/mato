@@ -1,4 +1,4 @@
-package main
+package status
 
 import (
 	"fmt"
@@ -8,26 +8,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"mato/internal/frontmatter"
+	"mato/internal/git"
+	"mato/internal/messaging"
+	"mato/internal/queue"
 )
 
-func showStatus(args []string) error {
-	repoRoot, _, tasksDir, extras, err := parseArgs(args)
-	if err == errHelp {
-		fmt.Fprintf(os.Stderr, "Usage: mato status [--repo <path>] [--tasks-dir <path>]\n")
-		return nil
-	}
+func Show(repoRoot, tasksDir string) error {
+	resolvedRepoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
 	}
-	if len(extras) > 0 {
-		return fmt.Errorf("unexpected status arguments: %s", strings.Join(extras, " "))
-	}
-
-	repoRoot, err = gitOutput(repoRoot, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return err
-	}
-	repoRoot = strings.TrimSpace(repoRoot)
+	repoRoot = strings.TrimSpace(resolvedRepoRoot)
 	if tasksDir == "" {
 		tasksDir = filepath.Join(repoRoot, ".tasks")
 	}
@@ -46,7 +39,7 @@ func showStatus(args []string) error {
 	if err != nil {
 		return err
 	}
-	messages, err := readMessages(tasksDir, time.Time{})
+	messages, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
 		return err
 	}
@@ -151,7 +144,7 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 			continue
 		}
 		agentID := strings.TrimSuffix(entry.Name(), ".pid")
-		if !isAgentActive(tasksDir, agentID) {
+		if !queue.IsAgentActive(tasksDir, agentID) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(tasksDir, ".locks", entry.Name()))
@@ -190,7 +183,7 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		meta, _, err := parseTaskFile(filepath.Join(tasksDir, "waiting", entry.Name()))
+		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, "waiting", entry.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("parse waiting task %s: %w", entry.Name(), err)
 		}
@@ -254,11 +247,11 @@ func taskStatesByID(tasksDir string) (map[string]string, error) {
 				continue
 			}
 			path := filepath.Join(tasksDir, dirState.Dir, entry.Name())
-			meta, _, err := parseTaskFile(path)
+			meta, _, err := frontmatter.ParseTaskFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("parse %s task %s: %w", dirState.Dir, entry.Name(), err)
 			}
-			states[taskFileStem(entry.Name())] = dirState.State
+			states[frontmatter.TaskFileStem(entry.Name())] = dirState.State
 			if meta.ID != "" {
 				states[meta.ID] = dirState.State
 			}

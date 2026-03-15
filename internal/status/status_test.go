@@ -1,4 +1,4 @@
-package main
+package status
 
 import (
 	"io"
@@ -7,9 +7,37 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"mato/internal/git"
+	"mato/internal/messaging"
 )
 
-func TestShowStatusWithPopulatedTasksDir(t *testing.T) {
+func setupTestRepo(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	if _, err := git.Output(dir, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := git.Output(dir, "config", "user.email", "test@test.com"); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+	if _, err := git.Output(dir, "config", "user.name", "Test"); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile README.md: %v", err)
+	}
+	if _, err := git.Output(dir, "add", "-A"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(dir, "commit", "-m", "initial"); err != nil {
+		t.Fatalf("git commit initial: %v", err)
+	}
+	return dir
+}
+
+func TestShowWithPopulatedTasksDir(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
@@ -17,8 +45,8 @@ func TestShowStatusWithPopulatedTasksDir(t *testing.T) {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
 		}
 	}
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
 	}
 
 	files := map[string]string{
@@ -37,7 +65,7 @@ func TestShowStatusWithPopulatedTasksDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tasksDir, ".locks", "abcd1234.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
 		t.Fatalf("os.WriteFile lock: %v", err)
 	}
-	if err := writeMessage(tasksDir, Message{
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
 		ID:     "msg1",
 		From:   "agent-abcd1234",
 		Type:   "intent",
@@ -45,7 +73,7 @@ func TestShowStatusWithPopulatedTasksDir(t *testing.T) {
 		Body:   "Starting work on refactor-api.md",
 		SentAt: time.Date(2024, time.May, 1, 14, 30, 2, 0, time.UTC),
 	}); err != nil {
-		t.Fatalf("writeMessage: %v", err)
+		t.Fatalf("messaging.WriteMessage: %v", err)
 	}
 
 	originalStdout := os.Stdout
@@ -56,12 +84,12 @@ func TestShowStatusWithPopulatedTasksDir(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = originalStdout }()
 
-	callErr := showStatus([]string{"--repo", repoRoot})
+	callErr := Show(repoRoot, "")
 	w.Close()
 	if _, err := io.ReadAll(r); err != nil {
 		t.Fatalf("io.ReadAll: %v", err)
 	}
 	if callErr != nil {
-		t.Fatalf("showStatus: %v", callErr)
+		t.Fatalf("Show: %v", callErr)
 	}
 }

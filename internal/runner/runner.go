@@ -1,4 +1,4 @@
-package main
+package runner
 
 import (
 	_ "embed"
@@ -11,20 +11,24 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"mato/internal/git"
+	"mato/internal/merge"
+	"mato/internal/messaging"
+	"mato/internal/queue"
 )
 
 //go:embed task-instructions.md
 var taskInstructions string
 
-func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error {
-	repoRoot, err := gitOutput(repoRoot, "rev-parse", "--show-toplevel")
+func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error {
+	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
 
-	// Create the target branch if it doesn't exist yet.
-	if err := ensureBranch(repoRoot, branch); err != nil {
+	if err := git.EnsureBranch(repoRoot, branch); err != nil {
 		return err
 	}
 
@@ -37,26 +41,22 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			return fmt.Errorf("create .tasks subdirectory %s: %w", sub, err)
 		}
 	}
-	if err := initMessaging(tasksDir); err != nil {
+	if err := messaging.Init(tasksDir); err != nil {
 		return fmt.Errorf("init messaging: %w", err)
 	}
 
-	// Generate agent identity early so the lock can be registered
-	// before recovering orphaned tasks.
-	agentID, err := generateAgentID()
+	agentID, err := queue.GenerateAgentID()
 	if err != nil {
 		return fmt.Errorf("generate agent ID: %w", err)
 	}
 
-	// Register this agent so concurrent instances know we're alive.
-	cleanupLock, err := registerAgent(tasksDir, agentID)
+	cleanupLock, err := queue.RegisterAgent(tasksDir, agentID)
 	if err != nil {
 		return fmt.Errorf("register agent: %w", err)
 	}
 	defer cleanupLock()
 
-	// Ensure .tasks is gitignored so it never pollutes commits or status.
-	if err := ensureGitignored(repoRoot, "/.tasks/"); err != nil {
+	if err := git.EnsureGitignored(repoRoot, "/.tasks/"); err != nil {
 		return err
 	}
 
@@ -66,14 +66,13 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	}
 	workdir := "/workspace"
 
-	// Read host git identity for commits made inside the container.
-	gitName, _ := gitOutput(repoRoot, "config", "user.name")
-	gitEmail, _ := gitOutput(repoRoot, "config", "user.email")
+	gitName, _ := git.Output(repoRoot, "config", "user.name")
+	gitEmail, _ := git.Output(repoRoot, "config", "user.email")
 	if strings.TrimSpace(gitName) == "" {
-		gitName, _ = gitOutput("", "config", "--global", "user.name")
+		gitName, _ = git.Output("", "config", "--global", "user.name")
 	}
 	if strings.TrimSpace(gitEmail) == "" {
-		gitEmail, _ = gitOutput("", "config", "--global", "user.email")
+		gitEmail, _ = git.Output("", "config", "--global", "user.email")
 	}
 
 	copilotPath, err := exec.LookPath("copilot")
@@ -84,8 +83,6 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	if err != nil {
 		return fmt.Errorf("find git CLI: %w", err)
 	}
-	// git-upload-pack is spawned by git when fetching from a local-path remote.
-	// Find it via LookPath, falling back to git's exec-path directory.
 	gitUploadPackPath, err := exec.LookPath("git-upload-pack")
 	if err != nil {
 		out, execErr := exec.Command("git", "--exec-path").Output()
@@ -98,7 +95,6 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		}
 		gitUploadPackPath = candidate
 	}
-	// git-receive-pack is spawned by git when pushing to a local-path remote.
 	gitReceivePackPath, err := exec.LookPath("git-receive-pack")
 	if err != nil {
 		out, execErr := exec.Command("git", "--exec-path").Output()
@@ -135,36 +131,30 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		hasGhConfig = true
 	}
 
-	// Build the prompt from embedded task instructions.
 	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
 	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
 	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
 
-	// Listen for interrupt signals to stop the loop gracefully.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
 	for {
-		// Recover any tasks left in in-progress by a previous crashed run.
-		// Tasks claimed by a still-active agent are left alone.
-		recoverOrphanedTasks(tasksDir)
+		queue.RecoverOrphanedTasks(tasksDir)
+		queue.CleanStaleLocks(tasksDir)
+		messaging.CleanStalePresence(tasksDir)
+		messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 
-		// Remove lock files from agents that are no longer running.
-		cleanStaleLocks(tasksDir)
-		cleanStalePresence(tasksDir)
-		cleanOldMessages(tasksDir, 24*time.Hour)
-
-		reconcileReadyQueue(tasksDir)
-		if err := writeQueueManifest(tasksDir); err != nil {
+		queue.ReconcileReadyQueue(tasksDir)
+		if err := queue.WriteQueueManifest(tasksDir); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 		}
-		removeOverlappingTasks(tasksDir)
-		if err := writeQueueManifest(tasksDir); err != nil {
+		queue.RemoveOverlappingTasks(tasksDir)
+		if err := queue.WriteQueueManifest(tasksDir); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest after overlap cleanup: %v\n", err)
 		}
 
-		hasBacklogTasks := hasAvailableTasks(tasksDir)
+		hasBacklogTasks := queue.HasAvailableTasks(tasksDir)
 		if hasBacklogTasks {
 			if err := runOnce(repoRoot, tasksDir, agentID, copilotArgs, image, workdir, prompt,
 				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
@@ -174,16 +164,15 @@ func run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			}
 		}
 
-		// Process any tasks ready to merge.
-		if cleanup, ok := acquireMergeLock(tasksDir); ok {
-			merged := processMergeQueue(repoRoot, tasksDir, branch)
+		if cleanup, ok := merge.AcquireLock(tasksDir); ok {
+			merged := merge.ProcessQueue(repoRoot, tasksDir, branch)
 			cleanup()
 			if merged > 0 {
 				fmt.Printf("Merged %d task(s) into %s\n", merged, branch)
 			}
 		}
 
-		if !hasBacklogTasks && !hasReadyToMergeTasks(tasksDir) {
+		if !hasBacklogTasks && !merge.HasReadyTasks(tasksDir) {
 			fmt.Println("No tasks found in backlog or ready-to-merge. Waiting...")
 		}
 
@@ -202,18 +191,13 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 	gitName, gitEmail, homeDir, ghConfigDir string, hasGhConfig bool,
 	systemCertsDir string, hasSystemCerts bool,
 ) error {
-	// Create a temporary local clone so multiple instances can run in
-	// parallel without conflicting on branch checkouts or index state.
-	cloneDir, err := createClone(repoRoot)
+	cloneDir, err := git.CreateClone(repoRoot)
 	if err != nil {
 		return err
 	}
-	defer removeClone(cloneDir)
+	defer git.RemoveClone(cloneDir)
 
-	// Allow the LLM agent to push to the checked-out branch in the origin repo.
-	// With .tasks/ gitignored the working tree stays clean, so updateInstead
-	// can safely update it on push.
-	gitOutput(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead")
+	git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead")
 
 	containerHome := homeDir
 	copilotDir := filepath.Join(homeDir, ".copilot")
@@ -226,8 +210,6 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
 		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
-		// Mount repoRoot so the clone's "origin" remote is reachable
-		// for git fetch/push inside the container.
 		"-v", fmt.Sprintf("%s:%s", repoRoot, repoRoot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
@@ -243,8 +225,6 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 		"-e", "MATO_MESSAGING_ENABLED=1",
 		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", workdir),
 	)
-	// Trust all directories inside the container — it's ephemeral and the
-	// repoRoot mount may appear owned by a different UID with userns-remap.
 	args = append(args,
 		"-e", "GIT_CONFIG_COUNT=1",
 		"-e", "GIT_CONFIG_KEY_0=safe.directory",
@@ -256,7 +236,6 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 	if e := strings.TrimSpace(gitEmail); e != "" {
 		args = append(args, "-e", "GIT_AUTHOR_EMAIL="+e, "-e", "GIT_COMMITTER_EMAIL="+e)
 	}
-	// Mount host .copilot dir so the copilot CLI can find auth + packages.
 	args = append(args,
 		"-e", fmt.Sprintf("HOME=%s", containerHome),
 		"-v", fmt.Sprintf("%s:%s/.copilot", copilotDir, containerHome),
@@ -287,4 +266,17 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func hasModelArg(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "--model" {
+			return true
+		}
+		if strings.HasPrefix(arg, "--model=") {
+			return true
+		}
+	}
+	return false
 }

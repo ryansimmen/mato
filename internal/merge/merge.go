@@ -1,14 +1,18 @@
-package main
+package merge
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"mato/internal/frontmatter"
+	"mato/internal/git"
 )
 
 type mergeQueueTask struct {
@@ -18,11 +22,14 @@ type mergeQueueTask struct {
 	priority int
 }
 
-// processMergeQueue merges completed task branches into the target branch.
+var nonAlphanumDash = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
+var multiDash = regexp.MustCompile(`-{2,}`)
+
+// ProcessQueue merges completed task branches into the target branch.
 // It scans ready-to-merge/ for task files, determines the task branch name
 // from each filename, and performs a squash merge.
 // Returns the number of tasks successfully merged.
-func processMergeQueue(repoRoot, tasksDir, branch string) int {
+func ProcessQueue(repoRoot, tasksDir, branch string) int {
 	readyDir := filepath.Join(tasksDir, "ready-to-merge")
 	entries, err := os.ReadDir(readyDir)
 	if err != nil {
@@ -36,7 +43,7 @@ func processMergeQueue(repoRoot, tasksDir, branch string) int {
 		}
 
 		path := filepath.Join(readyDir, entry.Name())
-		meta, body, err := parseTaskFile(path)
+		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse ready-to-merge task %s: %v\n", entry.Name(), err)
 			if failureErr := failMergeTask(path, filepath.Join(tasksDir, "backlog", entry.Name()), fmt.Sprintf("parse task file: %v", err)); failureErr != nil {
@@ -79,7 +86,7 @@ func processMergeQueue(repoRoot, tasksDir, branch string) int {
 	return merged
 }
 
-func hasReadyToMergeTasks(tasksDir string) bool {
+func HasReadyTasks(tasksDir string) bool {
 	entries, err := os.ReadDir(filepath.Join(tasksDir, "ready-to-merge"))
 	if err != nil {
 		return false
@@ -93,30 +100,30 @@ func hasReadyToMergeTasks(tasksDir string) bool {
 }
 
 func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
-	cloneDir, err := createClone(repoRoot)
+	cloneDir, err := git.CreateClone(repoRoot)
 	if err != nil {
 		return fmt.Errorf("create temp clone: %w", err)
 	}
-	defer removeClone(cloneDir)
+	defer git.RemoveClone(cloneDir)
 
 	if err := configureMergeCloneIdentity(repoRoot, cloneDir); err != nil {
 		return err
 	}
-	if _, err := gitOutput(cloneDir, "fetch", "origin"); err != nil {
+	if _, err := git.Output(cloneDir, "fetch", "origin"); err != nil {
 		return fmt.Errorf("fetch origin: %w", err)
 	}
-	if _, err := gitOutput(cloneDir, "checkout", "-B", branch, "origin/"+branch); err != nil {
+	if _, err := git.Output(cloneDir, "checkout", "-B", branch, "origin/"+branch); err != nil {
 		return fmt.Errorf("checkout target branch %s: %w", branch, err)
 	}
 
 	taskBranch := "task/" + sanitizeBranchName(task.name)
-	if _, err := gitOutput(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
+	if _, err := git.Output(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
 		return fmt.Errorf("squash merge %s: %w", taskBranch, err)
 	}
-	if _, err := gitOutput(cloneDir, "commit", "-m", task.title); err != nil {
+	if _, err := git.Output(cloneDir, "commit", "-m", task.title); err != nil {
 		return fmt.Errorf("commit squash merge: %w", err)
 	}
-	if _, err := gitOutput(cloneDir, "push", "origin", branch); err != nil {
+	if _, err := git.Output(cloneDir, "push", "origin", branch); err != nil {
 		return fmt.Errorf("push %s: %w", branch, err)
 	}
 
@@ -124,28 +131,28 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
 }
 
 func configureMergeCloneIdentity(repoRoot, cloneDir string) error {
-	name, _ := gitOutput(repoRoot, "config", "user.name")
+	name, _ := git.Output(repoRoot, "config", "user.name")
 	if strings.TrimSpace(name) == "" {
-		name, _ = gitOutput("", "config", "--global", "user.name")
+		name, _ = git.Output("", "config", "--global", "user.name")
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "mato"
 	}
 
-	email, _ := gitOutput(repoRoot, "config", "user.email")
+	email, _ := git.Output(repoRoot, "config", "user.email")
 	if strings.TrimSpace(email) == "" {
-		email, _ = gitOutput("", "config", "--global", "user.email")
+		email, _ = git.Output("", "config", "--global", "user.email")
 	}
 	email = strings.TrimSpace(email)
 	if email == "" {
 		email = "mato@local.invalid"
 	}
 
-	if _, err := gitOutput(cloneDir, "config", "user.name", name); err != nil {
+	if _, err := git.Output(cloneDir, "config", "user.name", name); err != nil {
 		return fmt.Errorf("configure merge user.name: %w", err)
 	}
-	if _, err := gitOutput(cloneDir, "config", "user.email", email); err != nil {
+	if _, err := git.Output(cloneDir, "config", "user.email", email); err != nil {
 		return fmt.Errorf("configure merge user.email: %w", err)
 	}
 	return nil
@@ -164,7 +171,7 @@ func taskTitle(name, body string) string {
 			return trimmed
 		}
 	}
-	return taskFileStem(name)
+	return frontmatter.TaskFileStem(name)
 }
 
 func failMergeTask(src, dst, reason string) error {
@@ -195,9 +202,9 @@ func failMergeTask(src, dst, reason string) error {
 	return nil
 }
 
-// acquireMergeLock attempts to acquire an exclusive merge lock.
+// AcquireLock attempts to acquire an exclusive merge lock.
 // Returns a cleanup function and true if acquired, or nil and false if already held.
-func acquireMergeLock(tasksDir string) (func(), bool) {
+func AcquireLock(tasksDir string) (func(), bool) {
 	locksDir := filepath.Join(tasksDir, ".locks")
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: create merge locks dir: %v\n", err)
@@ -259,4 +266,15 @@ func isProcessActive(pid int) bool {
 		return false
 	}
 	return p.Signal(syscall.Signal(0)) == nil
+}
+
+func sanitizeBranchName(name string) string {
+	name = strings.TrimSuffix(name, ".md")
+	name = nonAlphanumDash.ReplaceAllString(name, "-")
+	name = multiDash.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-")
+	if name == "" {
+		name = "unnamed"
+	}
+	return name
 }

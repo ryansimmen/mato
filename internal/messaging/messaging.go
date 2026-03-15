@@ -1,4 +1,4 @@
-package main
+package messaging
 
 import (
 	"encoding/json"
@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"mato/internal/queue"
 )
 
 type Message struct {
@@ -31,7 +33,7 @@ type presence struct {
 
 var safeMessageFilePart = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
-func initMessaging(tasksDir string) error {
+func Init(tasksDir string) error {
 	for _, dir := range []string{
 		filepath.Join(tasksDir, "messages", "events"),
 		filepath.Join(tasksDir, "messages", "presence"),
@@ -43,9 +45,9 @@ func initMessaging(tasksDir string) error {
 	return nil
 }
 
-func writeMessage(tasksDir string, msg Message) error {
+func WriteMessage(tasksDir string, msg Message) error {
 	if msg.ID == "" {
-		id, err := generateAgentID()
+		id, err := queue.GenerateAgentID()
 		if err != nil {
 			return fmt.Errorf("generate message ID: %w", err)
 		}
@@ -71,7 +73,7 @@ func writeMessage(tasksDir string, msg Message) error {
 	return nil
 }
 
-func readMessages(tasksDir string, since time.Time) ([]Message, error) {
+func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, err := os.ReadDir(eventsDir)
 	if err != nil {
@@ -111,7 +113,7 @@ func readMessages(tasksDir string, since time.Time) ([]Message, error) {
 	return messages, nil
 }
 
-func writePresence(tasksDir, agentID, taskFile, branch string) error {
+func WritePresence(tasksDir, agentID, taskFile, branch string) error {
 	info := presence{
 		AgentID:   agentID,
 		Task:      taskFile,
@@ -126,7 +128,7 @@ func writePresence(tasksDir, agentID, taskFile, branch string) error {
 	return nil
 }
 
-func cleanStalePresence(tasksDir string) {
+func CleanStalePresence(tasksDir string) {
 	presenceDir := filepath.Join(tasksDir, "messages", "presence")
 	entries, err := os.ReadDir(presenceDir)
 	if err != nil {
@@ -138,13 +140,13 @@ func cleanStalePresence(tasksDir string) {
 			continue
 		}
 		agentID := strings.TrimSuffix(entry.Name(), ".json")
-		if !isAgentActive(tasksDir, agentID) {
+		if !queue.IsAgentActive(tasksDir, agentID) {
 			os.Remove(filepath.Join(presenceDir, entry.Name()))
 		}
 	}
 }
 
-func cleanOldMessages(tasksDir string, maxAge time.Duration) {
+func CleanOldMessages(tasksDir string, maxAge time.Duration) {
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, err := os.ReadDir(eventsDir)
 	if err != nil {

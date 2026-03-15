@@ -1,4 +1,4 @@
-package main
+package messaging
 
 import (
 	"encoding/json"
@@ -15,8 +15,8 @@ import (
 func TestInitMessaging(t *testing.T) {
 	tasksDir := t.TempDir()
 
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
 	for _, dir := range []string{
@@ -35,8 +35,8 @@ func TestInitMessaging(t *testing.T) {
 
 func TestWriteMessage(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
 	sentAt := time.Date(2024, time.May, 1, 12, 34, 56, 123456789, time.UTC)
@@ -49,8 +49,8 @@ func TestWriteMessage(t *testing.T) {
 		Body:   "working on it",
 		SentAt: sentAt,
 	}
-	if err := writeMessage(tasksDir, msg); err != nil {
-		t.Fatalf("writeMessage: %v", err)
+	if err := WriteMessage(tasksDir, msg); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
 	}
 
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
@@ -83,8 +83,8 @@ func TestWriteMessage(t *testing.T) {
 
 func TestReadMessagesSortedByTime(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
 	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
@@ -94,14 +94,14 @@ func TestReadMessagesSortedByTime(t *testing.T) {
 		{ID: "m3", From: "agent", Type: "completion", Task: "task-3", Branch: "branch", Body: "third", SentAt: base.Add(3 * time.Minute)},
 	}
 	for _, msg := range messages {
-		if err := writeMessage(tasksDir, msg); err != nil {
-			t.Fatalf("writeMessage(%s): %v", msg.ID, err)
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
 		}
 	}
 
-	got, err := readMessages(tasksDir, time.Time{})
+	got, err := ReadMessages(tasksDir, time.Time{})
 	if err != nil {
-		t.Fatalf("readMessages: %v", err)
+		t.Fatalf("ReadMessages: %v", err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(got))
@@ -116,8 +116,8 @@ func TestReadMessagesSortedByTime(t *testing.T) {
 
 func TestReadMessagesFiltersBySince(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
 	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
@@ -126,14 +126,14 @@ func TestReadMessagesFiltersBySince(t *testing.T) {
 		{ID: "edge", From: "agent", Type: "intent", Task: "edge", Branch: "branch", Body: "edge", SentAt: base.Add(2 * time.Minute)},
 		{ID: "new", From: "agent", Type: "completion", Task: "new", Branch: "branch", Body: "new", SentAt: base.Add(3 * time.Minute)},
 	} {
-		if err := writeMessage(tasksDir, msg); err != nil {
-			t.Fatalf("writeMessage(%s): %v", msg.ID, err)
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
 		}
 	}
 
-	got, err := readMessages(tasksDir, base.Add(2*time.Minute))
+	got, err := ReadMessages(tasksDir, base.Add(2*time.Minute))
 	if err != nil {
-		t.Fatalf("readMessages: %v", err)
+		t.Fatalf("ReadMessages: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("expected 1 message newer than cutoff, got %d", len(got))
@@ -145,12 +145,12 @@ func TestReadMessagesFiltersBySince(t *testing.T) {
 
 func TestWritePresence(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
-	if err := writePresence(tasksDir, "agent-1", "task.md", "feature/branch"); err != nil {
-		t.Fatalf("writePresence: %v", err)
+	if err := WritePresence(tasksDir, "agent-1", "task.md", "feature/branch"); err != nil {
+		t.Fatalf("WritePresence: %v", err)
 	}
 
 	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "presence", "agent-1.json"))
@@ -176,8 +176,8 @@ func TestWritePresence(t *testing.T) {
 
 func TestCleanStalePresence(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -189,14 +189,14 @@ func TestCleanStalePresence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tasksDir, ".locks", "dead.pid"), []byte("2147483647"), 0o644); err != nil {
 		t.Fatalf("WriteFile dead lock: %v", err)
 	}
-	if err := writePresence(tasksDir, "live", "live-task.md", "live-branch"); err != nil {
-		t.Fatalf("writePresence live: %v", err)
+	if err := WritePresence(tasksDir, "live", "live-task.md", "live-branch"); err != nil {
+		t.Fatalf("WritePresence live: %v", err)
 	}
-	if err := writePresence(tasksDir, "dead", "dead-task.md", "dead-branch"); err != nil {
-		t.Fatalf("writePresence dead: %v", err)
+	if err := WritePresence(tasksDir, "dead", "dead-task.md", "dead-branch"); err != nil {
+		t.Fatalf("WritePresence dead: %v", err)
 	}
 
-	cleanStalePresence(tasksDir)
+	CleanStalePresence(tasksDir)
 
 	if _, err := os.Stat(filepath.Join(tasksDir, "messages", "presence", "live.json")); err != nil {
 		t.Fatalf("live presence should remain: %v", err)
@@ -208,15 +208,15 @@ func TestCleanStalePresence(t *testing.T) {
 
 func TestCleanOldMessages(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
 	oldMsg := Message{ID: "oldmsg", From: "agent", Type: "intent", Task: "old", Branch: "branch", Body: "old", SentAt: time.Date(2024, time.May, 1, 10, 0, 0, 0, time.UTC)}
 	recentMsg := Message{ID: "newmsg", From: "agent", Type: "intent", Task: "new", Branch: "branch", Body: "new", SentAt: time.Date(2024, time.May, 1, 11, 0, 0, 0, time.UTC)}
 	for _, msg := range []Message{oldMsg, recentMsg} {
-		if err := writeMessage(tasksDir, msg); err != nil {
-			t.Fatalf("writeMessage(%s): %v", msg.ID, err)
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
 		}
 	}
 
@@ -231,7 +231,7 @@ func TestCleanOldMessages(t *testing.T) {
 		t.Fatalf("Chtimes recent: %v", err)
 	}
 
-	cleanOldMessages(tasksDir, 24*time.Hour)
+	CleanOldMessages(tasksDir, 24*time.Hour)
 
 	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
 		t.Fatal("old message should be removed")
@@ -243,8 +243,8 @@ func TestCleanOldMessages(t *testing.T) {
 
 func TestWriteMessageAtomicWrite(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := initMessaging(tasksDir); err != nil {
-		t.Fatalf("initMessaging: %v", err)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
 	msg := Message{
@@ -256,8 +256,8 @@ func TestWriteMessageAtomicWrite(t *testing.T) {
 		Body:   strings.Repeat("done", 1024),
 		SentAt: time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC),
 	}
-	if err := writeMessage(tasksDir, msg); err != nil {
-		t.Fatalf("writeMessage: %v", err)
+	if err := WriteMessage(tasksDir, msg); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
 	}
 
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
