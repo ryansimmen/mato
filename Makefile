@@ -3,7 +3,7 @@
 -include .env
 export
 
-.PHONY: all build clean fmt help install run test
+.PHONY: all build clean fmt help install integration-test run test
 
 BIN_DIR := bin
 REPO ?= $(error REPO is not set. Create a .env file with REPO=<path> or pass it on the command line)
@@ -22,6 +22,9 @@ fmt: ## Format Go source files
 
 install: ## Install mato binary to GOBIN
 	go install ./cmd/mato
+
+integration-test: ## Run integration tests with race detector
+	go test -race -v ./internal/integration/...
 
 run: ## Run agent in Docker (use COPILOT_ARGS to pass args to copilot, e.g. COPILOT_ARGS="--model gpt-5.3-codex")
 	@if [ -z "$(REPO)" ]; then echo "REPO is required"; exit 1; fi
