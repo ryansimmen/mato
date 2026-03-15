@@ -88,7 +88,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 
 		if err := mergeReadyTask(repoRoot, branch, task); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not merge task %s: %v\n", task.name, err)
-			if failureErr := handleMergeFailure(tasksDir, task, err); failureErr != nil {
+			if failureErr := handleMergeFailure(repoRoot, tasksDir, task, err); failureErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not record merge failure for task %s: %v\n", task.name, failureErr)
 			}
 			continue
@@ -198,15 +198,26 @@ func taskTitle(name, body string) string {
 	return frontmatter.TaskFileStem(name)
 }
 
-func handleMergeFailure(tasksDir string, task mergeQueueTask, err error) error {
+func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err error) error {
 	switch {
 	case errors.Is(err, errTaskBranchNotPushed):
 		return failMergeTask(task.path, filepath.Join(tasksDir, "failed", task.name), err.Error())
 	case errors.Is(err, errSquashMergeConflict):
-		return failMergeTask(task.path, filepath.Join(tasksDir, "backlog", task.name), err.Error())
+		if err := failMergeTask(task.path, filepath.Join(tasksDir, "backlog", task.name), err.Error()); err != nil {
+			return err
+		}
+		cleanupTaskBranch(repoRoot, task.name)
+		return nil
 	default:
 		return failMergeTask(task.path, "", err.Error())
 	}
+}
+
+func cleanupTaskBranch(repoRoot, taskName string) {
+	// Clean up the stale task branch so the next agent can push a fresh one.
+	branchName := "task/" + sanitizeBranchName(taskName)
+	_, _ = git.Output(repoRoot, "branch", "-D", branchName)
+	_, _ = git.Output(repoRoot, "push", "origin", "--delete", branchName)
 }
 
 func failMergeTask(src, dst, reason string) error {

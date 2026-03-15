@@ -91,12 +91,15 @@ func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 
 		data, err := os.ReadFile(filepath.Join(eventsDir, entry.Name()))
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return nil, fmt.Errorf("read message %s: %w", entry.Name(), err)
 		}
 
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
-			return nil, fmt.Errorf("parse message %s: %w", entry.Name(), err)
+			continue
 		}
 		if msg.SentAt.After(since) {
 			messages = append(messages, msg)
