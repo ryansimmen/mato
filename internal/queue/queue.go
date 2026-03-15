@@ -131,7 +131,7 @@ func RecoverOrphanedTasks(tasksDir string) {
 			f.Close()
 		}
 
-		if err := os.Rename(src, dst); err != nil {
+		if err := safeRename(src, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", e.Name(), err)
 			continue
 		}
@@ -147,34 +147,58 @@ func ReconcileReadyQueue(tasksDir string) int {
 		return 0
 	}
 
-	promoted := 0
+	type waitingTask struct {
+		name string
+		path string
+		meta frontmatter.TaskMeta
+	}
+
+	waitingTasks := make([]waitingTask, 0, len(entries))
+	waitingDeps := make(map[string][]string, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
 
-		src := filepath.Join(waitingDir, e.Name())
-		meta, _, err := frontmatter.ParseTaskFile(src)
+		path := filepath.Join(waitingDir, e.Name())
+		meta, _, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse waiting task %s: %v\n", e.Name(), err)
 			continue
 		}
 
+		waitingTasks = append(waitingTasks, waitingTask{name: e.Name(), path: path, meta: meta})
+		waitingDeps[meta.ID] = meta.DependsOn
+	}
+
+	promoted := 0
+	loggedCircularDeps := make(map[string]struct{})
+	for _, task := range waitingTasks {
 		ready := true
-		for _, dep := range meta.DependsOn {
+		for _, dep := range task.meta.DependsOn {
+			if dep == task.meta.ID {
+				fmt.Fprintf(os.Stderr, "warning: task %s depends on itself\n", task.meta.ID)
+				ready = false
+				continue
+			}
+			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, task.meta.ID, waitingDeps, map[string]struct{}{}) {
+				logCircularDependency(loggedCircularDeps, task.meta.ID, dep)
+				ready = false
+				continue
+			}
 			if _, ok := completedIDs[dep]; ok {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on missing task ID %q\n", e.Name(), dep)
+			fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on missing task ID %q\n", task.name, dep)
 			ready = false
 		}
 		if !ready {
 			continue
 		}
 
-		dst := filepath.Join(tasksDir, "backlog", e.Name())
-		if err := os.Rename(src, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not promote waiting task %s: %v\n", e.Name(), err)
+		dst := filepath.Join(tasksDir, "backlog", task.name)
+		if err := safeRename(task.path, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not promote waiting task %s: %v\n", task.name, err)
 			continue
 		}
 		promoted++
@@ -195,13 +219,14 @@ func completedTaskIDs(tasksDir string) map[string]struct{} {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
+		stem := frontmatter.TaskFileStem(e.Name())
+		ids[stem] = struct{}{}
 		path := filepath.Join(completedDir, e.Name())
 		meta, _, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse completed task %s: %v\n", e.Name(), err)
 			continue
 		}
-		ids[frontmatter.TaskFileStem(e.Name())] = struct{}{}
 		ids[meta.ID] = struct{}{}
 	}
 	return ids
@@ -266,7 +291,7 @@ func RemoveOverlappingTasks(tasksDir string) {
 				continue
 			}
 			dst := filepath.Join(waitingDir, task.name)
-			if err := os.Rename(task.path, dst); err != nil {
+			if err := safeRename(task.path, dst); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not defer overlapping task %s: %v\n", task.name, err)
 				break
 			}
@@ -323,7 +348,8 @@ func WriteQueueManifest(tasksDir string) error {
 		}
 		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, "backlog", e.Name()))
 		if err != nil {
-			return fmt.Errorf("parse backlog task %s: %w", e.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", e.Name(), err)
+			continue
 		}
 		queueEntries = append(queueEntries, queueEntry{name: e.Name(), priority: meta.Priority})
 	}
@@ -343,7 +369,78 @@ func WriteQueueManifest(tasksDir string) error {
 	if manifest != "" {
 		manifest += "\n"
 	}
-	return os.WriteFile(filepath.Join(tasksDir, ".queue"), []byte(manifest), 0o644)
+	return writeFileAtomically(filepath.Join(tasksDir, ".queue"), []byte(manifest))
+}
+
+func safeRename(src, dst string) error {
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("destination already exists: %s", dst)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat destination %s: %w", dst, err)
+	}
+	return os.Rename(src, dst)
+}
+
+func dependsOnWaitingTask(taskID, targetID string, waitingDeps map[string][]string, visited map[string]struct{}) bool {
+	if taskID == targetID {
+		return true
+	}
+	if _, ok := visited[taskID]; ok {
+		return false
+	}
+	visited[taskID] = struct{}{}
+	for _, dep := range waitingDeps[taskID] {
+		if dep == targetID {
+			return true
+		}
+		if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, targetID, waitingDeps, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func logCircularDependency(logged map[string]struct{}, a, b string) {
+	if a > b {
+		a, b = b, a
+	}
+	key := a + "\x00" + b
+	if _, ok := logged[key]; ok {
+		return
+	}
+	logged[key] = struct{}{}
+	fmt.Fprintf(os.Stderr, "warning: circular dependency detected between %s and %s\n", a, b)
+}
+
+func writeFileAtomically(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmpFile.Name()
+	cleanup := func() {
+		tmpFile.Close()
+		os.Remove(tmpName)
+	}
+
+	if err := tmpFile.Chmod(0o644); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func GenerateAgentID() (string, error) {
