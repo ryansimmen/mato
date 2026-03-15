@@ -2,12 +2,14 @@ package messaging
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -81,6 +83,80 @@ func TestWriteMessage(t *testing.T) {
 	}
 }
 
+func TestWriteMessage_EmptyFields(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	if err := WriteMessage(tasksDir, Message{Type: "intent"}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 message file, got %d", len(entries))
+	}
+
+	data, err := os.ReadFile(filepath.Join(eventsDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !json.Valid(data) {
+		t.Fatal("message file should contain valid JSON")
+	}
+
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if got.Type != "intent" {
+		t.Fatalf("message type = %q, want %q", got.Type, "intent")
+	}
+	if got.ID == "" {
+		t.Fatal("message ID should be generated")
+	}
+	if got.SentAt.IsZero() {
+		t.Fatal("message SentAt should be set")
+	}
+}
+
+func TestWriteMessage_SpecialCharsInFields(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	msg := Message{
+		ID:     "special-1",
+		From:   "agent \"雪\"\nbackslash \\",
+		Type:   "status \"update\"\nline",
+		Task:   "task \"quote\"\n第二行",
+		Branch: "feature/雪\\branch",
+		Files:  []string{"dir/quote\".go", "line\nbreak.txt", "snow/雪\\file.txt"},
+		Body:   "body with \"quotes\"\nmultiple lines\nunicode 雪\nbackslash \\",
+		SentAt: time.Date(2024, time.May, 1, 13, 0, 0, 0, time.UTC),
+	}
+	if err := WriteMessage(tasksDir, msg); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	got, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(got))
+	}
+	if !reflect.DeepEqual(got[0], msg) {
+		t.Fatalf("round-trip message = %#v, want %#v", got[0], msg)
+	}
+}
+
 func TestReadMessagesSortedByTime(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {
@@ -140,6 +216,101 @@ func TestReadMessagesFiltersBySince(t *testing.T) {
 	}
 	if got[0].ID != "new" {
 		t.Fatalf("expected newest message, got %q", got[0].ID)
+	}
+}
+
+func TestReadMessages_EmptyEventsDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	got, err := ReadMessages(tasksDir, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected empty slice, got nil")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no messages, got %d", len(got))
+	}
+}
+
+func TestReadMessages_ConcurrentWrite(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	const total = 20
+	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < total; i++ {
+			msg := Message{
+				ID:     "msg-" + strconv.Itoa(i),
+				From:   "writer",
+				Type:   "intent",
+				Task:   "task-" + strconv.Itoa(i),
+				Branch: "branch",
+				Body:   strings.Repeat("payload-", 16) + strconv.Itoa(i),
+				SentAt: base.Add(time.Duration(i) * time.Millisecond),
+			}
+			if err := WriteMessage(tasksDir, msg); err != nil {
+				errCh <- fmt.Errorf("WriteMessage(%s): %w", msg.ID, err)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			msgs, err := ReadMessages(tasksDir, time.Time{})
+			if err != nil {
+				errCh <- fmt.Errorf("ReadMessages: %w", err)
+				return
+			}
+			if len(msgs) == total {
+				for i, msg := range msgs {
+					wantID := "msg-" + strconv.Itoa(i)
+					if msg.ID != wantID {
+						errCh <- fmt.Errorf("messages[%d].ID = %q, want %q", i, msg.ID, wantID)
+						return
+					}
+				}
+				return
+			}
+			if time.Now().After(deadline) {
+				errCh <- fmt.Errorf("timed out waiting for %d messages, got %d", total, len(msgs))
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages final: %v", err)
+	}
+	if len(got) != total {
+		t.Fatalf("final ReadMessages count = %d, want %d", len(got), total)
 	}
 }
 
