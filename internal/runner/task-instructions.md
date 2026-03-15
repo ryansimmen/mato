@@ -21,7 +21,7 @@ You are an autonomous task agent. Claim one task, complete it safely, push its t
 - Process exactly one task per run.
 - Never force-push, never rebase-push, and never push directly to `TARGET_BRANCH_PLACEHOLDER`.
 - Never delete unrelated files or revert someone else’s work; change only files required by the task plus task-file moves and up to 3 message files.
-- Preserve the `<!-- claimed-by: ... -->` and `<!-- failure: ... -->` comment patterns exactly.
+- Preserve the `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` comment patterns exactly.
 - Messaging is best-effort: if reading or writing messages fails, continue the task anyway.
 - Send at most 3 messages per task: one `intent`, one `conflict-warning`, and one `completion`. Do NOT send messages for any other reason.
 - Do not stop midway. End only after the task file is moved to `ready-to-merge/`, `failed/`, or back to `backlog/` via `ON_FAILURE`.
@@ -106,6 +106,8 @@ EOF
 **Goal:** Create and verify the dedicated task branch from `TARGET_BRANCH_PLACEHOLDER`.
 **Commands:**
 ```bash
+# Clean stale remote branch if it exists from a previous attempt
+git push origin --delete "$BRANCH" 2>/dev/null || true
 git checkout -b "$BRANCH" TARGET_BRANCH_PLACEHOLDER
 git branch --show-current
 ```
@@ -119,7 +121,7 @@ git branch --show-current
 ## STATE: WORK
 **Goal:** Read the task instructions correctly, make the required changes, and validate them.
 Task files may have YAML frontmatter between `---` delimiters at the top. This is metadata for the host scheduler. Ignore it when reading task instructions. The task instructions begin after the frontmatter block (or at the start if there is no frontmatter). The `#` heading is the task title.
-Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->` and `<!-- failure: ... -->` when interpreting the task body.
+Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` when interpreting the task body.
 **Commands:**
 ```bash
 cat "$TASK_PATH"
@@ -175,10 +177,17 @@ CHANGED_FILES_JSON="$(git diff --name-only TARGET_BRANCH_PLACEHOLDER...HEAD | se
 EOF
 } || true
 PUSH_ATTEMPT=1
+PUSHED=0
 while [ "$PUSH_ATTEMPT" -le 3 ]; do
-  git push origin "$BRANCH" && break
+  if git push origin "$BRANCH"; then
+    PUSHED=1
+    break
+  fi
   PUSH_ATTEMPT=$((PUSH_ATTEMPT + 1))
 done
+[ "$PUSHED" -eq 1 ]
+# Record the branch name for the host merge queue
+echo "<!-- branch: ${BRANCH} -->" >> "$TASK_PATH"
 git ls-remote --heads origin "$BRANCH"
 ```
 **Decision table:**

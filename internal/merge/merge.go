@@ -21,10 +21,12 @@ type mergeQueueTask struct {
 	path     string
 	title    string
 	priority int
+	branch   string
 }
 
 var nonAlphanumDash = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
 var multiDash = regexp.MustCompile(`-{2,}`)
+var branchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
 
 var errTaskBranchNotPushed = errors.New("task branch not pushed by agent")
 var errSquashMergeConflict = errors.New("squash merge conflict")
@@ -33,8 +35,9 @@ var errPushAfterSquashFailed = errors.New("push failed after squash merge")
 const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 
 // ProcessQueue merges completed task branches into the target branch.
-// It scans ready-to-merge/ for task files, determines the task branch name
-// from each filename, and performs a squash merge.
+// It scans ready-to-merge/ for task files, prefers branch metadata recorded in
+// each task file, falls back to the filename-derived branch name for backward
+// compatibility, and performs a squash merge.
 // Returns the number of tasks successfully merged.
 func ProcessQueue(repoRoot, tasksDir, branch string) int {
 	readyDir := filepath.Join(tasksDir, "ready-to-merge")
@@ -64,6 +67,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 			path:     path,
 			title:    taskTitle(entry.Name(), body),
 			priority: meta.Priority,
+			branch:   parseBranchFromFile(path),
 		})
 	}
 
@@ -137,7 +141,7 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
 		return fmt.Errorf("checkout target branch %s: %w", branch, err)
 	}
 
-	taskBranch := "task/" + sanitizeBranchName(task.name)
+	taskBranch := taskBranchName(task)
 	if _, err := git.Output(cloneDir, "rev-parse", "--verify", "origin/"+taskBranch); err != nil {
 		return fmt.Errorf("%w: task branch %s not found on origin (agent may not have pushed)", errTaskBranchNotPushed, taskBranch)
 	}
@@ -198,6 +202,25 @@ func taskTitle(name, body string) string {
 	return frontmatter.TaskFileStem(name)
 }
 
+func parseBranchFromFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	m := branchRe.FindStringSubmatch(string(data))
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+func taskBranchName(task mergeQueueTask) string {
+	if task.branch != "" {
+		return task.branch
+	}
+	return "task/" + sanitizeBranchName(task.name)
+}
+
 func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err error) error {
 	switch {
 	case errors.Is(err, errTaskBranchNotPushed):
@@ -206,16 +229,15 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err erro
 		if err := failMergeTask(task.path, filepath.Join(tasksDir, "backlog", task.name), err.Error()); err != nil {
 			return err
 		}
-		cleanupTaskBranch(repoRoot, task.name)
+		cleanupTaskBranch(repoRoot, taskBranchName(task))
 		return nil
 	default:
 		return failMergeTask(task.path, "", err.Error())
 	}
 }
 
-func cleanupTaskBranch(repoRoot, taskName string) {
+func cleanupTaskBranch(repoRoot, branchName string) {
 	// Clean up the stale task branch so the next agent can push a fresh one.
-	branchName := "task/" + sanitizeBranchName(taskName)
 	_, _ = git.Output(repoRoot, "branch", "-D", branchName)
 	_, _ = git.Output(repoRoot, "push", "origin", "--delete", branchName)
 }
