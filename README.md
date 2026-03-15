@@ -128,3 +128,10 @@ mato --model gpt-5.3-codex
 - Task instructions are embedded in the binary (`task-instructions.md`).
 - The default merge target branch is `mato`.
 - Run `go test ./...` (or `make test`) to run the test suite.
+
+## Documentation
+
+- [Architecture](docs/architecture.md) — system design, host loop, agent lifecycle, merge queue
+- [Task Format](docs/task-format.md) — frontmatter fields, defaults, examples
+- [Messaging](docs/messaging.md) — inter-agent coordination protocol
+- [Configuration](docs/configuration.md) — CLI flags, environment variables, Docker setup
