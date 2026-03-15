@@ -85,7 +85,7 @@ if [ "$FAILURES" -ge 3 ]; then
   echo "Task exceeded retry budget and was moved to failed/."
   exit 0
 fi
-ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read f; do cat "$f"; echo; done
+ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read f; do cat "$f"; echo; done || true
 {
   MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-intent"
   cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
@@ -216,8 +216,8 @@ echo "Completed $FILENAME on $BRANCH and moved it to ready-to-merge/."
 Use this state for unrecoverable errors only, after bounded retries are exhausted.
 **Commands:**
 ```bash
-FAIL_STEP="WORK"  # Set this to the state name where failure occurred
-FAIL_REASON="brief description of the error"
+FAIL_STEP="${FAIL_STEP:-WORK}"  # Set this to the state name where failure occurred
+FAIL_REASON="${FAIL_REASON:-brief description of the error}"
 FILES_CHANGED="$(git diff --name-only HEAD 2>/dev/null | paste -sd, -)"
 [ -n "$FILES_CHANGED" ] || FILES_CHANGED="none"
 echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} files_changed=${FILES_CHANGED} -->" >> "$TASK_PATH"
