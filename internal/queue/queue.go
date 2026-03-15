@@ -123,18 +123,18 @@ func RecoverOrphanedTasks(tasksDir string) {
 		}
 
 		dst := filepath.Join(tasksDir, "backlog", e.Name())
+		if err := safeRename(src, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", e.Name(), err)
+			continue
+		}
 
-		f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err == nil {
 			fmt.Fprintf(f, "\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
 				time.Now().UTC().Format(time.RFC3339))
 			f.Close()
 		}
 
-		if err := safeRename(src, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", e.Name(), err)
-			continue
-		}
 		fmt.Printf("Recovered orphaned task %s back to backlog\n", e.Name())
 	}
 }

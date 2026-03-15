@@ -165,3 +165,188 @@ func TestParseTaskFile_BackwardCompatibleMarkdown(t *testing.T) {
 		t.Fatalf("body = %q, want %q", body, content)
 	}
 }
+
+func TestParseTaskFile_PriorityZero(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "priority-zero.md")
+	content := `---
+priority: 0
+---
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, _, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+	if meta.Priority != 0 {
+		t.Fatalf("meta.Priority = %d, want 0", meta.Priority)
+	}
+}
+
+func TestParseTaskFile_NegativePriority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "negative-priority.md")
+	content := `---
+priority: -10
+---
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, _, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+	if meta.Priority != -10 {
+		t.Fatalf("meta.Priority = %d, want -10", meta.Priority)
+	}
+}
+
+func TestParseTaskFile_UnknownFieldsIgnored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unknown-fields.md")
+	content := `---
+id: known-id
+priority: 5
+unknown_field: xyz
+another: 123
+tags: [ops]
+---
+Body
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	want := TaskMeta{ID: "known-id", Priority: 5, Tags: []string{"ops"}, MaxRetries: 3}
+	if !reflect.DeepEqual(meta, want) {
+		t.Fatalf("meta = %#v, want %#v", meta, want)
+	}
+	if body != "Body\n" {
+		t.Fatalf("body = %q, want %q", body, "Body\n")
+	}
+}
+
+func TestParseTaskFile_DuplicatePriority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "duplicate-priority.md")
+	content := `---
+priority: 5
+priority: 20
+---
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, _, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+	if meta.Priority != 20 {
+		t.Fatalf("meta.Priority = %d, want 20", meta.Priority)
+	}
+}
+
+func TestParseTaskFile_SpecialCharacterValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "special-values.md")
+	content := `---
+id: my-task:v2
+tags: [front:end, "back-end"]
+---
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, _, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+	if meta.ID != "my-task:v2" {
+		t.Fatalf("meta.ID = %q, want %q", meta.ID, "my-task:v2")
+	}
+	if !reflect.DeepEqual(meta.Tags, []string{"front:end", "back-end"}) {
+		t.Fatalf("meta.Tags = %#v, want %#v", meta.Tags, []string{"front:end", "back-end"})
+	}
+}
+
+func TestParseTaskFile_EmptyFrontmatterEmptyBody(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty-frontmatter-empty-body.md")
+	content := "---\n---\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	want := TaskMeta{ID: "empty-frontmatter-empty-body", Priority: 50, MaxRetries: 3}
+	if !reflect.DeepEqual(meta, want) {
+		t.Fatalf("meta = %#v, want %#v", meta, want)
+	}
+	if body != "" {
+		t.Fatalf("body = %q, want empty body", body)
+	}
+}
+
+func TestParseTaskFile_DependsOnDropsEmptyItems(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "depends-on-drops-empty-items.md")
+	content := `---
+depends_on: ["", real-dep, ""]
+---
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, _, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+	if !reflect.DeepEqual(meta.DependsOn, []string{"real-dep"}) {
+		t.Fatalf("meta.DependsOn = %#v, want %#v", meta.DependsOn, []string{"real-dep"})
+	}
+}
+
+func TestParseTaskFile_InvalidPriority(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "float",
+			content: `---
+priority: 3.5
+---
+`,
+		},
+		{
+			name: "string",
+			content: `---
+priority: high
+---
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.name+"-priority.md")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("os.WriteFile: %v", err)
+			}
+
+			if _, _, err := ParseTaskFile(path); err == nil {
+				t.Fatalf("ParseTaskFile(%q) error = nil, want error", tt.content)
+			}
+		})
+	}
+}

@@ -421,6 +421,140 @@ func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	createReadyTaskWithBranch := func(taskName, title, changedFile string) {
+		t.Helper()
+
+		taskBranch := "task/" + sanitizeBranchName(taskName)
+		if _, err := git.Output(repoRoot, "checkout", "-b", taskBranch, "mato"); err != nil {
+			t.Fatalf("git checkout -b %s: %v", taskBranch, err)
+		}
+		if err := os.WriteFile(filepath.Join(repoRoot, changedFile), []byte(title+"\n"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile %s: %v", changedFile, err)
+		}
+		if _, err := git.Output(repoRoot, "add", changedFile); err != nil {
+			t.Fatalf("git add %s: %v", changedFile, err)
+		}
+		if _, err := git.Output(repoRoot, "commit", "-m", title+" branch work"); err != nil {
+			t.Fatalf("git commit %s branch work: %v", title, err)
+		}
+		if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+			t.Fatalf("git checkout mato: %v", err)
+		}
+
+		taskContent := "---\npriority: 10\n---\n# " + title + "\n"
+		if err := os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", taskName), []byte(taskContent), 0o644); err != nil {
+			t.Fatalf("os.WriteFile %s: %v", taskName, err)
+		}
+	}
+
+	createReadyTaskWithBranch("c-task.md", "C task", "c.txt")
+	createReadyTaskWithBranch("a-task.md", "A task", "a.txt")
+	createReadyTaskWithBranch("b-task.md", "B task", "b.txt")
+
+	baseRev, err := git.Output(repoRoot, "rev-parse", "mato")
+	if err != nil {
+		t.Fatalf("git rev-parse mato: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 3 {
+		t.Fatalf("ProcessQueue() = %d, want 3", got)
+	}
+
+	for _, name := range []string{"a-task.md", "b-task.md", "c-task.md"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, "completed", name)); err != nil {
+			t.Fatalf("completed task %s missing: %v", name, err)
+		}
+	}
+
+	log, err := git.Output(repoRoot, "log", "--reverse", "--format=%s", strings.TrimSpace(baseRev)+"..mato")
+	if err != nil {
+		t.Fatalf("git log mato: %v", err)
+	}
+	var gotOrder []string
+	for _, line := range strings.Split(strings.TrimSpace(log), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			gotOrder = append(gotOrder, line)
+		}
+	}
+	wantOrder := []string{"A task", "B task", "C task"}
+	if len(gotOrder) != len(wantOrder) {
+		t.Fatalf("merged commit count = %d, want %d (%v)", len(gotOrder), len(wantOrder), gotOrder)
+	}
+	for i, want := range wantOrder {
+		if gotOrder[i] != want {
+			t.Fatalf("merge order[%d] = %q, want %q (full order: %v)", i, gotOrder[i], want, gotOrder)
+		}
+	}
+}
+
+func TestProcessQueue_MalformedTaskInReadyToMerge(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/good-task", "mato"); err != nil {
+		t.Fatalf("git checkout task/good-task: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "good.txt"), []byte("good\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile good.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "good.txt"); err != nil {
+		t.Fatalf("git add good.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "good branch work"); err != nil {
+		t.Fatalf("git commit good branch work: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	malformedTask := filepath.Join(tasksDir, "ready-to-merge", "bad-task.md")
+	if err := os.WriteFile(malformedTask, []byte("---\npriority: not-a-number\n---\n# Bad\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile bad-task.md: %v", err)
+	}
+	validTask := filepath.Join(tasksDir, "ready-to-merge", "good-task.md")
+	if err := os.WriteFile(validTask, []byte("---\npriority: 1\n---\n# Good task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile good-task.md: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "good-task.md")); err != nil {
+		t.Fatalf("completed good-task.md missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "good.txt")); err != nil {
+		t.Fatalf("merged good.txt missing from target branch: %v", err)
+	}
+
+	backlogTask := filepath.Join(tasksDir, "backlog", "bad-task.md")
+	data, err := os.ReadFile(backlogTask)
+	if err != nil {
+		t.Fatalf("backlog bad-task.md missing: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- failure: merge-queue") || !strings.Contains(string(data), "parse task file") {
+		t.Fatalf("malformed task should be moved to backlog with parse failure record, got %q", string(data))
+	}
+	if _, err := os.Stat(malformedTask); !os.IsNotExist(err) {
+		t.Fatalf("malformed task should not remain in ready-to-merge, stat err = %v", err)
+	}
+}
+
 func TestSanitizeBranchName(t *testing.T) {
 	tests := []struct {
 		name  string
