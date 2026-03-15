@@ -261,6 +261,8 @@ Important consequence: `affects` is metadata, not a live diff. `mato` does not i
 ### `task-instructions.md`
 - The embedded agent prompt/state machine.
 - Describes folder semantics, per-state commands, retry rules, and failure handling.
+### Test files
+Each source file has a matching `*_test.go`: `main_test.go`, `util_test.go`, `queue_test.go`, `frontmatter_test.go`, `merge_test.go`, `messaging_test.go`, `status_test.go`.
 ## 9. End-to-End Summary
 Responsibility is split cleanly:
 - the host owns queue maintenance, dependency promotion, overlap prevention, stale-state cleanup, and merging;
