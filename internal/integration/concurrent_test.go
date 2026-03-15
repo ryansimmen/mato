@@ -293,6 +293,188 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 	}
 }
 
+func TestConflictRequeueThenRaceToClaim(t *testing.T) {
+	repoRoot, tasksDir := setupTestRepo(t)
+
+	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha content\n"}, "alpha change")
+	createTaskBranch(t, repoRoot, "task/conflict-task", map[string]string{"README.md": "conflict content\n"}, "conflict change")
+
+	writeTask(t, tasksDir, "ready-to-merge", "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, "ready-to-merge", "conflict-task.md", "---\npriority: 10\n---\n# Conflict Task\n")
+
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
+	}
+
+	mustExist(t, filepath.Join(tasksDir, "completed", "alpha.md"))
+	conflictBacklog := filepath.Join(tasksDir, "backlog", "conflict-task.md")
+	mustExist(t, conflictBacklog)
+	if contents := readFile(t, conflictBacklog); !strings.Contains(contents, "<!-- failure: merge-queue") {
+		t.Fatalf("conflict task missing merge failure record: %q", contents)
+	}
+
+	conflictInProgress := filepath.Join(tasksDir, "in-progress", "conflict-task.md")
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var successes atomic.Int32
+	errCh := make(chan error, 2)
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			src := filepath.Join(tasksDir, "backlog", "conflict-task.md")
+			dst := filepath.Join(tasksDir, "in-progress", "conflict-task.md")
+			if err := os.Rename(src, dst); err != nil {
+				errCh <- err
+				return
+			}
+			successes.Add(1)
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+
+	errs := make([]error, 0, 2)
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+
+	if got := successes.Load(); got != 1 {
+		t.Fatalf("successful claims = %d, want 1", got)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("claim errors = %d, want 1 (%v)", len(errs), errs)
+	}
+
+	mustExist(t, conflictInProgress)
+	mustNotExist(t, conflictBacklog)
+
+	if got := markdownFileNames(t, filepath.Join(tasksDir, "in-progress")); len(got) != 1 || got[0] != "conflict-task.md" {
+		t.Fatalf("in-progress tasks = %v, want [conflict-task.md]", got)
+	}
+	if got := markdownFileNames(t, filepath.Join(tasksDir, "backlog")); len(got) != 0 {
+		t.Fatalf("backlog tasks = %v, want none", got)
+	}
+}
+
+func TestConcurrentMergeQueueTwoHosts(t *testing.T) {
+	repoRoot, tasksDir := setupTestRepo(t)
+
+	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"alpha.txt": "alpha\n"}, "alpha change")
+	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"beta.txt": "beta\n"}, "beta change")
+
+	writeTask(t, tasksDir, "ready-to-merge", "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, "ready-to-merge", "beta.md", "---\npriority: 10\n---\n# Beta\n")
+
+	start := make(chan struct{})
+	results := make([]int, 2)
+	var wg sync.WaitGroup
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+			if cleanup, ok := merge.AcquireLock(tasksDir); ok {
+				results[idx] = merge.ProcessQueue(repoRoot, tasksDir, "mato")
+				cleanup()
+			}
+		}(i)
+	}
+
+	close(start)
+	wg.Wait()
+
+	totalMerged := 0
+	for _, mergedCount := range results {
+		totalMerged += mergedCount
+	}
+	if totalMerged != 2 {
+		t.Fatalf("total merged across hosts = %d, want 2 (%v)", totalMerged, results)
+	}
+
+	mustExist(t, filepath.Join(tasksDir, "completed", "alpha.md"))
+	mustExist(t, filepath.Join(tasksDir, "completed", "beta.md"))
+	mustNotExist(t, filepath.Join(tasksDir, "ready-to-merge", "alpha.md"))
+	mustNotExist(t, filepath.Join(tasksDir, "ready-to-merge", "beta.md"))
+
+	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "mato:alpha.txt")); got != "alpha" {
+		t.Fatalf("alpha.txt contents = %q, want %q", got, "alpha")
+	}
+	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "mato:beta.txt")); got != "beta" {
+		t.Fatalf("beta.txt contents = %q, want %q", got, "beta")
+	}
+
+	logSubjects := strings.Split(strings.TrimSpace(mustGitOutput(t, repoRoot, "log", "--format=%s", "mato")), "\n")
+	if len(logSubjects) != 3 {
+		t.Fatalf("commit subjects on mato = %v, want 3 commits", logSubjects)
+	}
+
+	alphaCommits := 0
+	betaCommits := 0
+	for _, subject := range logSubjects {
+		switch subject {
+		case "Alpha":
+			alphaCommits++
+		case "Beta":
+			betaCommits++
+		}
+	}
+	if alphaCommits != 1 || betaCommits != 1 {
+		t.Fatalf("merge commit counts alpha=%d beta=%d, want 1 each (log=%v)", alphaCommits, betaCommits, logSubjects)
+	}
+}
+
+// This test documents a known limitation: tasks with filenames that sanitize to the same
+// branch name will collide. A future fix should include task ID in branch names.
+func TestBranchNameCollisionTwoTasks(t *testing.T) {
+	repoRoot, tasksDir := setupTestRepo(t)
+
+	firstBacklog := writeTask(t, tasksDir, "backlog", "fix-bug.md", "# Fix bug\n")
+	secondBacklog := writeTask(t, tasksDir, "backlog", "fix_bug.md", "# Fix bug underscore\n")
+
+	firstInProgress := filepath.Join(tasksDir, "in-progress", "fix-bug.md")
+	mustRename(t, firstBacklog, firstInProgress)
+
+	clone1, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone agent 1: %v", err)
+	}
+	defer git.RemoveClone(clone1)
+
+	configureCloneIdentity(t, clone1)
+	mustGitOutput(t, clone1, "checkout", "-b", "task/fix-bug", "mato")
+	writeFile(t, filepath.Join(clone1, "agent-one.txt"), "agent one\n")
+	mustGitOutput(t, clone1, "add", "-A")
+	mustGitOutput(t, clone1, "commit", "-m", "agent 1 fix")
+	mustGitOutput(t, clone1, "push", "origin", "task/fix-bug")
+
+	secondInProgress := filepath.Join(tasksDir, "in-progress", "fix_bug.md")
+	mustRename(t, secondBacklog, secondInProgress)
+
+	clone2, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone agent 2: %v", err)
+	}
+	defer git.RemoveClone(clone2)
+
+	configureCloneIdentity(t, clone2)
+	mustGitOutput(t, clone2, "checkout", "-b", "task/fix-bug", "mato")
+	writeFile(t, filepath.Join(clone2, "agent-two.txt"), "agent two\n")
+	mustGitOutput(t, clone2, "add", "-A")
+	mustGitOutput(t, clone2, "commit", "-m", "agent 2 fix")
+
+	if _, err := git.Output(clone2, "push", "origin", "task/fix-bug"); err == nil {
+		t.Fatal("agent 2 push unexpectedly succeeded; want non-fast-forward collision")
+	} else if !strings.Contains(err.Error(), "non-fast-forward") && !strings.Contains(err.Error(), "fetch first") && !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("agent 2 push error = %v, want non-fast-forward collision", err)
+	}
+}
+
 func TestOrphanRecoveryDuringConcurrentWork(t *testing.T) {
 	_, tasksDir := setupTestRepo(t)
 
@@ -420,6 +602,68 @@ func TestConcurrentMessageWriting(t *testing.T) {
 		if msg.Body != want.Body || msg.From != want.From || msg.Task != want.Task || msg.Branch != want.Branch {
 			t.Fatalf("message file %s = %#v, want %#v", entry.Name(), msg, want)
 		}
+	}
+}
+
+func TestReadMessagesDuringCleanup(t *testing.T) {
+	_, tasksDir := setupTestRepo(t)
+	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 20; i++ {
+		msg := messaging.Message{
+			ID:     fmt.Sprintf("cleanup-msg-%02d", i),
+			From:   "cleanup-agent",
+			Type:   "status",
+			Body:   fmt.Sprintf("message body %02d", i),
+			SentAt: base.Add(time.Duration(i) * time.Nanosecond),
+		}
+		if err := messaging.WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("messaging.WriteMessage(%s): %v", msg.ID, err)
+		}
+	}
+
+	start := make(chan struct{})
+	errCh := make(chan error, 10)
+	var wg sync.WaitGroup
+	var panics atomic.Int32
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if recover() != nil {
+				panics.Add(1)
+			}
+		}()
+
+		<-start
+		for i := 0; i < 10; i++ {
+			if _, err := messaging.ReadMessages(tasksDir, time.Time{}); err != nil {
+				errCh <- fmt.Errorf("messaging.ReadMessages iteration %d: %w", i, err)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if recover() != nil {
+				panics.Add(1)
+			}
+		}()
+
+		<-start
+		messaging.CleanOldMessages(tasksDir, 0)
+	}()
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Error(err)
+	}
+	if panics.Load() != 0 {
+		t.Fatalf("expected no goroutine panics, got %d", panics.Load())
 	}
 }
 

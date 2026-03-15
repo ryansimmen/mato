@@ -244,6 +244,118 @@ func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	originDir := filepath.Join(t.TempDir(), "origin.git")
+	if _, err := git.Output("", "init", "--bare", originDir); err != nil {
+		t.Fatalf("git init --bare origin: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "remote", "add", "origin", originDir); err != nil {
+		t.Fatalf("git remote add origin: %v", err)
+	}
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	baseFile := filepath.Join(repoRoot, "README.md")
+	if err := os.WriteFile(baseFile, []byte("shared\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile README.md base: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "README.md"); err != nil {
+		t.Fatalf("git add README.md base: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "prepare shared base"); err != nil {
+		t.Fatalf("git commit prepare shared base: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "push", "-u", "origin", "mato"); err != nil {
+		t.Fatalf("git push -u origin mato: %v", err)
+	}
+
+	firstTaskName := "first task.md"
+	firstBranch := "task/" + sanitizeBranchName(firstTaskName)
+	if _, err := git.Output(repoRoot, "checkout", "-b", firstBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", firstBranch, err)
+	}
+	if err := os.WriteFile(baseFile, []byte("first branch change\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile README.md first branch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "README.md"); err != nil {
+		t.Fatalf("git add README.md first branch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "first branch change"); err != nil {
+		t.Fatalf("git commit first branch change: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "push", "-u", "origin", firstBranch); err != nil {
+		t.Fatalf("git push -u origin %s: %v", firstBranch, err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato after first branch: %v", err)
+	}
+
+	conflictTaskName := "conflict task.md"
+	conflictBranch := "task/" + sanitizeBranchName(conflictTaskName)
+	if _, err := git.Output(repoRoot, "checkout", "-b", conflictBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", conflictBranch, err)
+	}
+	if err := os.WriteFile(baseFile, []byte("conflict branch change\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile README.md conflict branch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "README.md"); err != nil {
+		t.Fatalf("git add README.md conflict branch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "conflict branch change"); err != nil {
+		t.Fatalf("git commit conflict branch change: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "push", "-u", "origin", conflictBranch); err != nil {
+		t.Fatalf("git push -u origin %s: %v", conflictBranch, err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato after conflict branch: %v", err)
+	}
+
+	if out, err := git.Output(repoRoot, "ls-remote", "--heads", "origin", conflictBranch); err != nil {
+		t.Fatalf("git ls-remote before ProcessQueue: %v", err)
+	} else if strings.TrimSpace(out) == "" {
+		t.Fatalf("expected conflicted task branch %s to exist on origin before ProcessQueue", conflictBranch)
+	}
+
+	firstTaskFile := filepath.Join(tasksDir, "ready-to-merge", firstTaskName)
+	firstTaskContent := "---\npriority: 1\n---\n# First task\nThis should merge first.\n"
+	if err := os.WriteFile(firstTaskFile, []byte(firstTaskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile first task file: %v", err)
+	}
+	conflictTaskFile := filepath.Join(tasksDir, "ready-to-merge", conflictTaskName)
+	conflictTaskContent := "---\npriority: 2\n---\n# Conflict task\nThis should conflict after the first merge.\n"
+	if err := os.WriteFile(conflictTaskFile, []byte(conflictTaskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile conflict task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "completed", firstTaskName)); err != nil {
+		t.Fatalf("completed first task missing: %v", err)
+	}
+
+	backlogFile := filepath.Join(tasksDir, "backlog", conflictTaskName)
+	data, err := os.ReadFile(backlogFile)
+	if err != nil {
+		t.Fatalf("backlog conflicted task file missing: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- failure: merge-queue") {
+		t.Fatalf("backlog conflicted task should contain merge failure record, got %q", string(data))
+	}
+	if out, err := git.Output(repoRoot, "ls-remote", "--heads", "origin", conflictBranch); err != nil {
+		t.Fatalf("git ls-remote after ProcessQueue: %v", err)
+	} else if strings.TrimSpace(out) != "" {
+		t.Fatalf("expected conflicted task branch %s to be deleted from origin, got %q", conflictBranch, out)
+	}
+}
+
 func TestProcessQueueMovesMissingBranchTaskToFailed(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := setupTasksDir(t)

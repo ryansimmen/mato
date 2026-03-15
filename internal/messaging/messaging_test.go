@@ -314,6 +314,146 @@ func TestReadMessages_ConcurrentWrite(t *testing.T) {
 	}
 }
 
+func TestReadMessages_SkipsMalformedFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	valid := Message{
+		ID:     "valid",
+		From:   "agent",
+		Type:   "intent",
+		Task:   "task.md",
+		Branch: "branch",
+		Body:   "ok",
+		SentAt: time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC),
+	}
+	if err := WriteMessage(tasksDir, valid); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	if err := os.WriteFile(filepath.Join(eventsDir, "broken.json"), []byte("{"), 0o644); err != nil {
+		t.Fatalf("WriteFile broken.json: %v", err)
+	}
+
+	got, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 valid message, got %d", len(got))
+	}
+	if !reflect.DeepEqual(got[0], valid) {
+		t.Fatalf("message = %#v, want %#v", got[0], valid)
+	}
+}
+
+func TestReadMessages_FileDeletedDuringRead(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	const total = 5
+	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
+	payload := strings.Repeat("payload-", 256*1024)
+	wantByID := make(map[string]Message, total)
+	for i := 0; i < total; i++ {
+		msg := Message{
+			ID:     "msg-" + strconv.Itoa(i),
+			From:   "writer",
+			Type:   "intent",
+			Task:   "task-" + strconv.Itoa(i),
+			Branch: "branch",
+			Body:   payload + strconv.Itoa(i),
+			SentAt: base.Add(time.Duration(i) * time.Millisecond),
+		}
+		wantByID[msg.ID] = msg
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
+		}
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != total {
+		t.Fatalf("expected %d message files, got %d", total, len(entries))
+	}
+
+	errCh := make(chan error, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 10; i++ {
+			msgs, err := ReadMessages(tasksDir, time.Time{})
+			if err != nil {
+				errCh <- fmt.Errorf("ReadMessages iteration %d: %w", i, err)
+				return
+			}
+			if len(msgs) > total {
+				errCh <- fmt.Errorf("ReadMessages iteration %d returned %d messages, want <= %d", i, len(msgs), total)
+				return
+			}
+			for j, msg := range msgs {
+				want, ok := wantByID[msg.ID]
+				if !ok {
+					errCh <- fmt.Errorf("ReadMessages iteration %d returned unexpected message ID %q", i, msg.ID)
+					return
+				}
+				if !reflect.DeepEqual(msg, want) {
+					errCh <- fmt.Errorf("ReadMessages iteration %d returned %#v, want %#v", i, msg, want)
+					return
+				}
+				if j > 0 && msgs[j-1].SentAt.After(msg.SentAt) {
+					errCh <- fmt.Errorf("ReadMessages iteration %d returned messages out of order", i)
+					return
+				}
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		time.Sleep(1 * time.Millisecond)
+		for _, entry := range entries {
+			if err := os.Remove(filepath.Join(eventsDir, entry.Name())); err != nil && !os.IsNotExist(err) {
+				errCh <- fmt.Errorf("Remove(%s): %w", entry.Name(), err)
+				return
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages final: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("final ReadMessages count = %d, want 0", len(got))
+	}
+}
+
 func TestWritePresence(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {
