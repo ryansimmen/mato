@@ -220,49 +220,54 @@ Algorithm:
 - the overlap list is sorted before logging
 Important consequence: `affects` is metadata, not a live diff. `mato` does not interpret it as globs or path prefixes.
 ## 8. Code Structure
-### `main.go`
+
+The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypoint, `internal/` for library packages.
+
+### `cmd/mato/main.go`
 - CLI entrypoint.
-- `main()` routes `status` to `showStatus(...)` and otherwise starts `run(...)`.
+- `main()` routes `status` to `status.Show(...)` and otherwise starts `runner.Run(...)`.
 - `parseArgs(...)` handles `--repo`, `--branch`, `--tasks-dir`, `--help`, `--`, and forwards all other args to Copilot CLI.
-### `runner.go`
-- Embeds `task-instructions.md`.
-- `run(...)` initializes the repo/queue and executes the polling loop.
-- `runOnce(...)` builds the temp clone + Docker runtime for one agent run.
-### `queue.go`
-- Agent liveness via `.locks/*.pid`.
+
+### `internal/runner/`
+- Embeds `task-instructions.md` (the agent prompt/state machine).
+- `Run(...)` initializes the repo/queue and executes the polling loop.
+- `RunOnce(...)` builds the temp clone + Docker runtime for one agent run.
+
+### `internal/queue/`
+- Agent identity (`GenerateAgentID`) and liveness via `.locks/*.pid`.
 - Orphan recovery, dependency promotion, backlog overlap deferral, and `.queue` manifest writing.
-### `git.go`
-- `gitOutput(...)` wrapper.
+
+### `internal/git/`
+- `Output(...)` wrapper for git commands.
 - Temp clone helpers.
 - Branch creation/check-out and `.gitignore` maintenance.
-### `merge.go`
+
+### `internal/merge/`
 - Ready-to-merge scanning and ordering.
 - Temp-clone squash merges into the target branch.
 - Merge lock and merge-failure requeue path.
-### `frontmatter.go`
+- Branch-name sanitization.
+
+### `internal/frontmatter/`
 - `TaskMeta` schema.
-- YAML-like frontmatter parsing.
+- YAML-like frontmatter parsing (stdlib only).
 - Default metadata values and task-body extraction.
-- Strips comment-only HTML metadata lines from the body returned to consumers.
-### `messaging.go`
+- Strips comment-only HTML metadata lines from the body.
+
+### `internal/messaging/`
 - `Message` and `presence` JSON types.
 - Event/presence directory setup.
 - Atomic JSON write helpers.
 - Message reading, stale presence cleanup, and old-event garbage collection.
-### `status.go`
+
+### `internal/status/`
 - `mato status` implementation.
 - Counts task files by queue directory.
 - Lists active agents from `.locks/*.pid`.
-- Shows waiting-task dependency summaries and the five most recent messages.
-### `util.go`
-- Random agent ID generation.
-- Branch-name sanitization.
-- `hasModelArg(...)` helper for Docker command construction.
-### `task-instructions.md`
-- The embedded agent prompt/state machine.
-- Describes folder semantics, per-state commands, retry rules, and failure handling.
+- Shows waiting-task dependency summaries and recent messages.
+
 ### Test files
-Each source file has a matching `*_test.go`: `main_test.go`, `util_test.go`, `queue_test.go`, `frontmatter_test.go`, `merge_test.go`, `messaging_test.go`, `status_test.go`.
+Each package has tests alongside its source. All tests run with `go test ./...`.
 ## 9. End-to-End Summary
 Responsibility is split cleanly:
 - the host owns queue maintenance, dependency promotion, overlap prevention, stale-state cleanup, and merging;

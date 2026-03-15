@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"mato/internal/runner"
+	"mato/internal/status"
 )
 
 var errHelp = errors.New("help requested")
@@ -28,7 +31,20 @@ Any other flags are forwarded to the copilot CLI inside the container.
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "status" {
-		if err := showStatus(os.Args[2:]); err != nil {
+		repoRoot, _, tasksDir, extras, err := parseArgs(os.Args[2:])
+		if err == errHelp {
+			fmt.Fprintf(os.Stderr, "Usage: mato status [--repo <path>] [--tasks-dir <path>]\n")
+			os.Exit(0)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(extras) > 0 {
+			fmt.Fprintf(os.Stderr, "mato error: unexpected status arguments: %s\n", strings.Join(extras, " "))
+			os.Exit(1)
+		}
+		if err := status.Show(repoRoot, tasksDir); err != nil {
 			fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
 			os.Exit(1)
 		}
@@ -44,7 +60,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := run(repoRoot, branch, tasksDir, copilotArgs); err != nil {
+	if err := runner.Run(repoRoot, branch, tasksDir, copilotArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
 		os.Exit(1)
 	}

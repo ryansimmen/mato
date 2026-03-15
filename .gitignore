@@ -6,7 +6,7 @@ bin/*
 *.so
 *.dylib
 *.test
-mato
+/mato
 
 # Coverage and test outputs
 *.out

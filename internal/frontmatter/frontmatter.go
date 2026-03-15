@@ -1,4 +1,4 @@
-package main
+package frontmatter
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ type TaskMeta struct {
 	MaxRetries          int      `yaml:"max_retries"`
 }
 
-func parseTaskFile(path string) (TaskMeta, string, error) {
+func ParseTaskFile(path string) (TaskMeta, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return TaskMeta{}, "", err
@@ -26,7 +26,7 @@ func parseTaskFile(path string) (TaskMeta, string, error) {
 
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 	meta := TaskMeta{
-		ID:         taskFileStem(path),
+		ID:         TaskFileStem(path),
 		Priority:   50,
 		MaxRetries: 3,
 	}
@@ -50,10 +50,10 @@ func parseTaskFile(path string) (TaskMeta, string, error) {
 		body = strings.Join(lines[end+1:], "\n")
 	}
 
-	return meta, stripHTMLCommentLines(body), nil
+	return meta, StripHTMLCommentLines(body), nil
 }
 
-func taskFileStem(path string) string {
+func TaskFileStem(path string) string {
 	base := filepath.Base(path)
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
@@ -188,7 +188,7 @@ func trimYAMLString(value string) string {
 	return value
 }
 
-func stripHTMLCommentLines(body string) string {
+func StripHTMLCommentLines(body string) string {
 	lines := strings.Split(body, "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {

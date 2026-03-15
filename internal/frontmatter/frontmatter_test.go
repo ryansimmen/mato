@@ -1,4 +1,4 @@
-package main
+package frontmatter
 
 import (
 	"os"
@@ -27,9 +27,9 @@ Task body.
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	meta, body, err := parseTaskFile(path)
+	meta, body, err := ParseTaskFile(path)
 	if err != nil {
-		t.Fatalf("parseTaskFile: %v", err)
+		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
 	want := TaskMeta{
@@ -62,9 +62,9 @@ Body
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	meta, body, err := parseTaskFile(path)
+	meta, body, err := ParseTaskFile(path)
 	if err != nil {
-		t.Fatalf("parseTaskFile: %v", err)
+		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
 	if meta.ID != "partial-task" {
@@ -94,9 +94,9 @@ func TestParseTaskFile_NoFrontmatterUsesDefaults(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	meta, body, err := parseTaskFile(path)
+	meta, body, err := ParseTaskFile(path)
 	if err != nil {
-		t.Fatalf("parseTaskFile: %v", err)
+		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
 	want := TaskMeta{ID: "plain-task", Priority: 50, MaxRetries: 3}
@@ -115,9 +115,9 @@ func TestParseTaskFile_EmptyFrontmatter(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	meta, body, err := parseTaskFile(path)
+	meta, body, err := ParseTaskFile(path)
 	if err != nil {
-		t.Fatalf("parseTaskFile: %v", err)
+		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
 	if meta.ID != "empty-frontmatter" || meta.Priority != 50 || meta.MaxRetries != 3 {
@@ -135,9 +135,9 @@ func TestParseTaskFile_StripsHTMLCommentLines(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	_, body, err := parseTaskFile(path)
+	_, body, err := ParseTaskFile(path)
 	if err != nil {
-		t.Fatalf("parseTaskFile: %v", err)
+		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
 	if body != "# Title\nBody text\n" {
@@ -152,9 +152,9 @@ func TestParseTaskFile_BackwardCompatibleMarkdown(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	meta, body, err := parseTaskFile(path)
+	meta, body, err := ParseTaskFile(path)
 	if err != nil {
-		t.Fatalf("parseTaskFile: %v", err)
+		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
 	want := TaskMeta{ID: "legacy-task", Priority: 50, MaxRetries: 3}
@@ -165,4 +165,3 @@ func TestParseTaskFile_BackwardCompatibleMarkdown(t *testing.T) {
 		t.Fatalf("body = %q, want %q", body, content)
 	}
 }
-
