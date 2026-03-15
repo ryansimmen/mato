@@ -150,8 +150,8 @@ done
 git status --short
 git add -A
 COMMIT_MSG="$TASK_TITLE"
-# If the task was ambiguous, use:
-# COMMIT_MSG="$TASK_TITLE (best-effort: <brief uncertainty>)"
+# If the task was ambiguous, replace the note text with a short uncertainty summary:
+# COMMIT_MSG="$TASK_TITLE (best-effort: explain the uncertainty briefly)"
 git commit -m "$COMMIT_MSG"
 git log --oneline -1
 ```
@@ -216,15 +216,17 @@ echo "Completed $FILENAME on $BRANCH and moved it to ready-to-merge/."
 Use this state for unrecoverable errors only, after bounded retries are exhausted.
 **Commands:**
 ```bash
-FILES_CHANGED="$(git status --short | awk '{print $2}' | paste -sd, -)"
+FAIL_STEP="WORK"  # Set this to the state name where failure occurred
+FAIL_REASON="brief description of the error"
+FILES_CHANGED="$(git diff --name-only HEAD 2>/dev/null | paste -sd, -)"
 [ -n "$FILES_CHANGED" ] || FILES_CHANGED="none"
-echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=<STATE> error=<brief description> files_changed=${FILES_CHANGED} -->" >> "TASKS_DIR_PLACEHOLDER/in-progress/<filename>"
-git checkout TARGET_BRANCH_PLACEHOLDER || true
-FAILURES=$(grep -c '<!-- failure:' "TASKS_DIR_PLACEHOLDER/in-progress/<filename>" || true)
+echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} files_changed=${FILES_CHANGED} -->" >> "$TASK_PATH"
+git checkout TARGET_BRANCH_PLACEHOLDER 2>/dev/null || true
+FAILURES=$(grep -c '<!-- failure:' "$TASK_PATH" || true)
 if [ "$FAILURES" -ge 3 ]; then
-  mv "TASKS_DIR_PLACEHOLDER/in-progress/<filename>" "TASKS_DIR_PLACEHOLDER/failed/<filename>"
+  mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/failed/$FILENAME"
 else
-  mv "TASKS_DIR_PLACEHOLDER/in-progress/<filename>" "TASKS_DIR_PLACEHOLDER/backlog/<filename>"
+  mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/backlog/$FILENAME"
 fi
 ```
 **Decision table:**

@@ -183,9 +183,11 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, "waiting", entry.Name()))
+		path := filepath.Join(tasksDir, "waiting", entry.Name())
+		meta, _, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("parse waiting task %s: %w", entry.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not parse %s: %v\n", path, err)
+			continue
 		}
 
 		deps := make([]string, 0, len(meta.DependsOn))
@@ -249,7 +251,8 @@ func taskStatesByID(tasksDir string) (map[string]string, error) {
 			path := filepath.Join(tasksDir, dirState.Dir, entry.Name())
 			meta, _, err := frontmatter.ParseTaskFile(path)
 			if err != nil {
-				return nil, fmt.Errorf("parse %s task %s: %w", dirState.Dir, entry.Name(), err)
+				fmt.Fprintf(os.Stderr, "warning: could not parse %s: %v\n", path, err)
+				continue
 			}
 			states[frontmatter.TaskFileStem(entry.Name())] = dirState.State
 			if meta.ID != "" {

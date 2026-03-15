@@ -56,6 +56,21 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	}
 	defer cleanupLock()
 
+	gitName, _ := git.Output(repoRoot, "config", "user.name")
+	gitEmail, _ := git.Output(repoRoot, "config", "user.email")
+	if strings.TrimSpace(gitName) == "" {
+		gitName, _ = git.Output("", "config", "--global", "user.name")
+	}
+	if strings.TrimSpace(gitEmail) == "" {
+		gitEmail, _ = git.Output("", "config", "--global", "user.email")
+	}
+	if n := strings.TrimSpace(gitName); n != "" {
+		git.Output(repoRoot, "config", "user.name", n)
+	}
+	if e := strings.TrimSpace(gitEmail); e != "" {
+		git.Output(repoRoot, "config", "user.email", e)
+	}
+
 	if err := git.EnsureGitignored(repoRoot, "/.tasks/"); err != nil {
 		return err
 	}
@@ -65,15 +80,6 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		image = "ubuntu:24.04"
 	}
 	workdir := "/workspace"
-
-	gitName, _ := git.Output(repoRoot, "config", "user.name")
-	gitEmail, _ := git.Output(repoRoot, "config", "user.email")
-	if strings.TrimSpace(gitName) == "" {
-		gitName, _ = git.Output("", "config", "--global", "user.name")
-	}
-	if strings.TrimSpace(gitEmail) == "" {
-		gitEmail, _ = git.Output("", "config", "--global", "user.email")
-	}
 
 	copilotPath, err := exec.LookPath("copilot")
 	if err != nil {

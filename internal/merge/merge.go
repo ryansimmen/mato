@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,12 @@ type mergeQueueTask struct {
 
 var nonAlphanumDash = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
 var multiDash = regexp.MustCompile(`-{2,}`)
+
+var errTaskBranchNotPushed = errors.New("task branch not pushed by agent")
+var errSquashMergeConflict = errors.New("squash merge conflict")
+var errPushAfterSquashFailed = errors.New("push failed after squash merge")
+
+const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 
 // ProcessQueue merges completed task branches into the target branch.
 // It scans ready-to-merge/ for task files, determines the task branch name
@@ -69,14 +76,28 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 
 	merged := 0
 	for _, task := range tasks {
+		completedPath := filepath.Join(tasksDir, "completed", task.name)
+		if taskHasMergeSuccessRecord(task.path) {
+			if err := moveTaskWithRetry(task.path, completedPath); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
+				continue
+			}
+			merged++
+			continue
+		}
+
 		if err := mergeReadyTask(repoRoot, branch, task); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not merge task %s: %v\n", task.name, err)
-			if failureErr := failMergeTask(task.path, filepath.Join(tasksDir, "backlog", task.name), err.Error()); failureErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not requeue task %s: %v\n", task.name, failureErr)
+			if failureErr := handleMergeFailure(tasksDir, task, err); failureErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not record merge failure for task %s: %v\n", task.name, failureErr)
 			}
 			continue
 		}
-		if err := os.Rename(task.path, filepath.Join(tasksDir, "completed", task.name)); err != nil {
+		if err := markTaskMerged(task.path); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: merged task %s but could not mark completion: %v\n", task.name, err)
+			continue
+		}
+		if err := moveTaskWithRetry(task.path, completedPath); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
 			continue
 		}
@@ -117,14 +138,17 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
 	}
 
 	taskBranch := "task/" + sanitizeBranchName(task.name)
+	if _, err := git.Output(cloneDir, "rev-parse", "--verify", "origin/"+taskBranch); err != nil {
+		return fmt.Errorf("%w: task branch %s not found on origin (agent may not have pushed)", errTaskBranchNotPushed, taskBranch)
+	}
 	if _, err := git.Output(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
-		return fmt.Errorf("squash merge %s: %w", taskBranch, err)
+		return fmt.Errorf("%w: %s: %v", errSquashMergeConflict, taskBranch, err)
 	}
 	if _, err := git.Output(cloneDir, "commit", "-m", task.title); err != nil {
 		return fmt.Errorf("commit squash merge: %w", err)
 	}
 	if _, err := git.Output(cloneDir, "push", "origin", branch); err != nil {
-		return fmt.Errorf("push %s: %w", branch, err)
+		return fmt.Errorf("%w: push %s: %v", errPushAfterSquashFailed, branch, err)
 	}
 
 	return nil
@@ -174,6 +198,17 @@ func taskTitle(name, body string) string {
 	return frontmatter.TaskFileStem(name)
 }
 
+func handleMergeFailure(tasksDir string, task mergeQueueTask, err error) error {
+	switch {
+	case errors.Is(err, errTaskBranchNotPushed):
+		return failMergeTask(task.path, filepath.Join(tasksDir, "failed", task.name), err.Error())
+	case errors.Is(err, errSquashMergeConflict):
+		return failMergeTask(task.path, filepath.Join(tasksDir, "backlog", task.name), err.Error())
+	default:
+		return failMergeTask(task.path, "", err.Error())
+	}
+}
+
 func failMergeTask(src, dst, reason string) error {
 	reason = strings.TrimSpace(reason)
 	reason = strings.ReplaceAll(reason, "\r", " ")
@@ -183,21 +218,71 @@ func failMergeTask(src, dst, reason string) error {
 		reason = "merge queue failure"
 	}
 
-	f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open task file for failure record: %w", err)
+	if err := appendTaskRecord(src, "<!-- failure: merge-queue at %s — %s -->", time.Now().UTC().Format(time.RFC3339), reason); err != nil {
+		return err
 	}
-	_, writeErr := fmt.Fprintf(f, "\n<!-- failure: merge-queue at %s — %s -->\n",
-		time.Now().UTC().Format(time.RFC3339), reason)
+	if dst == "" {
+		return nil
+	}
+	if err := moveTaskFile(src, dst); err != nil {
+		return fmt.Errorf("move task file after merge failure: %w", err)
+	}
+	return nil
+}
+
+func markTaskMerged(path string) error {
+	if taskHasMergeSuccessRecord(path) {
+		return nil
+	}
+	if err := appendTaskRecord(path, "%s%s -->", mergedTaskRecordPrefix, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("append merged record: %w", err)
+	}
+	return nil
+}
+
+func taskHasMergeSuccessRecord(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), mergedTaskRecordPrefix)
+}
+
+func appendTaskRecord(path, format string, args ...any) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open task file for merge record: %w", err)
+	}
+	_, writeErr := fmt.Fprintf(f, "\n"+format+"\n", args...)
 	closeErr := f.Close()
 	if writeErr != nil {
-		return fmt.Errorf("append failure record: %w", writeErr)
+		return fmt.Errorf("append merge record: %w", writeErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close task file after failure record: %w", closeErr)
+		return fmt.Errorf("close task file after merge record: %w", closeErr)
+	}
+	return nil
+}
+
+func moveTaskWithRetry(src, dst string) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := moveTaskFile(src, dst); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return lastErr
+}
+
+func moveTaskFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("create task destination dir: %w", err)
 	}
 	if err := os.Rename(src, dst); err != nil {
-		return fmt.Errorf("move task back to backlog: %w", err)
+		return fmt.Errorf("rename task file: %w", err)
 	}
 	return nil
 }

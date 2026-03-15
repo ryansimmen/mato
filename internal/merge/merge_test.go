@@ -39,7 +39,7 @@ func setupTasksDir(t *testing.T) string {
 	t.Helper()
 
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "ready-to-merge", "completed", ".locks"} {
+	for _, sub := range []string{"backlog", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
 		}
@@ -241,6 +241,183 @@ func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
 		t.Fatalf("ready-to-merge task file should be moved back to backlog, stat err = %v", err)
+	}
+}
+
+func TestProcessQueueMovesMissingBranchTaskToFailed(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "missing branch.md")
+	if err := os.WriteFile(taskFile, []byte("# Missing branch\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", got)
+	}
+
+	failedFile := filepath.Join(tasksDir, "failed", "missing branch.md")
+	data, err := os.ReadFile(failedFile)
+	if err != nil {
+		t.Fatalf("failed task file missing: %v", err)
+	}
+	if !strings.Contains(string(data), "task branch not pushed by agent") {
+		t.Fatalf("failed task should mention missing branch push, got %q", string(data))
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "missing branch.md")); !os.IsNotExist(err) {
+		t.Fatalf("missing-branch task should not be moved to backlog, stat err = %v", err)
+	}
+	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
+		t.Fatalf("ready-to-merge task should be moved to failed, stat err = %v", err)
+	}
+}
+
+func TestProcessQueueKeepsTaskReadyWhenPushFails(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/add-feature", "mato"); err != nil {
+		t.Fatalf("git checkout task/add-feature: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "feature.txt"), []byte("new feature\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile feature.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "feature.txt"); err != nil {
+		t.Fatalf("git add feature.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "feature work"); err != nil {
+		t.Fatalf("git commit feature work: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "refuse"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "add feature!!.md")
+	taskContent := "---\npriority: 5\n---\n# Add feature\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", got)
+	}
+
+	data, err := os.ReadFile(taskFile)
+	if err != nil {
+		t.Fatalf("ready task file missing after push failure: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- failure: merge-queue") || !strings.Contains(string(data), "push failed after squash merge") {
+		t.Fatalf("ready task should contain push failure record, got %q", string(data))
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "add feature!!.md")); !os.IsNotExist(err) {
+		t.Fatalf("push failure should not move task to backlog, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "add feature!!.md")); !os.IsNotExist(err) {
+		t.Fatalf("push failure should not move task to completed, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "feature.txt")); !os.IsNotExist(err) {
+		t.Fatalf("target branch should not have feature after rejected push, stat err = %v", err)
+	}
+
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() retry = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "add feature!!.md")); err != nil {
+		t.Fatalf("completed task file missing after retry: %v", err)
+	}
+	log, err := git.Output(repoRoot, "log", "--format=%s", "mato")
+	if err != nil {
+		t.Fatalf("git log mato: %v", err)
+	}
+	if got := strings.Count(log, "Add feature"); got != 1 {
+		t.Fatalf("Add feature commit count = %d, want 1", got)
+	}
+}
+
+func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/add-feature", "mato"); err != nil {
+		t.Fatalf("git checkout task/add-feature: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "feature.txt"), []byte("new feature\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile feature.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "feature.txt"); err != nil {
+		t.Fatalf("git add feature.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "feature work"); err != nil {
+		t.Fatalf("git commit feature work: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	completedDir := filepath.Join(tasksDir, "completed")
+	if err := os.RemoveAll(completedDir); err != nil {
+		t.Fatalf("os.RemoveAll completed: %v", err)
+	}
+	if err := os.WriteFile(completedDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile completed placeholder: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "add feature!!.md")
+	taskContent := "---\npriority: 5\n---\n# Add feature\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() first run = %d, want 0", got)
+	}
+	data, err := os.ReadFile(taskFile)
+	if err != nil {
+		t.Fatalf("ready task file missing after completed move failure: %v", err)
+	}
+	if !strings.Contains(string(data), mergedTaskRecordPrefix) {
+		t.Fatalf("ready task should be marked as merged after push succeeds, got %q", string(data))
+	}
+
+	if err := os.Remove(completedDir); err != nil {
+		t.Fatalf("os.Remove completed placeholder: %v", err)
+	}
+	if err := os.MkdirAll(completedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll completed: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() second run = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "add feature!!.md")); err != nil {
+		t.Fatalf("completed task file missing after retry: %v", err)
+	}
+	log, err := git.Output(repoRoot, "log", "--format=%s", "mato")
+	if err != nil {
+		t.Fatalf("git log mato: %v", err)
+	}
+	if got := strings.Count(log, "Add feature"); got != 1 {
+		t.Fatalf("Add feature commit count = %d, want 1", got)
 	}
 }
 
