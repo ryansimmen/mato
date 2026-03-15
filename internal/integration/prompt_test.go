@@ -326,6 +326,81 @@ func TestPromptPushAndMarkReady(t *testing.T) {
 	}
 }
 
+func TestPromptRecordsBranchInTaskFile(t *testing.T) {
+	repoRoot, tasksDir := setupTestRepo(t)
+	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-branch  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task", "mato")
+	writeFile(t, filepath.Join(cloneDir, "branch.txt"), "branch metadata\n")
+	mustGitOutput(t, cloneDir, "add", "branch.txt")
+	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
+
+	script := strings.Join([]string{
+		`AGENT_ID="${MATO_AGENT_ID:-unknown}"`,
+		`FILENAME="my-task.md"`,
+		`BRANCH="task/my-task"`,
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
+		promptStateBlock(t, "PUSH_BRANCH"),
+		promptStateBlock(t, "MARK_READY"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+
+	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-branch"}, script)
+	if err != nil {
+		t.Fatalf("runBash record branch metadata: %v\noutput:\n%s", err, out)
+	}
+
+	readyTask := filepath.Join(tasksDir, "ready-to-merge", "my-task.md")
+	contents := readFile(t, readyTask)
+	if !strings.Contains(contents, "<!-- branch: task/my-task -->") {
+		t.Fatalf("ready task missing branch metadata: %s", contents)
+	}
+}
+
+func TestStaleRemoteBranchCleanedBeforeNewBranch(t *testing.T) {
+	repoRoot, tasksDir := setupTestRepo(t)
+	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-stale  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+
+	mustGitOutput(t, repoRoot, "checkout", "-b", "task/my-task", "mato")
+	writeFile(t, filepath.Join(repoRoot, "stale.txt"), "stale branch\n")
+	mustGitOutput(t, repoRoot, "add", "stale.txt")
+	mustGitOutput(t, repoRoot, "commit", "-m", "stale branch work")
+	mustGitOutput(t, repoRoot, "checkout", "mato")
+	writeFile(t, filepath.Join(repoRoot, "base.txt"), "advanced target\n")
+	mustGitOutput(t, repoRoot, "add", "base.txt")
+	mustGitOutput(t, repoRoot, "commit", "-m", "advance mato")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	script := strings.Join([]string{
+		`AGENT_ID="${MATO_AGENT_ID:-unknown}"`,
+		`FILENAME="my-task.md"`,
+		`BRANCH="task/my-task"`,
+		`TASK_TITLE="My Task"`,
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
+		promptStateBlock(t, "CREATE_BRANCH"),
+		`echo "fresh branch" > fresh.txt`,
+		promptStateBlock(t, "COMMIT"),
+		promptStateBlock(t, "PUSH_BRANCH"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+
+	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-stale"}, script)
+	if err != nil {
+		t.Fatalf("runBash stale branch cleanup: %v\noutput:\n%s", err, out)
+	}
+
+	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "task/my-task:fresh.txt")); got != "fresh branch" {
+		t.Fatalf("fresh.txt on remote branch = %q, want %q", got, "fresh branch")
+	}
+	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "task/my-task:base.txt")); got != "advanced target" {
+		t.Fatalf("base.txt on remote branch = %q, want %q", got, "advanced target")
+	}
+	if _, err := git.Output(repoRoot, "show", "task/my-task:stale.txt"); err == nil {
+		t.Fatal("expected stale remote branch content to be removed before pushing fresh branch")
+	}
+}
+
 func TestPromptOnFailure(t *testing.T) {
 	repoRoot, tasksDir := setupTestRepo(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", strings.Join([]string{

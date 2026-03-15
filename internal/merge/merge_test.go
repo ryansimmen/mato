@@ -178,6 +178,111 @@ func TestProcessQueueMergesReadyTaskBranch(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_UsesBranchFromTaskFile(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskName := "custom branch.md"
+	derivedBranch := "task/" + sanitizeBranchName(taskName)
+	actualBranch := "task/custom-branch-actual"
+
+	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "wrong.txt"), []byte("wrong branch\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile wrong.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "wrong.txt"); err != nil {
+		t.Fatalf("git add wrong.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "wrong branch work"); err != nil {
+		t.Fatalf("git commit wrong branch work: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato after wrong branch: %v", err)
+	}
+
+	if _, err := git.Output(repoRoot, "checkout", "-b", actualBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", actualBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "right.txt"), []byte("actual branch\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile right.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "right.txt"); err != nil {
+		t.Fatalf("git add right.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "actual branch work"); err != nil {
+		t.Fatalf("git commit actual branch work: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato after actual branch: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", taskName)
+	taskContent := "---\npriority: 5\n---\n<!-- branch: " + actualBranch + " -->\n# Use actual branch\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "right.txt")); err != nil {
+		t.Fatalf("expected actual branch change to merge: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "wrong.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected filename-derived branch to be ignored, stat err = %v", err)
+	}
+}
+
+func TestProcessQueue_FallbackToDerivedBranch(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskName := "fallback branch.md"
+	derivedBranch := "task/" + sanitizeBranchName(taskName)
+	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "fallback.txt"), []byte("fallback branch\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile fallback.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "fallback.txt"); err != nil {
+		t.Fatalf("git add fallback.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "fallback branch work"); err != nil {
+		t.Fatalf("git commit fallback branch work: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", taskName)
+	taskContent := "---\npriority: 5\n---\n# Fallback branch\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "fallback.txt")); err != nil {
+		t.Fatalf("expected derived branch change to merge: %v", err)
+	}
+}
+
 func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := setupTasksDir(t)
@@ -297,7 +402,7 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 	}
 
 	conflictTaskName := "conflict task.md"
-	conflictBranch := "task/" + sanitizeBranchName(conflictTaskName)
+	conflictBranch := "task/conflict-task-actual"
 	if _, err := git.Output(repoRoot, "checkout", "-b", conflictBranch, "mato"); err != nil {
 		t.Fatalf("git checkout -b %s: %v", conflictBranch, err)
 	}
@@ -329,7 +434,7 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 		t.Fatalf("os.WriteFile first task file: %v", err)
 	}
 	conflictTaskFile := filepath.Join(tasksDir, "ready-to-merge", conflictTaskName)
-	conflictTaskContent := "---\npriority: 2\n---\n# Conflict task\nThis should conflict after the first merge.\n"
+	conflictTaskContent := "---\npriority: 2\n---\n<!-- branch: " + conflictBranch + " -->\n# Conflict task\nThis should conflict after the first merge.\n"
 	if err := os.WriteFile(conflictTaskFile, []byte(conflictTaskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile conflict task file: %v", err)
 	}
