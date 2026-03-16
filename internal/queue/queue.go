@@ -296,6 +296,7 @@ type queueEntry struct {
 
 type backlogTask struct {
 	name     string
+	dir      string // source directory (e.g., "backlog", "in-progress", "ready-to-merge")
 	path     string
 	priority int
 	affects  []string
@@ -323,6 +324,7 @@ func collectActiveAffects(tasksDir string) []backlogTask {
 			}
 			active = append(active, backlogTask{
 				name:     e.Name(),
+				dir:      dir,
 				path:     path,
 				priority: 0,
 				affects:  meta.Affects,
@@ -368,8 +370,25 @@ func hasActiveOverlap(tasksDir string, affects []string) bool {
 // be excluded from the queue because they conflict with higher-priority backlog
 // tasks or active tasks in in-progress/ready-to-merge. Tasks remain in backlog/
 // (no file movement) to avoid churn between waiting/ and backlog/.
+// DeferralInfo describes why a task was excluded from the runnable queue.
+type DeferralInfo struct {
+	BlockedBy    string   // name of the conflicting task
+	BlockedByDir string   // directory of the conflicting task (e.g., "in-progress", "backlog")
+	OverlapFiles []string // files both tasks claim in affects
+}
+
 func DeferredOverlappingTasks(tasksDir string) map[string]struct{} {
-	deferred := make(map[string]struct{})
+	detailed := DeferredOverlappingTasksDetailed(tasksDir)
+	simple := make(map[string]struct{}, len(detailed))
+	for name := range detailed {
+		simple[name] = struct{}{}
+	}
+	return simple
+}
+
+// DeferredOverlappingTasksDetailed returns deferred tasks with the reason for deferral.
+func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
+	deferred := make(map[string]DeferralInfo)
 	backlogDir := filepath.Join(tasksDir, "backlog")
 	entries, err := os.ReadDir(backlogDir)
 	if err != nil {
@@ -411,12 +430,21 @@ func DeferredOverlappingTasks(tasksDir string) map[string]struct{} {
 		for _, other := range kept {
 			overlap := overlappingAffects(task.affects, other.affects)
 			if len(overlap) > 0 {
-				deferred[task.name] = struct{}{}
+				blockedByDir := other.dir
+				if blockedByDir == "" {
+					blockedByDir = "backlog"
+				}
+				deferred[task.name] = DeferralInfo{
+					BlockedBy:    other.name,
+					BlockedByDir: blockedByDir,
+					OverlapFiles: overlap,
+				}
 				isDef = true
 				break
 			}
 		}
 		if !isDef {
+			task.dir = "backlog"
 			kept = append(kept, task)
 		}
 	}
