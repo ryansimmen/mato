@@ -331,7 +331,13 @@ func hasActiveOverlap(tasksDir string, affects []string) bool {
 	if len(affects) == 0 {
 		return false
 	}
-	for _, dir := range []string{"in-progress", "ready-to-merge", "backlog"} {
+	// Only check in-progress and ready-to-merge — these represent tasks that are
+	// actively being worked on or awaiting merge. We intentionally exclude backlog/
+	// because RemoveOverlappingTasks handles backlog-vs-backlog conflicts with
+	// proper priority ordering. Including backlog here would cause priority
+	// inversion: a high-priority waiting task would be blocked by a lower-priority
+	// backlog task that hasn't even been claimed yet.
+	for _, dir := range []string{"in-progress", "ready-to-merge"} {
 		dirPath := filepath.Join(tasksDir, dir)
 		entries, err := os.ReadDir(dirPath)
 		if err != nil {
