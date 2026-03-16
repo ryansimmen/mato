@@ -503,6 +503,60 @@ func TestReconcileReadyQueue_PromotesTaskWithNoDeps(t *testing.T) {
 	}
 }
 
+func TestReconcileReadyQueue_SkipsOverlappingWithActive(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "completed", "in-progress"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
+		t.Fatalf("write active task: %v", err)
+	}
+	waitingPath := filepath.Join(tasksDir, "waiting", "task-b.md")
+	if err := os.WriteFile(waitingPath, []byte("---\naffects: [main.go]\n---\nBlocked by active overlap\n"), 0o644); err != nil {
+		t.Fatalf("write waiting task: %v", err)
+	}
+
+	if got := ReconcileReadyQueue(tasksDir); got != 0 {
+		t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+	}
+	if _, err := os.Stat(waitingPath); err != nil {
+		t.Fatalf("overlapping waiting task should stay in waiting: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); !os.IsNotExist(err) {
+		t.Fatalf("overlapping waiting task should not be promoted, stat err = %v", err)
+	}
+}
+
+func TestReconcileReadyQueue_PromotesAfterActiveCompletes(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "completed"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, "completed", "task-a.md"), []byte("---\nid: task-a\naffects: [main.go]\n---\nDone\n"), 0o644); err != nil {
+		t.Fatalf("write completed task: %v", err)
+	}
+	waitingPath := filepath.Join(tasksDir, "waiting", "task-b.md")
+	if err := os.WriteFile(waitingPath, []byte("---\ndepends_on: [task-a]\naffects: [main.go]\n---\nReady now\n"), 0o644); err != nil {
+		t.Fatalf("write waiting task: %v", err)
+	}
+
+	if got := ReconcileReadyQueue(tasksDir); got != 1 {
+		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); err != nil {
+		t.Fatalf("task should be promoted after active completion: %v", err)
+	}
+	if _, err := os.Stat(waitingPath); !os.IsNotExist(err) {
+		t.Fatalf("promoted task should leave waiting, stat err = %v", err)
+	}
+}
+
 func TestReconcileReadyQueue_DoesNotOverwriteExistingBacklogTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"waiting", "backlog", "completed"} {
@@ -704,6 +758,56 @@ func TestRemoveOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "low-priority.md")); err != nil {
 		t.Fatalf("low priority overlapping task should move to waiting: %v", err)
+	}
+}
+
+func TestRemoveOverlappingTasks_ChecksInProgress(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "in-progress"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
+		t.Fatalf("write active task: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "backlog", "task-b.md"), []byte("---\naffects: [main.go]\n---\nConflicting\n"), 0o644); err != nil {
+		t.Fatalf("write backlog task: %v", err)
+	}
+
+	RemoveOverlappingTasks(tasksDir)
+
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); !os.IsNotExist(err) {
+		t.Fatalf("conflicting backlog task should be deferred, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); err != nil {
+		t.Fatalf("conflicting backlog task should move to waiting: %v", err)
+	}
+}
+
+func TestRemoveOverlappingTasks_ChecksReadyToMerge(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "ready-to-merge"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
+		t.Fatalf("write ready-to-merge task: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "backlog", "task-b.md"), []byte("---\naffects: [main.go]\n---\nConflicting\n"), 0o644); err != nil {
+		t.Fatalf("write backlog task: %v", err)
+	}
+
+	RemoveOverlappingTasks(tasksDir)
+
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); !os.IsNotExist(err) {
+		t.Fatalf("conflicting backlog task should be deferred, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); err != nil {
+		t.Fatalf("conflicting backlog task should move to waiting: %v", err)
 	}
 }
 

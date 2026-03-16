@@ -497,7 +497,7 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 	}
 }
 
-func TestProcessQueueMovesMissingBranchTaskToFailed(t *testing.T) {
+func TestProcessQueue_RespectsMaxRetries(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
@@ -508,7 +508,15 @@ func TestProcessQueueMovesMissingBranchTaskToFailed(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, "ready-to-merge", "missing branch.md")
-	if err := os.WriteFile(taskFile, []byte("# Missing branch\n"), 0o644); err != nil {
+	taskContent := strings.Join([]string{
+		"---",
+		"max_retries: 1",
+		"---",
+		"<!-- failure: prior -->",
+		"# Missing branch",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
 
@@ -524,11 +532,58 @@ func TestProcessQueueMovesMissingBranchTaskToFailed(t *testing.T) {
 	if !strings.Contains(string(data), "task branch not pushed by agent") {
 		t.Fatalf("failed task should mention missing branch push, got %q", string(data))
 	}
+	if got := strings.Count(string(data), "<!-- failure:"); got != 2 {
+		t.Fatalf("failed task failure count = %d, want 2\ncontents:\n%s", got, string(data))
+	}
 	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "missing branch.md")); !os.IsNotExist(err) {
 		t.Fatalf("missing-branch task should not be moved to backlog, stat err = %v", err)
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
 		t.Fatalf("ready-to-merge task should be moved to failed, stat err = %v", err)
+	}
+}
+
+func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "missing branch.md")
+	taskContent := strings.Join([]string{
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"# Missing branch",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", got)
+	}
+
+	backlogFile := filepath.Join(tasksDir, "backlog", "missing branch.md")
+	data, err := os.ReadFile(backlogFile)
+	if err != nil {
+		t.Fatalf("backlog task file missing: %v", err)
+	}
+	if !strings.Contains(string(data), "task branch not pushed by agent") {
+		t.Fatalf("backlog task should mention missing branch push, got %q", string(data))
+	}
+	if got := strings.Count(string(data), "<!-- failure:"); got != 3 {
+		t.Fatalf("backlog task failure count = %d, want 3\ncontents:\n%s", got, string(data))
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "failed", "missing branch.md")); !os.IsNotExist(err) {
+		t.Fatalf("missing-branch task should not be moved to failed yet, stat err = %v", err)
+	}
+	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
+		t.Fatalf("ready-to-merge task should be moved to backlog, stat err = %v", err)
 	}
 }
 

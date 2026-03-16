@@ -222,6 +222,9 @@ func ReconcileReadyQueue(tasksDir string) int {
 		if !ready {
 			continue
 		}
+		if hasActiveOverlap(tasksDir, task.meta.Affects) {
+			continue
+		}
 
 		dst := filepath.Join(tasksDir, "backlog", task.name)
 		if err := safeRename(task.path, dst); err != nil {
@@ -293,6 +296,63 @@ type backlogTask struct {
 	affects  []string
 }
 
+func collectActiveAffects(tasksDir string) []backlogTask {
+	var active []backlogTask
+	for _, dir := range []string{"in-progress", "ready-to-merge"} {
+		dirPath := filepath.Join(tasksDir, dir)
+		entries, err := os.ReadDir(dirPath)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			path := filepath.Join(dirPath, e.Name())
+			meta, _, err := frontmatter.ParseTaskFile(path)
+			if err != nil {
+				continue
+			}
+			if len(meta.Affects) == 0 {
+				continue
+			}
+			active = append(active, backlogTask{
+				name:     e.Name(),
+				path:     path,
+				priority: 0,
+				affects:  meta.Affects,
+			})
+		}
+	}
+	return active
+}
+
+func hasActiveOverlap(tasksDir string, affects []string) bool {
+	if len(affects) == 0 {
+		return false
+	}
+	for _, dir := range []string{"in-progress", "ready-to-merge", "backlog"} {
+		dirPath := filepath.Join(tasksDir, dir)
+		entries, err := os.ReadDir(dirPath)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			meta, _, err := frontmatter.ParseTaskFile(filepath.Join(dirPath, e.Name()))
+			if err != nil {
+				continue
+			}
+			if len(overlappingAffects(affects, meta.Affects)) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // RemoveOverlappingTasks checks tasks in backlog/ for overlapping affects: metadata.
 // If two tasks have overlapping affects patterns, only the higher-priority one
 // stays in backlog/; the other is moved back to waiting/.
@@ -330,7 +390,9 @@ func RemoveOverlappingTasks(tasksDir string) {
 		return tasks[i].name < tasks[j].name
 	})
 
-	kept := make([]backlogTask, 0, len(tasks))
+	activeAffects := collectActiveAffects(tasksDir)
+	kept := make([]backlogTask, 0, len(tasks)+len(activeAffects))
+	kept = append(kept, activeAffects...)
 	waitingDir := filepath.Join(tasksDir, "waiting")
 	for _, task := range tasks {
 		deferred := false
