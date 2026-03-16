@@ -717,3 +717,43 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 		t.Fatal("queue.HasAvailableTasks() = false, want true")
 	}
 }
+
+func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
+repoRoot, tasksDir := setupTestRepo(t)
+_ = repoRoot
+
+// Task A in in-progress with overlapping affects
+writeFile(t, filepath.Join(tasksDir, "in-progress", "active.md"),
+"---\nid: active\npriority: 1\naffects: [main.go]\n---\n# Active task\n")
+
+// Task B in backlog with same affects — should be deferred
+writeFile(t, filepath.Join(tasksDir, "backlog", "blocked.md"),
+"---\nid: blocked\npriority: 10\naffects: [main.go]\n---\n# Blocked task\n")
+
+// Compute deferred set
+deferred := queue.DeferredOverlappingTasks(tasksDir)
+if _, ok := deferred["blocked.md"]; !ok {
+t.Fatal("blocked.md should be in deferred set")
+}
+
+// Write manifest excluding deferred
+if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
+t.Fatalf("WriteQueueManifest: %v", err)
+}
+
+// .queue should be empty (only task is deferred)
+queueContent := readFile(t, filepath.Join(tasksDir, ".queue"))
+if strings.TrimSpace(queueContent) != "" {
+t.Fatalf(".queue should be empty, got %q", queueContent)
+}
+
+// HasAvailableTasks with deferred set should return false
+if queue.HasAvailableTasks(tasksDir, deferred) {
+t.Fatal("HasAvailableTasks should return false when only deferred tasks in backlog")
+}
+
+// Without deferred set, it would return true (proving alignment matters)
+if !queue.HasAvailableTasks(tasksDir, nil) {
+t.Fatal("HasAvailableTasks(nil) should return true (task exists in backlog)")
+}
+}
