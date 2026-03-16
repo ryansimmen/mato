@@ -39,6 +39,7 @@ func Show(repoRoot, tasksDir string) error {
 	if err != nil {
 		return err
 	}
+	deferred := queue.DeferredOverlappingTasks(tasksDir)
 	messages, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
 		return err
@@ -50,7 +51,12 @@ func Show(repoRoot, tasksDir string) error {
 	fmt.Println("Task Queue Status")
 	fmt.Println("─────────────────")
 	for _, dir := range queueDirs {
-		fmt.Printf("  %-15s %d\n", dir+":", counts[dir])
+		label := dir + ":"
+		if dir == "backlog" && len(deferred) > 0 {
+			fmt.Printf("  %-15s %d (%d deferred)\n", label, counts[dir], len(deferred))
+		} else {
+			fmt.Printf("  %-15s %d\n", label, counts[dir])
+		}
 	}
 
 	fmt.Println()
@@ -65,14 +71,40 @@ func Show(repoRoot, tasksDir string) error {
 	}
 
 	fmt.Println()
-	fmt.Println("Waiting Tasks")
-	fmt.Println("─────────────")
+	fmt.Println("Waiting Tasks (dependency-blocked)")
+	fmt.Println("──────────────────────────────────")
 	if len(waitingTasks) == 0 {
 		fmt.Println("  (none)")
 	} else {
 		for _, task := range waitingTasks {
 			fmt.Printf("  %s\n", task.Name)
 			fmt.Printf("    depends on: %s\n", strings.Join(task.Dependencies, ", "))
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Deferred Tasks (conflict-blocked)")
+	fmt.Println("─────────────────────────────────")
+	if len(deferred) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		deferredNames := make([]string, 0, len(deferred))
+		for name := range deferred {
+			deferredNames = append(deferredNames, name)
+		}
+		sort.Strings(deferredNames)
+		for _, name := range deferredNames {
+			path := filepath.Join(tasksDir, "backlog", name)
+			meta, _, err := frontmatter.ParseTaskFile(path)
+			if err != nil {
+				fmt.Printf("  %s (could not read affects)\n", name)
+				continue
+			}
+			if len(meta.Affects) > 0 {
+				fmt.Printf("  %s (affects: %s)\n", name, strings.Join(meta.Affects, ", "))
+			} else {
+				fmt.Printf("  %s\n", name)
+			}
 		}
 	}
 
