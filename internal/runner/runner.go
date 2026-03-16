@@ -152,12 +152,9 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 
 		queue.ReconcileReadyQueue(tasksDir)
-		if err := queue.WriteQueueManifest(tasksDir); err != nil {
+		deferred := queue.DeferredOverlappingTasks(tasksDir)
+		if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
-		}
-		queue.RemoveOverlappingTasks(tasksDir)
-		if err := queue.WriteQueueManifest(tasksDir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest after overlap cleanup: %v\n", err)
 		}
 
 		hasBacklogTasks := queue.HasAvailableTasks(tasksDir)

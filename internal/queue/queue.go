@@ -359,14 +359,16 @@ func hasActiveOverlap(tasksDir string, affects []string) bool {
 	return false
 }
 
-// RemoveOverlappingTasks checks tasks in backlog/ for overlapping affects: metadata.
-// If two tasks have overlapping affects patterns, only the higher-priority one
-// stays in backlog/; the other is moved back to waiting/.
-func RemoveOverlappingTasks(tasksDir string) {
+// DeferredOverlappingTasks returns the set of backlog task filenames that should
+// be excluded from the queue because they conflict with higher-priority backlog
+// tasks or active tasks in in-progress/ready-to-merge. Tasks remain in backlog/
+// (no file movement) to avoid churn between waiting/ and backlog/.
+func DeferredOverlappingTasks(tasksDir string) map[string]struct{} {
+	deferred := make(map[string]struct{})
 	backlogDir := filepath.Join(tasksDir, "backlog")
 	entries, err := os.ReadDir(backlogDir)
 	if err != nil {
-		return
+		return deferred
 	}
 
 	tasks := make([]backlogTask, 0, len(entries))
@@ -399,28 +401,22 @@ func RemoveOverlappingTasks(tasksDir string) {
 	activeAffects := collectActiveAffects(tasksDir)
 	kept := make([]backlogTask, 0, len(tasks)+len(activeAffects))
 	kept = append(kept, activeAffects...)
-	waitingDir := filepath.Join(tasksDir, "waiting")
 	for _, task := range tasks {
-		deferred := false
+		isDef := false
 		for _, other := range kept {
 			overlap := overlappingAffects(task.affects, other.affects)
-			if len(overlap) == 0 {
-				continue
-			}
-			dst := filepath.Join(waitingDir, task.name)
-			if err := safeRename(task.path, dst); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not defer overlapping task %s: %v\n", task.name, err)
+			if len(overlap) > 0 {
+				deferred[task.name] = struct{}{}
+				isDef = true
 				break
 			}
-			fmt.Printf("Deferring task %s (conflicts with higher-priority task %s on files %s)\n",
-				task.name, other.name, strings.Join(overlap, ", "))
-			deferred = true
-			break
 		}
-		if !deferred {
+		if !isDef {
 			kept = append(kept, task)
 		}
 	}
+
+	return deferred
 }
 
 func overlappingAffects(a, b []string) []string {
@@ -452,7 +448,7 @@ func overlappingAffects(a, b []string) []string {
 	return overlap
 }
 
-func WriteQueueManifest(tasksDir string) error {
+func WriteQueueManifest(tasksDir string, exclude map[string]struct{}) error {
 	entries, err := os.ReadDir(filepath.Join(tasksDir, "backlog"))
 	if err != nil {
 		return err
@@ -462,6 +458,11 @@ func WriteQueueManifest(tasksDir string) error {
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
+		}
+		if exclude != nil {
+			if _, excluded := exclude[e.Name()]; excluded {
+				continue
+			}
 		}
 		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, "backlog", e.Name()))
 		if err != nil {

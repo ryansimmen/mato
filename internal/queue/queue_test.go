@@ -654,7 +654,7 @@ func TestWriteQueueManifest_SortsByPriorityThenFilename(t *testing.T) {
 		os.WriteFile(filepath.Join(tasksDir, "backlog", name), []byte(content), 0o644)
 	}
 
-	if err := WriteQueueManifest(tasksDir); err != nil {
+	if err := WriteQueueManifest(tasksDir, nil); err != nil {
 		t.Fatalf("WriteQueueManifest: %v", err)
 	}
 
@@ -671,7 +671,7 @@ func TestWriteQueueManifest_EmptyBacklog(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	if err := WriteQueueManifest(tasksDir); err != nil {
+	if err := WriteQueueManifest(tasksDir, nil); err != nil {
 		t.Fatalf("WriteQueueManifest: %v", err)
 	}
 
@@ -693,7 +693,7 @@ func TestWriteQueueManifest_SkipsMalformedFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, "backlog", "bad.md"), []byte("---\npriority: nope\n---\nBad\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
-		if err := WriteQueueManifest(tasksDir); err != nil {
+		if err := WriteQueueManifest(tasksDir, nil); err != nil {
 			t.Fatalf("WriteQueueManifest: %v", err)
 		}
 	})
@@ -731,7 +731,7 @@ func TestCompletedTaskIDs_UsesFilenameStemWhenParseFails(t *testing.T) {
 	}
 }
 
-func TestRemoveOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
+func TestDeferredOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"waiting", "backlog"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -745,23 +745,29 @@ func TestRemoveOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
 		os.WriteFile(filepath.Join(tasksDir, "backlog", name), []byte(content), 0o644)
 	}
 
-	RemoveOverlappingTasks(tasksDir)
+	deferred := DeferredOverlappingTasks(tasksDir)
 
+	if len(deferred) != 1 {
+		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
+	}
+	if _, ok := deferred["low-priority.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "low-priority.md", deferred)
+	}
 	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "high-priority.md")); err != nil {
 		t.Fatalf("high priority task should stay in backlog: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "independent.md")); err != nil {
 		t.Fatalf("independent task should stay in backlog: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "low-priority.md")); !os.IsNotExist(err) {
-		t.Fatalf("low priority overlapping task should leave backlog, stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "low-priority.md")); err != nil {
+		t.Fatalf("low priority overlapping task should stay in backlog: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "low-priority.md")); err != nil {
-		t.Fatalf("low priority overlapping task should move to waiting: %v", err)
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "low-priority.md")); !os.IsNotExist(err) {
+		t.Fatalf("low priority overlapping task should not move to waiting, stat err = %v", err)
 	}
 }
 
-func TestRemoveOverlappingTasks_ChecksInProgress(t *testing.T) {
+func TestDeferredOverlappingTasks_ChecksInProgress(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"waiting", "backlog", "in-progress"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -776,17 +782,23 @@ func TestRemoveOverlappingTasks_ChecksInProgress(t *testing.T) {
 		t.Fatalf("write backlog task: %v", err)
 	}
 
-	RemoveOverlappingTasks(tasksDir)
+	deferred := DeferredOverlappingTasks(tasksDir)
 
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); !os.IsNotExist(err) {
-		t.Fatalf("conflicting backlog task should be deferred, stat err = %v", err)
+	if len(deferred) != 1 {
+		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); err != nil {
-		t.Fatalf("conflicting backlog task should move to waiting: %v", err)
+	if _, ok := deferred["task-b.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "task-b.md", deferred)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); err != nil {
+		t.Fatalf("conflicting backlog task should stay in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); !os.IsNotExist(err) {
+		t.Fatalf("conflicting backlog task should not move to waiting, stat err = %v", err)
 	}
 }
 
-func TestRemoveOverlappingTasks_ChecksReadyToMerge(t *testing.T) {
+func TestDeferredOverlappingTasks_ChecksReadyToMerge(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"waiting", "backlog", "ready-to-merge"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -801,46 +813,23 @@ func TestRemoveOverlappingTasks_ChecksReadyToMerge(t *testing.T) {
 		t.Fatalf("write backlog task: %v", err)
 	}
 
-	RemoveOverlappingTasks(tasksDir)
+	deferred := DeferredOverlappingTasks(tasksDir)
 
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); !os.IsNotExist(err) {
-		t.Fatalf("conflicting backlog task should be deferred, stat err = %v", err)
+	if len(deferred) != 1 {
+		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); err != nil {
-		t.Fatalf("conflicting backlog task should move to waiting: %v", err)
+	if _, ok := deferred["task-b.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "task-b.md", deferred)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); err != nil {
+		t.Fatalf("conflicting backlog task should stay in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); !os.IsNotExist(err) {
+		t.Fatalf("conflicting backlog task should not move to waiting, stat err = %v", err)
 	}
 }
 
-func TestRemoveOverlappingTasks_DoesNotOverwriteExistingWaitingTask(t *testing.T) {
-	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
-	}
-
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "low-priority.md"), []byte("# Existing waiting\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "high-priority.md"), []byte("---\npriority: 5\naffects: [pkg/client/http.go]\n---\nKeep me\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "low-priority.md"), []byte("---\npriority: 20\naffects: [pkg/client/http.go]\n---\nDefer me\n"), 0o644)
-
-	stderr := captureStderr(t, func() {
-		RemoveOverlappingTasks(tasksDir)
-	})
-
-	if !strings.Contains(stderr, "destination already exists") {
-		t.Fatalf("expected overwrite warning, got %q", stderr)
-	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "low-priority.md")); err != nil {
-		t.Fatalf("task should remain in backlog after failed defer: %v", err)
-	}
-	data, err := os.ReadFile(filepath.Join(tasksDir, "waiting", "low-priority.md"))
-	if err != nil {
-		t.Fatalf("read waiting task: %v", err)
-	}
-	if string(data) != "# Existing waiting\n" {
-		t.Fatalf("existing waiting task should be unchanged, got %q", string(data))
-	}
-}
-
-func TestRemoveOverlappingTasks_AllIdenticalAffects(t *testing.T) {
+func TestDeferredOverlappingTasks_AllIdenticalAffects(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"waiting", "backlog"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -858,22 +847,34 @@ func TestRemoveOverlappingTasks_AllIdenticalAffects(t *testing.T) {
 		}
 	}
 
-	RemoveOverlappingTasks(tasksDir)
+	deferred := DeferredOverlappingTasks(tasksDir)
 
+	if len(deferred) != 2 {
+		t.Fatalf("len(deferred) = %d, want 2", len(deferred))
+	}
+	if _, ok := deferred["priority-10.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "priority-10.md", deferred)
+	}
+	if _, ok := deferred["priority-20.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "priority-20.md", deferred)
+	}
+	if _, ok := deferred["priority-5.md"]; ok {
+		t.Fatalf("deferred set should not include %q: %#v", "priority-5.md", deferred)
+	}
 	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "priority-5.md")); err != nil {
 		t.Fatalf("highest-priority task should remain in backlog: %v", err)
 	}
 	for _, name := range []string{"priority-10.md", "priority-20.md"} {
-		if _, err := os.Stat(filepath.Join(tasksDir, "backlog", name)); !os.IsNotExist(err) {
-			t.Fatalf("%s should leave backlog, stat err = %v", name, err)
+		if _, err := os.Stat(filepath.Join(tasksDir, "backlog", name)); err != nil {
+			t.Fatalf("%s should remain in backlog: %v", name, err)
 		}
-		if _, err := os.Stat(filepath.Join(tasksDir, "waiting", name)); err != nil {
-			t.Fatalf("%s should move to waiting: %v", name, err)
+		if _, err := os.Stat(filepath.Join(tasksDir, "waiting", name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should not move to waiting, stat err = %v", name, err)
 		}
 	}
 }
 
-func TestRemoveOverlappingTasks_NoAffects(t *testing.T) {
+func TestDeferredOverlappingTasks_NoAffects(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"waiting", "backlog"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -887,8 +888,11 @@ func TestRemoveOverlappingTasks_NoAffects(t *testing.T) {
 		}
 	}
 
-	RemoveOverlappingTasks(tasksDir)
+	deferred := DeferredOverlappingTasks(tasksDir)
 
+	if len(deferred) != 0 {
+		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
+	}
 	for _, name := range []string{"task-a.md", "task-b.md", "task-c.md"} {
 		if _, err := os.Stat(filepath.Join(tasksDir, "backlog", name)); err != nil {
 			t.Fatalf("%s should remain in backlog: %v", name, err)
@@ -923,7 +927,7 @@ func TestQueueOps_SpecialCharacterFilenames(t *testing.T) {
 		t.Fatalf("special-character task should leave waiting, stat err = %v", err)
 	}
 
-	if err := WriteQueueManifest(tasksDir); err != nil {
+	if err := WriteQueueManifest(tasksDir, nil); err != nil {
 		t.Fatalf("WriteQueueManifest: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(tasksDir, ".queue"))
@@ -953,26 +957,26 @@ func TestGenerateAgentID(t *testing.T) {
 }
 
 func TestReconcileReadyQueue_HighPriorityNotBlockedByLowPriorityBacklog(t *testing.T) {
-tasksDir := t.TempDir()
-for _, sub := range []string{"waiting", "backlog", "completed", "in-progress", "ready-to-merge"} {
-os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
-}
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "completed", "in-progress", "ready-to-merge"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
 
-// Low-priority task already in backlog with overlapping affects
-os.WriteFile(filepath.Join(tasksDir, "backlog", "low-priority.md"),
-[]byte("---\npriority: 20\naffects: [main.go]\n---\n# Low\n"), 0o644)
+	// Low-priority task already in backlog with overlapping affects
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "low-priority.md"),
+		[]byte("---\npriority: 20\naffects: [main.go]\n---\n# Low\n"), 0o644)
 
-// High-priority task in waiting with same affects, no deps
-os.WriteFile(filepath.Join(tasksDir, "waiting", "high-priority.md"),
-[]byte("---\npriority: 5\naffects: [main.go]\n---\n# High\n"), 0o644)
+	// High-priority task in waiting with same affects, no deps
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "high-priority.md"),
+		[]byte("---\npriority: 5\naffects: [main.go]\n---\n# High\n"), 0o644)
 
-got := ReconcileReadyQueue(tasksDir)
-if got != 1 {
-t.Fatalf("ReconcileReadyQueue() = %d, want 1 (high-priority should promote)", got)
-}
-if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "high-priority.md")); err != nil {
-t.Fatal("high-priority task should be promoted to backlog")
-}
-// Both are now in backlog — RemoveOverlappingTasks will handle the conflict
-// by deferring the lower-priority one.
+	got := ReconcileReadyQueue(tasksDir)
+	if got != 1 {
+		t.Fatalf("ReconcileReadyQueue() = %d, want 1 (high-priority should promote)", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "high-priority.md")); err != nil {
+		t.Fatal("high-priority task should be promoted to backlog")
+	}
+	// Both are now in backlog — DeferredOverlappingTasks can mark the
+	// lower-priority one for exclusion from .queue.
 }
