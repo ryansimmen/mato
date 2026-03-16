@@ -165,6 +165,7 @@ func laterStateDuplicateDir(tasksDir, name string) string {
 
 func ReconcileReadyQueue(tasksDir string) int {
 	completedIDs := completedTaskIDs(tasksDir)
+	knownIDs := allKnownTaskIDs(tasksDir)
 	waitingDir := filepath.Join(tasksDir, "waiting")
 	entries, err := os.ReadDir(waitingDir)
 	if err != nil {
@@ -213,7 +214,9 @@ func ReconcileReadyQueue(tasksDir string) int {
 			if _, ok := completedIDs[dep]; ok {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on missing task ID %q\n", task.name, dep)
+			if _, ok := knownIDs[dep]; !ok {
+				fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", task.name, dep)
+			}
 			ready = false
 		}
 		if !ready {
@@ -252,6 +255,28 @@ func completedTaskIDs(tasksDir string) map[string]struct{} {
 			continue
 		}
 		ids[meta.ID] = struct{}{}
+	}
+	return ids
+}
+
+// allKnownTaskIDs returns the set of task IDs found across all queue directories.
+func allKnownTaskIDs(tasksDir string) map[string]struct{} {
+	ids := make(map[string]struct{})
+	for _, dir := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed"} {
+		entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			ids[frontmatter.TaskFileStem(e.Name())] = struct{}{}
+			path := filepath.Join(tasksDir, dir, e.Name())
+			if meta, _, err := frontmatter.ParseTaskFile(path); err == nil {
+				ids[meta.ID] = struct{}{}
+			}
+		}
 	}
 	return ids
 }
