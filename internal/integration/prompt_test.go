@@ -9,11 +9,11 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 
 	"mato/internal/git"
 	"mato/internal/merge"
+	"mato/internal/queue"
 )
 
 // substitutePromptPlaceholders replaces the 3 prompt placeholders with real paths.
@@ -200,27 +200,47 @@ func quotedPath(path string) string {
 	return fmt.Sprintf("%q", path)
 }
 
-func TestPromptClaimTask(t *testing.T) {
+func TestPromptVerifyClaim(t *testing.T) {
 	repoRoot, tasksDir := setupTestRepo(t)
+
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil)
+	if claimed != nil {
+		t.Fatalf("expected no task (backlog empty), got %+v", claimed)
+	}
+
 	writeTask(t, tasksDir, "backlog", "task-alpha.md", "# Task Alpha\nDo alpha.\n")
 	writeTask(t, tasksDir, "backlog", "task-beta.md", "# Task Beta\nDo beta.\n")
 	writeFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\n")
+
+	claimed, err = queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if claimed == nil || claimed.Filename != "task-alpha.md" {
+		t.Fatalf("expected task-alpha.md, got %+v", claimed)
+	}
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
 
 	script := strings.Join([]string{
-		promptStateBlock(t, "SELECT_TASK"),
-		promptStateBlock(t, "CLAIM_TASK"),
+		promptStateBlock(t, "VERIFY_CLAIM"),
 		`echo "FILENAME=$FILENAME"`,
 		`echo "BRANCH=$BRANCH"`,
-		`echo "SAFE_NAME=$SAFE_NAME"`,
+		`echo "TASK_TITLE=$TASK_TITLE"`,
 	}, "\n\n")
 	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
 
-	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-1"}, script)
+	env := []string{
+		"MATO_AGENT_ID=test-agent-1",
+		"MATO_TASK_FILE=" + claimed.Filename,
+		"MATO_TASK_BRANCH=" + claimed.Branch,
+		"MATO_TASK_TITLE=" + claimed.Title,
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, "in-progress", claimed.Filename),
+	}
+	out, err := runBash(t, cloneDir, env, script)
 	if err != nil {
-		t.Fatalf("runBash claim task: %v\noutput:\n%s", err, out)
+		t.Fatalf("runBash verify claim: %v\noutput:\n%s", err, out)
 	}
 
 	alphaInProgress := filepath.Join(tasksDir, "in-progress", "task-alpha.md")
@@ -233,49 +253,11 @@ func TestPromptClaimTask(t *testing.T) {
 		t.Fatalf("claimed task missing claimed-by header: %q", contents)
 	}
 	if !strings.Contains(out, "FILENAME=task-alpha.md") {
-		t.Fatalf("claim output missing filename: %s", out)
+		t.Fatalf("verify claim output missing filename: %s", out)
 	}
 	if !strings.Contains(out, "BRANCH=task/task-alpha") {
-		t.Fatalf("claim output missing branch: %s", out)
+		t.Fatalf("verify claim output missing branch: %s", out)
 	}
-	if !strings.Contains(out, "SAFE_NAME=task-alpha") {
-		t.Fatalf("claim output missing safe name: %s", out)
-	}
-
-	intent := findPromptEventMessage(t, tasksDir, "intent")
-	if intent.Task != "task-alpha.md" || intent.Branch != "task/task-alpha" || intent.From != "test-agent-1" {
-		t.Fatalf("intent message = %+v, want task-alpha/task/task-alpha/test-agent-1", intent)
-	}
-}
-
-func TestPromptClaimTaskRetryExhausted(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
-	writeTask(t, tasksDir, "backlog", "task-retry.md", strings.Join([]string{
-		"# Retry task",
-		"<!-- failure: one -->",
-		"<!-- failure: two -->",
-		"<!-- failure: three -->",
-		"",
-	}, "\n"))
-	writeFile(t, filepath.Join(tasksDir, ".queue"), "task-retry.md\n")
-
-	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	script := substitutePromptPlaceholders(strings.Join([]string{
-		promptStateBlock(t, "SELECT_TASK"),
-		promptStateBlock(t, "CLAIM_TASK"),
-	}, "\n\n"), filepath.Join(cloneDir, ".tasks"), "mato")
-
-	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-2"}, script)
-	if err != nil {
-		t.Fatalf("runBash retry exhausted: %v\noutput:\n%s", err, out)
-	}
-	if !strings.Contains(out, "Task exceeded retry budget and was moved to failed/.") {
-		t.Fatalf("expected retry exhaustion output, got: %s", out)
-	}
-
-	mustExist(t, filepath.Join(tasksDir, "failed", "task-retry.md"))
-	mustNotExist(t, filepath.Join(tasksDir, "in-progress", "task-retry.md"))
-	mustNotExist(t, filepath.Join(tasksDir, "backlog", "task-retry.md"))
 }
 
 func TestPromptCreateBranchAndCommit(t *testing.T) {
@@ -453,10 +435,10 @@ func TestPromptOnFailure(t *testing.T) {
 		t.Fatalf("runBash on failure: %v\noutput:\n%s", err, out)
 	}
 
+	// ON_FAILURE always moves to backlog; the host checks retry budget on next cycle.
 	backlogTask := filepath.Join(tasksDir, "backlog", "my-task.md")
 	mustExist(t, backlogTask)
 	mustNotExist(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
-	mustNotExist(t, filepath.Join(tasksDir, "failed", "my-task.md"))
 
 	contents := readFile(t, backlogTask)
 	if got := countFailureRecords(contents); got != 2 {
@@ -470,7 +452,9 @@ func TestPromptOnFailure(t *testing.T) {
 	}
 }
 
-func TestPromptOnFailureExhaustsRetries(t *testing.T) {
+func TestPromptOnFailureAlwaysRequeues(t *testing.T) {
+	// Even with many prior failures, ON_FAILURE moves to backlog (not failed).
+	// The host's SelectAndClaimTask checks retry budget before the next attempt.
 	repoRoot, tasksDir := setupTestRepo(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", strings.Join([]string{
 		"<!-- claimed-by: test-agent-6  claimed-at: 2026-01-01T00:00:00Z -->",
@@ -495,15 +479,16 @@ func TestPromptOnFailureExhaustsRetries(t *testing.T) {
 
 	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-6"}, script)
 	if err != nil {
-		t.Fatalf("runBash on failure exhausted: %v\noutput:\n%s", err, out)
+		t.Fatalf("runBash on failure with many priors: %v\noutput:\n%s", err, out)
 	}
 
-	failedTask := filepath.Join(tasksDir, "failed", "my-task.md")
-	mustExist(t, failedTask)
+	// Task goes to backlog, NOT failed — the host decides on retry exhaustion.
+	backlogTask := filepath.Join(tasksDir, "backlog", "my-task.md")
+	mustExist(t, backlogTask)
 	mustNotExist(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
-	mustNotExist(t, filepath.Join(tasksDir, "backlog", "my-task.md"))
+	mustNotExist(t, filepath.Join(tasksDir, "failed", "my-task.md"))
 
-	contents := readFile(t, failedTask)
+	contents := readFile(t, backlogTask)
 	if got := countFailureRecords(contents); got != 3 {
 		t.Fatalf("failure record count = %d, want 3\ncontents:\n%s", got, contents)
 	}
@@ -513,50 +498,31 @@ func TestPromptOnFailureExhaustsRetries(t *testing.T) {
 }
 
 func TestPromptTwoAgentsParallelClaim(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	_, tasksDir := setupTestRepo(t)
 	for _, name := range []string{"task-alpha.md", "task-beta.md", "task-gamma.md"} {
 		writeTask(t, tasksDir, "backlog", name, "# "+strings.TrimSuffix(name, ".md")+"\n")
 	}
 	writeFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\ntask-gamma.md\n")
 
-	cloneA := createPromptClone(t, repoRoot, tasksDir)
-	cloneB := createPromptClone(t, repoRoot, tasksDir)
-	scriptA := substitutePromptPlaceholders(strings.Join([]string{
-		promptStateBlock(t, "SELECT_TASK"),
-		promptStateBlock(t, "CLAIM_TASK"),
-		`echo "FILENAME=$FILENAME"`,
-	}, "\n\n"), filepath.Join(cloneA, ".tasks"), "mato")
-	scriptB := substitutePromptPlaceholders(strings.Join([]string{
-		promptStateBlock(t, "SELECT_TASK"),
-		promptStateBlock(t, "CLAIM_TASK"),
-		`echo "FILENAME=$FILENAME"`,
-	}, "\n\n"), filepath.Join(cloneB, ".tasks"), "mato")
-
-	type result struct {
-		out string
-		err error
+	// Both agents claim via Go; each gets a different task.
+	claimedA, err := queue.SelectAndClaimTask(tasksDir, "agent-a", nil)
+	if err != nil {
+		t.Fatalf("claim agent-a: %v", err)
 	}
-	results := make([]result, 2)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		<-start
-		results[0].out, results[0].err = runBash(t, cloneA, []string{"MATO_AGENT_ID=agent-a"}, scriptA)
-	}()
-	go func() {
-		defer wg.Done()
-		<-start
-		results[1].out, results[1].err = runBash(t, cloneB, []string{"MATO_AGENT_ID=agent-b"}, scriptB)
-	}()
-	close(start)
-	wg.Wait()
+	if claimedA == nil {
+		t.Fatal("agent-a got no task")
+	}
 
-	for i, result := range results {
-		if result.err != nil {
-			t.Fatalf("parallel claim %d failed: %v\noutput:\n%s", i, result.err, result.out)
-		}
+	claimedB, err := queue.SelectAndClaimTask(tasksDir, "agent-b", nil)
+	if err != nil {
+		t.Fatalf("claim agent-b: %v", err)
+	}
+	if claimedB == nil {
+		t.Fatal("agent-b got no task")
+	}
+
+	if claimedA.Filename == claimedB.Filename {
+		t.Fatalf("both agents claimed the same task: %s", claimedA.Filename)
 	}
 
 	inProgress := markdownFileNames(t, filepath.Join(tasksDir, "in-progress"))
@@ -567,31 +533,6 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 	if len(backlog) != 1 {
 		t.Fatalf("backlog tasks = %v, want 1 unclaimed task", backlog)
 	}
-
-	claimedByTask := map[string]string{}
-	for _, name := range inProgress {
-		contents := readFile(t, filepath.Join(tasksDir, "in-progress", name))
-		switch {
-		case strings.Contains(contents, "claimed-by: agent-a"):
-			claimedByTask[name] = "agent-a"
-		case strings.Contains(contents, "claimed-by: agent-b"):
-			claimedByTask[name] = "agent-b"
-		default:
-			t.Fatalf("task %s missing expected claimant: %s", name, contents)
-		}
-	}
-	if len(claimedByTask) != 2 {
-		t.Fatalf("claimed tasks = %+v, want 2 unique claims", claimedByTask)
-	}
-	if claimedByTask[inProgress[0]] == claimedByTask[inProgress[1]] {
-		t.Fatalf("same agent claimed both tasks: %+v", claimedByTask)
-	}
-
-	for _, result := range results {
-		if strings.Count(result.out, "FILENAME=") != 1 {
-			t.Fatalf("expected one claim per output, got: %s", result.out)
-		}
-	}
 }
 
 func TestPromptFullLifecycleWithMerge(t *testing.T) {
@@ -599,10 +540,18 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
 	writeFile(t, filepath.Join(tasksDir, ".queue"), "add-hello.md\n")
 
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-8", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("expected a task to be claimed")
+	}
+
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
 	script := strings.Join([]string{
-		promptStateBlock(t, "SELECT_TASK"),
-		promptStateBlock(t, "CLAIM_TASK"),
+		promptStateBlock(t, "VERIFY_CLAIM"),
 		promptStateBlock(t, "CREATE_BRANCH"),
 		promptStateBlock(t, "WORK"),
 		`echo "hello world" > hello.txt`,
@@ -610,9 +559,16 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 		promptStateBlock(t, "PUSH_BRANCH"),
 		promptStateBlock(t, "MARK_READY"),
 	}, "\n\n")
-	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
 
-	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-8"}, script)
+	env := []string{
+		"MATO_AGENT_ID=test-agent-8",
+		"MATO_TASK_FILE=" + claimed.Filename,
+		"MATO_TASK_BRANCH=" + claimed.Branch,
+		"MATO_TASK_TITLE=" + claimed.Title,
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, "in-progress", claimed.Filename),
+	}
+	out, err := runBash(t, cloneDir, env, script)
 	if err != nil {
 		t.Fatalf("runBash full lifecycle: %v\noutput:\n%s", err, out)
 	}
@@ -632,12 +588,12 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	}
 
 	messages := readPromptEventMessages(t, tasksDir)
-	if len(messages) != 3 {
-		t.Fatalf("message count = %d, want 3", len(messages))
+	if len(messages) != 2 {
+		t.Fatalf("message count = %d, want 2 (conflict-warning + completion; intent is now host-side)", len(messages))
 	}
-	types := []string{messages[0].Type, messages[1].Type, messages[2].Type}
+	types := []string{messages[0].Type, messages[1].Type}
 	sort.Strings(types)
-	if strings.Join(types, ",") != "completion,conflict-warning,intent" {
-		t.Fatalf("message types = %v, want intent/conflict-warning/completion", types)
+	if strings.Join(types, ",") != "completion,conflict-warning" {
+		t.Fatalf("message types = %v, want conflict-warning/completion", types)
 	}
 }
