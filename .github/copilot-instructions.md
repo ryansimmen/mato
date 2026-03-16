@@ -29,7 +29,6 @@ When asked to implement a change, follow this process:
 ## Code Conventions
 
 - **Go project layout**: `cmd/mato/` for CLI, `internal/` for packages
-- **No external dependencies** — stdlib only, no third-party modules
 - **Tests alongside source** — each `foo.go` has `foo_test.go` in the same package
 - **Integration tests** in `internal/integration/` — use `package integration_test`
 - **Prompt tests** execute actual bash commands from `task-instructions.md` in real git repos
