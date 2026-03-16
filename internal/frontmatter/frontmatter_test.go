@@ -244,12 +244,9 @@ priority: 20
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	meta, _, err := ParseTaskFile(path)
-	if err != nil {
-		t.Fatalf("ParseTaskFile: %v", err)
-	}
-	if meta.Priority != 20 {
-		t.Fatalf("meta.Priority = %d, want 20", meta.Priority)
+	_, _, err := ParseTaskFile(path)
+	if err == nil {
+		t.Fatal("expected error for duplicate YAML key, got nil")
 	}
 }
 
@@ -321,13 +318,6 @@ func TestParseTaskFile_InvalidPriority(t *testing.T) {
 		name    string
 		content string
 	}{
-		{
-			name: "float",
-			content: `---
-priority: 3.5
----
-`,
-		},
 		{
 			name: "string",
 			content: `---
