@@ -45,7 +45,7 @@ Arrays may be written as inline lists (`[a, b]`) or block lists.
 | `id` | string | filename without `.md` | Stable task ID. If omitted, `my-task.md` becomes `my-task`. Use this in `depends_on`. Completed deps match either explicit `id` or filename stem. |
 | `priority` | int | `50` | Lower numbers are higher priority. `.queue` is generated from `backlog/` sorted by priority ascending, then filename ascending. |
 | `depends_on` | string array | empty | IDs that must be completed before a waiting task can be promoted into `backlog/`. No dependencies means the task is immediately ready. |
-| `affects` | string array | empty | Expected touched paths. Backlog overlap prevention compares entries by exact string match and defers the lower-priority conflicting task to `waiting/`. |
+| `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries by exact string match and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). |
 | `tags` | string array | empty | Free-form categorization labels. Parsed today, but not used by queue reconciliation. |
 | `estimated_complexity` | string | empty | Human hint for task size. Use `simple`, `medium`, or `complex` by convention; current parsing does not enforce these values. |
 | `max_retries` | int | `3` | Maximum failure records before the task moves to `failed/`. The host merge queue reads this per-task from frontmatter (authoritative). The agent uses a global default via `MATO_MAX_RETRIES` env var (safety net). |
@@ -126,7 +126,7 @@ Simplify the status summary formatting.
 ## Where to Place Tasks
 - Put tasks with dependencies in `waiting/`.
 - Put tasks without dependencies in `backlog/`.
-- `waiting/` is also where backlog tasks are sent when they conflict with a higher-priority task's `affects` entries.
+- `waiting/` is for tasks with unmet dependencies. Conflict-deferred tasks stay in `backlog/` but are excluded from the `.queue` manifest.
 - mato writes `.queue` from the current `backlog/`, ordered by priority and then filename.
 
 ## Backward Compatibility
