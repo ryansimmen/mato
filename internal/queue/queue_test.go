@@ -951,3 +951,28 @@ func TestGenerateAgentID(t *testing.T) {
 		t.Errorf("two consecutive IDs should differ: %q == %q", id, id2)
 	}
 }
+
+func TestReconcileReadyQueue_HighPriorityNotBlockedByLowPriorityBacklog(t *testing.T) {
+tasksDir := t.TempDir()
+for _, sub := range []string{"waiting", "backlog", "completed", "in-progress", "ready-to-merge"} {
+os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+}
+
+// Low-priority task already in backlog with overlapping affects
+os.WriteFile(filepath.Join(tasksDir, "backlog", "low-priority.md"),
+[]byte("---\npriority: 20\naffects: [main.go]\n---\n# Low\n"), 0o644)
+
+// High-priority task in waiting with same affects, no deps
+os.WriteFile(filepath.Join(tasksDir, "waiting", "high-priority.md"),
+[]byte("---\npriority: 5\naffects: [main.go]\n---\n# High\n"), 0o644)
+
+got := ReconcileReadyQueue(tasksDir)
+if got != 1 {
+t.Fatalf("ReconcileReadyQueue() = %d, want 1 (high-priority should promote)", got)
+}
+if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "high-priority.md")); err != nil {
+t.Fatal("high-priority task should be promoted to backlog")
+}
+// Both are now in backlog — RemoveOverlappingTasks will handle the conflict
+// by deferring the lower-priority one.
+}
