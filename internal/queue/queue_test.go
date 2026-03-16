@@ -356,28 +356,28 @@ func TestHasAvailableTasks(t *testing.T) {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	if HasAvailableTasks(tasksDir) {
+	if HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("expected no available tasks in empty dirs")
 	}
 
 	os.WriteFile(filepath.Join(tasksDir, "backlog", "notes.txt"), []byte("hi"), 0o644)
-	if HasAvailableTasks(tasksDir) {
+	if HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("non-.md file should not count as an available task")
 	}
 
 	os.WriteFile(filepath.Join(tasksDir, "backlog", "task1.md"), []byte("# Task 1\n"), 0o644)
-	if !HasAvailableTasks(tasksDir) {
+	if !HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("expected available task in backlog")
 	}
 
 	os.Remove(filepath.Join(tasksDir, "backlog", "task1.md"))
 	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task2.md"), []byte("# Task 2\n"), 0o644)
-	if HasAvailableTasks(tasksDir) {
+	if HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("in-progress tasks should not count as available")
 	}
 
 	os.WriteFile(filepath.Join(tasksDir, "backlog", "task3.md"), []byte("# Task 3\n"), 0o644)
-	if !HasAvailableTasks(tasksDir) {
+	if !HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("expected available task in backlog")
 	}
 }

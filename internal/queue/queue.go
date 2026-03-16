@@ -18,18 +18,23 @@ import (
 
 var claimedByRe = regexp.MustCompile(`<!-- claimed-by:\s*(\S+)`)
 
-// HasAvailableTasks reports whether there is at least one .md task file
-// in backlog/. After orphan recovery, any task still in in-progress/
-// belongs to an active agent, so only backlog/ matters for new agents.
-func HasAvailableTasks(tasksDir string) bool {
+// HasAvailableTasks reports whether there is at least one claimable .md task
+// file in backlog/ that is not in the deferred exclusion set.
+func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
 	entries, err := os.ReadDir(filepath.Join(tasksDir, "backlog"))
 	if err != nil {
 		return false
 	}
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-			return true
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
 		}
+		if deferred != nil {
+			if _, excluded := deferred[e.Name()]; excluded {
+				continue
+			}
+		}
+		return true
 	}
 	return false
 }

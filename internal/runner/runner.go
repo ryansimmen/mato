@@ -157,7 +157,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 		}
 
-		hasBacklogTasks := queue.HasAvailableTasks(tasksDir)
+		hasBacklogTasks := queue.HasAvailableTasks(tasksDir, deferred)
 		if hasBacklogTasks {
 			if err := runOnce(repoRoot, tasksDir, agentID, copilotArgs, image, workdir, prompt,
 				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,

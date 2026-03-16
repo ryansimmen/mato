@@ -713,7 +713,7 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 	if got := readFile(t, filepath.Join(tasksDir, ".queue")); got != "task-low.md\n" {
 		t.Fatalf("second queue manifest = %q, want %q", got, "task-low.md\n")
 	}
-	if !queue.HasAvailableTasks(tasksDir) {
+	if !queue.HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("queue.HasAvailableTasks() = false, want true")
 	}
 }
