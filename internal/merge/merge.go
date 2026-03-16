@@ -224,9 +224,9 @@ func taskBranchName(task mergeQueueTask) string {
 func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err error) error {
 	switch {
 	case errors.Is(err, errTaskBranchNotPushed):
-		return failMergeTask(task.path, filepath.Join(tasksDir, "failed", task.name), err.Error())
+		return failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error())
 	case errors.Is(err, errSquashMergeConflict):
-		if err := failMergeTask(task.path, filepath.Join(tasksDir, "backlog", task.name), err.Error()); err != nil {
+		if err := failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error()); err != nil {
 			return err
 		}
 		cleanupTaskBranch(repoRoot, taskBranchName(task))
@@ -234,6 +234,30 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err erro
 	default:
 		return failMergeTask(task.path, "", err.Error())
 	}
+}
+
+func mergeFailureDestination(tasksDir, taskPath, taskName string) string {
+	dir := "backlog"
+	if shouldFailTask(taskPath) {
+		dir = "failed"
+	}
+	return filepath.Join(tasksDir, dir, taskName)
+}
+
+func shouldFailTask(taskPath string) bool {
+	maxRetries := 3
+	meta, _, err := frontmatter.ParseTaskFile(taskPath)
+	if err == nil && meta.MaxRetries > 0 {
+		maxRetries = meta.MaxRetries
+	}
+
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return false
+	}
+
+	failures := strings.Count(string(data), "<!-- failure:")
+	return failures >= maxRetries
 }
 
 func cleanupTaskBranch(repoRoot, branchName string) {
