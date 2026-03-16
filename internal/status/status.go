@@ -25,6 +25,7 @@ func Show(repoRoot, tasksDir string) error {
 		tasksDir = filepath.Join(repoRoot, ".tasks")
 	}
 
+	// Collect all data before printing.
 	queueDirs := []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed"}
 	counts := make(map[string]int, len(queueDirs))
 	for _, dir := range queueDirs {
@@ -40,6 +41,9 @@ func Show(repoRoot, tasksDir string) error {
 		return err
 	}
 	deferred := queue.DeferredOverlappingTasks(tasksDir)
+	inProgressTasks := listTasksInDir(tasksDir, "in-progress")
+	readyToMergeTasks := listTasksInDir(tasksDir, "ready-to-merge")
+	failedTasks := listTasksInDir(tasksDir, "failed")
 	messages, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
 		return err
@@ -48,17 +52,23 @@ func Show(repoRoot, tasksDir string) error {
 		messages = messages[len(messages)-5:]
 	}
 
-	fmt.Println("Task Queue Status")
-	fmt.Println("─────────────────")
-	for _, dir := range queueDirs {
-		label := dir + ":"
-		if dir == "backlog" && len(deferred) > 0 {
-			fmt.Printf("  %-15s %d (%d deferred)\n", label, counts[dir], len(deferred))
-		} else {
-			fmt.Printf("  %-15s %d\n", label, counts[dir])
-		}
+	runnable := counts["backlog"] - len(deferred)
+	if runnable < 0 {
+		runnable = 0
 	}
 
+	// ── Queue Overview ──
+	fmt.Println("Queue Overview")
+	fmt.Println("──────────────")
+	fmt.Printf("  runnable:       %d\n", runnable)
+	fmt.Printf("  deferred:       %d  (conflict-blocked, in backlog)\n", len(deferred))
+	fmt.Printf("  waiting:        %d  (dependency-blocked)\n", counts["waiting"])
+	fmt.Printf("  in-progress:    %d\n", counts["in-progress"])
+	fmt.Printf("  ready-to-merge: %d\n", counts["ready-to-merge"])
+	fmt.Printf("  completed:      %d\n", counts["completed"])
+	fmt.Printf("  failed:         %d\n", counts["failed"])
+
+	// ── Active Agents ──
 	fmt.Println()
 	fmt.Println("Active Agents")
 	fmt.Println("─────────────")
@@ -70,9 +80,35 @@ func Show(repoRoot, tasksDir string) error {
 		}
 	}
 
+	// ── In-Progress ──
+	if len(inProgressTasks) > 0 {
+		fmt.Println()
+		fmt.Println("In-Progress Tasks")
+		fmt.Println("─────────────────")
+		for _, task := range inProgressTasks {
+			claimedBy := queue.ParseClaimedBy(filepath.Join(tasksDir, "in-progress", task.name))
+			if claimedBy != "" {
+				fmt.Printf("  %s  (agent %s)\n", task.name, claimedBy)
+			} else {
+				fmt.Printf("  %s\n", task.name)
+			}
+		}
+	}
+
+	// ── Ready to Merge ──
+	if len(readyToMergeTasks) > 0 {
+		fmt.Println()
+		fmt.Println("Ready to Merge")
+		fmt.Println("──────────────")
+		for _, task := range readyToMergeTasks {
+			fmt.Printf("  %s  (priority %d)\n", task.name, task.priority)
+		}
+	}
+
+	// ── Dependency-Blocked ──
 	fmt.Println()
-	fmt.Println("Waiting Tasks (dependency-blocked)")
-	fmt.Println("──────────────────────────────────")
+	fmt.Println("Dependency-Blocked (waiting/)")
+	fmt.Println("─────────────────────────────")
 	if len(waitingTasks) == 0 {
 		fmt.Println("  (none)")
 	} else {
@@ -82,9 +118,10 @@ func Show(repoRoot, tasksDir string) error {
 		}
 	}
 
+	// ── Conflict-Deferred ──
 	fmt.Println()
-	fmt.Println("Deferred Tasks (conflict-blocked)")
-	fmt.Println("─────────────────────────────────")
+	fmt.Println("Conflict-Deferred (backlog/, excluded from queue)")
+	fmt.Println("──────────────────────────────────────────────────")
 	if len(deferred) == 0 {
 		fmt.Println("  (none)")
 	} else {
@@ -97,17 +134,29 @@ func Show(repoRoot, tasksDir string) error {
 			path := filepath.Join(tasksDir, "backlog", name)
 			meta, _, err := frontmatter.ParseTaskFile(path)
 			if err != nil {
-				fmt.Printf("  %s (could not read affects)\n", name)
+				fmt.Printf("  %s  (could not read metadata)\n", name)
 				continue
 			}
 			if len(meta.Affects) > 0 {
-				fmt.Printf("  %s (affects: %s)\n", name, strings.Join(meta.Affects, ", "))
+				fmt.Printf("  %s  (affects: %s)\n", name, strings.Join(meta.Affects, ", "))
 			} else {
 				fmt.Printf("  %s\n", name)
 			}
 		}
 	}
 
+	// ── Failed ──
+	if len(failedTasks) > 0 {
+		fmt.Println()
+		fmt.Println("Failed Tasks")
+		fmt.Println("────────────")
+		for _, task := range failedTasks {
+			failCount := countFailureRecords(filepath.Join(tasksDir, "failed", task.name))
+			fmt.Printf("  %s  (%d failures)\n", task.name, failCount)
+		}
+	}
+
+	// ── Recent Messages ──
 	fmt.Println()
 	fmt.Println("Recent Messages")
 	fmt.Println("───────────────")
@@ -127,6 +176,45 @@ func Show(repoRoot, tasksDir string) error {
 	}
 
 	return nil
+}
+
+type taskEntry struct {
+	name     string
+	priority int
+}
+
+func listTasksInDir(tasksDir, dir string) []taskEntry {
+	entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
+	if err != nil {
+		return nil
+	}
+	tasks := make([]taskEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, dir, e.Name()))
+		priority := 50
+		if err == nil {
+			priority = meta.Priority
+		}
+		tasks = append(tasks, taskEntry{name: e.Name(), priority: priority})
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].priority != tasks[j].priority {
+			return tasks[i].priority < tasks[j].priority
+		}
+		return tasks[i].name < tasks[j].name
+	})
+	return tasks
+}
+
+func countFailureRecords(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(data), "<!-- failure:")
 }
 
 type statusAgent struct {
@@ -260,7 +348,7 @@ func taskStatesByID(tasksDir string) (map[string]string, error) {
 		State string
 	}{
 		{Dir: "waiting", State: "waiting"},
-		{Dir: "backlog", State: "pending"},
+		{Dir: "backlog", State: "backlog"},
 		{Dir: "in-progress", State: "in-progress"},
 		{Dir: "ready-to-merge", State: "ready-to-merge"},
 		{Dir: "completed", State: "completed"},
