@@ -48,7 +48,7 @@ Arrays may be written as inline lists (`[a, b]`) or block lists.
 | `affects` | string array | empty | Expected touched paths. Backlog overlap prevention compares entries by exact string match and defers the lower-priority conflicting task to `waiting/`. |
 | `tags` | string array | empty | Free-form categorization labels. Parsed today, but not used by queue reconciliation. |
 | `estimated_complexity` | string | empty | Human hint for task size. Use `simple`, `medium`, or `complex` by convention; current parsing does not enforce these values. |
-| `max_retries` | int | `3` | Retry budget metadata. The current retry flow also uses a failure-count threshold of `3` based on `<!-- failure: ... -->` lines. |
+| `max_retries` | int | `3` | Parsed into `TaskMeta.MaxRetries`, but not yet enforced by the runtime. Current retry handling is hardcoded to a threshold of `3` based on `<!-- failure: ... -->` line count. |
 
 ### Frontmatter syntax examples
 Inline arrays:
@@ -77,13 +77,17 @@ Do not edit them manually.
 Expected comment patterns:
 ```html
 <!-- claimed-by: agent-7  claimed-at: 2026-01-01T00:00:00Z -->
+<!-- branch: task/add-http-retries -->
 <!-- failure: agent-7 at 2026-01-01T00:03:00Z step=WORK error=tests_failed files_changed=queue.go,queue_test.go -->
+<!-- merged: merge-queue at 2026-01-01T00:10:00Z -->
 ```
 
 What they mean:
 - `claimed-by` records which agent owns an in-progress task.
+- `branch:` records the pushed task branch name after a successful agent push; the merge queue reads this first and falls back to the filename-derived branch when absent.
 - `failure:` records a failed attempt; failure lines are counted for retry handling.
 - Recovery and merge logic may append `failure:` lines such as `mato-recovery` or `merge-queue`.
+- `merged:` records that the merge queue successfully squashed the task branch into the target branch.
 - The host parses `claimed-by` and strips full-line HTML comments from the task body before agent-facing interpretation.
 
 ## Examples

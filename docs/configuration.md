@@ -22,8 +22,8 @@ Run mode creates the queue structure if needed, starts the Docker-based Copilot 
 and merges completed work into the target branch. If the target branch does not exist
 yet, `mato` creates it.
 Status mode prints queue counts, active agents, waiting-task dependency summaries, and
-recent messages. `mato status` accepts only status-related flags; extra arguments are
-an error.
+recent messages. `mato status` rejects extra positional arguments, but it does
+silently accept `--branch` even though status ignores that value.
 Use `--` to stop `mato` flag parsing and forward the remaining arguments verbatim to
 Copilot CLI. In run mode, unrecognized arguments are also passed through to Copilot.
 
@@ -32,7 +32,7 @@ Long flags support both `--flag value` and `--flag=value` forms.
 | Flag | Applies to | Default | Description |
 | --- | --- | --- | --- |
 | `--repo <path>` | run, status | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
-| `--branch <name>` | run | `mato` | Target branch used for merge processing. |
+| `--branch <name>` | run; accepted-but-ignored by status | `mato` | Target branch used for merge processing. `mato status` parses this flag via shared argument handling but does not use it. |
 | `--tasks-dir <path>` | run, status | `<repo>/.tasks` | Task queue directory. If omitted, `mato` uses `.tasks` under the resolved repository root. |
 | `--help`, `-h` | run, status | none | Show help and exit. |
 | `--` | run | none | Forward all following arguments directly to Copilot CLI without further `mato` parsing. |
@@ -44,17 +44,17 @@ Long flags support both `--flag value` and `--flag=value` forms.
 - active agents discovered from `.tasks/.locks/*.pid`
 - waiting tasks plus dependency-status summaries
 - the five most recent messages from `.tasks/messages`
-Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`.
+Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also accepted by the shared parser, but `mato status` ignores it.
 
 ## Environment Variables
 | Variable | Scope | Default | Description |
 | --- | --- | --- | --- |
 | `MATO_DOCKER_IMAGE` | host | `ubuntu:24.04` | Docker image used for agent containers. Set this before starting `mato` to use a custom image. |
 | `MATO_AGENT_ID` | container | generated per run | Agent identity injected by `mato` so the running agent can identify itself. |
-| `MATO_MESSAGING_ENABLED` | container | `1` | Enables the in-container messaging integration used by agents. |
-| `MATO_MESSAGES_DIR` | container | `/workspace/.tasks/messages` | Path to the shared messages directory inside the container. |
+| `MATO_MESSAGING_ENABLED` | container | `1` | Injected by `mato` for agent-side tooling. The embedded prompt already uses hardcoded `.tasks` paths, so this is mainly useful to custom scripts or wrappers. |
+| `MATO_MESSAGES_DIR` | container | `/workspace/.tasks/messages` | Injected path to the shared messages directory for custom tooling. The embedded prompt separately hardcodes the same `/workspace/.tasks/messages` path. |
 Only `MATO_DOCKER_IMAGE` is intended as a host-side configuration input. The other
-variables are set by `mato` inside each container and are normally not set manually.
+variables are injected by `mato` inside each container and are normally not set manually.
 
 ## Docker Configuration
 Each agent run uses `docker run --rm -it` with working directory `/workspace` and user
@@ -94,11 +94,12 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 `help` target.
 | Target | Description |
 | --- | --- |
-| `build` | Build `bin/mato` with `go build -o bin/mato .`. |
-| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install .`. |
+| `build` | Build `bin/mato` with `go build -o bin/mato ./cmd/mato`. |
+| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install ./cmd/mato`. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
-| `run` | Run `go run . --repo "$(REPO)" $(COPILOT_ARGS)`. `REPO` is required; set it in `.env` or on the command line. |
+| `integration-test` | Run `go test -race -v ./internal/integration/...`. |
+| `run` | Run `go run ./cmd/mato --repo "$(REPO)" $(COPILOT_ARGS)`. `REPO` is required; set it in `.env` or on the command line. |
 | `test` | Run `go test ./...`. |
 | `help` | Print the target list and descriptions. |
 Additional behavior:
