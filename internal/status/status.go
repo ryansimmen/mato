@@ -41,6 +41,7 @@ func Show(repoRoot, tasksDir string) error {
 		return err
 	}
 	deferred := queue.DeferredOverlappingTasks(tasksDir)
+	deferredDetail := queue.DeferredOverlappingTasksDetailed(tasksDir)
 	inProgressTasks := listTasksInDir(tasksDir, "in-progress")
 	readyToMergeTasks := listTasksInDir(tasksDir, "ready-to-merge")
 	failedTasks := listTasksInDir(tasksDir, "failed")
@@ -131,17 +132,10 @@ func Show(repoRoot, tasksDir string) error {
 		}
 		sort.Strings(deferredNames)
 		for _, name := range deferredNames {
-			path := filepath.Join(tasksDir, "backlog", name)
-			meta, _, err := frontmatter.ParseTaskFile(path)
-			if err != nil {
-				fmt.Printf("  %s  (could not read metadata)\n", name)
-				continue
-			}
-			if len(meta.Affects) > 0 {
-				fmt.Printf("  %s  (affects: %s)\n", name, strings.Join(meta.Affects, ", "))
-			} else {
-				fmt.Printf("  %s\n", name)
-			}
+			info := deferredDetail[name]
+			fmt.Printf("  %s\n", name)
+			fmt.Printf("    blocked by: %s (%s/)\n", info.BlockedBy, info.BlockedByDir)
+			fmt.Printf("    overlapping: %s\n", strings.Join(info.OverlapFiles, ", "))
 		}
 	}
 
