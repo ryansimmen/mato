@@ -314,6 +314,11 @@ func moveTaskFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("create task destination dir: %w", err)
 	}
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("destination already exists: %s", dst)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat destination %s: %w", dst, err)
+	}
 	if err := os.Rename(src, dst); err != nil {
 		return fmt.Errorf("rename task file: %w", err)
 	}

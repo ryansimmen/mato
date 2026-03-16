@@ -105,6 +105,8 @@ func CleanStaleLocks(tasksDir string) {
 // before the agent could clean up. A failure record is appended so the
 // retry-count logic can eventually move it to failed/.
 // Tasks claimed by a still-active agent are skipped.
+// If the same task already exists in a later-state directory, the
+// in-progress copy is treated as stale and removed instead of recovered.
 func RecoverOrphanedTasks(tasksDir string) {
 	inProgress := filepath.Join(tasksDir, "in-progress")
 	entries, err := os.ReadDir(inProgress)
@@ -116,6 +118,17 @@ func RecoverOrphanedTasks(tasksDir string) {
 			continue
 		}
 		src := filepath.Join(inProgress, e.Name())
+
+		if laterDir := laterStateDuplicateDir(tasksDir, e.Name()); laterDir != "" {
+			if err := os.Remove(src); err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(os.Stderr, "warning: could not remove stale in-progress copy %s: %v\n", e.Name(), err)
+				}
+				continue
+			}
+			fmt.Printf("Removing stale in-progress copy of %s (already in %s/)\n", e.Name(), laterDir)
+			continue
+		}
 
 		if agent := ParseClaimedBy(src); agent != "" && IsAgentActive(tasksDir, agent) {
 			fmt.Printf("Skipping in-progress task %s (agent %s still active)\n", e.Name(), agent)
@@ -137,6 +150,17 @@ func RecoverOrphanedTasks(tasksDir string) {
 
 		fmt.Printf("Recovered orphaned task %s back to backlog\n", e.Name())
 	}
+}
+
+func laterStateDuplicateDir(tasksDir, name string) string {
+	for _, laterDir := range []string{"ready-to-merge", "completed", "failed"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, laterDir, name)); err == nil {
+			return laterDir
+		} else if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: could not check %s for duplicate %s: %v\n", laterDir, name, err)
+		}
+	}
+	return ""
 }
 
 func ReconcileReadyQueue(tasksDir string) int {
