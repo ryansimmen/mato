@@ -59,5 +59,7 @@ When asked to implement a change, follow this process:
 - Host merge queue squash-merges task branches serially
 - `affects:` metadata prevents concurrent conflicting tasks (checked against in-progress/ and ready-to-merge/)
 - Conflict-deferred tasks stay in backlog/ but are excluded from `.queue` manifest
-- `max_retries` is enforced by both agent prompt and host merge queue
+- `max_retries` is enforced by the host: `queue.SelectAndClaimTask` checks before launching an agent, and host merge queue checks after merge failures
+- Task selection, claiming, retry-budget checks, and intent messages are handled by Go (host-side) before the agent container launches
+- The agent prompt receives pre-resolved task info via `MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH` env vars
 - `<!-- branch: ... -->` in task file tells merge queue which branch to merge
