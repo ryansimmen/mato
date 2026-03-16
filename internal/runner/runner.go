@@ -225,6 +225,7 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 	}
 	args = append(args,
 		"-e", "MATO_AGENT_ID="+agentID,
+		"-e", "MATO_MAX_RETRIES=3",
 		"-e", "MATO_MESSAGING_ENABLED=1",
 		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", workdir),
 	)

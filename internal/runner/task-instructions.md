@@ -80,8 +80,7 @@ printf '<!-- claimed-by: %s  claimed-at: %s -->\n' "$AGENT_ID" "$CLAIMED_AT" > "
 cat "$TASK_PATH" >> "$TMPF"
 mv "$TMPF" "$TASK_PATH"
 FAILURES=$(grep -c '<!-- failure:' "$TASK_PATH" || true)
-MAX_RETRIES=$(sed -n 's/^max_retries:[[:space:]]*//p' "$TASK_PATH" | head -1)
-MAX_RETRIES="${MAX_RETRIES:-3}"
+MAX_RETRIES="${MATO_MAX_RETRIES:-3}"
 if [ "$FAILURES" -ge "$MAX_RETRIES" ]; then
   mv "$TASK_PATH" "$FAILED_DIR/$FILENAME"
   echo "Task exceeded retry budget and was moved to failed/."
@@ -231,8 +230,7 @@ FILES_CHANGED="$(git diff --name-only HEAD 2>/dev/null | paste -sd, -)"
 echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} files_changed=${FILES_CHANGED} -->" >> "$TASK_PATH"
 git checkout TARGET_BRANCH_PLACEHOLDER 2>/dev/null || true
 FAILURES=$(grep -c '<!-- failure:' "$TASK_PATH" || true)
-MAX_RETRIES=$(sed -n 's/^max_retries:[[:space:]]*//p' "$TASK_PATH" | head -1)
-MAX_RETRIES="${MAX_RETRIES:-3}"
+MAX_RETRIES="${MATO_MAX_RETRIES:-3}"
 if [ "$FAILURES" -ge "$MAX_RETRIES" ]; then
   mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/failed/$FILENAME"
 else
