@@ -48,7 +48,7 @@ Arrays may be written as inline lists (`[a, b]`) or block lists.
 | `affects` | string array | empty | Expected touched paths. Backlog overlap prevention compares entries by exact string match and defers the lower-priority conflicting task to `waiting/`. |
 | `tags` | string array | empty | Free-form categorization labels. Parsed today, but not used by queue reconciliation. |
 | `estimated_complexity` | string | empty | Human hint for task size. Use `simple`, `medium`, or `complex` by convention; current parsing does not enforce these values. |
-| `max_retries` | int | `3` | Maximum number of `<!-- failure: ... -->` records before the task is moved to `failed/`. Enforced by both the agent prompt (during `CLAIM_TASK` and `ON_FAILURE`) and the host merge queue. |
+| `max_retries` | int | `3` | Maximum number of `<!-- failure: ... -->` records before the task is moved to `failed/`. Enforced by the host merge queue (reads from frontmatter) and the agent prompt (reads `MATO_MAX_RETRIES` env var, default 3). |
 
 ### Frontmatter syntax examples
 Inline arrays:
