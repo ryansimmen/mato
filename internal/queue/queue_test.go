@@ -173,6 +173,44 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	}
 }
 
+func TestRecoverOrphanedTasks_RemovesStaleInProgressCopyWhenTaskAlreadyAdvanced(t *testing.T) {
+	for _, laterDir := range []string{"ready-to-merge", "completed", "failed"} {
+		t.Run(laterDir, func(t *testing.T) {
+			tasksDir := t.TempDir()
+			for _, sub := range []string{"backlog", "in-progress", "ready-to-merge", "completed", "failed"} {
+				if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+					t.Fatalf("MkdirAll(%s): %v", sub, err)
+				}
+			}
+
+			stalePath := filepath.Join(tasksDir, "in-progress", "fix-bug.md")
+			authoritativePath := filepath.Join(tasksDir, laterDir, "fix-bug.md")
+			if err := os.WriteFile(stalePath, []byte("# Stale task\n"), 0o644); err != nil {
+				t.Fatalf("write stale task: %v", err)
+			}
+			if err := os.WriteFile(authoritativePath, []byte("# Authoritative task\n"), 0o644); err != nil {
+				t.Fatalf("write authoritative task: %v", err)
+			}
+
+			RecoverOrphanedTasks(tasksDir)
+
+			if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+				t.Fatalf("stale in-progress copy should be removed, stat err = %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "fix-bug.md")); !os.IsNotExist(err) {
+				t.Fatalf("task should not be recovered to backlog when %s copy exists, stat err = %v", laterDir, err)
+			}
+			data, err := os.ReadFile(authoritativePath)
+			if err != nil {
+				t.Fatalf("read authoritative task: %v", err)
+			}
+			if string(data) != "# Authoritative task\n" {
+				t.Fatalf("authoritative task should be unchanged, got %q", string(data))
+			}
+		})
+	}
+}
+
 func TestRecoverOrphanedTasks_ConcurrentCalls(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"backlog", "in-progress"} {

@@ -19,7 +19,7 @@ You are an autonomous task agent. Claim one task, complete it safely, push its t
 ```
 ## Non-Negotiable Invariants
 - Process exactly one task per run.
-- Never force-push, never rebase-push, and never push directly to `TARGET_BRANCH_PLACEHOLDER`.
+- Never rebase-push or push directly to `TARGET_BRANCH_PLACEHOLDER`. Only force-push the dedicated task branch, and only with `--force-with-lease` in `PUSH_BRANCH`.
 - Never delete unrelated files or revert someone else’s work; change only files required by the task plus task-file moves and up to 3 message files.
 - Preserve the `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` comment patterns exactly.
 - Messaging is best-effort: if reading or writing messages fails, continue the task anyway.
@@ -106,8 +106,6 @@ EOF
 **Goal:** Create and verify the dedicated task branch from `TARGET_BRANCH_PLACEHOLDER`.
 **Commands:**
 ```bash
-# Clean stale remote branch if it exists from a previous attempt
-git push origin --delete "$BRANCH" 2>/dev/null || true
 git checkout -b "$BRANCH" TARGET_BRANCH_PLACEHOLDER
 git branch --show-current
 ```
@@ -179,22 +177,21 @@ EOF
 PUSH_ATTEMPT=1
 PUSHED=0
 while [ "$PUSH_ATTEMPT" -le 3 ]; do
-  if git push origin "$BRANCH"; then
+  if git push --force-with-lease origin "$BRANCH"; then
+    echo "<!-- branch: ${BRANCH} -->" >> "$TASK_PATH"
     PUSHED=1
     break
   fi
   PUSH_ATTEMPT=$((PUSH_ATTEMPT + 1))
 done
 [ "$PUSHED" -eq 1 ]
-# Record the branch name for the host merge queue
-echo "<!-- branch: ${BRANCH} -->" >> "$TASK_PATH"
 git ls-remote --heads origin "$BRANCH"
 ```
 **Decision table:**
 | If | Then |
 | --- | --- |
 | Writing the `conflict-warning` message fails | Continue anyway. Do not send any replacement message. |
-| `git push origin "$BRANCH"` succeeds | Continue to `MARK_READY`. |
+| `git push --force-with-lease origin "$BRANCH"` succeeds | Continue to `MARK_READY`. |
 | Push fails | Retry up to 3 total attempts. |
 | Push still fails after 3 attempts | Transition to `ON_FAILURE` with `step=PUSH_BRANCH`. |
 ---
@@ -247,4 +244,4 @@ fi
 | The task now has 3 or more `<!-- failure:` lines | Move it to `failed/`. |
 | The task has fewer than 3 failure lines | Move it back to `backlog/` for another future attempt. |
 ## Final Reminder
-Stay disciplined: one task, one branch, one commit sequence, at most 3 messages, bounded retries, and no force-pushes.
+Stay disciplined: one task, one branch, one commit sequence, at most 3 messages, bounded retries, and only `--force-with-lease` pushes for the dedicated task branch.

@@ -111,6 +111,42 @@ func TestAcquireLockCleanupRemovesLockFile(t *testing.T) {
 	}
 }
 
+func TestMoveTaskFile_DestinationExists(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "ready-to-merge", "task.md")
+	dst := filepath.Join(dir, "backlog", "task.md")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll src dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll dst dir: %v", err)
+	}
+	if err := os.WriteFile(src, []byte("# Ready task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile src: %v", err)
+	}
+	if err := os.WriteFile(dst, []byte("# Existing backlog task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile dst: %v", err)
+	}
+
+	err := moveTaskFile(src, dst)
+	if err == nil {
+		t.Fatal("moveTaskFile should fail when destination exists")
+	}
+	if !strings.Contains(err.Error(), "destination already exists") {
+		t.Fatalf("moveTaskFile error = %q, want destination already exists", err)
+	}
+	if data, readErr := os.ReadFile(dst); readErr != nil {
+		t.Fatalf("os.ReadFile dst: %v", readErr)
+	} else if string(data) != "# Existing backlog task\n" {
+		t.Fatalf("destination contents changed: got %q", string(data))
+	}
+	if data, readErr := os.ReadFile(src); readErr != nil {
+		t.Fatalf("os.ReadFile src: %v", readErr)
+	} else if string(data) != "# Ready task\n" {
+		t.Fatalf("source contents changed: got %q", string(data))
+	}
+}
+
 func TestProcessQueueEmptyReadyToMergeReturnsZero(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := setupTasksDir(t)

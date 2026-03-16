@@ -81,6 +81,31 @@ func promptStateBlock(t *testing.T, state string) string {
 	return strings.TrimSpace(section[:blockEnd])
 }
 
+func TestPromptCreateBranchDoesNotDeleteRemoteBranch(t *testing.T) {
+	block := promptStateBlock(t, "CREATE_BRANCH")
+	if strings.Contains(block, `git push origin --delete "$BRANCH"`) {
+		t.Fatalf("CREATE_BRANCH should not delete the remote task branch:\n%s", block)
+	}
+}
+
+func TestPromptPushBranchUsesForceWithLease(t *testing.T) {
+	block := promptStateBlock(t, "PUSH_BRANCH")
+	if !strings.Contains(block, `git push --force-with-lease origin "$BRANCH"`) {
+		t.Fatalf("PUSH_BRANCH should use --force-with-lease:\n%s", block)
+	}
+	pushIdx := strings.Index(block, `git push --force-with-lease origin "$BRANCH"`)
+	recordIdx := strings.Index(block, `echo "<!-- branch: ${BRANCH} -->" >> "$TASK_PATH"`)
+	if recordIdx < 0 {
+		t.Fatalf("PUSH_BRANCH should record branch metadata after a successful push:\n%s", block)
+	}
+	if recordIdx < pushIdx {
+		t.Fatalf("branch metadata should be recorded after the push command:\n%s", block)
+	}
+	if strings.Contains(promptStateBlock(t, "MARK_READY"), `<!-- branch:`) {
+		t.Fatal("MARK_READY should not record branch metadata")
+	}
+}
+
 func createPromptClone(t *testing.T, repoRoot, tasksDir string) string {
 	t.Helper()
 
@@ -358,7 +383,7 @@ func TestPromptRecordsBranchInTaskFile(t *testing.T) {
 	}
 }
 
-func TestStaleRemoteBranchCleanedBeforeNewBranch(t *testing.T) {
+func TestExistingRemoteBranchIsReplacedWhenTaskBranchIsPushed(t *testing.T) {
 	repoRoot, tasksDir := setupTestRepo(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-stale  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
@@ -397,7 +422,7 @@ func TestStaleRemoteBranchCleanedBeforeNewBranch(t *testing.T) {
 		t.Fatalf("base.txt on remote branch = %q, want %q", got, "advanced target")
 	}
 	if _, err := git.Output(repoRoot, "show", "task/my-task:stale.txt"); err == nil {
-		t.Fatal("expected stale remote branch content to be removed before pushing fresh branch")
+		t.Fatal("expected pre-existing remote branch content to be replaced by the newly pushed task branch")
 	}
 }
 
