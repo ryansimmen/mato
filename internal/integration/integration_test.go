@@ -134,7 +134,7 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 	if err := queue.WriteQueueManifest(tasksDir, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest: %v", err)
 	}
-	if !queue.HasAvailableTasks(tasksDir) {
+	if !queue.HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("queue.HasAvailableTasks() = false, want true")
 	}
 
