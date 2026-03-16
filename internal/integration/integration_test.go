@@ -131,7 +131,7 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 	if got := queue.ReconcileReadyQueue(tasksDir); got != 0 {
 		t.Fatalf("queue.ReconcileReadyQueue() = %d, want 0", got)
 	}
-	if err := queue.WriteQueueManifest(tasksDir); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest: %v", err)
 	}
 	if !queue.HasAvailableTasks(tasksDir) {
@@ -234,23 +234,32 @@ func TestOverlapPrevention(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Low\n")
 	writeTask(t, tasksDir, "backlog", "other.md", "---\npriority: 10\naffects: [README.md]\n---\n# Other\n")
 
-	queue.RemoveOverlappingTasks(tasksDir)
+	deferred := queue.DeferredOverlappingTasks(tasksDir)
 
+	if len(deferred) != 1 {
+		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
+	}
+	if _, ok := deferred["low.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "low.md", deferred)
+	}
 	mustExist(t, filepath.Join(tasksDir, "backlog", "high.md"))
 	mustExist(t, filepath.Join(tasksDir, "backlog", "other.md"))
-	mustExist(t, filepath.Join(tasksDir, "waiting", "low.md"))
-	mustNotExist(t, filepath.Join(tasksDir, "backlog", "low.md"))
+	mustExist(t, filepath.Join(tasksDir, "backlog", "low.md"))
+	mustNotExist(t, filepath.Join(tasksDir, "waiting", "low.md"))
 
 	mustRename(t,
 		filepath.Join(tasksDir, "backlog", "high.md"),
 		filepath.Join(tasksDir, "completed", "high.md"),
 	)
 
-	if got := queue.ReconcileReadyQueue(tasksDir); got != 1 {
-		t.Fatalf("queue.ReconcileReadyQueue() after completion = %d, want 1", got)
+	if got := queue.ReconcileReadyQueue(tasksDir); got != 0 {
+		t.Fatalf("queue.ReconcileReadyQueue() after completion = %d, want 0", got)
 	}
 
-	queue.RemoveOverlappingTasks(tasksDir)
+	deferred = queue.DeferredOverlappingTasks(tasksDir)
+	if len(deferred) != 0 {
+		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
+	}
 
 	mustExist(t, filepath.Join(tasksDir, "backlog", "low.md"))
 	mustExist(t, filepath.Join(tasksDir, "backlog", "other.md"))
@@ -271,7 +280,7 @@ func TestOrphanRecoveryAndRequeue(t *testing.T) {
 		t.Fatalf("recovered task missing failure record: %q", contents)
 	}
 
-	if err := queue.WriteQueueManifest(tasksDir); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest: %v", err)
 	}
 	if manifest := readFile(t, filepath.Join(tasksDir, ".queue")); !strings.Contains(manifest, "recover-me.md") {

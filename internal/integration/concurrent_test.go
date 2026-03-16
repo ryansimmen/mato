@@ -673,13 +673,19 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 	highPath := writeTask(t, tasksDir, "backlog", "task-high.md", "---\npriority: 5\naffects: [main.go]\n---\n# Task High\n")
 	writeTask(t, tasksDir, "backlog", "task-low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Task Low\n")
 
-	queue.RemoveOverlappingTasks(tasksDir)
+	deferred := queue.DeferredOverlappingTasks(tasksDir)
 
+	if len(deferred) != 1 {
+		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
+	}
+	if _, ok := deferred["task-low.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "task-low.md", deferred)
+	}
 	mustExist(t, highPath)
-	mustExist(t, filepath.Join(tasksDir, "waiting", "task-low.md"))
-	mustNotExist(t, filepath.Join(tasksDir, "backlog", "task-low.md"))
+	mustExist(t, filepath.Join(tasksDir, "backlog", "task-low.md"))
+	mustNotExist(t, filepath.Join(tasksDir, "waiting", "task-low.md"))
 
-	if err := queue.WriteQueueManifest(tasksDir); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
 		t.Fatalf("queue.WriteQueueManifest first pass: %v", err)
 	}
 	if got := readFile(t, filepath.Join(tasksDir, ".queue")); got != "task-high.md\n" {
@@ -688,17 +694,20 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 
 	mustRename(t, highPath, filepath.Join(tasksDir, "completed", "task-high.md"))
 
-	if got := queue.ReconcileReadyQueue(tasksDir); got != 1 {
-		t.Fatalf("queue.ReconcileReadyQueue() = %d, want 1", got)
+	if got := queue.ReconcileReadyQueue(tasksDir); got != 0 {
+		t.Fatalf("queue.ReconcileReadyQueue() = %d, want 0", got)
 	}
 
-	queue.RemoveOverlappingTasks(tasksDir)
+	deferred = queue.DeferredOverlappingTasks(tasksDir)
+	if len(deferred) != 0 {
+		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
+	}
 
 	mustExist(t, filepath.Join(tasksDir, "backlog", "task-low.md"))
 	mustNotExist(t, filepath.Join(tasksDir, "waiting", "task-low.md"))
 	mustNotExist(t, filepath.Join(tasksDir, "backlog", "task-high.md"))
 
-	if err := queue.WriteQueueManifest(tasksDir); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
 		t.Fatalf("queue.WriteQueueManifest second pass: %v", err)
 	}
 	if got := readFile(t, filepath.Join(tasksDir, ".queue")); got != "task-low.md\n" {
