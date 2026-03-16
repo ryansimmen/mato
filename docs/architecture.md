@@ -56,10 +56,9 @@ queue.CleanStaleLocks(tasksDir)
 messaging.CleanStalePresence(tasksDir)
 messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 queue.ReconcileReadyQueue(tasksDir)
-queue.WriteQueueManifest(tasksDir)
-queue.RemoveOverlappingTasks(tasksDir)
-queue.WriteQueueManifest(tasksDir)
-queue.HasAvailableTasks(tasksDir)
+deferred := queue.DeferredOverlappingTasks(tasksDir)
+queue.WriteQueueManifest(tasksDir, deferred)
+queue.HasAvailableTasks(tasksDir, deferred)
 runOnce(...) if backlog has tasks
 merge.AcquireLock(tasksDir) + merge.ProcessQueue(...)
 if no backlog and no ready-to-merge: print idle message
@@ -142,16 +141,18 @@ The prompt enforces several invariants: one task per run; agents use `--force-wi
 ## 4. Task Queue States
 The queue is encoded directly in directories under `.tasks/`.
 ```text
-waiting/ --all deps complete--> backlog/ --claim--> in-progress/ --mark ready--> ready-to-merge/ --merge--> completed/
-   ^                               |                     |
-   |                               |                     +--ON_FAILURE / recovery--> backlog/ or failed/
-   +--queue.RemoveOverlappingTasks()--+                  
+waiting/ --deps met--> backlog/ --claim--> in-progress/ --mark ready--> ready-to-merge/ --merge--> completed/
+   ^                      |                     |
+   |                      |                     +--ON_FAILURE / recovery--> backlog/ or failed/
+   +--dep not met---------+
+                          |
+                          +--conflict-deferred tasks stay in backlog/ but excluded from .queue
 ```
 State meanings:
 | State | Meaning | Entered by | Left by |
 | --- | --- | --- | --- |
-| `waiting/` | blocked task | authored there initially or deferred from `backlog/` because of overlap | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed |
-| `backlog/` | claimable task | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, or `ON_FAILURE` with retries left | agent claim moves it to `in-progress/`; overlap deferral moves it to `waiting/` |
+| `waiting/` | blocked task | authored there initially for dependency tracking | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed and no active overlap exists |
+| `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, or `ON_FAILURE` with retries left | agent claim moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
 | `in-progress/` | task owned by one agent | prompt `CLAIM_TASK` | `MARK_READY`, `ON_FAILURE`, retry exhaustion, or host orphan recovery |
 | `ready-to-merge/` | branch pushed, waiting for host merge | prompt `MARK_READY` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
@@ -207,14 +208,15 @@ Merge failure handling is branch-specific:
 3. Push failure after a successful squash commit: append `<!-- failure: merge-queue ... -->` but leave the task file in `ready-to-merge/` for retry on the next merge pass.
 4. Parse errors are also recorded as merge-queue failures and requeued to `backlog/`.
 ## 7. Conflict Prevention
-`queue.RemoveOverlappingTasks(tasksDir)` prevents multiple backlog tasks from advertising the same `affects` entries simultaneously.
+`queue.DeferredOverlappingTasks(tasksDir)` prevents multiple backlog tasks from claiming the same files simultaneously.
 Algorithm:
-1. Scan `backlog/*.md`.
+1. Scan `backlog/*.md` and `in-progress/*.md` + `ready-to-merge/*.md` (active tasks).
 2. Parse each task's `priority` and `affects`.
-3. Sort tasks by ascending priority, then filename.
-4. Keep the highest-priority non-overlapping tasks in `backlog/`.
-5. For each later task, compare its `affects` list with every already-kept task.
-6. If there is overlap, rename the later task `backlog/ -> waiting/`.
+3. Sort backlog tasks by ascending priority, then filename.
+4. Seed the "kept" set with active tasks (immovable — already being worked on or awaiting merge).
+5. For each backlog task, compare its `affects` list with every kept task.
+6. If there is overlap, add the task to the deferred exclusion set (it stays in `backlog/` but is excluded from `.queue` — agents won't see it).
+7. The exclusion set is passed to `WriteQueueManifest` and `HasAvailableTasks`.
 `overlappingAffects(a, b)` is an exact intersection test:
 - no overlap if either list is empty
 - values must match by exact string equality

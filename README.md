@@ -70,7 +70,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 - `depends_on` entries refer to task IDs.
 - On each loop, completed dependencies promote a task from `waiting/` to `backlog/`.
 - Lower numbers mean higher priority.
-- `affects` is used for simple conflict prevention: if two backlog tasks list the exact same path, the lower-priority task is deferred back to `waiting/`.
+- `affects` is used for simple conflict prevention: if two backlog tasks list the exact same path, the lower-priority task is excluded from the `.queue` manifest until the conflict clears.
 
 ## Queue Layout
 
