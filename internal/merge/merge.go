@@ -351,6 +351,7 @@ func moveTaskFile(src, dst string) error {
 
 // AcquireLock attempts to acquire an exclusive merge lock.
 // Returns a cleanup function and true if acquired, or nil and false if already held.
+// The lock file stores "PID:starttime" to detect PID reuse.
 func AcquireLock(tasksDir string) (func(), bool) {
 	locksDir := filepath.Join(tasksDir, ".locks")
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
@@ -359,12 +360,12 @@ func AcquireLock(tasksDir string) (func(), bool) {
 	}
 
 	lockFile := filepath.Join(locksDir, "merge.lock")
-	pidText := strconv.Itoa(os.Getpid())
+	identity := lockIdentity(os.Getpid())
 
 	for attempts := 0; attempts < 2; attempts++ {
 		f, err := os.OpenFile(lockFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err == nil {
-			if _, writeErr := f.WriteString(pidText); writeErr != nil {
+			if _, writeErr := f.WriteString(identity); writeErr != nil {
 				f.Close()
 				os.Remove(lockFile)
 				fmt.Fprintf(os.Stderr, "warning: write merge lock: %v\n", writeErr)
@@ -391,8 +392,7 @@ func AcquireLock(tasksDir string) (func(), bool) {
 			return nil, false
 		}
 
-		holderPID, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
-		if convErr == nil && isProcessActive(holderPID) {
+		if isLockHolderAlive(strings.TrimSpace(string(data))) {
 			return nil, false
 		}
 		if removeErr := os.Remove(lockFile); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -402,6 +402,60 @@ func AcquireLock(tasksDir string) (func(), bool) {
 	}
 
 	return nil, false
+}
+
+// lockIdentity returns "PID:starttime" for the given process.
+// Falls back to just "PID" if start time is unavailable.
+func lockIdentity(pid int) string {
+	startTime := processStartTime(pid)
+	if startTime != "" {
+		return fmt.Sprintf("%d:%s", pid, startTime)
+	}
+	return strconv.Itoa(pid)
+}
+
+// isLockHolderAlive checks if the process described by a lock identity
+// ("PID" or "PID:starttime") is still running with the same start time.
+func isLockHolderAlive(identity string) bool {
+	parts := strings.SplitN(identity, ":", 2)
+	pid, err := strconv.Atoi(parts[0])
+	if err != nil || pid <= 0 {
+		return false
+	}
+	if !isProcessActive(pid) {
+		return false
+	}
+	// If we have a start time, verify it matches (detect PID reuse).
+	if len(parts) == 2 && parts[1] != "" {
+		currentStart := processStartTime(pid)
+		if currentStart != "" && currentStart != parts[1] {
+			return false // PID was reused by a different process
+		}
+	}
+	return true
+}
+
+// processStartTime reads the start time of a process from /proc/<pid>/stat.
+// Returns empty string if unavailable (non-Linux or process gone).
+func processStartTime(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return ""
+	}
+	// Field 22 (1-indexed) is starttime. Find it after the comm field
+	// which is enclosed in parens and may contain spaces.
+	s := string(data)
+	closeParenIdx := strings.LastIndex(s, ")")
+	if closeParenIdx < 0 || closeParenIdx+2 >= len(s) {
+		return ""
+	}
+	fields := strings.Fields(s[closeParenIdx+2:])
+	// After the closing paren, fields are: state(1), ppid(2), pgrp(3), ...
+	// starttime is field 20 (0-indexed from after the paren)
+	if len(fields) < 20 {
+		return ""
+	}
+	return fields[19]
 }
 
 func isProcessActive(pid int) bool {
