@@ -21,13 +21,12 @@ copilot login
 # cd into the target repo
 cd /path/to/repo
 
-# Create a task (waiting/ is promoted automatically when deps are met)
-mkdir -p .tasks/waiting
-cat > .tasks/waiting/add-retry-logic.md << 'EOF'
+# Create a ready task in backlog/
+mkdir -p .tasks/backlog
+cat > .tasks/backlog/add-retry-logic.md << 'EOF'
 ---
 id: add-retry-logic
 priority: 10
-depends_on: [setup-http-client]
 affects: [pkg/client/http.go]
 tags: [backend]
 ---
@@ -36,10 +35,10 @@ tags: [backend]
 Wrap fetchData in a retry loop with exponential backoff and add tests.
 EOF
 
-# Run the orchestrator
+# Run the orchestrator (stays running and keeps polling for work)
 mato
 
-# Inspect queue health
+# In a separate terminal, inspect queue health
 mato status
 ```
 
@@ -85,7 +84,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 ├── failed/          # exceeded retry limit
 ├── messages/
 │   ├── events/      # coordination events and status updates
-│   └── presence/    # active agent heartbeats
+│   └── presence/    # agent presence tracking (reserved for future use)
 └── .locks/          # PID locks for agents and merge queue
 ```
 
@@ -98,7 +97,7 @@ Failed tasks are retried up to 3 times before moving to `failed/`.
 3. An agent claims a backlog task, works in an isolated clone, and pushes a `task/<name>` branch.
 4. Agents communicate through `.tasks/messages/` so concurrent runs can share intent and completion events.
 5. The host merge queue processes `ready-to-merge/` and squash-merges finished task branches into the target branch.
-6. Tasks move to `completed/` on success or back through the queue on retryable failure.
+6. Tasks move to `completed/` on success. Missing branches move to `failed/`, merge conflicts requeue to `backlog/` for a fresh attempt, and push failures are retried in `ready-to-merge/`.
 
 If the queue is empty, mato keeps polling until new work appears. The loop exits cleanly on `Ctrl+C`.
 
@@ -117,7 +116,7 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 
 ## Docker
 
-`mato` launches an `ubuntu:24.04` container by default (override with `MATO_DOCKER_IMAGE`). The container mounts the repo at `/workspace`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
+`mato` launches an `ubuntu:24.04` container by default (override with `MATO_DOCKER_IMAGE`). The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
 
 ```bash
 mato --model gpt-5.3-codex

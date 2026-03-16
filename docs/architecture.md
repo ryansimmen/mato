@@ -1,14 +1,14 @@
 # Mato Architecture
-This document describes the architecture implemented by `main.go`, `runner.go`, `queue.go`, `git.go`, `merge.go`, `frontmatter.go`, `messaging.go`, `status.go`, `util.go`, and the embedded task prompt in `task-instructions.md`.
+This document describes the architecture implemented by `main.go`, `runner.go`, `queue.go`, `git.go`, `merge.go`, `frontmatter.go`, `messaging.go`, `status.go`, and the embedded task prompt in `task-instructions.md`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.tasks/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one task lifecycle: claim one task, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
-+-------------------+      +-----------------------------+
-| CLI: mato         |      | CLI: mato status            |
-| main.go -> run()  |      | main.go -> showStatus()     |
-+---------+---------+      +-----------------------------+
-          |
-          v
++-------------------------+      +-----------------------------+
+| CLI: mato               |      | CLI: mato status            |
+| main.go -> runner.Run() |      | main.go -> status.Show()    |
++------------+------------+      +-----------------------------+
+             |
+             v
 +-------------------------------+
 | Host loop in runner.go        |
 | manages .tasks/, Docker, Git  |
@@ -30,38 +30,38 @@ This document describes the architecture implemented by `main.go`, `runner.go`, 
 +------------------+     ready-to-merge -> completed
 ```
 High-level flow:
-1. `main.go` parses flags and either starts `run(...)` or routes to `showStatus(...)`.
-2. `run(...)` creates/maintains the queue, writes `.queue`, and starts agent runs.
+1. `main.go` parses flags and either starts `runner.Run(...)` or routes to `status.Show(...)`.
+2. `runner.Run(...)` creates/maintains the queue, writes `.queue`, and starts agent runs.
 3. The agent prompt in `task-instructions.md` claims one task and pushes `task/<sanitized-filename>`.
 4. The host merge queue squashes that task branch into the target branch and moves the task file to `completed/`.
 ## 2. Host Loop
 ### Startup
-`run(repoRoot, branch, tasksDirOverride, copilotArgs)` performs host initialization in this order:
+`runner.Run(repoRoot, branch, tasksDirOverride, copilotArgs)` performs host initialization in this order:
 1. Resolve `repoRoot` with `git rev-parse --show-toplevel`.
-2. Ensure the target branch exists with `ensureBranch(...)`; if it exists, check it out, otherwise create it from `HEAD`.
+2. Ensure the target branch exists with `git.EnsureBranch(...)`; if it exists, check it out, otherwise create it from `HEAD`.
 3. Resolve `tasksDir`; default is `<repoRoot>/.tasks`.
 4. Create queue directories: `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, `completed/`, and `failed/`.
-5. Create messaging directories with `initMessaging(...)`: `.tasks/messages/events/` and `.tasks/messages/presence/`.
-6. Generate an agent ID with `generateAgentID()`.
-7. Register the process as active by writing `.tasks/.locks/<agentID>.pid`.
-8. Ensure `/.tasks/` is in `.gitignore` via `ensureGitignored(...)`; if missing, `mato` appends it, stages `.gitignore`, and commits that change.
+5. Create messaging directories with `messaging.Init(...)`: `.tasks/messages/events/` and `.tasks/messages/presence/`.
+6. Generate an agent ID with `queue.GenerateAgentID()`.
+7. Register the process as active by writing `.tasks/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
+8. Ensure `/.tasks/` is in `.gitignore` via `git.EnsureGitignored(...)`.
 9. Resolve host tools and config: Docker image, `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity.
 10. Build the embedded prompt by replacing placeholders in `task-instructions.md` with `/workspace/.tasks`, the configured target branch, and `/workspace/.tasks/messages`.
 11. Install `SIGINT`/`SIGTERM` handlers.
 ### Polling loop
-The loop in `run()` polls every 10 seconds. The exact order is:
+The loop in `Run()` polls every 10 seconds. The exact order is:
 ```text
-recoverOrphanedTasks(tasksDir)
-cleanStaleLocks(tasksDir)
-cleanStalePresence(tasksDir)
-cleanOldMessages(tasksDir, 24*time.Hour)
-reconcileReadyQueue(tasksDir)
-writeQueueManifest(tasksDir)
-removeOverlappingTasks(tasksDir)
-writeQueueManifest(tasksDir)
-hasAvailableTasks(tasksDir)
+queue.RecoverOrphanedTasks(tasksDir)
+queue.CleanStaleLocks(tasksDir)
+messaging.CleanStalePresence(tasksDir)
+messaging.CleanOldMessages(tasksDir, 24*time.Hour)
+queue.ReconcileReadyQueue(tasksDir)
+queue.WriteQueueManifest(tasksDir)
+queue.RemoveOverlappingTasks(tasksDir)
+queue.WriteQueueManifest(tasksDir)
+queue.HasAvailableTasks(tasksDir)
 runOnce(...) if backlog has tasks
-acquireMergeLock(tasksDir) + processMergeQueue(...)
+merge.AcquireLock(tasksDir) + merge.ProcessQueue(...)
 if no backlog and no ready-to-merge: print idle message
 wait for signal or 10 seconds
 ```
@@ -69,23 +69,23 @@ Important details from the implementation:
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
 - `.queue` is written twice each iteration: once after dependency promotion and again after overlap deferral, so the manifest matches the final backlog state.
-- `hasAvailableTasks(...)` only checks `backlog/`, not `waiting/`.
+- `queue.HasAvailableTasks(...)` only checks `backlog/`, not `waiting/`.
 - Merge processing happens after any agent run in the same outer loop.
 ### Orphan recovery and lock cleanup
 `queue.go` provides the host-side recovery primitives:
-- `registerAgent(...)` writes `.tasks/.locks/<agentID>.pid` and returns a cleanup function.
-- `isAgentActive(...)` reads a PID file and tests liveness with signal `0`.
-- `cleanStaleLocks(...)` removes dead agent lock files.
-- `recoverOrphanedTasks(...)` scans `in-progress/*.md`; if the claiming agent is no longer active, it appends `<!-- failure: mato-recovery ... -->` and renames the task back to `backlog/`.
+- `queue.RegisterAgent(...)` writes `.tasks/.locks/<agentID>.pid` and returns a cleanup function.
+- `queue.IsAgentActive(...)` reads a PID file and tests liveness with signal `0`.
+- `queue.CleanStaleLocks(...)` removes dead agent lock files.
+- `queue.RecoverOrphanedTasks(...)` scans `in-progress/*.md`; if the claiming agent is no longer active, it appends `<!-- failure: mato-recovery ... -->` and renames the task back to `backlog/`.
 - If `claimed-by` points at a still-live agent, recovery skips that task.
 ### Signal handling
-`run()` listens for `SIGINT` and `SIGTERM`. On either signal it prints `Interrupted. Exiting.`, returns `nil`, and the deferred cleanup removes the host lock file.
+`Run()` listens for `SIGINT` and `SIGTERM`. On either signal it prints `Interrupted. Exiting.`, returns `nil`, and the deferred cleanup removes the host lock file.
 ## 3. Agent Lifecycle
 `runOnce(...)` launches one isolated task agent.
 ### Temporary clone and origin behavior
 Before Docker starts, `runOnce(...)`:
-1. Creates a temporary local clone with `createClone(repoRoot)`.
-2. Defers `removeClone(cloneDir)`.
+1. Creates a temporary local clone with `git.CreateClone(repoRoot)`.
+2. Defers `git.RemoveClone(cloneDir)`.
 3. Sets `receive.denyCurrentBranch=updateInstead` in the origin repo so the temp clone can push into the checked-out target branch safely.
 The design relies on `.tasks/` being Git-ignored so queue updates do not dirty the branch being updated via `updateInstead`.
 ### Docker runtime
@@ -135,49 +135,49 @@ State-by-state behavior:
 - `CREATE_BRANCH`: create `task/<safe-name>` from the target branch. The safe name is derived from the task filename stem; Go reconstructs the same name later with `sanitizeBranchName(...)`.
 - `WORK`: read the task body, ignoring YAML frontmatter and comment-only metadata lines, implement the task, and run the repository's existing validation commands with up to 3 attempts.
 - `COMMIT`: `git add -A`, commit with the task title, and continue only if a commit is created.
-- `PUSH_BRANCH`: compute changed files relative to the target branch, write one best-effort `conflict-warning` message, push `origin <task-branch>` with up to 3 attempts, and verify the remote branch exists.
+- `PUSH_BRANCH`: compute changed files relative to the target branch, write one best-effort `conflict-warning` message, push `origin <task-branch>` with `git push --force-with-lease` up to 3 attempts, append `<!-- branch: ... -->` after a successful push, and verify the remote branch exists.
 - `MARK_READY`: move the task file `in-progress/ -> ready-to-merge/`, write one best-effort `completion` message, and exit.
 - `ON_FAILURE`: append a structured `<!-- failure: ... -->` line, try to check out the target branch, then move the task back to `backlog/` if failures are still below 3, otherwise to `failed/`.
-The prompt enforces several invariants: one task per run, no force-pushes, no direct pushes to the target branch, and at most 3 messages per task (`intent`, `conflict-warning`, `completion`).
+The prompt enforces several invariants: one task per run; agents use `--force-with-lease` for task branches only; they never push directly to the target branch; and they send at most 3 messages per task (`intent`, `conflict-warning`, `completion`).
 ## 4. Task Queue States
 The queue is encoded directly in directories under `.tasks/`.
 ```text
 waiting/ --all deps complete--> backlog/ --claim--> in-progress/ --mark ready--> ready-to-merge/ --merge--> completed/
    ^                               |                     |
    |                               |                     +--ON_FAILURE / recovery--> backlog/ or failed/
-   +--removeOverlappingTasks()-----+                     
+   +--queue.RemoveOverlappingTasks()--+                  
 ```
 State meanings:
 | State | Meaning | Entered by | Left by |
 | --- | --- | --- | --- |
-| `waiting/` | blocked task | authored there initially or deferred from `backlog/` because of overlap | `reconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed |
-| `backlog/` | claimable task | initial ready state, dependency promotion, orphan recovery, merge requeue, or `ON_FAILURE` with retries left | agent claim moves it to `in-progress/`; overlap deferral moves it to `waiting/` |
+| `waiting/` | blocked task | authored there initially or deferred from `backlog/` because of overlap | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed |
+| `backlog/` | claimable task | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, or `ON_FAILURE` with retries left | agent claim moves it to `in-progress/`; overlap deferral moves it to `waiting/` |
 | `in-progress/` | task owned by one agent | prompt `CLAIM_TASK` | `MARK_READY`, `ON_FAILURE`, retry exhaustion, or host orphan recovery |
-| `ready-to-merge/` | branch pushed, waiting for host merge | prompt `MARK_READY` | `processMergeQueue(...)` moves it to `completed/` on success or `backlog/` on failure |
+| `ready-to-merge/` | branch pushed, waiting for host merge | prompt `MARK_READY` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
-| `failed/` | retry budget exhausted | prompt `CLAIM_TASK` or `ON_FAILURE` when failure count reaches 3+ | no normal exit |
+| `failed/` | retry budget exhausted or merge blocked by a missing task branch | prompt `CLAIM_TASK`, `ON_FAILURE` when failure count reaches 3+, or merge-queue missing-branch handling | no normal exit |
 Retry counting is comment-based, not directory-based. The prompt checks for `<!-- failure:` lines, and host recovery/merge failures also append those lines.
 ## 5. Dependency Resolution
-`reconcileReadyQueue(tasksDir)` in `queue.go` promotes waiting tasks whose dependencies are satisfied.
+`queue.ReconcileReadyQueue(tasksDir)` in `queue.go` promotes waiting tasks whose dependencies are satisfied.
 How it works:
 1. `completedTaskIDs(tasksDir)` scans `completed/*.md`.
 2. For each completed task, it records both the filename stem and `TaskMeta.ID` in a set.
-3. `reconcileReadyQueue(...)` scans `waiting/*.md` and parses each file with `parseTaskFile(...)`.
+3. `queue.ReconcileReadyQueue(...)` scans `waiting/*.md` and parses each file with `frontmatter.ParseTaskFile(...)`.
 4. Every entry in `meta.DependsOn` must exist in the completed-ID set.
 5. If all dependencies are present, the task moves `waiting/ -> backlog/`; otherwise it stays in `waiting/`.
 What “ready” means in the current code:
 - A dependency is satisfied only if it matches a task already in `completed/`.
 - Matching can happen by file stem or explicit `id:` frontmatter.
-- Dependencies on tasks that exist elsewhere but are not completed are treated the same as unknown IDs: not ready.
-- The function prints a warning for each unsatisfied dependency, describing it as a missing task ID.
+- Dependencies on tasks that exist elsewhere in `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, or `failed/` but are not completed remain blocked silently.
+- The function warns only for truly unknown dependency IDs, meaning IDs not found in any queue directory.
 Relevant frontmatter defaults from `frontmatter.go`:
 - `ID` defaults to the filename stem.
 - `Priority` defaults to `50`.
 - `MaxRetries` defaults to `3`.
 ## 6. Merge Queue
-`processMergeQueue(repoRoot, tasksDir, branch)` in `merge.go` is the host-side integrator.
+`merge.ProcessQueue(repoRoot, tasksDir, branch)` in `merge.go` is the host-side integrator.
 ### Locking
-Before processing the queue, `run()` calls `acquireMergeLock(tasksDir)`. The lock file is `.tasks/.locks/merge.lock`.
+Before processing the queue, `Run()` calls `merge.AcquireLock(tasksDir)`. The lock file is `.tasks/.locks/merge.lock`.
 Behavior:
 - create with `O_CREATE|O_EXCL`
 - write the holder PID into the file
@@ -186,26 +186,28 @@ Behavior:
 - if the PID is stale or invalid, remove the lock and retry once
 This is the main multi-process safety mechanism for host-side merges.
 ### Task ordering and merge flow
-`processMergeQueue(...)` scans `ready-to-merge/*.md`, parses each task, and sorts by ascending `priority`, then filename.
+`merge.ProcessQueue(...)` scans `ready-to-merge/*.md`, parses each task, and sorts by ascending `priority`, then filename.
 For each task:
-1. Parse the task file with `parseTaskFile(...)`.
+1. Parse the task file with `frontmatter.ParseTaskFile(...)`.
 2. Derive the squash commit message with `taskTitle(...)` from the first non-empty body line; leading `#` is stripped.
-3. Create a fresh temp clone.
-4. Configure clone identity from repo Git config, then global config, with fallbacks `mato` and `mato@local.invalid`.
-5. `git fetch origin`
-6. `git checkout -B <target-branch> origin/<target-branch>`
-7. Reconstruct the task branch as `task/<sanitizeBranchName(filename)>`
-8. `git merge --squash origin/<task-branch>`
-9. `git commit -m <task title>`
-10. `git push origin <target-branch>`
-11. Rename the task file `ready-to-merge/ -> completed/`
+3. Read `<!-- branch: ... -->` from the task file when present; if absent, fall back to `task/<sanitizeBranchName(filename)>`.
+4. Create a fresh temp clone.
+5. Configure clone identity from repo Git config, then global config, with fallbacks `mato` and `mato@local.invalid`.
+6. `git fetch origin`
+7. `git checkout -B <target-branch> origin/<target-branch>`
+8. Verify `origin/<task-branch>` exists.
+9. `git merge --squash origin/<task-branch>`
+10. `git commit -m <task title>`
+11. `git push origin <target-branch>`
+12. Append `<!-- merged: merge-queue at ... -->` and rename the task file `ready-to-merge/ -> completed/`
 ### Conflict and failure handling
-Any parse, fetch, checkout, squash merge, commit, or push error is treated as a merge-queue failure. `failMergeTask(...)` then:
-1. appends `<!-- failure: merge-queue ... -->` to the task file
-2. renames it `ready-to-merge/ -> backlog/`
-So merge conflicts are not resolved automatically; they are requeued for another future agent attempt.
+Merge failure handling is branch-specific:
+1. Missing task branch: append `<!-- failure: merge-queue ... -->` and move the task `ready-to-merge/ -> failed/`.
+2. Squash merge conflict: append `<!-- failure: merge-queue ... -->`, move the task `ready-to-merge/ -> backlog/`, and delete the stale task branch locally and on `origin` so a future agent run can push a fresh branch.
+3. Push failure after a successful squash commit: append `<!-- failure: merge-queue ... -->` but leave the task file in `ready-to-merge/` for retry on the next merge pass.
+4. Parse errors are also recorded as merge-queue failures and requeued to `backlog/`.
 ## 7. Conflict Prevention
-`removeOverlappingTasks(tasksDir)` prevents multiple backlog tasks from advertising the same `affects` entries simultaneously.
+`queue.RemoveOverlappingTasks(tasksDir)` prevents multiple backlog tasks from advertising the same `affects` entries simultaneously.
 Algorithm:
 1. Scan `backlog/*.md`.
 2. Parse each task's `priority` and `affects`.
@@ -231,7 +233,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `internal/runner/`
 - Embeds `task-instructions.md` (the agent prompt/state machine).
 - `Run(...)` initializes the repo/queue and executes the polling loop.
-- `RunOnce(...)` builds the temp clone + Docker runtime for one agent run.
+- `runOnce(...)` builds the temp clone + Docker runtime for one agent run.
 
 ### `internal/queue/`
 - Agent identity (`GenerateAgentID`) and liveness via `.locks/*.pid`.
@@ -256,7 +258,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `internal/messaging/`
 - `Message` and `presence` JSON types.
-- Event/presence directory setup.
+- `messaging.Init(...)` creates the event/presence directories.
 - Atomic JSON write helpers.
 - Message reading, stale presence cleanup, and old-event garbage collection.
 
@@ -267,7 +269,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Shows waiting-task dependency summaries and recent messages.
 
 ### Test files
-Each package has tests alongside its source. All tests run with `go test ./...`.
+Most packages have tests alongside their source. `internal/git/` has no dedicated `_test.go` file; its helpers are exercised through the integration tests. Repository tests run with `go test ./...`.
 ## 9. End-to-End Summary
 Responsibility is split cleanly:
 - the host owns queue maintenance, dependency promotion, overlap prevention, stale-state cleanup, and merging;
