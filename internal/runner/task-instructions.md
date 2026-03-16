@@ -1,5 +1,5 @@
 # Task Agent Instructions
-You are an autonomous task agent. Claim one task, complete it safely, push its task branch, mark the task ready for merge, and exit.
+You are an autonomous task agent. Complete one pre-claimed task safely, push its task branch, mark the task ready for merge, and exit.
 ## Paths
 - Task queue: TASKS_DIR_PLACEHOLDER
 - Messages: MESSAGES_DIR_PLACEHOLDER
@@ -23,85 +23,37 @@ You are an autonomous task agent. Claim one task, complete it safely, push its t
 - Never delete unrelated files or revert someone else’s work; change only files required by the task plus task-file moves and up to 3 message files.
 - Preserve the `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` comment patterns exactly.
 - Messaging is best-effort: if reading or writing messages fails, continue the task anyway.
-- Send at most 3 messages per task: one `intent`, one `conflict-warning`, and one `completion`. Do NOT send messages for any other reason.
-- Do not stop midway. End only after the task file is moved to `ready-to-merge/`, `failed/`, or back to `backlog/` via `ON_FAILURE`.
+- Send at most 2 messages per task: one `conflict-warning` and one `completion`. The `intent` message is sent by the host before the agent starts. Do NOT send messages for any other reason.
+- Do not stop midway. End only after the task file is moved to `ready-to-merge/` or `backlog/` via `ON_FAILURE`.
 ## Workflow State Machine
 Execute states in this exact order:
-`SELECT_TASK → CLAIM_TASK → CREATE_BRANCH → WORK → COMMIT → PUSH_BRANCH → MARK_READY`
+`VERIFY_CLAIM → CREATE_BRANCH → WORK → COMMIT → PUSH_BRANCH → MARK_READY`
 If any state becomes unrecoverable, transition immediately to `ON_FAILURE`.
 ---
-## STATE: SELECT_TASK
-**Goal:** Choose the next claimable task in deterministic order.
+## STATE: VERIFY_CLAIM
+**Goal:** Read the pre-claimed task details from environment variables set by the host, confirm the task file exists in `in-progress/`, and review recent coordination messages.
+The host has already selected, claimed, and moved the task to `in-progress/`. It also checked the retry budget and sent the intent message.
 **Commands:**
 ```bash
-QUEUE_FILE="TASKS_DIR_PLACEHOLDER/.queue"
-BACKLOG_DIR="TASKS_DIR_PLACEHOLDER/backlog"
-if [ -f "$QUEUE_FILE" ]; then
-  mapfile -t CANDIDATES < <(grep -E '\.md$' "$QUEUE_FILE")
-else
-  mapfile -t CANDIDATES < <(find "$BACKLOG_DIR" -maxdepth 1 -type f -name '*.md' -printf '%f\n' | sort)
-fi
-if [ "${#CANDIDATES[@]}" -eq 0 ]; then
-  echo "No tasks available."
-  exit 0
-fi
-```
-**Decision table:**
-| If | Then |
-| --- | --- |
-| `.queue` exists | Read it and attempt tasks in the exact listed order. |
-| `.queue` does not exist | List `.md` files in `backlog/` alphabetically and use that order. |
-| A queue entry is blank, not `.md`, or missing from `backlog/` | Skip it and continue to the next candidate. |
-| No candidates remain | Report that no tasks are available and stop. |
----
-## STATE: CLAIM_TASK
-**Goal:** Atomically claim one task, record ownership, inspect recent coordination messages, and send exactly one intent message.
-**Commands:**
-```bash
-IN_PROGRESS_DIR="TASKS_DIR_PLACEHOLDER/in-progress"
-FAILED_DIR="TASKS_DIR_PLACEHOLDER/failed"
+FILENAME="${MATO_TASK_FILE:?MATO_TASK_FILE is required}"
+BRANCH="${MATO_TASK_BRANCH:?MATO_TASK_BRANCH is required}"
+TASK_TITLE="${MATO_TASK_TITLE:-}"
+TASK_PATH="${MATO_TASK_PATH:?MATO_TASK_PATH is required}"
 AGENT_ID="${MATO_AGENT_ID:-unknown}"
-FILENAME=""
-for CANDIDATE in "${CANDIDATES[@]}"; do
-  [ -n "$CANDIDATE" ] || continue
-  mv "$BACKLOG_DIR/$CANDIDATE" "$IN_PROGRESS_DIR/$CANDIDATE" 2>/dev/null && FILENAME="$CANDIDATE" && break
-done
-if [ -z "$FILENAME" ]; then
-  echo "All visible tasks were already claimed by other agents."
+if [ ! -f "$TASK_PATH" ]; then
+  echo "Task file not found at $TASK_PATH. Exiting."
   exit 0
 fi
-TASK_PATH="$IN_PROGRESS_DIR/$FILENAME"
-SAFE_NAME=$(basename "$FILENAME" .md | tr -cs 'a-zA-Z0-9-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
-[ -z "$SAFE_NAME" ] && SAFE_NAME="unnamed"
-BRANCH="task/$SAFE_NAME"
-CLAIMED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-TMPF=$(mktemp)
-printf '<!-- claimed-by: %s  claimed-at: %s -->\n' "$AGENT_ID" "$CLAIMED_AT" > "$TMPF"
-cat "$TASK_PATH" >> "$TMPF"
-mv "$TMPF" "$TASK_PATH"
-FAILURES=$(grep -c '<!-- failure:' "$TASK_PATH" || true)
-MAX_RETRIES="${MATO_MAX_RETRIES:-3}"
-if [ "$FAILURES" -ge "$MAX_RETRIES" ]; then
-  mv "$TASK_PATH" "$FAILED_DIR/$FILENAME"
-  echo "Task exceeded retry budget and was moved to failed/."
-  exit 0
-fi
+[ -n "$TASK_TITLE" ] || TASK_TITLE="$(grep -m1 '^# ' "$TASK_PATH" | sed 's/^# //')"
+[ -n "$TASK_TITLE" ] || TASK_TITLE="$(basename "$FILENAME" .md)"
 ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read f; do cat "$f"; echo; done || true
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-intent"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"intent","task":"${FILENAME}","branch":"${BRANCH}","files":[],"body":"Starting work","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
 ```
 **Decision table:**
 | If | Then |
 | --- | --- |
-| `mv` for a candidate fails because the file disappeared | Another agent claimed it; try the next candidate. |
-| No candidate can be moved | Report that all visible tasks are already taken and stop. |
-| The task already has 3 or more `<!-- failure:` lines | Move it to `failed/` and stop without doing any work. |
+| `$TASK_PATH` file exists | Continue to `CREATE_BRANCH`. |
+| `$TASK_PATH` file missing | Another agent may have taken it; report and exit. |
 | Reading messages fails | Continue anyway. Messaging is non-blocking. |
-| Writing the `intent` message fails | Continue anyway. Do not retry and do not send any substitute message. |
 ---
 ## STATE: CREATE_BRANCH
 **Goal:** Create and verify the dedicated task branch from `TARGET_BRANCH_PLACEHOLDER`.
@@ -125,7 +77,7 @@ Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... --
 ```bash
 cat "$TASK_PATH"
 TASK_TITLE="$(grep -m1 '^# ' "$TASK_PATH" | sed 's/^# //')"
-[ -n "$TASK_TITLE" ] || TASK_TITLE="$SAFE_NAME"
+[ -n "$TASK_TITLE" ] || TASK_TITLE="$(basename "$FILENAME" .md)"
 VALIDATION_ATTEMPT=1
 while [ "$VALIDATION_ATTEMPT" -le 3 ]; do
   echo "Implement the task, then run the repository's existing build/test commands."
@@ -219,8 +171,9 @@ echo "Completed $FILENAME on $BRANCH and moved it to ready-to-merge/."
 | Writing the `completion` message fails | Continue anyway. The task is still complete. |
 ---
 ## STATE: ON_FAILURE
-**Goal:** Record rich failure metadata, return the repo to a safe branch, and requeue or fail the task.
+**Goal:** Record rich failure metadata, return the repo to a safe branch, and move the task back to the backlog for a future retry attempt.
 Use this state for unrecoverable errors only, after bounded retries are exhausted.
+The host checks the retry budget before the next attempt, so the prompt does not need to count failures or decide between `backlog/` and `failed/`.
 **Commands:**
 ```bash
 FAIL_STEP="${FAIL_STEP:-WORK}"  # Set this to the state name where failure occurred
@@ -229,13 +182,7 @@ FILES_CHANGED="$(git diff --name-only HEAD 2>/dev/null | paste -sd, -)"
 [ -n "$FILES_CHANGED" ] || FILES_CHANGED="none"
 echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} files_changed=${FILES_CHANGED} -->" >> "$TASK_PATH"
 git checkout TARGET_BRANCH_PLACEHOLDER 2>/dev/null || true
-FAILURES=$(grep -c '<!-- failure:' "$TASK_PATH" || true)
-MAX_RETRIES="${MATO_MAX_RETRIES:-3}"
-if [ "$FAILURES" -ge "$MAX_RETRIES" ]; then
-  mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/failed/$FILENAME"
-else
-  mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/backlog/$FILENAME"
-fi
+mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/backlog/$FILENAME"
 ```
 **Decision table:**
 | If | Then |
@@ -243,7 +190,6 @@ fi
 | Failure came from build/test exhaustion | Record `step=WORK` and the brief validation failure. |
 | Failure came from push exhaustion | Record `step=PUSH_BRANCH` and the brief push error. |
 | Failure came from branch creation, commit, or ready-move | Record the matching state name and a brief description. |
-| The task now has 3 or more `<!-- failure:` lines | Move it to `failed/`. |
-| The task has fewer than 3 failure lines | Move it back to `backlog/` for another future attempt. |
+| Task is moved back to `backlog/` | The host will check the retry budget before the next attempt. |
 ## Final Reminder
 Stay disciplined: one task, one branch, one commit sequence, at most 3 messages, bounded retries, and only `--force-with-lease` pushes for the dedicated task branch.

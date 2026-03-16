@@ -157,9 +157,21 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 		}
 
-		hasBacklogTasks := queue.HasAvailableTasks(tasksDir, deferred)
+		claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred)
+		if claimErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not claim task: %v\n", claimErr)
+		}
+		hasBacklogTasks := claimed != nil
 		if hasBacklogTasks {
-			if err := runOnce(repoRoot, tasksDir, agentID, copilotArgs, image, workdir, prompt,
+			messaging.WriteMessage(tasksDir, messaging.Message{
+				From:   agentID,
+				Type:   "intent",
+				Task:   claimed.Filename,
+				Branch: claimed.Branch,
+				Body:   "Starting work",
+			})
+
+			if err := runOnce(repoRoot, tasksDir, agentID, claimed, copilotArgs, image, workdir, prompt,
 				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
 				gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
 				systemCertsDir, hasSystemCerts); err != nil {
@@ -188,7 +200,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	}
 }
 
-func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
+func runOnce(repoRoot, tasksDir, agentID string, claimed *queue.ClaimedTask, copilotArgs []string,
 	image, workdir, prompt string,
 	copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot string,
 	gitName, gitEmail, homeDir, ghConfigDir string, hasGhConfig bool,
@@ -229,6 +241,14 @@ func runOnce(repoRoot, tasksDir, agentID string, copilotArgs []string,
 		"-e", "MATO_MESSAGING_ENABLED=1",
 		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", workdir),
 	)
+	if claimed != nil {
+		args = append(args,
+			"-e", "MATO_TASK_FILE="+claimed.Filename,
+			"-e", "MATO_TASK_BRANCH="+claimed.Branch,
+			"-e", "MATO_TASK_TITLE="+claimed.Title,
+			"-e", fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/in-progress/%s", workdir, claimed.Filename),
+		)
+	}
 	args = append(args,
 		"-e", "GIT_CONFIG_COUNT=1",
 		"-e", "GIT_CONFIG_KEY_0=safe.directory",
