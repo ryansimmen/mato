@@ -131,13 +131,13 @@ SELECT_TASK -> CLAIM_TASK -> CREATE_BRANCH -> WORK -> COMMIT -> PUSH_BRANCH -> M
 ```
 State-by-state behavior:
 - `SELECT_TASK`: read `.tasks/.queue` if present, otherwise list `backlog/*.md` alphabetically; skip invalid/missing entries.
-- `CLAIM_TASK`: move one file `backlog/ -> in-progress/`, prepend `<!-- claimed-by: ... -->`, count `<!-- failure: ... -->` lines, read `max_retries` from frontmatter (default 3), fail immediately if failures >= max_retries, read recent messages, then write one best-effort `intent` message.
+- `CLAIM_TASK`: move one file `backlog/ -> in-progress/`, prepend `<!-- claimed-by: ... -->`, count `<!-- failure: ... -->` lines, fail immediately if failures >= `MATO_MAX_RETRIES` (default 3), read recent messages, then write one best-effort `intent` message.
 - `CREATE_BRANCH`: create `task/<safe-name>` from the target branch. The safe name is derived from the task filename stem; Go reconstructs the same name later with `sanitizeBranchName(...)`.
 - `WORK`: read the task body, ignoring YAML frontmatter and comment-only metadata lines, implement the task, and run the repository's existing validation commands with up to 3 attempts.
 - `COMMIT`: `git add -A`, commit with the task title, and continue only if a commit is created.
 - `PUSH_BRANCH`: compute changed files relative to the target branch, write one best-effort `conflict-warning` message, push `origin <task-branch>` with `git push --force-with-lease` up to 3 attempts, append `<!-- branch: ... -->` after a successful push, and verify the remote branch exists.
 - `MARK_READY`: move the task file `in-progress/ -> ready-to-merge/`, write one best-effort `completion` message, and exit.
-- `ON_FAILURE`: append a structured `<!-- failure: ... -->` line, try to check out the target branch, read `max_retries` from frontmatter (default 3), then move the task back to `backlog/` if failures are still below max_retries, otherwise to `failed/`.
+- `ON_FAILURE`: append a structured `<!-- failure: ... -->` line, try to check out the target branch, then move the task back to `backlog/` if failures are still below `MATO_MAX_RETRIES` (default 3), otherwise to `failed/`.
 The prompt enforces several invariants: one task per run; agents use `--force-with-lease` for task branches only; they never push directly to the target branch; and they send at most 3 messages per task (`intent`, `conflict-warning`, `completion`).
 ## 4. Task Queue States
 The queue is encoded directly in directories under `.tasks/`.

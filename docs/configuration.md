@@ -51,7 +51,7 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 | --- | --- | --- | --- |
 | `MATO_DOCKER_IMAGE` | host | `ubuntu:24.04` | Docker image used for agent containers. Set this before starting `mato` to use a custom image. |
 | `MATO_AGENT_ID` | container | generated per run | Agent identity injected by `mato` so the running agent can identify itself. |
-| `MATO_MAX_RETRIES` | container | `3` | Default retry budget for agent-side failure checks. The host merge queue reads per-task `max_retries` from frontmatter for authoritative enforcement. |
+| `MATO_MAX_RETRIES` | container | `3` | Global default retry budget for agent-side failure checks (`CLAIM_TASK`, `ON_FAILURE`). Per-task overrides via `max_retries` frontmatter are enforced authoritatively by the host merge queue. |
 | `MATO_MESSAGING_ENABLED` | container | `1` | Injected by `mato` for agent-side tooling. The embedded prompt already uses hardcoded `.tasks` paths, so this is mainly useful to custom scripts or wrappers. |
 | `MATO_MESSAGES_DIR` | container | `/workspace/.tasks/messages` | Injected path to the shared messages directory for custom tooling. The embedded prompt separately hardcodes the same `/workspace/.tasks/messages` path. |
 Only `MATO_DOCKER_IMAGE` is intended as a host-side configuration input. The other
