@@ -47,16 +47,16 @@ Field meanings:
 
 ## Message Types
 Only these three message types are valid:
-- `intent`: sent right after a task is claimed to announce planned work
-- `conflict-warning`: sent in `PUSH_BRANCH`, before `git push`, with the changed file list
-- `completion`: sent in `MARK_READY`, after moving the task to `ready-to-merge/`, with the final changed file list
+- `intent`: sent by the host (Go) right after a task is claimed, before the agent container starts
+- `conflict-warning`: sent by the agent in `PUSH_BRANCH`, before `git push`, with the changed file list
+- `completion`: sent by the agent in `MARK_READY`, after moving the task to `ready-to-merge/`, with the final changed file list
 
 No other message types are part of the protocol.
 
 ## Agent Checkpoints
 Messaging maps directly to the task-agent state machine:
-- `SELECT_TASK`: no messaging
-- `CLAIM_TASK`: read recent `events/*.json`, then write one `intent`
+- **Host (before agent start)**: write one `intent` via `messaging.WriteMessage(...)` after claiming the task
+- `VERIFY_CLAIM`: read recent `events/*.json` for coordination awareness
 - `CREATE_BRANCH`: no messaging
 - `WORK`: no required messaging
 - `COMMIT`: no required messaging

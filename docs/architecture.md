@@ -1,7 +1,7 @@
 # Mato Architecture
 This document describes the architecture implemented by `main.go`, `runner.go`, `queue.go`, `git.go`, `merge.go`, `frontmatter.go`, `messaging.go`, `status.go`, and the embedded task prompt in `task-instructions.md`.
 ## 1. System Overview
-`mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.tasks/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one task lifecycle: claim one task, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
+`mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.tasks/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
 +-------------------------+      +-----------------------------+
 | CLI: mato               |      | CLI: mato status            |
@@ -32,7 +32,7 @@ This document describes the architecture implemented by `main.go`, `runner.go`, 
 High-level flow:
 1. `main.go` parses flags and either starts `runner.Run(...)` or routes to `status.Show(...)`.
 2. `runner.Run(...)` creates/maintains the queue, writes `.queue`, and starts agent runs.
-3. The agent prompt in `task-instructions.md` claims one task and pushes `task/<sanitized-filename>`.
+3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim and pushes `task/<sanitized-filename>`.
 4. The host merge queue squashes that task branch into the target branch and moves the task file to `completed/`.
 ## 2. Host Loop
 ### Startup
@@ -122,42 +122,52 @@ The final command is:
 copilot -p <embedded task prompt> --autopilot --allow-all [copilotArgs...]
 ```
 If forwarded arguments do not already contain `--model`, `runOnce(...)` appends `--model claude-opus-4.6`.
+### Host-side task claiming
+Before launching a Docker container, the host calls `queue.SelectAndClaimTask(tasksDir, agentID, deferred)` which:
+1. Reads `.tasks/.queue` if present, otherwise lists `backlog/*.md` alphabetically.
+2. Parses each candidate's frontmatter and counts `<!-- failure:` lines.
+3. If failures >= `max_retries` (default 3), moves the task to `failed/` and skips it.
+4. Atomically renames the first viable candidate from `backlog/` to `in-progress/`.
+5. Prepends a `<!-- claimed-by: ... -->` header to the task file.
+6. Returns the filename, derived branch name, extracted title, and host-side path.
+
+The host then writes one best-effort `intent` message via `messaging.WriteMessage(...)` and passes the claimed task info to the agent as environment variables: `MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`.
+
 ### Task state machine from `task-instructions.md`
 ```text
-SELECT_TASK -> CLAIM_TASK -> CREATE_BRANCH -> WORK -> COMMIT -> PUSH_BRANCH -> MARK_READY
-                     \______________________________________________________________/
-                                      unrecoverable error -> ON_FAILURE
+VERIFY_CLAIM -> CREATE_BRANCH -> WORK -> COMMIT -> PUSH_BRANCH -> MARK_READY
+     \______________________________________________________________/
+                          unrecoverable error -> ON_FAILURE
 ```
 State-by-state behavior:
-- `SELECT_TASK`: read `.tasks/.queue` if present, otherwise list `backlog/*.md` alphabetically; skip invalid/missing entries.
-- `CLAIM_TASK`: move one file `backlog/ -> in-progress/`, prepend `<!-- claimed-by: ... -->`, count `<!-- failure: ... -->` lines, fail immediately if failures >= `MATO_MAX_RETRIES` (default 3), read recent messages, then write one best-effort `intent` message.
-- `CREATE_BRANCH`: create `task/<safe-name>` from the target branch. The safe name is derived from the task filename stem; Go reconstructs the same name later with `sanitizeBranchName(...)`.
+- `VERIFY_CLAIM`: read pre-resolved task details from `MATO_TASK_*` env vars, confirm the task file exists in `in-progress/`, read recent coordination messages.
+- `CREATE_BRANCH`: create `task/<safe-name>` from the target branch. The safe name is derived from the task filename stem; Go reconstructs the same name with `sanitizeForBranch(...)`.
 - `WORK`: read the task body, ignoring YAML frontmatter and comment-only metadata lines, implement the task, and run the repository's existing validation commands with up to 3 attempts.
 - `COMMIT`: `git add -A`, commit with the task title, and continue only if a commit is created.
 - `PUSH_BRANCH`: compute changed files relative to the target branch, write one best-effort `conflict-warning` message, push `origin <task-branch>` with `git push --force-with-lease` up to 3 attempts, append `<!-- branch: ... -->` after a successful push, and verify the remote branch exists.
 - `MARK_READY`: move the task file `in-progress/ -> ready-to-merge/`, write one best-effort `completion` message, and exit.
-- `ON_FAILURE`: append a structured `<!-- failure: ... -->` line, try to check out the target branch, then move the task back to `backlog/` if failures are still below `MATO_MAX_RETRIES` (default 3), otherwise to `failed/`.
-The prompt enforces several invariants: one task per run; agents use `--force-with-lease` for task branches only; they never push directly to the target branch; and they send at most 3 messages per task (`intent`, `conflict-warning`, `completion`).
+- `ON_FAILURE`: append a structured `<!-- failure: ... -->` line, try to check out the target branch, then always move the task back to `backlog/`. The host checks the retry budget on the next cycle via `SelectAndClaimTask`.
+The prompt enforces several invariants: one task per run; agents use `--force-with-lease` for task branches only; they never push directly to the target branch; and they send at most 2 messages per task (`conflict-warning`, `completion`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States
 The queue is encoded directly in directories under `.tasks/`.
 ```text
-waiting/ --deps met--> backlog/ --claim--> in-progress/ --mark ready--> ready-to-merge/ --merge--> completed/
-   ^                      |                     |
-   |                      |                     +--ON_FAILURE / recovery--> backlog/ or failed/
-   +--dep not met---------+
-                          |
+waiting/ --deps met--> backlog/ --host claim--> in-progress/ --mark ready--> ready-to-merge/ --merge--> completed/
+   ^                      |                          |
+   |                      |                          +--ON_FAILURE--> backlog/
+   +--dep not met---------+                          +--host orphan recovery--> backlog/
+                          |                          +--host retry exhaustion--> failed/
                           +--conflict-deferred tasks stay in backlog/ but excluded from .queue
 ```
 State meanings:
 | State | Meaning | Entered by | Left by |
 | --- | --- | --- | --- |
 | `waiting/` | blocked task | authored there initially for dependency tracking | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed and no active overlap exists |
-| `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, or `ON_FAILURE` with retries left | agent claim moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
-| `in-progress/` | task owned by one agent | prompt `CLAIM_TASK` | `MARK_READY`, `ON_FAILURE`, retry exhaustion, or host orphan recovery |
+| `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, or `ON_FAILURE` requeue | host `SelectAndClaimTask` moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
+| `in-progress/` | task owned by one agent | host `SelectAndClaimTask` | `MARK_READY`, `ON_FAILURE`, or host orphan recovery |
 | `ready-to-merge/` | branch pushed, waiting for host merge | prompt `MARK_READY` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
-| `failed/` | retry budget exhausted or merge blocked by a missing task branch | prompt `CLAIM_TASK`, `ON_FAILURE` when failure count reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
-Retry counting is comment-based, not directory-based. The prompt checks for `<!-- failure:` lines, and host recovery/merge failures also append those lines.
+| `failed/` | retry budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` when failure count reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
+Retry counting is comment-based, not directory-based. The host checks for `<!-- failure:` lines in `SelectAndClaimTask` and in the merge queue. Host recovery and merge failures also append those lines.
 ## 5. Dependency Resolution
 `queue.ReconcileReadyQueue(tasksDir)` in `queue.go` promotes waiting tasks whose dependencies are satisfied.
 How it works:
