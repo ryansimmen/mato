@@ -91,8 +91,8 @@ func TestAcquireLockSucceedsWhenHeldByDeadProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.ReadFile merge.lock: %v", err)
 	}
-	if got := strings.TrimSpace(string(data)); got != strconv.Itoa(os.Getpid()) {
-		t.Fatalf("merge lock PID = %q, want %q", got, strconv.Itoa(os.Getpid()))
+	if got := strings.TrimSpace(string(data)); !strings.HasPrefix(got, strconv.Itoa(os.Getpid())) {
+		t.Fatalf("merge lock identity = %q, want prefix %q", got, strconv.Itoa(os.Getpid()))
 	}
 	cleanup()
 }
