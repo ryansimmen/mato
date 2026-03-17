@@ -247,7 +247,7 @@ func mergeFailureDestination(tasksDir, taskPath, taskName string) string {
 func shouldFailTask(taskPath string) bool {
 	maxRetries := 3
 	meta, _, err := frontmatter.ParseTaskFile(taskPath)
-	if err == nil && meta.MaxRetries > 0 {
+	if err == nil {
 		maxRetries = meta.MaxRetries
 	}
 
