@@ -350,6 +350,25 @@ func TestIsAgentActive_NegativePID(t *testing.T) {
 	}
 }
 
+func TestIsAgentActive_EPERMTreatedAsAlive(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user (PID 1 returns EPERM only for non-root)")
+	}
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// PID 1 (init/systemd) belongs to root; Signal(0) returns EPERM for non-root callers.
+	if err := os.WriteFile(filepath.Join(locksDir, "other-user.pid"), []byte("1"), 0o644); err != nil {
+		t.Fatalf("write pid file: %v", err)
+	}
+
+	if !IsAgentActive(tasksDir, "other-user") {
+		t.Fatal("PID 1 should be considered active (EPERM means process exists)")
+	}
+}
+
 func TestHasAvailableTasks(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"backlog", "in-progress", "completed", "failed"} {

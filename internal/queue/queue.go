@@ -3,6 +3,7 @@ package queue
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,7 +72,8 @@ func IsAgentActive(tasksDir, agentID string) bool {
 	if err != nil {
 		return false
 	}
-	return p.Signal(syscall.Signal(0)) == nil
+	err = p.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // ParseClaimedBy extracts the agent ID from a task file's claimed-by metadata.
