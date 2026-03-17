@@ -71,10 +71,10 @@ func EnsureGitignored(repoRoot, pattern string) error {
 		fmt.Fprintln(f)
 	}
 	fmt.Fprintln(f, pattern)
-	if _, err := Output(repoRoot, "add", ".gitignore"); err != nil {
+	if _, err := Output(repoRoot, "add", "--", ".gitignore"); err != nil {
 		return fmt.Errorf("git add .gitignore: %w", err)
 	}
-	if _, err := Output(repoRoot, "commit", "-m", "chore: add "+pattern+" to .gitignore"); err != nil {
+	if _, err := Output(repoRoot, "commit", "-m", "chore: add "+pattern+" to .gitignore", "--", ".gitignore"); err != nil {
 		return fmt.Errorf("git commit .gitignore: %w", err)
 	}
 	return nil
