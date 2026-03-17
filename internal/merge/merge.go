@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"mato/internal/frontmatter"
-	"mato/internal/process"
 	"mato/internal/git"
+	"mato/internal/process"
 )
 
 type mergeQueueTask struct {
