@@ -100,7 +100,7 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | Target | Description |
 | --- | --- |
 | `build` | Build `bin/mato` with `go build -o bin/mato ./cmd/mato`. |
-| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install ./cmd/mato`. |
+| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato-skill` Copilot skill to `~/.copilot/skills/mato-skill/`. The skill provides a code review agent for commit and codebase reviews. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |
