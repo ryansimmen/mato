@@ -337,11 +337,11 @@ Body text.
 	}
 
 	want := TaskMeta{
-		ID:        "my-task",
-		Priority:  10,
-		Affects:   []string{"main.go"},
-		DependsOn: []string{"other-task"},
-		Tags:      []string{"bugfix"},
+		ID:         "my-task",
+		Priority:   10,
+		Affects:    []string{"main.go"},
+		DependsOn:  []string{"other-task"},
+		Tags:       []string{"bugfix"},
 		MaxRetries: 5,
 	}
 	if !reflect.DeepEqual(meta, want) {
