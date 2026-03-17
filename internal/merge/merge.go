@@ -214,21 +214,14 @@ func taskBranchName(task mergeQueueTask) string {
 	return "task/" + frontmatter.SanitizeBranchName(task.name)
 }
 
-func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err error) error {
-	switch {
-	case errors.Is(err, errTaskBranchNotPushed):
-		return failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error())
-	case errors.Is(err, errSquashMergeConflict):
-		if err := failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error()); err != nil {
-			return err
-		}
-		cleanupTaskBranch(repoRoot, taskBranchName(task))
-		return nil
-	case errors.Is(err, errPushAfterSquashFailed):
-		return failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error())
-	default:
-		return failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error())
+func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr error) error {
+	if err := failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), mergeErr.Error()); err != nil {
+		return err
 	}
+	if errors.Is(mergeErr, errSquashMergeConflict) {
+		cleanupTaskBranch(repoRoot, taskBranchName(task))
+	}
+	return nil
 }
 
 func mergeFailureDestination(tasksDir, taskPath, taskName string) string {
