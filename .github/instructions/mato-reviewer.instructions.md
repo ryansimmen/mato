@@ -46,11 +46,9 @@ Priority guidelines: 1-10 critical, 11-30 important, 31-50 normal, 51+ low.
 
 ### High-priority patterns
 - Tasks stuck in a queue state forever (missing moves in error paths)
-- Frontmatter parsing failures on files with prepended HTML comments
-- Retry budget not being enforced on some code paths
-- Process liveness checks that don't handle all signal return values
-- Host not cleaning up after agent container crashes
-- Duplicate functions that could diverge when one copy is fixed
+- Regressions in areas with recent fixes: frontmatter parsing with prepended HTML comments, retry budget enforcement, process liveness checks (EPERM handling, PID reuse detection), host cleanup after agent container crashes
+- Post-push bookkeeping failures leaving tasks in `ready-to-merge/` after code is already merged
+- Lock identity or liveness check changes that break cross-platform (non-Linux) fallback behavior
 
 ### Medium-priority patterns
 - Stale comments referencing renamed/removed functions
@@ -63,6 +61,13 @@ Priority guidelines: 1-10 critical, 11-30 important, 31-50 normal, 51+ low.
 - Missing test coverage for edge cases
 - Performance optimizations for file I/O
 
+### Code style violations to flag
+- **Non-atomic file writes**: Any new `os.WriteFile` or `os.Create` without the temp+rename pattern — all file writes must be atomic
+- **Missing `%w` in error wrapping**: Sentinel errors must use `%w`, not `%v`, so callers can use `errors.Is`
+- **`time.Now()` without `.UTC()`**: All timestamps must be UTC
+- **New external dependencies**: The project uses only `gopkg.in/yaml.v3` — flag any new `go.mod` additions
+- **Wrong output stream**: Progress to stdout (`fmt.Printf`), warnings to stderr (`fmt.Fprintf(os.Stderr, ...)`) — flag any mixing
+
 ## Key Architecture Context
 
 - `ParseTaskFile` skips leading HTML comments before detecting `---` frontmatter
@@ -71,5 +76,7 @@ Priority guidelines: 1-10 critical, 11-30 important, 31-50 normal, 51+ low.
 - `SanitizeBranchName` and `ExtractTitle` live in the `frontmatter` package (shared)
 - `shouldFailTask` counts `<!-- failure:` lines against `max_retries`
 - `recoverStuckTask` runs after every `runOnce` to catch container crashes
-- `IsAgentActive` and `isProcessActive` treat EPERM as "alive"
+- `IsAgentActive` uses `PID:starttime` lock identity to detect PID reuse (PID-only fallback on non-Linux); treats EPERM as "alive"
+- `mergeReadyTask` detects already-merged branches via empty squash (`git diff --cached --quiet`), making retries idempotent
+- `markTaskMerged` failure no longer blocks `moveTaskWithRetry` — moving to `completed/` takes priority over the merged record
 - `handleMergeFailure` routes all error types through `mergeFailureDestination`
