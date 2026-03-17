@@ -10,6 +10,7 @@ import (
 
 	"mato/internal/git"
 	"mato/internal/messaging"
+	"mato/internal/queue"
 )
 
 func setupTestRepo(t *testing.T) string {
@@ -62,9 +63,12 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 			t.Fatalf("os.WriteFile(%s): %v", path, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(tasksDir, ".locks", "abcd1234.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
-		t.Fatalf("os.WriteFile lock: %v", err)
+	// Use RegisterAgent to write the lock file with a valid "PID:starttime" identity.
+	cleanup, err := queue.RegisterAgent(tasksDir, "abcd1234")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
 	}
+	defer cleanup()
 	if err := messaging.WriteMessage(tasksDir, messaging.Message{
 		ID:     "msg1",
 		From:   "agent-abcd1234",
@@ -91,5 +95,64 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	}
 	if callErr != nil {
 		t.Fatalf("Show: %v", callErr)
+	}
+}
+
+func TestActiveAgentsPIDColonStarttime(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Use RegisterAgent to write a lock file with the real "PID:starttime"
+	// identity so that IsAgentActive returns true.
+	cleanup, err := queue.RegisterAgent(tasksDir, "abc12345")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	agents, agentsErr := activeAgents(tasksDir)
+	if agentsErr != nil {
+		t.Fatalf("activeAgents: %v", agentsErr)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	pid := os.Getpid()
+	if agents[0].PID != pid {
+		t.Errorf("expected PID %d, got %d", pid, agents[0].PID)
+	}
+	if agents[0].ID != "abc12345" {
+		t.Errorf("expected ID abc12345, got %s", agents[0].ID)
+	}
+}
+
+func TestActiveAgentsLegacyPIDOnly(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Write lock file with legacy PID-only format.
+	pid := os.Getpid()
+	if err := os.WriteFile(filepath.Join(locksDir, "legacy01.pid"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	agents, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if agents[0].PID != pid {
+		t.Errorf("expected PID %d, got %d", pid, agents[0].PID)
+	}
+	if agents[0].ID != "legacy01" {
+		t.Errorf("expected ID legacy01, got %s", agents[0].ID)
 	}
 }

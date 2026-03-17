@@ -268,7 +268,10 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read lock file %s: %w", entry.Name(), err)
 		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		// Lock identity format is "PID:starttime" (or legacy "PID").
+		identity := strings.TrimSpace(string(data))
+		parts := strings.SplitN(identity, ":", 2)
+		pid, err := strconv.Atoi(parts[0])
 		if err != nil {
 			continue
 		}
