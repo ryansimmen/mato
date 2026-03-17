@@ -267,6 +267,7 @@ func TestPromptCreateBranchAndCommit(t *testing.T) {
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	script := strings.Join([]string{
 		`BRANCH="task/my-task"`,
+		`FILENAME="my-task.md"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
 		`TASK_TITLE="My Task"`,
 		promptStateBlock(t, "CREATE_BRANCH"),
@@ -286,8 +287,54 @@ func TestPromptCreateBranchAndCommit(t *testing.T) {
 	if got := strings.TrimSpace(mustGitOutput(t, cloneDir, "log", "--format=%s", "-1")); got != "My Task" {
 		t.Fatalf("commit subject = %q, want %q", got, "My Task")
 	}
+	body := strings.TrimSpace(mustGitOutput(t, cloneDir, "log", "--format=%b", "-1"))
+	if body == "" {
+		t.Fatal("commit body is empty; expected a non-empty description")
+	}
+	if !strings.Contains(body, "hello.txt") {
+		t.Fatalf("commit body should list changed files, got:\n%s", body)
+	}
 	if got := strings.TrimSpace(mustGitOutput(t, cloneDir, "show", "HEAD:hello.txt")); got != "hello world" {
 		t.Fatalf("hello.txt contents = %q, want %q", got, "hello world")
+	}
+}
+
+func TestPromptCommitIncludesDescription(t *testing.T) {
+	repoRoot, tasksDir := setupTestRepo(t)
+	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	script := strings.Join([]string{
+		`BRANCH="task/my-task"`,
+		`FILENAME="my-task.md"`,
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
+		`TASK_TITLE="My Task"`,
+		promptStateBlock(t, "CREATE_BRANCH"),
+		`echo "aaa" > a.txt`,
+		`echo "bbb" > b.txt`,
+		promptStateBlock(t, "COMMIT"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+
+	out, err := runBash(t, cloneDir, nil, script)
+	if err != nil {
+		t.Fatalf("runBash: %v\noutput:\n%s", err, out)
+	}
+
+	subject := strings.TrimSpace(mustGitOutput(t, cloneDir, "log", "--format=%s", "-1"))
+	if subject != "My Task" {
+		t.Fatalf("commit subject = %q, want %q", subject, "My Task")
+	}
+
+	body := strings.TrimSpace(mustGitOutput(t, cloneDir, "log", "--format=%b", "-1"))
+	if body == "" {
+		t.Fatal("commit body is empty; expected a non-empty description")
+	}
+	if !strings.Contains(body, "Task: my-task.md") {
+		t.Fatalf("commit body should reference the task filename, got:\n%s", body)
+	}
+	if !strings.Contains(body, "a.txt") || !strings.Contains(body, "b.txt") {
+		t.Fatalf("commit body should list changed files (a.txt, b.txt), got:\n%s", body)
 	}
 }
 
