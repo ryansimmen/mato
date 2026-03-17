@@ -231,6 +231,8 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err erro
 		}
 		cleanupTaskBranch(repoRoot, taskBranchName(task))
 		return nil
+	case errors.Is(err, errPushAfterSquashFailed):
+		return failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error())
 	default:
 		return failMergeTask(task.path, "", err.Error())
 	}

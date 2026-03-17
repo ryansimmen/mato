@@ -628,7 +628,7 @@ func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 	}
 }
 
-func TestProcessQueueKeepsTaskReadyWhenPushFails(t *testing.T) {
+func TestProcessQueueMovesTaskToBacklogWhenPushFails(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
@@ -663,15 +663,17 @@ func TestProcessQueueKeepsTaskReadyWhenPushFails(t *testing.T) {
 		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
 
-	data, err := os.ReadFile(taskFile)
+	// Task should be moved to backlog (not stuck in ready-to-merge)
+	backlogFile := filepath.Join(tasksDir, "backlog", "add feature!!.md")
+	data, err := os.ReadFile(backlogFile)
 	if err != nil {
-		t.Fatalf("ready task file missing after push failure: %v", err)
+		t.Fatalf("task should be moved to backlog after push failure: %v", err)
 	}
 	if !strings.Contains(string(data), "<!-- failure: merge-queue") || !strings.Contains(string(data), "push failed after squash merge") {
-		t.Fatalf("ready task should contain push failure record, got %q", string(data))
+		t.Fatalf("backlog task should contain push failure record, got %q", string(data))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "add feature!!.md")); !os.IsNotExist(err) {
-		t.Fatalf("push failure should not move task to backlog, stat err = %v", err)
+	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
+		t.Fatalf("task should not remain in ready-to-merge after push failure, stat err = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "add feature!!.md")); !os.IsNotExist(err) {
 		t.Fatalf("push failure should not move task to completed, stat err = %v", err)
@@ -679,22 +681,71 @@ func TestProcessQueueKeepsTaskReadyWhenPushFails(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repoRoot, "feature.txt")); !os.IsNotExist(err) {
 		t.Fatalf("target branch should not have feature after rejected push, stat err = %v", err)
 	}
+}
 
-	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+func TestProcessQueue_PushFailureRespectsMaxRetries(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/push-retry", "mato"); err != nil {
+		t.Fatalf("git checkout task/push-retry: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "retry.txt"), []byte("retry\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile retry.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "retry.txt"); err != nil {
+		t.Fatalf("git add retry.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "retry work"); err != nil {
+		t.Fatalf("git commit retry work: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+	// Reject pushes to trigger errPushAfterSquashFailed
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "refuse"); err != nil {
 		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
 	}
-	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
-		t.Fatalf("ProcessQueue() retry = %d, want 1", got)
+
+	// Task already has one prior failure and max_retries: 1, so the next
+	// failure should route it to failed/ instead of backlog/.
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "push-retry.md")
+	taskContent := strings.Join([]string{
+		"---",
+		"max_retries: 1",
+		"---",
+		"<!-- failure: prior -->",
+		"# Push retry",
+		"Merge this task.",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "add feature!!.md")); err != nil {
-		t.Fatalf("completed task file missing after retry: %v", err)
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
-	log, err := git.Output(repoRoot, "log", "--format=%s", "mato")
+
+	// With one prior failure and max_retries:1, the task should go to failed/
+	failedFile := filepath.Join(tasksDir, "failed", "push-retry.md")
+	data, err := os.ReadFile(failedFile)
 	if err != nil {
-		t.Fatalf("git log mato: %v", err)
+		t.Fatalf("failed task file missing after push failure with exhausted retries: %v", err)
 	}
-	if got := strings.Count(log, "Add feature"); got != 1 {
-		t.Fatalf("Add feature commit count = %d, want 1", got)
+	if !strings.Contains(string(data), "push failed after squash merge") {
+		t.Fatalf("failed task should mention push failure, got %q", string(data))
+	}
+	if got := strings.Count(string(data), "<!-- failure:"); got != 2 {
+		t.Fatalf("failed task failure count = %d, want 2\ncontents:\n%s", got, string(data))
+	}
+	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
+		t.Fatalf("task should not remain in ready-to-merge, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "push-retry.md")); !os.IsNotExist(err) {
+		t.Fatalf("exhausted-retry task should not be in backlog, stat err = %v", err)
 	}
 }
 
