@@ -980,3 +980,56 @@ func TestReconcileReadyQueue_HighPriorityNotBlockedByLowPriorityBacklog(t *testi
 	// Both are now in backlog — DeferredOverlappingTasks can mark the
 	// lower-priority one for exclusion from .queue.
 }
+
+func TestReconcileReadyQueue_DuplicateIDDoesNotSatisfyDependency(t *testing.T) {
+	// Regression: if a completed task and a waiting task share the same ID,
+	// a dependent task must NOT be promoted — the dependency is ambiguous.
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "completed", "in-progress", "ready-to-merge", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Completed task with id "shared-id"
+	os.WriteFile(filepath.Join(tasksDir, "completed", "first-task.md"),
+		[]byte("---\nid: shared-id\n---\n# First\nDone\n"), 0o644)
+
+	// Waiting task also with id "shared-id"
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "second-task.md"),
+		[]byte("---\nid: shared-id\n---\n# Second\nNot done\n"), 0o644)
+
+	// Third task depends on "shared-id" — should NOT be promoted
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "dependent-task.md"),
+		[]byte("---\nid: dependent\ndepends_on: [shared-id]\n---\n# Dependent\n"), 0o644)
+
+	got := ReconcileReadyQueue(tasksDir)
+	// second-task has no deps so it may promote, but dependent-task must not
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "dependent-task.md")); os.IsNotExist(err) {
+		t.Fatal("dependent-task should NOT be promoted when dep ID is ambiguous (duplicate)")
+	}
+	// second-task (no deps) should still promote
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "second-task.md")); err != nil {
+		t.Fatalf("second-task (no deps) should promote, got err: %v (promoted=%d)", err, got)
+	}
+}
+
+func TestReconcileReadyQueue_UniqueCompletedIDStillWorks(t *testing.T) {
+	// Sanity check: when there is no duplicate, dependencies are still satisfied.
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "completed", "in-progress", "ready-to-merge", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, "completed", "unique-dep.md"),
+		[]byte("---\nid: unique-dep\n---\n# Unique dep\nDone\n"), 0o644)
+
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "consumer.md"),
+		[]byte("---\nid: consumer\ndepends_on: [unique-dep]\n---\n# Consumer\n"), 0o644)
+
+	got := ReconcileReadyQueue(tasksDir)
+	if got != 1 {
+		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "consumer.md")); err != nil {
+		t.Fatal("consumer task should be promoted when dep is uniquely completed")
+	}
+}
