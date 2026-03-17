@@ -102,16 +102,21 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 		TaskPath: inProgressPath,
 	}
 
-	// Should still attempt recovery; os.Rename overwrites on same filesystem
+	// Recovery should refuse to overwrite the existing backlog file
 	recoverStuckTask(tasksDir, "agent1", claimed)
 
-	// The recovered file should be in backlog/
+	// The existing backlog file must be untouched
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
-		t.Fatalf("task file not found in backlog/: %v", err)
+		t.Fatalf("backlog file should still exist: %v", err)
 	}
-	if !strings.Contains(string(data), "<!-- failure: agent1") {
-		t.Fatal("failure record not appended to recovered task")
+	if string(data) != "# Existing Task\n" {
+		t.Fatalf("backlog file was overwritten, got: %s", string(data))
+	}
+
+	// The in-progress file should remain since recovery was skipped
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatal("in-progress file should remain when backlog destination exists")
 	}
 }
 

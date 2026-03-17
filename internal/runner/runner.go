@@ -305,6 +305,10 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	}
 
 	dst := filepath.Join(tasksDir, "backlog", claimed.Filename)
+	if _, err := os.Stat(dst); err == nil {
+		fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: destination already exists in backlog\n", claimed.Filename)
+		return
+	}
 	if err := os.Rename(claimed.TaskPath, dst); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
 		return
