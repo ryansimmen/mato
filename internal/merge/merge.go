@@ -376,7 +376,8 @@ func AcquireLock(tasksDir string) (func(), bool) {
 			return nil, false
 		}
 
-		if isLockHolderAlive(strings.TrimSpace(string(data))) {
+		content := strings.TrimSpace(string(data))
+		if content == "" || isLockHolderAlive(content) {
 			return nil, false
 		}
 		if removeErr := os.Remove(lockFile); removeErr != nil && !os.IsNotExist(removeErr) {
