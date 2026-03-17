@@ -93,11 +93,11 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	if err != nil {
 		out, execErr := exec.Command("git", "--exec-path").Output()
 		if execErr != nil {
-			return fmt.Errorf("find git-upload-pack: %w", err)
+			return fmt.Errorf("find git-upload-pack: git --exec-path failed: %w", execErr)
 		}
 		candidate := filepath.Join(strings.TrimSpace(string(out)), "git-upload-pack")
 		if _, statErr := os.Stat(candidate); statErr != nil {
-			return fmt.Errorf("find git-upload-pack: %w", err)
+			return fmt.Errorf("find git-upload-pack: %w", statErr)
 		}
 		gitUploadPackPath = candidate
 	}
@@ -105,11 +105,11 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	if err != nil {
 		out, execErr := exec.Command("git", "--exec-path").Output()
 		if execErr != nil {
-			return fmt.Errorf("find git-receive-pack: %w", err)
+			return fmt.Errorf("find git-receive-pack: git --exec-path failed: %w", execErr)
 		}
 		candidate := filepath.Join(strings.TrimSpace(string(out)), "git-receive-pack")
 		if _, statErr := os.Stat(candidate); statErr != nil {
-			return fmt.Errorf("find git-receive-pack: %w", err)
+			return fmt.Errorf("find git-receive-pack: %w", statErr)
 		}
 		gitReceivePackPath = candidate
 	}
