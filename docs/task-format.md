@@ -11,6 +11,7 @@ Conceptually, a task file has three layers:
 
 ## File Structure
 ```md
+<!-- claimed-by: agent-7  claimed-at: 2026-01-01T00:00:00Z -->
 ---
 id: add-http-retries
 priority: 10
@@ -22,14 +23,13 @@ tags: [backend, reliability]
 estimated_complexity: medium
 max_retries: 3
 ---
-<!-- claimed-by: agent-7  claimed-at: 2026-01-01T00:00:00Z -->
 <!-- failure: mato-recovery at 2026-01-01T00:05:00Z — agent was interrupted -->
 # Add HTTP retries
 Implement retry handling for transient 5xx responses.
 ```
 
 Notes:
-- If present, frontmatter must be the first block and must be closed by a second `---` line.
+- If present, frontmatter must be closed by a second `---` line. The parser skips leading empty lines and full-line HTML comments (e.g. `<!-- claimed-by: ... -->`) before looking for the opening `---`, since claim metadata may be prepended above the frontmatter block.
 - Runtime metadata is stored as full-line HTML comments and is auto-managed.
 - The markdown body starts after the frontmatter block.
 - Agents are instructed to ignore frontmatter and these HTML comments when reading the task.
