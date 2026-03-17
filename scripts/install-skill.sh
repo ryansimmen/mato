@@ -6,7 +6,7 @@ set -e
 
 SKILL_DIR="$HOME/.copilot/skills/mato-skill"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SOURCE_DIR="$SCRIPT_DIR/.github/skills/mato-skill"
+SOURCE_DIR="$SCRIPT_DIR/../.github/skills/mato-skill"
 
 if [ ! -f "$SOURCE_DIR/SKILL.md" ]; then
   echo "error: SKILL.md not found at $SOURCE_DIR" >&2
