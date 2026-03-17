@@ -177,6 +177,8 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 				systemCertsDir, hasSystemCerts); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
 			}
+
+			recoverStuckTask(tasksDir, agentID, claimed)
 		}
 
 		if cleanup, ok := merge.AcquireLock(tasksDir); ok {
@@ -290,6 +292,32 @@ func runOnce(repoRoot, tasksDir, agentID string, claimed *queue.ClaimedTask, cop
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// recoverStuckTask checks whether a claimed task is still in in-progress/
+// after the agent container exits. If so, the agent did not complete its
+// lifecycle (crash, OOM, SIGKILL, etc.), so the host moves the task back
+// to backlog/ with a failure record for a future retry attempt.
+func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
+	if _, err := os.Stat(claimed.TaskPath); err != nil {
+		// Task was moved by the agent (to ready-to-merge or backlog); nothing to do.
+		return
+	}
+
+	dst := filepath.Join(tasksDir, "backlog", claimed.Filename)
+	if err := os.Rename(claimed.TaskPath, dst); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
+		return
+	}
+
+	f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err == nil {
+		fmt.Fprintf(f, "\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
+			agentID, time.Now().UTC().Format(time.RFC3339))
+		f.Close()
+	}
+
+	fmt.Printf("Recovered task %s after agent exit\n", claimed.Filename)
 }
 
 func hasModelArg(args []string) bool {
