@@ -182,7 +182,8 @@ The host checks the retry budget before the next attempt, so the prompt does not
 ```bash
 FAIL_STEP="${FAIL_STEP:-WORK}"  # Set this to the state name where failure occurred
 FAIL_REASON="${FAIL_REASON:-brief description of the error}"
-FILES_CHANGED="$(git diff --name-only HEAD 2>/dev/null | paste -sd, -)"
+FILES_CHANGED="$(git diff --name-only TARGET_BRANCH_PLACEHOLDER...HEAD 2>/dev/null | paste -sd, -)"
+[ -n "$FILES_CHANGED" ] || FILES_CHANGED="$(git diff --name-only HEAD 2>/dev/null | paste -sd, -)"
 [ -n "$FILES_CHANGED" ] || FILES_CHANGED="none"
 echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} files_changed=${FILES_CHANGED} -->" >> "$TASK_PATH"
 git checkout TARGET_BRANCH_PLACEHOLDER 2>/dev/null || true
