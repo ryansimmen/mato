@@ -58,17 +58,22 @@ messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 queue.ReconcileReadyQueue(tasksDir)
 deferred := queue.DeferredOverlappingTasks(tasksDir)
 queue.WriteQueueManifest(tasksDir, deferred)
-queue.HasAvailableTasks(tasksDir, deferred)
-runOnce(...) if backlog has tasks
+claimed := queue.SelectAndClaimTask(tasksDir, agentID, deferred)
+if claimed != nil:
+    messaging.WriteMessage(...) intent
+    runOnce(...)
+    recoverStuckTask(...)
 merge.AcquireLock(tasksDir) + merge.ProcessQueue(...)
-if no backlog and no ready-to-merge: print idle message
+if no claimed task and no ready-to-merge: print idle message
 wait for signal or 10 seconds
 ```
 Important details from the implementation:
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
-- `.queue` is written twice each iteration: once after dependency promotion and again after overlap deferral, so the manifest matches the final backlog state.
-- `queue.HasAvailableTasks(...)` only checks `backlog/`, not `waiting/`.
+- `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state.
+- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses candidates, checks the retry budget, and atomically moves the first viable task from `backlog/` to `in-progress/`. `HasAvailableTasks` is a separate helper but is not called in the polling loop.
+- After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
+- `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
 ### Orphan recovery and lock cleanup
 `queue.go` provides the host-side recovery primitives:
@@ -226,7 +231,7 @@ Algorithm:
 4. Seed the "kept" set with active tasks (immovable — already being worked on or awaiting merge).
 5. For each backlog task, compare its `affects` list with every kept task.
 6. If there is overlap, add the task to the deferred exclusion set (it stays in `backlog/` but is excluded from `.queue` — agents won't see it).
-7. The exclusion set is passed to `WriteQueueManifest` and `HasAvailableTasks`.
+7. The exclusion set is passed to `WriteQueueManifest` and `SelectAndClaimTask`.
 `overlappingAffects(a, b)` is an exact intersection test:
 - no overlap if either list is empty
 - values must match by exact string equality
