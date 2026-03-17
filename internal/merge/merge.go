@@ -234,7 +234,7 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err erro
 	case errors.Is(err, errPushAfterSquashFailed):
 		return failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error())
 	default:
-		return failMergeTask(task.path, "", err.Error())
+		return failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), err.Error())
 	}
 }
 

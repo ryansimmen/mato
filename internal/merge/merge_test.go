@@ -955,6 +955,85 @@ func TestProcessQueue_MalformedTaskInReadyToMerge(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_NonSentinelErrorMovesTaskToBacklog(t *testing.T) {
+	// Use a non-git directory as repoRoot so CreateClone fails with a
+	// non-sentinel error (not one of the three known error sentinels).
+	repoRoot := t.TempDir()
+	tasksDir := setupTasksDir(t)
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "clone-fail.md")
+	taskContent := strings.Join([]string{
+		"---",
+		"priority: 1",
+		"---",
+		"# Clone fail task",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", got)
+	}
+
+	// Task should be moved to backlog/ (not left in ready-to-merge/).
+	backlogFile := filepath.Join(tasksDir, "backlog", "clone-fail.md")
+	data, err := os.ReadFile(backlogFile)
+	if err != nil {
+		t.Fatalf("backlog task file missing: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- failure: merge-queue") {
+		t.Fatalf("backlog task should contain merge failure record, got %q", string(data))
+	}
+	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
+		t.Fatalf("ready-to-merge task file should be moved to backlog, stat err = %v", err)
+	}
+}
+
+func TestProcessQueue_NonSentinelErrorRespectsMaxRetries(t *testing.T) {
+	// A non-sentinel error with exhausted retries should move to failed/.
+	repoRoot := t.TempDir()
+	tasksDir := setupTasksDir(t)
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "clone-fail-retry.md")
+	taskContent := strings.Join([]string{
+		"---",
+		"max_retries: 1",
+		"---",
+		"<!-- failure: prior -->",
+		"# Clone fail retry",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", got)
+	}
+
+	// With max_retries: 1 and 1 prior failure, the new failure makes 2 >= 1,
+	// so the task should go to failed/.
+	failedFile := filepath.Join(tasksDir, "failed", "clone-fail-retry.md")
+	data, err := os.ReadFile(failedFile)
+	if err != nil {
+		t.Fatalf("failed task file missing: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- failure: merge-queue") {
+		t.Fatalf("failed task should contain merge failure record, got %q", string(data))
+	}
+	if got := strings.Count(string(data), "<!-- failure:"); got != 2 {
+		t.Fatalf("failed task failure count = %d, want 2\ncontents:\n%s", got, string(data))
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "clone-fail-retry.md")); !os.IsNotExist(err) {
+		t.Fatalf("task should not be in backlog, stat err = %v", err)
+	}
+	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
+		t.Fatalf("ready-to-merge task should be moved to failed, stat err = %v", err)
+	}
+}
+
 func TestSanitizeBranchName(t *testing.T) {
 	tests := []struct {
 		name  string
