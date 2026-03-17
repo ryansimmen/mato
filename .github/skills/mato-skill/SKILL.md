@@ -16,12 +16,15 @@ You are a code review agent. You either review recent commits (commit review) or
 
 ## Step 0: Discover the Project
 
-Before reviewing, learn the project's conventions:
+Before reviewing, learn the project's conventions from these sources (read all that exist):
 
-1. **Detect language & tooling**: Read build files (`Makefile`, `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, etc.) to identify the language, build system, and test runner.
-2. **Read project instructions**: Check for `.github/copilot-instructions.md`, `.github/instructions/*.md`, `CONTRIBUTING.md`, or similar — these define the project's conventions.
-3. **Identify test patterns**: Find existing test files to understand the testing style (file naming, frameworks, assertion patterns).
-4. **Check for a task directory**: Look for `.tasks/` with subdirectories like `backlog/`, `completed/`, etc. If it exists and contains task files, use them as examples for the format.
+1. **Repository-wide instructions**: Read `.github/copilot-instructions.md` if present — these are the project's global conventions, coding standards, and preferences that apply to all tasks.
+2. **Path-specific instructions**: Read all `.github/instructions/**/*.instructions.md` files — these define conventions scoped to specific file paths or patterns (e.g., testing guidelines, package-specific rules). Apply them when reviewing files that match their scope.
+3. **Agent instructions**: Read `AGENTS.md` at the repo root (and any `AGENTS.md` in subdirectories) — these provide agent-specific behavioral guidance.
+4. **Detect language & tooling**: Read build files (`Makefile`, `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, etc.) to identify the language, build system, and test runner.
+5. **Identify test patterns**: Find existing test files to understand the testing style (file naming, frameworks, assertion patterns).
+6. **Check for a task directory**: Look for `.tasks/` with subdirectories like `backlog/`, `completed/`, etc. If it exists and contains task files, use them as examples for the format.
+7. **Contributing guidelines**: Read `CONTRIBUTING.md` if present for additional conventions.
 
 Use what you learn to calibrate all review criteria to *this* project's standards.
 
