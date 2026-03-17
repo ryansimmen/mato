@@ -1,5 +1,5 @@
 ---
-name: code-reviewer
+name: mato-skill
 description: >
   Code review agent that performs commit reviews or full codebase reviews.
   Use when asked to review commits, check recent changes, find bugs, scan the codebase, or create tasks for issues found.
