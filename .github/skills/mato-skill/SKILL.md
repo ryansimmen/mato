@@ -87,8 +87,9 @@ Only flag style issues that violate the *project's own conventions* (discovered 
 If the project has a `.tasks/backlog/` directory:
 
 1. Check `.tasks/completed/` for examples of well-written task files to match the style.
-2. Create one task file per issue in `.tasks/backlog/`, following the format below.
-3. Use kebab-case filenames: `.tasks/backlog/fix-race-in-worker-pool.md`
+2. Create one task file per issue, following the format below.
+3. Use kebab-case filenames: `fix-race-in-worker-pool.md`
+4. **Placement**: Tasks with no `depends_on` go in `.tasks/backlog/`. Tasks with dependencies go in `.tasks/waiting/` — they will be promoted to `backlog/` automatically once their dependencies complete.
 
 If the project does NOT have a `.tasks/` directory, report all findings inline in your response, grouped by severity.
 
