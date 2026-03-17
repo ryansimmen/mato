@@ -40,8 +40,11 @@ func Show(repoRoot, tasksDir string) error {
 	if err != nil {
 		return err
 	}
-	deferred := queue.DeferredOverlappingTasks(tasksDir)
 	deferredDetail := queue.DeferredOverlappingTasksDetailed(tasksDir)
+	deferred := make(map[string]struct{}, len(deferredDetail))
+	for name := range deferredDetail {
+		deferred[name] = struct{}{}
+	}
 	inProgressTasks := listTasksInDir(tasksDir, "in-progress")
 	readyToMergeTasks := listTasksInDir(tasksDir, "ready-to-merge")
 	failedTasks := listTasksInDir(tasksDir, "failed")
