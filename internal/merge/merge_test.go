@@ -1085,3 +1085,152 @@ func TestIsProcessActive_EPERMTreatedAsAlive(t *testing.T) {
 		t.Fatal("PID 1 should be considered active (EPERM means process exists)")
 	}
 }
+
+// TestProcessQueue_IdempotentMergeAfterBookkeepingFailure verifies that when
+// a push succeeds but the post-push bookkeeping (markTaskMerged + move) fails,
+// the next merge cycle detects the already-merged branch and completes the
+// bookkeeping without creating a duplicate commit.
+func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	// Create a task branch with a change.
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/durable-merge", "mato"); err != nil {
+		t.Fatalf("git checkout task/durable-merge: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "durable.txt"), []byte("durable\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile durable.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "durable.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "durable work"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	// Sabotage: make the completed directory a file so both markTaskMerged
+	// (which will succeed) and moveTaskWithRetry (which will fail) trigger
+	// the "merged but could not move" path.
+	completedDir := filepath.Join(tasksDir, "completed")
+	if err := os.RemoveAll(completedDir); err != nil {
+		t.Fatalf("os.RemoveAll completed: %v", err)
+	}
+	if err := os.WriteFile(completedDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile completed placeholder: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "durable-merge.md")
+	taskContent := "---\npriority: 5\n---\n# Durable merge\nMerge this.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task: %v", err)
+	}
+
+	// First run: push succeeds, move fails → task stays in ready-to-merge.
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() first run = %d, want 0", got)
+	}
+	if _, err := os.Stat(taskFile); err != nil {
+		t.Fatalf("task file should still be in ready-to-merge: %v", err)
+	}
+
+	// Verify the push actually landed.
+	if _, err := os.Stat(filepath.Join(repoRoot, "durable.txt")); err != nil {
+		t.Fatalf("merged file missing from target branch: %v", err)
+	}
+
+	// Fix the completed directory.
+	if err := os.Remove(completedDir); err != nil {
+		t.Fatalf("os.Remove completed placeholder: %v", err)
+	}
+	if err := os.MkdirAll(completedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll completed: %v", err)
+	}
+
+	// Second run: should detect the already-merged branch and complete
+	// bookkeeping without creating a duplicate commit.
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() second run = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "durable-merge.md")); err != nil {
+		t.Fatalf("completed task missing after retry: %v", err)
+	}
+
+	// Ensure exactly one merge commit (no duplicate).
+	log, err := git.Output(repoRoot, "log", "--format=%s", "mato")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if got := strings.Count(log, "Durable merge"); got != 1 {
+		t.Fatalf("Durable merge commit count = %d, want 1; log:\n%s", got, log)
+	}
+}
+
+// TestProcessQueue_MarkMergedFailsButMoveSucceeds verifies that when
+// markTaskMerged fails (e.g. read-only task file), the task still moves to
+// completed/ because we no longer skip moveTaskWithRetry.
+func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	// Create a task branch.
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/readonly-task", "mato"); err != nil {
+		t.Fatalf("git checkout task/readonly-task: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "readonly.txt"), []byte("data\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "readonly.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "readonly work"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "readonly-task.md")
+	taskContent := "---\npriority: 5\n---\n# Readonly task\nMerge this.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task: %v", err)
+	}
+
+	// Make task file read-only so markTaskMerged (which opens for append)
+	// will fail, but os.Rename (used by moveTaskWithRetry) will still work.
+	if err := os.Chmod(taskFile, 0o444); err != nil {
+		t.Fatalf("os.Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		// Ensure cleanup can remove the file.
+		os.Chmod(taskFile, 0o644)
+		completedFile := filepath.Join(tasksDir, "completed", "readonly-task.md")
+		os.Chmod(completedFile, 0o644)
+	})
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+
+	// Task should be in completed/ despite markTaskMerged failure.
+	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "readonly-task.md")); err != nil {
+		t.Fatalf("completed task missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "readonly.txt")); err != nil {
+		t.Fatalf("merged file missing from target branch: %v", err)
+	}
+}
