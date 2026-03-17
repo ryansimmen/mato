@@ -313,6 +313,131 @@ depends_on: ["", real-dep, ""]
 	}
 }
 
+func TestParseTaskFile_ClaimedByBeforeFrontmatter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claimed-task.md")
+	content := `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
+---
+id: my-task
+priority: 10
+affects: [main.go]
+depends_on: [other-task]
+tags: [bugfix]
+max_retries: 5
+---
+# Task title
+Body text.
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	want := TaskMeta{
+		ID:        "my-task",
+		Priority:  10,
+		Affects:   []string{"main.go"},
+		DependsOn: []string{"other-task"},
+		Tags:      []string{"bugfix"},
+		MaxRetries: 5,
+	}
+	if !reflect.DeepEqual(meta, want) {
+		t.Fatalf("meta = %#v, want %#v", meta, want)
+	}
+	if body != "# Task title\nBody text.\n" {
+		t.Fatalf("body = %q, want %q", body, "# Task title\nBody text.\n")
+	}
+}
+
+func TestParseTaskFile_MultipleCommentsBeforeFrontmatter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "multi-comment-task.md")
+	content := `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
+<!-- failure: xyz at 2026-01-01T01:00:00Z step=WORK error=build failed files_changed=none -->
+---
+id: retry-task
+priority: 3
+affects: [internal/foo.go]
+---
+# Retry task
+Do the thing.
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	want := TaskMeta{
+		ID:         "retry-task",
+		Priority:   3,
+		Affects:    []string{"internal/foo.go"},
+		MaxRetries: 3,
+	}
+	if !reflect.DeepEqual(meta, want) {
+		t.Fatalf("meta = %#v, want %#v", meta, want)
+	}
+	if body != "# Retry task\nDo the thing.\n" {
+		t.Fatalf("body = %q, want %q", body, "# Retry task\nDo the thing.\n")
+	}
+}
+
+func TestParseTaskFile_ClaimedByNoFrontmatter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claimed-no-fm.md")
+	content := `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
+# Simple task
+Just do it.
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	want := TaskMeta{ID: "claimed-no-fm", Priority: 50, MaxRetries: 3}
+	if !reflect.DeepEqual(meta, want) {
+		t.Fatalf("meta = %#v, want %#v", meta, want)
+	}
+	if body != "# Simple task\nJust do it.\n" {
+		t.Fatalf("body = %q, want %q", body, "# Simple task\nJust do it.\n")
+	}
+}
+
+func TestParseTaskFile_BlankLinesBetweenCommentsAndFrontmatter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blanks-before-fm.md")
+	content := `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
+
+---
+priority: 8
+---
+# Title
+Body.
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	if meta.Priority != 8 {
+		t.Fatalf("meta.Priority = %d, want 8", meta.Priority)
+	}
+	if body != "# Title\nBody.\n" {
+		t.Fatalf("body = %q, want %q", body, "# Title\nBody.\n")
+	}
+}
+
 func TestParseTaskFile_InvalidPriority(t *testing.T) {
 	tests := []struct {
 		name    string
