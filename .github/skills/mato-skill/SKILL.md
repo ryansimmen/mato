@@ -86,10 +86,9 @@ Only flag style issues that violate the *project's own conventions* (discovered 
 
 If the project has a `.tasks/backlog/` directory:
 
-1. Check `.tasks/completed/` for examples of well-written task files to match the format.
-2. Check for a task format reference doc (e.g., `docs/task-format.md`).
-3. Create one task file per issue in `.tasks/backlog/`, following the format below.
-4. Use kebab-case filenames: `.tasks/backlog/fix-race-in-worker-pool.md`
+1. Check `.tasks/completed/` for examples of well-written task files to match the style.
+2. Create one task file per issue in `.tasks/backlog/`, following the format below.
+3. Use kebab-case filenames: `.tasks/backlog/fix-race-in-worker-pool.md`
 
 If the project does NOT have a `.tasks/` directory, report all findings inline in your response, grouped by severity.
 
