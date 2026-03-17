@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"mato/internal/process"
 )
 
 func captureStderr(t *testing.T, fn func()) string {
@@ -161,7 +163,7 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	task := filepath.Join(tasksDir, "in-progress", "active-task.md")
 	content := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: 2026-01-01T00:00:00Z -->\n# Active task\n", agentID)
 	os.WriteFile(task, []byte(content), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(agentLockIdentity(os.Getpid())), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
 
 	RecoverOrphanedTasks(tasksDir)
 
@@ -310,7 +312,7 @@ func TestIsAgentActive(t *testing.T) {
 	}
 
 	// New PID:starttime format
-	os.WriteFile(filepath.Join(locksDir, "live.pid"), []byte(agentLockIdentity(os.Getpid())), 0o644)
+	os.WriteFile(filepath.Join(locksDir, "live.pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
 	if !IsAgentActive(tasksDir, "live") {
 		t.Error("agent with current PID:starttime should be active")
 	}
@@ -499,7 +501,7 @@ func TestCleanStaleLocks(t *testing.T) {
 	locksDir := filepath.Join(tasksDir, ".locks")
 	os.MkdirAll(locksDir, 0o755)
 
-	os.WriteFile(filepath.Join(locksDir, "alive.pid"), []byte(agentLockIdentity(os.Getpid())), 0o644)
+	os.WriteFile(filepath.Join(locksDir, "alive.pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
 	os.WriteFile(filepath.Join(locksDir, "dead.pid"), []byte("2147483647:99999999"), 0o644)
 
 	CleanStaleLocks(tasksDir)
