@@ -196,10 +196,10 @@ Relevant frontmatter defaults from `frontmatter.go`:
 Before processing the queue, `Run()` calls `merge.AcquireLock(tasksDir)`. The lock file is `.tasks/.locks/merge.lock`.
 Behavior:
 - create with `O_CREATE|O_EXCL`
-- write the holder PID into the file
-- if the file already exists, read the PID
-- if that PID is still alive, skip merging this loop
-- if the PID is stale or invalid, remove the lock and retry once
+- write a `"PID:starttime"` identity (via `process.LockIdentity`) into the file to detect PID reuse; on non-Linux systems the start time is unavailable so the value is just `"PID"`
+- if the file already exists, read the identity string
+- if `process.IsLockHolderAlive(...)` determines the holder is still running (PID alive and start-time matches), skip merging this loop
+- if the holder is stale, dead, or the identity is invalid, remove the lock and retry once
 This is the main multi-process safety mechanism for host-side merges.
 ### Task ordering and merge flow
 `merge.ProcessQueue(...)` scans `ready-to-merge/*.md`, parses each task, and sorts by ascending `priority`, then filename.
