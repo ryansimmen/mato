@@ -267,6 +267,13 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Merge lock and merge-failure requeue path.
 - Branch-name sanitization.
 
+### `internal/process/`
+- Shared process identity and liveness helpers used by the lock systems in `internal/queue/` and `internal/merge/`.
+- `LockIdentity(pid)` — returns `"PID:starttime"` (or just `"PID"` on non-Linux).
+- `IsLockHolderAlive(identity)` — parses an identity string and checks process liveness with start-time verification to detect PID reuse.
+- `ProcessStartTime(pid)` — reads `/proc/<pid>/stat` field 22.
+- `IsProcessActive(pid)` — sends signal 0 to check if a PID is alive.
+
 ### `internal/frontmatter/`
 - `TaskMeta` schema.
 - YAML-like frontmatter parsing (stdlib only).
