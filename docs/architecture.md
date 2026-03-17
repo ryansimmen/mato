@@ -293,7 +293,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Shows waiting-task dependency summaries and recent messages.
 
 ### Test files
-Most packages have tests alongside their source. `internal/git/` has no dedicated `_test.go` file; its helpers are exercised through the integration tests. Repository tests run with `go test ./...`.
+Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignored`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
 ## 9. End-to-End Summary
 Responsibility is split cleanly:
 - the host owns queue maintenance, dependency promotion, overlap prevention, stale-state cleanup, and merging;
