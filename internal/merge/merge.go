@@ -392,5 +392,3 @@ func AcquireLock(tasksDir string) (func(), bool) {
 
 	return nil, false
 }
-
-
