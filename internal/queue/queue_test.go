@@ -161,7 +161,7 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	task := filepath.Join(tasksDir, "in-progress", "active-task.md")
 	content := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: 2026-01-01T00:00:00Z -->\n# Active task\n", agentID)
 	os.WriteFile(task, []byte(content), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(agentLockIdentity(os.Getpid())), 0o644)
 
 	RecoverOrphanedTasks(tasksDir)
 
@@ -309,14 +309,50 @@ func TestIsAgentActive(t *testing.T) {
 		t.Error("agent without lock file should not be active")
 	}
 
-	os.WriteFile(filepath.Join(locksDir, "live.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
+	// New PID:starttime format
+	os.WriteFile(filepath.Join(locksDir, "live.pid"), []byte(agentLockIdentity(os.Getpid())), 0o644)
 	if !IsAgentActive(tasksDir, "live") {
-		t.Error("agent with current PID should be active")
+		t.Error("agent with current PID:starttime should be active")
 	}
 
-	os.WriteFile(filepath.Join(locksDir, "dead.pid"), []byte("2147483647"), 0o644)
+	os.WriteFile(filepath.Join(locksDir, "dead.pid"), []byte("2147483647:99999999"), 0o644)
 	if IsAgentActive(tasksDir, "dead") {
 		t.Error("agent with dead PID should not be active")
+	}
+}
+
+func TestIsAgentActive_LegacyPIDOnly(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(locksDir, 0o755)
+
+	// Legacy format: PID only (no start time)
+	os.WriteFile(filepath.Join(locksDir, "legacy.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
+	if !IsAgentActive(tasksDir, "legacy") {
+		t.Error("legacy PID-only lock file for live process should be active")
+	}
+
+	os.WriteFile(filepath.Join(locksDir, "legacy-dead.pid"), []byte("2147483647"), 0o644)
+	if IsAgentActive(tasksDir, "legacy-dead") {
+		t.Error("legacy PID-only lock file for dead process should not be active")
+	}
+}
+
+func TestIsAgentActive_PIDReuseDetected(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("test requires /proc filesystem (Linux)")
+	}
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(locksDir, 0o755)
+
+	// Write a lock with the current PID but a fabricated start time that
+	// does not match the actual process start time. This simulates PID reuse.
+	fakeIdentity := fmt.Sprintf("%d:99999999999", os.Getpid())
+	os.WriteFile(filepath.Join(locksDir, "reused.pid"), []byte(fakeIdentity), 0o644)
+
+	if IsAgentActive(tasksDir, "reused") {
+		t.Error("lock with mismatched start time should detect PID reuse and return false")
 	}
 }
 
@@ -360,6 +396,7 @@ func TestIsAgentActive_EPERMTreatedAsAlive(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	// PID 1 (init/systemd) belongs to root; Signal(0) returns EPERM for non-root callers.
+	// Use legacy PID-only format since we can't read PID 1's start time as non-root.
 	if err := os.WriteFile(filepath.Join(locksDir, "other-user.pid"), []byte("1"), 0o644); err != nil {
 		t.Fatalf("write pid file: %v", err)
 	}
@@ -414,8 +451,17 @@ func TestRegisterAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lock file not created: %v", err)
 	}
-	if got := strings.TrimSpace(string(data)); got != strconv.Itoa(os.Getpid()) {
-		t.Errorf("lock file PID = %q, want %q", got, strconv.Itoa(os.Getpid()))
+	got := strings.TrimSpace(string(data))
+	pidStr := strconv.Itoa(os.Getpid())
+	// Lock file must start with the PID.
+	if !strings.HasPrefix(got, pidStr) {
+		t.Errorf("lock file content = %q, want prefix %q", got, pidStr)
+	}
+	// On Linux, expect "PID:starttime" format.
+	if _, statErr := os.Stat("/proc/self/stat"); statErr == nil {
+		if !strings.Contains(got, ":") {
+			t.Errorf("lock file content = %q, expected PID:starttime format on Linux", got)
+		}
 	}
 
 	cleanup()
@@ -453,8 +499,8 @@ func TestCleanStaleLocks(t *testing.T) {
 	locksDir := filepath.Join(tasksDir, ".locks")
 	os.MkdirAll(locksDir, 0o755)
 
-	os.WriteFile(filepath.Join(locksDir, "alive.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
-	os.WriteFile(filepath.Join(locksDir, "dead.pid"), []byte("2147483647"), 0o644)
+	os.WriteFile(filepath.Join(locksDir, "alive.pid"), []byte(agentLockIdentity(os.Getpid())), 0o644)
+	os.WriteFile(filepath.Join(locksDir, "dead.pid"), []byte("2147483647:99999999"), 0o644)
 
 	CleanStaleLocks(tasksDir)
 
