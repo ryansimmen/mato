@@ -20,10 +20,8 @@ clean: ## Remove build artifacts
 fmt: ## Format Go source files
 	go fmt ./...
 
-install: ## Install mato binary to GOBIN
+install: ## Install mato binary to GOBIN and mato-skill to ~/.copilot/skills/
 	go install ./cmd/mato
-
-install-skill: ## Install mato-skill to ~/.copilot/skills/
 	./scripts/install-skill.sh
 
 integration-test: ## Run integration tests with race detector
