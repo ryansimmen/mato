@@ -97,7 +97,10 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		}
 		if err := markTaskMerged(task.path); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: merged task %s but could not mark completion: %v\n", task.name, err)
-			continue
+			// Continue to moveTaskWithRetry: moving to completed/ is
+			// more important than the merged record.  If the move also
+			// fails, the next cycle will detect the already-merged
+			// branch via the idempotent squash check.
 		}
 		if err := moveTaskWithRetry(task.path, completedPath); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
@@ -146,6 +149,15 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
 	if _, err := git.Output(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
 		return fmt.Errorf("%w: %s: %v", errSquashMergeConflict, taskBranch, err)
 	}
+
+	// If the squash produced no staged changes, the task branch is already
+	// fully merged into the target (e.g. a prior push succeeded but
+	// post-push bookkeeping failed).  Return success without a duplicate
+	// commit so the caller can finish the bookkeeping.
+	if _, err := git.Output(cloneDir, "diff", "--cached", "--quiet"); err == nil {
+		return nil
+	}
+
 	if _, err := git.Output(cloneDir, "commit", "-m", task.title); err != nil {
 		return fmt.Errorf("commit squash merge: %w", err)
 	}
