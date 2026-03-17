@@ -376,7 +376,7 @@ func hasActiveOverlap(tasksDir string, affects []string) bool {
 	}
 	// Only check in-progress and ready-to-merge — these represent tasks that are
 	// actively being worked on or awaiting merge. We intentionally exclude backlog/
-	// because RemoveOverlappingTasks handles backlog-vs-backlog conflicts with
+	// because DeferredOverlappingTasks handles backlog-vs-backlog conflicts with
 	// proper priority ordering. Including backlog here would cause priority
 	// inversion: a high-priority waiting task would be blocked by a lower-priority
 	// backlog task that hasn't even been claimed yet.
