@@ -234,3 +234,27 @@ func TestSelectAndClaimTask_FrontmatterMaxRetries(t *testing.T) {
 		t.Fatalf("custom.md not in failed: %v", err)
 	}
 }
+
+func TestSelectAndClaimTask_ZeroMaxRetries(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "zero-retry.md"), strings.Join([]string{
+		"---",
+		"max_retries: 0",
+		"---",
+		"# Zero retries",
+		"",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(dir, ".queue"), "zero-retry.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-10", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected nil (max_retries=0 means no retries allowed), got %+v", task)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "failed", "zero-retry.md")); err != nil {
+		t.Fatalf("zero-retry.md not in failed: %v", err)
+	}
+}

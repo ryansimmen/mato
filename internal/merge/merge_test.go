@@ -543,6 +543,47 @@ func TestProcessQueue_RespectsMaxRetries(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_ZeroMaxRetries(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "zero-retry.md")
+	taskContent := strings.Join([]string{
+		"---",
+		"max_retries: 0",
+		"---",
+		"# Zero retries",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", got)
+	}
+
+	// With max_retries: 0 and 0 prior failures, the task should go to failed/
+	// because 0 >= 0 (no retries allowed).
+	failedFile := filepath.Join(tasksDir, "failed", "zero-retry.md")
+	data, err := os.ReadFile(failedFile)
+	if err != nil {
+		t.Fatalf("failed task file missing: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- failure:") {
+		t.Fatalf("failed task should contain failure record, got %q", string(data))
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "zero-retry.md")); !os.IsNotExist(err) {
+		t.Fatalf("zero-retry task should not be in backlog, stat err = %v", err)
+	}
+}
+
 func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := setupTasksDir(t)
