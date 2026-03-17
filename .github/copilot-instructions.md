@@ -33,6 +33,22 @@ When asked to implement a change, follow this process:
 - **Integration tests** in `internal/integration/` — use `package integration_test`
 - **Prompt tests** execute actual bash commands from `task-instructions.md` in real git repos
 - **Race detector** — integration tests should pass with `go test -race`
+- **Minimal dependencies** — only external dep is `gopkg.in/yaml.v3`; everything else uses Go standard library. Do not add third-party packages without strong justification.
+- **Naming conventions** — task files: `kebab-case.md`, branches: `task/<sanitized-name>`, agent IDs: 8-char hex, queue manifest: `.queue`
+
+## Error Handling & Logging
+
+- **Error wrapping**: `fmt.Errorf("context: %w", err)` — always add context, always use `%w` for wrappable errors
+- **Sentinel errors**: Defined as unexported package-level `var` (e.g., `errTaskBranchNotPushed`), matched via `errors.Is`
+- **Non-fatal warnings**: `fmt.Fprintf(os.Stderr, "warning: ...\n")` and continue — never fatal for recoverable issues
+- **Progress output**: `fmt.Printf(...)` to stdout for user-facing info
+- **No logging library** — plain `fmt` only; no structured logging
+
+## File I/O & Timestamps
+
+- **Atomic writes**: All file writes use "write to temp file in same dir, then `os.Rename`" to prevent partial writes. New file I/O code must follow this pattern.
+- **Timestamps**: Always UTC — call `.UTC()` on `time.Now()`. Store as RFC3339 in task metadata HTML comments.
+- **HTML comment metadata**: Runtime state tracked via `<!-- claimed-by: ... -->`, `<!-- failure: ... -->`, `<!-- branch: ... -->`, `<!-- merged: ... -->` — these are the core state mechanism for task lifecycle
 
 ## Testing Requirements
 
@@ -54,7 +70,7 @@ When asked to implement a change, follow this process:
 ## Key Architecture Facts
 
 - Tasks are markdown files with optional YAML frontmatter
-- Host manages queue: `waiting/` → `backlog/` → `in-progress/` → `ready-to-merge/` → `completed/`
+- Host manages queue: `waiting/` → `backlog/` → `in-progress/` → `ready-to-merge/` → `completed/` (or `failed/` when retry budget is exhausted or task branch is missing)
 - Agents run in Docker, push task branches only, never the target branch
 - Host merge queue squash-merges task branches serially
 - `affects:` metadata prevents concurrent conflicting tasks (checked against in-progress/ and ready-to-merge/)
