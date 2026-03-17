@@ -34,9 +34,22 @@ func ParseTaskFile(path string) (TaskMeta, string, error) {
 	body := content
 
 	lines := strings.Split(content, "\n")
-	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+
+	// Skip leading HTML comment lines (e.g. <!-- claimed-by: ... -->) before
+	// checking for frontmatter, since claim.go prepends these before the --- delimiter.
+	startLine := 0
+	for startLine < len(lines) {
+		trimmed := strings.TrimSpace(lines[startLine])
+		if trimmed == "" || (strings.HasPrefix(trimmed, "<!--") && strings.HasSuffix(trimmed, "-->")) {
+			startLine++
+			continue
+		}
+		break
+	}
+
+	if startLine < len(lines) && strings.TrimSpace(lines[startLine]) == "---" {
 		end := -1
-		for i := 1; i < len(lines); i++ {
+		for i := startLine + 1; i < len(lines); i++ {
 			if strings.TrimSpace(lines[i]) == "---" {
 				end = i
 				break
@@ -45,7 +58,7 @@ func ParseTaskFile(path string) (TaskMeta, string, error) {
 		if end == -1 {
 			return TaskMeta{}, "", fmt.Errorf("unterminated frontmatter in %s", path)
 		}
-		block := strings.Join(lines[1:end], "\n")
+		block := strings.Join(lines[startLine+1:end], "\n")
 		if strings.TrimSpace(block) != "" {
 			if err := yaml.Unmarshal([]byte(block), &meta); err != nil {
 				return TaskMeta{}, "", fmt.Errorf("parse frontmatter in %s: %w", path, err)
