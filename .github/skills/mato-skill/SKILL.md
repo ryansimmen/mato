@@ -46,6 +46,7 @@ Review recent commits for correctness and completeness.
 3. Report each commit as ✅ (good), ⚠️ (has issue), or ❌ (broken).
 4. For any ⚠️ or ❌, create a task file if the project uses `.tasks/backlog/` (see Task Output below), otherwise report the issue inline.
 5. Run the project's build + test commands to confirm everything passes.
+6. End with a summary: how many commits reviewed, how many ✅/⚠️/❌.
 
 ## Codebase Review
 
@@ -105,7 +106,21 @@ If the project has a `.tasks/backlog/` directory:
 4. Use kebab-case filenames: `fix-unclosed-db-connections.md`
 5. **Placement**: Tasks with no `depends_on` go in `.tasks/backlog/`. Tasks with dependencies go in `.tasks/waiting/` — they will be promoted to `backlog/` automatically once their dependencies complete.
 
-If the project does NOT have a `.tasks/` directory, report all findings inline in your response, grouped by severity.
+If the project does NOT have a `.tasks/` directory, report all findings inline in your response using this format:
+
+```
+## 🔴 High Priority
+### 1. <issue title>
+**File:** `path/to/file` (lines N-M)
+**Issue:** <description>
+**Fix:** <suggested fix>
+
+## 🟡 Medium Priority
+...
+
+## 🟢 Low Priority
+...
+```
 
 ### Task File Format
 
@@ -120,7 +135,6 @@ affects:
   - src/db/connection_test.go
 tags: [bug, reliability]
 estimated_complexity: medium
-max_retries: 3
 ---
 # Fix unclosed database connections on error paths
 
