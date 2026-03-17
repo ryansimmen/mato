@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/frontmatter"
 	"mato/internal/git"
 )
 
@@ -225,7 +226,7 @@ func TestProcessQueue_UsesBranchFromTaskFile(t *testing.T) {
 	}
 
 	taskName := "custom branch.md"
-	derivedBranch := "task/" + sanitizeBranchName(taskName)
+	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskName)
 	actualBranch := "task/custom-branch-actual"
 
 	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
@@ -288,7 +289,7 @@ func TestProcessQueue_FallbackToDerivedBranch(t *testing.T) {
 	}
 
 	taskName := "fallback branch.md"
-	derivedBranch := "task/" + sanitizeBranchName(taskName)
+	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskName)
 	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
 		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
 	}
@@ -417,7 +418,7 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 	}
 
 	firstTaskName := "first task.md"
-	firstBranch := "task/" + sanitizeBranchName(firstTaskName)
+	firstBranch := "task/" + frontmatter.SanitizeBranchName(firstTaskName)
 	if _, err := git.Output(repoRoot, "checkout", "-b", firstBranch, "mato"); err != nil {
 		t.Fatalf("git checkout -b %s: %v", firstBranch, err)
 	}
@@ -834,7 +835,7 @@ func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
 	createReadyTaskWithBranch := func(taskName, title, changedFile string) {
 		t.Helper()
 
-		taskBranch := "task/" + sanitizeBranchName(taskName)
+		taskBranch := "task/" + frontmatter.SanitizeBranchName(taskName)
 		if _, err := git.Output(repoRoot, "checkout", "-b", taskBranch, "mato"); err != nil {
 			t.Fatalf("git checkout -b %s: %v", taskBranch, err)
 		}
@@ -1031,30 +1032,6 @@ func TestProcessQueue_NonSentinelErrorRespectsMaxRetries(t *testing.T) {
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
 		t.Fatalf("ready-to-merge task should be moved to failed, stat err = %v", err)
-	}
-}
-
-func TestSanitizeBranchName(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{name: "simple name", input: "add-feature.md", want: "add-feature"},
-		{name: "spaces and special chars", input: "fix the bug (urgent).md", want: "fix-the-bug-urgent"},
-		{name: "already clean no extension", input: "my-task", want: "my-task"},
-		{name: "consecutive special chars", input: "foo---bar___baz.md", want: "foo-bar-baz"},
-		{name: "leading and trailing specials", input: "---hello---.md", want: "hello"},
-		{name: "empty after strip", input: ".md", want: "unnamed"},
-		{name: "unicode characters", input: "tâche-résumé.md", want: "t-che-r-sum"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := sanitizeBranchName(tt.input); got != tt.want {
-				t.Errorf("sanitizeBranchName(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
 	}
 }
 
