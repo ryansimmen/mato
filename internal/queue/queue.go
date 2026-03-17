@@ -40,21 +40,24 @@ func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
 	return false
 }
 
-// RegisterAgent writes a PID lock file so concurrent mato instances
-// know this agent is still alive. Returns a cleanup function.
+// RegisterAgent writes a lock file containing "PID:starttime" so concurrent
+// mato instances can detect PID reuse. Falls back to PID-only when start time
+// is unavailable (non-Linux). Returns a cleanup function.
 func RegisterAgent(tasksDir, agentID string) (func(), error) {
 	locksDir := filepath.Join(tasksDir, ".locks")
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create locks dir: %w", err)
 	}
 	lockFile := filepath.Join(locksDir, agentID+".pid")
-	if err := os.WriteFile(lockFile, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+	identity := agentLockIdentity(os.Getpid())
+	if err := os.WriteFile(lockFile, []byte(identity), 0o644); err != nil {
 		return nil, fmt.Errorf("write agent lock: %w", err)
 	}
 	return func() { os.Remove(lockFile) }, nil
 }
 
 // IsAgentActive checks whether the agent that wrote a lock file is still running.
+// Supports both the "PID:starttime" format and legacy "PID" format.
 func IsAgentActive(tasksDir, agentID string) bool {
 	if agentID == "" {
 		return false
@@ -64,16 +67,7 @@ func IsAgentActive(tasksDir, agentID string) bool {
 	if err != nil {
 		return false
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = p.Signal(syscall.Signal(0))
-	return err == nil || errors.Is(err, syscall.EPERM)
+	return isAgentLockHolderAlive(strings.TrimSpace(string(data)))
 }
 
 // ParseClaimedBy extracts the agent ID from a task file's claimed-by metadata.
@@ -628,6 +622,73 @@ func writeFileAtomically(path string, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// agentLockIdentity returns "PID:starttime" for the given process.
+// Falls back to just "PID" if start time is unavailable (non-Linux).
+func agentLockIdentity(pid int) string {
+	startTime := agentProcessStartTime(pid)
+	if startTime != "" {
+		return fmt.Sprintf("%d:%s", pid, startTime)
+	}
+	return strconv.Itoa(pid)
+}
+
+// isAgentLockHolderAlive checks if the process described by a lock identity
+// ("PID" or "PID:starttime") is still running with the same start time.
+// Legacy PID-only files are handled gracefully.
+func isAgentLockHolderAlive(identity string) bool {
+	parts := strings.SplitN(identity, ":", 2)
+	pid, err := strconv.Atoi(parts[0])
+	if err != nil || pid <= 0 {
+		return false
+	}
+	if !agentIsProcessActive(pid) {
+		return false
+	}
+	// If we have a start time, verify it matches (detect PID reuse).
+	if len(parts) == 2 && parts[1] != "" {
+		currentStart := agentProcessStartTime(pid)
+		if currentStart != "" && currentStart != parts[1] {
+			return false // PID was reused by a different process
+		}
+	}
+	return true
+}
+
+// agentProcessStartTime reads the start time of a process from /proc/<pid>/stat.
+// Returns empty string if unavailable (non-Linux or process gone).
+func agentProcessStartTime(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return ""
+	}
+	// Field 22 (1-indexed) is starttime. Find it after the comm field
+	// which is enclosed in parens and may contain spaces.
+	s := string(data)
+	closeParenIdx := strings.LastIndex(s, ")")
+	if closeParenIdx < 0 || closeParenIdx+2 >= len(s) {
+		return ""
+	}
+	fields := strings.Fields(s[closeParenIdx+2:])
+	// After the closing paren, fields are: state(1), ppid(2), pgrp(3), ...
+	// starttime is field 20 (0-indexed from after the paren)
+	if len(fields) < 20 {
+		return ""
+	}
+	return fields[19]
+}
+
+func agentIsProcessActive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = p.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func GenerateAgentID() (string, error) {
