@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -19,11 +18,6 @@ type ClaimedTask struct {
 	Title    string // first heading or filename stem
 	TaskPath string // host-side path in in-progress/
 }
-
-var (
-	branchUnsafe = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
-	branchMulti  = regexp.MustCompile(`-{2,}`)
-)
 
 // SelectAndClaimTask picks the highest-priority available task, atomically
 // moves it to in-progress/, stamps the claimed-by header, and checks the
@@ -69,8 +63,8 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 			fmt.Fprintf(os.Stderr, "warning: could not write claimed-by header for %s: %v\n", name, err)
 		}
 
-		branch := "task/" + sanitizeForBranch(name)
-		title := extractTitle(name, body)
+		branch := "task/" + frontmatter.SanitizeBranchName(name)
+		title := frontmatter.ExtractTitle(name, body)
 
 		return &ClaimedTask{
 			Filename: name,
@@ -146,31 +140,4 @@ func countFailureLines(taskPath string) int {
 		return 0
 	}
 	return strings.Count(string(data), "<!-- failure:")
-}
-
-func sanitizeForBranch(filename string) string {
-	name := strings.TrimSuffix(filename, ".md")
-	name = branchUnsafe.ReplaceAllString(name, "-")
-	name = branchMulti.ReplaceAllString(name, "-")
-	name = strings.Trim(name, "-")
-	if name == "" {
-		name = "unnamed"
-	}
-	return name
-}
-
-func extractTitle(filename, body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "#") {
-			trimmed = strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
-		}
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return frontmatter.TaskFileStem(filename)
 }

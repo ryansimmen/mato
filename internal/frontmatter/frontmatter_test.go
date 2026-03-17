@@ -465,3 +465,89 @@ priority: high
 		})
 	}
 }
+
+func TestSanitizeBranchName(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "simple name", input: "add-feature.md", want: "add-feature"},
+		{name: "spaces and special chars", input: "fix the bug (urgent).md", want: "fix-the-bug-urgent"},
+		{name: "already clean no extension", input: "my-task", want: "my-task"},
+		{name: "consecutive special chars", input: "foo---bar___baz.md", want: "foo-bar-baz"},
+		{name: "leading and trailing specials", input: "---hello---.md", want: "hello"},
+		{name: "empty after strip", input: ".md", want: "unnamed"},
+		{name: "unicode characters", input: "tâche-résumé.md", want: "t-che-r-sum"},
+		{name: "no extension", input: "plain-name", want: "plain-name"},
+		{name: "all special chars", input: "!!@@##.md", want: "unnamed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SanitizeBranchName(tt.input); got != tt.want {
+				t.Errorf("SanitizeBranchName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractTitle(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		body     string
+		want     string
+	}{
+		{
+			name:     "heading line",
+			filename: "my-task.md",
+			body:     "# My Task Title\n\nSome body text.",
+			want:     "My Task Title",
+		},
+		{
+			name:     "multi-level heading",
+			filename: "my-task.md",
+			body:     "## Sub Heading\n\nText.",
+			want:     "Sub Heading",
+		},
+		{
+			name:     "plain text first line",
+			filename: "my-task.md",
+			body:     "Just a plain line\nMore text.",
+			want:     "Just a plain line",
+		},
+		{
+			name:     "empty body falls back to filename",
+			filename: "fallback-task.md",
+			body:     "",
+			want:     "fallback-task",
+		},
+		{
+			name:     "only blank lines falls back to filename",
+			filename: "blank.md",
+			body:     "\n\n\n",
+			want:     "blank",
+		},
+		{
+			name:     "leading blank lines skipped",
+			filename: "task.md",
+			body:     "\n\n# Real Title\nBody.",
+			want:     "Real Title",
+		},
+		{
+			name:     "heading with only hashes falls back",
+			filename: "edge.md",
+			body:     "###\nActual content",
+			want:     "Actual content",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExtractTitle(tt.filename, tt.body); got != tt.want {
+				t.Errorf("ExtractTitle(%q, %q) = %q, want %q", tt.filename, tt.body, got, tt.want)
+			}
+		})
+	}
+}

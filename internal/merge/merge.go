@@ -24,8 +24,6 @@ type mergeQueueTask struct {
 	branch   string
 }
 
-var nonAlphanumDash = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
-var multiDash = regexp.MustCompile(`-{2,}`)
 var branchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
 
 var errTaskBranchNotPushed = errors.New("task branch not pushed by agent")
@@ -65,7 +63,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		tasks = append(tasks, mergeQueueTask{
 			name:     entry.Name(),
 			path:     path,
-			title:    taskTitle(entry.Name(), body),
+			title:    frontmatter.ExtractTitle(entry.Name(), body),
 			priority: meta.Priority,
 			branch:   parseBranchFromFile(path),
 		})
@@ -186,22 +184,6 @@ func configureMergeCloneIdentity(repoRoot, cloneDir string) error {
 	return nil
 }
 
-func taskTitle(name, body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "#") {
-			trimmed = strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
-		}
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return frontmatter.TaskFileStem(name)
-}
-
 func parseBranchFromFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -218,7 +200,7 @@ func taskBranchName(task mergeQueueTask) string {
 	if task.branch != "" {
 		return task.branch
 	}
-	return "task/" + sanitizeBranchName(task.name)
+	return "task/" + frontmatter.SanitizeBranchName(task.name)
 }
 
 func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, err error) error {
@@ -470,15 +452,4 @@ func isProcessActive(pid int) bool {
 	}
 	err = p.Signal(syscall.Signal(0))
 	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
-func sanitizeBranchName(name string) string {
-	name = strings.TrimSuffix(name, ".md")
-	name = nonAlphanumDash.ReplaceAllString(name, "-")
-	name = multiDash.ReplaceAllString(name, "-")
-	name = strings.Trim(name, "-")
-	if name == "" {
-		name = "unnamed"
-	}
-	return name
 }

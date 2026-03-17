@@ -4,9 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+)
+
+var (
+	branchUnsafeRe = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
+	branchMultiRe  = regexp.MustCompile(`-{2,}`)
 )
 
 type TaskMeta struct {
@@ -100,6 +106,38 @@ func StripHTMLCommentLines(body string) string {
 		filtered = append(filtered, line)
 	}
 	return strings.Join(filtered, "\n")
+}
+
+// ExtractTitle returns the first non-empty line from the body, stripping
+// leading markdown heading markers (#). Falls back to TaskFileStem(filename).
+func ExtractTitle(filename, body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			trimmed = strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		}
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return TaskFileStem(filename)
+}
+
+// SanitizeBranchName converts a task filename into a safe git branch name by
+// stripping the .md extension, replacing non-alphanumeric characters with
+// dashes, collapsing consecutive dashes, and trimming edge dashes.
+func SanitizeBranchName(name string) string {
+	name = strings.TrimSuffix(name, ".md")
+	name = branchUnsafeRe.ReplaceAllString(name, "-")
+	name = branchMultiRe.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-")
+	if name == "" {
+		name = "unnamed"
+	}
+	return name
 }
 
 func filterEmpty(ss []string) []string {
