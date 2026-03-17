@@ -170,6 +170,18 @@ func laterStateDuplicateDir(tasksDir, name string) string {
 
 func ReconcileReadyQueue(tasksDir string) int {
 	completedIDs := completedTaskIDs(tasksDir)
+	nonCompletedIDs := nonCompletedTaskIDs(tasksDir)
+
+	// Remove ambiguous IDs: if an ID appears in both completed and
+	// non-completed directories, we cannot safely assume the dependency
+	// is satisfied — it may refer to the non-completed copy.
+	for id := range nonCompletedIDs {
+		if _, dup := completedIDs[id]; dup {
+			fmt.Fprintf(os.Stderr, "warning: task ID %q exists in both completed and non-completed directories; dependency on it will not be satisfied\n", id)
+			delete(completedIDs, id)
+		}
+	}
+
 	knownIDs := allKnownTaskIDs(tasksDir)
 	waitingDir := filepath.Join(tasksDir, "waiting")
 	entries, err := os.ReadDir(waitingDir)
@@ -263,6 +275,28 @@ func completedTaskIDs(tasksDir string) map[string]struct{} {
 			continue
 		}
 		ids[meta.ID] = struct{}{}
+	}
+	return ids
+}
+
+// nonCompletedTaskIDs returns the set of task IDs found in all directories except completed/.
+func nonCompletedTaskIDs(tasksDir string) map[string]struct{} {
+	ids := make(map[string]struct{})
+	for _, dir := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "failed"} {
+		entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			ids[frontmatter.TaskFileStem(e.Name())] = struct{}{}
+			path := filepath.Join(tasksDir, dir, e.Name())
+			if meta, _, err := frontmatter.ParseTaskFile(path); err == nil {
+				ids[meta.ID] = struct{}{}
+			}
+		}
 	}
 	return ids
 }
