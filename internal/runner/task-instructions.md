@@ -102,10 +102,14 @@ done
 ```bash
 git status --short
 git add -A
-COMMIT_MSG="$TASK_TITLE"
+COMMIT_SUBJECT="$TASK_TITLE"
 # If the task was ambiguous, replace the note text with a short uncertainty summary:
-# COMMIT_MSG="$TASK_TITLE (best-effort: explain the uncertainty briefly)"
-git commit -m "$COMMIT_MSG"
+# COMMIT_SUBJECT="$TASK_TITLE (best-effort: explain the uncertainty briefly)"
+COMMIT_BODY="Task: ${FILENAME}
+
+Changed files:
+$(git diff --cached --name-only | sort)"
+git commit -m "$COMMIT_SUBJECT" -m "$COMMIT_BODY"
 git log --oneline -1
 ```
 **Decision table:**
