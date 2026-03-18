@@ -308,7 +308,7 @@ func writeJSONAtomically(path string, value any) error {
 	dir := filepath.Dir(path)
 	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpName := tmpFile.Name()
 	cleanup := func() {
@@ -318,19 +318,19 @@ func writeJSONAtomically(path string, value any) error {
 
 	if err := tmpFile.Chmod(0o644); err != nil {
 		cleanup()
-		return err
+		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := json.NewEncoder(tmpFile).Encode(value); err != nil {
 		cleanup()
-		return err
+		return fmt.Errorf("encode json to temp file: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		os.Remove(tmpName)
-		return err
+		return fmt.Errorf("close temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
-		return err
+		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
 }
