@@ -43,7 +43,7 @@ func setupTestRepo(t *testing.T) string {
 func TestShowWithPopulatedTasksDir(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
 		}
@@ -53,12 +53,13 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	}
 
 	files := map[string]string{
-		filepath.Join(tasksDir, "waiting", "refactor-api.md"):    "---\nid: refactor-api\ndepends_on: [setup-models, add-auth]\n---\n# Refactor the API layer\n",
-		filepath.Join(tasksDir, "backlog", "add-auth.md"):        "---\nid: add-auth\npriority: 10\n---\n# Add authentication\n",
-		filepath.Join(tasksDir, "in-progress", "agent-task.md"):  "<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: agent-task\n---\n# In progress task\n",
-		filepath.Join(tasksDir, "ready-to-merge", "merge-me.md"): "---\npriority: 5\n---\n# Ready to merge\n",
-		filepath.Join(tasksDir, "completed", "setup-models.md"):  "---\nid: setup-models\n---\n# Setup models\n",
-		filepath.Join(tasksDir, "failed", "failed-task.md"):      "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — merge conflict in config.yaml -->\n---\nid: failed-task\nmax_retries: 2\n---\n# A failed task\n",
+		filepath.Join(tasksDir, "waiting", "refactor-api.md"):            "---\nid: refactor-api\ndepends_on: [setup-models, add-auth]\n---\n# Refactor the API layer\n",
+		filepath.Join(tasksDir, "backlog", "add-auth.md"):                "---\nid: add-auth\npriority: 10\n---\n# Add authentication\n",
+		filepath.Join(tasksDir, "in-progress", "agent-task.md"):          "<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: agent-task\n---\n# In progress task\n",
+		filepath.Join(tasksDir, "ready-for-review", "review-feature.md"): "<!-- branch: task/review-feature -->\n---\npriority: 10\n---\n# Review this feature\n",
+		filepath.Join(tasksDir, "ready-to-merge", "merge-me.md"):         "---\npriority: 5\n---\n# Ready to merge\n",
+		filepath.Join(tasksDir, "completed", "setup-models.md"):          "---\nid: setup-models\n---\n# Setup models\n",
+		filepath.Join(tasksDir, "failed", "failed-task.md"):              "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — merge conflict in config.yaml -->\n---\nid: failed-task\nmax_retries: 2\n---\n# A failed task\n",
 	}
 	for path, content := range files {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -105,6 +106,9 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	// Verify task titles appear.
 	if !contains(output, "In progress task") {
 		t.Errorf("output should contain in-progress task title, got:\n%s", output)
+	}
+	if !contains(output, "Review this feature") {
+		t.Errorf("output should contain ready-for-review task title, got:\n%s", output)
 	}
 	if !contains(output, "Ready to merge") {
 		t.Errorf("output should contain ready-to-merge task title, got:\n%s", output)
@@ -689,6 +693,73 @@ func TestRecentMessagesAgentPrefix(t *testing.T) {
 	// Recent Messages should show "agent-abc12345", not bare "abc12345".
 	if !contains(output, "agent-abc12345") {
 		t.Errorf("Recent Messages should show 'agent-abc12345', got:\n%s", output)
+	}
+}
+
+func TestReadyForReviewSection(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed", ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Write a task with a branch comment.
+	taskContent := "<!-- branch: task/add-login -->\n---\npriority: 20\n---\n# Add login page\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, "ready-for-review", "add-login.md"), []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Write a task without a branch comment.
+	taskContent2 := "---\npriority: 30\n---\n# Fix typo in docs\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, "ready-for-review", "fix-typo.md"), []byte(taskContent2), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	originalStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = originalStdout }()
+
+	callErr := Show(repoRoot, "")
+	w.Close()
+	out, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("io.ReadAll: %v", readErr)
+	}
+	if callErr != nil {
+		t.Fatalf("Show: %v", callErr)
+	}
+	output := string(out)
+
+	if !contains(output, "Ready for Review") {
+		t.Errorf("output should contain 'Ready for Review' section header, got:\n%s", output)
+	}
+	if !contains(output, "add-login.md") {
+		t.Errorf("output should contain task filename 'add-login.md', got:\n%s", output)
+	}
+	if !contains(output, "Add login page") {
+		t.Errorf("output should contain task title 'Add login page', got:\n%s", output)
+	}
+	if !contains(output, "on task/add-login") {
+		t.Errorf("output should contain branch info 'on task/add-login', got:\n%s", output)
+	}
+	if !contains(output, "fix-typo.md") {
+		t.Errorf("output should contain task filename 'fix-typo.md', got:\n%s", output)
+	}
+	if !contains(output, "Fix typo in docs") {
+		t.Errorf("output should contain task title 'Fix typo in docs', got:\n%s", output)
+	}
+	// The queue overview should show the count.
+	if !contains(output, "ready-review:   2") {
+		t.Errorf("output should contain 'ready-review:   2', got:\n%s", output)
 	}
 }
 
