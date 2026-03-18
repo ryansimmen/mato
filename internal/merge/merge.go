@@ -90,7 +90,16 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		completedPath := filepath.Join(tasksDir, "completed", task.name)
 		if taskHasMergeSuccessRecord(task.path) {
 			if err := moveTaskWithRetry(task.path, completedPath); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
+				// If the destination already exists, the task was already
+				// moved to completed/ by a prior cycle. Remove the
+				// ready-to-merge copy to avoid an infinite retry loop.
+				if _, statErr := os.Stat(completedPath); statErr == nil {
+					if removeErr := os.Remove(task.path); removeErr != nil {
+						fmt.Fprintf(os.Stderr, "warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
+				}
 				continue
 			}
 			merged++
@@ -126,8 +135,14 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 			// branch via the idempotent squash check.
 		}
 		if err := moveTaskWithRetry(task.path, completedPath); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
-			continue
+			if _, statErr := os.Stat(completedPath); statErr == nil {
+				if removeErr := os.Remove(task.path); removeErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
+				continue
+			}
 		}
 		merged++
 	}

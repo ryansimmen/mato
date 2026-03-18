@@ -216,7 +216,7 @@ func CleanOldMessages(tasksDir string, maxAge time.Duration) {
 		return
 	}
 
-	cutoff := time.Now().Add(-maxAge)
+	cutoff := time.Now().UTC().Add(-maxAge)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
