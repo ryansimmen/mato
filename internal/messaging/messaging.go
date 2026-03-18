@@ -183,7 +183,7 @@ func ReadAllPresence(tasksDir string) (map[string]PresenceInfo, error) {
 		}
 		var info PresenceInfo
 		if err := json.Unmarshal(data, &info); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse message %s: %v\n", entry.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not parse presence file %s: %v\n", entry.Name(), err)
 			continue
 		}
 		result[info.AgentID] = info
