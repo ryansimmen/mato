@@ -28,7 +28,7 @@ func Show(repoRoot, tasksDir string) error {
 	}
 
 	// Collect all data before printing.
-	queueDirs := []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed"}
+	queueDirs := []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"}
 	counts := make(map[string]int, len(queueDirs))
 	for _, dir := range queueDirs {
 		counts[dir] = countMarkdownFiles(filepath.Join(tasksDir, dir))
@@ -48,6 +48,7 @@ func Show(repoRoot, tasksDir string) error {
 		deferred[name] = struct{}{}
 	}
 	inProgressTasks := listTasksInDir(tasksDir, "in-progress")
+	readyForReviewTasks := listTasksInDir(tasksDir, "ready-for-review")
 	readyToMergeTasks := listTasksInDir(tasksDir, "ready-to-merge")
 	failedTasks := listTasksInDir(tasksDir, "failed")
 	reverseDeps := reverseDependencies(tasksDir)
@@ -75,6 +76,7 @@ func Show(repoRoot, tasksDir string) error {
 	fmt.Printf("  deferred:       %d  (conflict-blocked, in backlog)\n", len(deferred))
 	fmt.Printf("  waiting:        %d  (dependency-blocked)\n", counts["waiting"])
 	fmt.Printf("  in-progress:    %d\n", counts["in-progress"])
+	fmt.Printf("  ready-review:   %d\n", counts["ready-for-review"])
 	fmt.Printf("  ready-to-merge: %d\n", counts["ready-to-merge"])
 	fmt.Printf("  completed:      %d\n", counts["completed"])
 	fmt.Printf("  failed:         %d\n", counts["failed"])
@@ -172,6 +174,23 @@ func Show(repoRoot, tasksDir string) error {
 			} else {
 				fmt.Printf("  %s\n", label)
 			}
+		}
+	}
+
+	// ── Ready for Review ──
+	if len(readyForReviewTasks) > 0 {
+		fmt.Println()
+		fmt.Println("Ready for Review")
+		fmt.Println("────────────────")
+		for _, task := range readyForReviewTasks {
+			taskPath := filepath.Join(tasksDir, "ready-for-review", task.name)
+			branch := parseBranchComment(taskPath)
+			var parts []string
+			parts = append(parts, task.title)
+			if branch != "" {
+				parts = append(parts, "on "+branch)
+			}
+			fmt.Printf("  %s — %s\n", task.name, strings.Join(parts, " "))
 		}
 	}
 
@@ -483,6 +502,7 @@ func taskStatesByID(tasksDir string) (map[string]string, error) {
 		{Dir: "waiting", State: "waiting"},
 		{Dir: "backlog", State: "backlog"},
 		{Dir: "in-progress", State: "in-progress"},
+		{Dir: "ready-for-review", State: "ready-for-review"},
 		{Dir: "ready-to-merge", State: "ready-to-merge"},
 		{Dir: "completed", State: "completed"},
 		{Dir: "failed", State: "failed"},
@@ -543,6 +563,20 @@ func formatDuration(d time.Duration) string {
 }
 
 var claimedAtRe = regexp.MustCompile(`claimed-at:\s*(\S+)`)
+var branchCommentRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
+
+// parseBranchComment extracts the branch name from a <!-- branch: ... --> comment.
+func parseBranchComment(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	m := branchCommentRe.FindStringSubmatch(string(data))
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
 
 // parseClaimedAt extracts the claimed-at timestamp from a task file's HTML comment.
 func parseClaimedAt(path string) time.Time {
