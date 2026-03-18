@@ -1,12 +1,10 @@
 .DEFAULT_GOAL := help
 
 -include .env
-export
 
 .PHONY: all build clean fmt help install install-skill integration-test run test
 
 BIN_DIR := bin
-REPO ?= $(error REPO is not set. Create a .env file with REPO=<path> or pass it on the command line)
 
 all: fmt build test ## Run formatting, build, and tests
 
@@ -28,7 +26,7 @@ integration-test: ## Run integration tests with race detector
 	go test -race -v ./internal/integration/...
 
 run: ## Run agent in Docker (use COPILOT_ARGS to pass args to copilot, e.g. COPILOT_ARGS="--model gpt-5.3-codex")
-	@if [ -z "$(REPO)" ]; then echo "REPO is required"; exit 1; fi
+	@if [ -z "$(REPO)" ]; then echo "REPO is required. Set REPO=<path> in .env or pass it on the command line."; exit 1; fi
 	go run ./cmd/mato --repo "$(REPO)" $(COPILOT_ARGS)
 
 test: ## Run tests
