@@ -486,6 +486,133 @@ func TestSelectAndClaimTask_PrependFails_RollbackSucceeds_ContinuesToNext(t *tes
 	}
 }
 
+func TestSelectAndClaimTask_RetryExhausted_MoveToFailedFails_RollbackToBacklog(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "exhausted.md"), strings.Join([]string{
+		"# Exhausted",
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"<!-- failure: three -->",
+		"",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(dir, "backlog", "healthy.md"), "# Healthy\nDo healthy.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "exhausted.md\nhealthy.md\n")
+
+	origMove := retryExhaustedMoveFn
+	t.Cleanup(func() { retryExhaustedMoveFn = origMove })
+
+	retryExhaustedMoveFn = func(src, dst string) error {
+		return fmt.Errorf("simulated move-to-failed failure")
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-re1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected healthy.md to be claimed, got nil")
+	}
+	if task.Filename != "healthy.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "healthy.md")
+	}
+
+	// exhausted.md should be back in backlog (rollback succeeded)
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "exhausted.md")); err != nil {
+		t.Fatalf("exhausted.md should be back in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "in-progress", "exhausted.md")); !os.IsNotExist(err) {
+		t.Fatal("exhausted.md should NOT be in in-progress")
+	}
+}
+
+func TestSelectAndClaimTask_RetryExhausted_DoubleFailure_ReturnsError(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "stuck.md"), strings.Join([]string{
+		"# Stuck",
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"<!-- failure: three -->",
+		"",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(dir, ".queue"), "stuck.md\n")
+
+	origMove := retryExhaustedMoveFn
+	origRollback := retryExhaustedRollback
+	t.Cleanup(func() {
+		retryExhaustedMoveFn = origMove
+		retryExhaustedRollback = origRollback
+	})
+
+	retryExhaustedMoveFn = func(src, dst string) error {
+		return fmt.Errorf("simulated move-to-failed failure")
+	}
+	retryExhaustedRollback = func(src, dst string) error {
+		return fmt.Errorf("simulated rollback failure")
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-re2", nil)
+	if err == nil {
+		t.Fatal("expected error when both move-to-failed and rollback fail, got nil")
+	}
+	if task != nil {
+		t.Fatalf("expected nil task on double failure, got %+v", task)
+	}
+	if !strings.Contains(err.Error(), "retry-exhausted rollback failed") {
+		t.Fatalf("error should mention retry-exhausted rollback failure: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated move-to-failed failure") {
+		t.Fatalf("error should include move-to-failed cause: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated rollback failure") {
+		t.Fatalf("error should include rollback cause: %v", err)
+	}
+
+	// Task should be stranded in in-progress (both moves failed)
+	if _, err := os.Stat(filepath.Join(dir, "in-progress", "stuck.md")); err != nil {
+		t.Fatalf("stuck.md should remain in in-progress after double failure: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_RetryExhausted_DoubleFailure_SkipsFurtherCandidates(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "exhausted.md"), strings.Join([]string{
+		"# Exhausted",
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"<!-- failure: three -->",
+		"",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(dir, "backlog", "second.md"), "# Second\nDo second.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "exhausted.md\nsecond.md\n")
+
+	origMove := retryExhaustedMoveFn
+	origRollback := retryExhaustedRollback
+	t.Cleanup(func() {
+		retryExhaustedMoveFn = origMove
+		retryExhaustedRollback = origRollback
+	})
+
+	retryExhaustedMoveFn = func(src, dst string) error {
+		return fmt.Errorf("simulated move-to-failed failure")
+	}
+	retryExhaustedRollback = func(src, dst string) error {
+		return fmt.Errorf("simulated rollback failure")
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-re3", nil)
+	if err == nil {
+		t.Fatal("expected error on double failure")
+	}
+	if task != nil {
+		t.Fatalf("expected nil task, got %+v", task)
+	}
+
+	// second.md should still be in backlog (not attempted after hard error)
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "second.md")); err != nil {
+		t.Fatalf("second.md should still be in backlog: %v", err)
+	}
+}
+
 func TestRecoverOrphanedTasks_HandlesStrandedWithoutClaimedBy(t *testing.T) {
 	dir := setupClaimTestDir(t)
 
