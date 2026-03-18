@@ -38,7 +38,7 @@ High-level flow:
 ### Startup
 `runner.Run(repoRoot, branch, tasksDirOverride, copilotArgs)` performs host initialization in this order:
 1. Resolve `repoRoot` with `git rev-parse --show-toplevel`.
-2. Ensure the target branch exists with `git.EnsureBranch(...)`; if the local branch exists, check it out; if only `origin/<branch>` exists, create the local branch from the remote-tracking ref; otherwise create it from `HEAD`.
+2. Ensure the target branch exists with `git.EnsureBranch(...)`; if the local branch exists, check it out; otherwise fetch the branch from `origin` (non-fatal on failure), then if `origin/<branch>` exists create the local branch from the remote-tracking ref; otherwise create it from `HEAD`.
 3. Resolve `tasksDir`; default is `<repoRoot>/.tasks`.
 4. Create queue directories: `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, `completed/`, and `failed/`.
 5. Create messaging directories with `messaging.Init(...)`: `.tasks/messages/events/`, `.tasks/messages/completions/`, and `.tasks/messages/presence/`.

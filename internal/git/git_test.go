@@ -206,6 +206,117 @@ func TestEnsureBranch_LocalBranchExists(t *testing.T) {
 	}
 }
 
+func TestEnsureBranch_FetchesRemoteBranchCreatedAfterClone(t *testing.T) {
+	bare, clone := initBareAndClone(t)
+
+	// Create a second clone that will push a new branch to origin.
+	pusher := t.TempDir()
+	cmd := exec.Command("git", "clone", bare, pusher)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clone pusher: %v\n%s", err, out)
+	}
+	for _, kv := range [][2]string{{"user.name", "test"}, {"user.email", "test@test.com"}} {
+		cmd = exec.Command("git", "-C", pusher, "config", kv[0], kv[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", kv[0], err, out)
+		}
+	}
+
+	// Create a branch "latebranch" and push it from the pusher clone.
+	cmd = exec.Command("git", "-C", pusher, "checkout", "-b", "latebranch")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkout -b latebranch: %v\n%s", err, out)
+	}
+	lateFile := filepath.Join(pusher, "late.txt")
+	if err := os.WriteFile(lateFile, []byte("late content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", pusher, "add", "late.txt")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", pusher, "commit", "-m", "late commit")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", pusher, "push", "origin", "latebranch")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git push latebranch: %v\n%s", err, out)
+	}
+
+	// Record the SHA that the pusher committed.
+	pusherSHA, err := Output(pusher, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD in pusher: %v", err)
+	}
+	pusherSHA = strings.TrimSpace(pusherSHA)
+
+	// The original clone has NO remote-tracking ref for latebranch yet.
+	if _, err := Output(clone, "rev-parse", "--verify", "refs/remotes/origin/latebranch"); err == nil {
+		t.Fatal("test setup error: clone should NOT have origin/latebranch yet")
+	}
+
+	// EnsureBranch should fetch and create the local branch from origin.
+	if err := EnsureBranch(clone, "latebranch"); err != nil {
+		t.Fatalf("EnsureBranch: %v", err)
+	}
+
+	// Verify we're on the latebranch.
+	branch, err := Output(clone, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	if strings.TrimSpace(branch) != "latebranch" {
+		t.Errorf("expected to be on branch latebranch, got %q", strings.TrimSpace(branch))
+	}
+
+	// Verify HEAD matches the commit pushed by the other clone.
+	headAfter, err := Output(clone, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD after: %v", err)
+	}
+	if strings.TrimSpace(headAfter) != pusherSHA {
+		t.Errorf("expected HEAD to match pusher SHA (%s), got %s", pusherSHA, strings.TrimSpace(headAfter))
+	}
+}
+
+func TestEnsureBranch_FetchFailsFallsBackToHEAD(t *testing.T) {
+	_, clone := initBareAndClone(t)
+
+	// Remove the remote so fetch will fail.
+	cmd := exec.Command("git", "-C", clone, "remote", "remove", "origin")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("remote remove origin: %v\n%s", err, out)
+	}
+
+	headBefore, err := Output(clone, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	headBefore = strings.TrimSpace(headBefore)
+
+	// EnsureBranch should still work, falling back to HEAD.
+	if err := EnsureBranch(clone, "orphan"); err != nil {
+		t.Fatalf("EnsureBranch: %v", err)
+	}
+
+	branch, err := Output(clone, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	if strings.TrimSpace(branch) != "orphan" {
+		t.Errorf("expected to be on branch orphan, got %q", strings.TrimSpace(branch))
+	}
+
+	headAfter, err := Output(clone, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD after: %v", err)
+	}
+	if strings.TrimSpace(headAfter) != headBefore {
+		t.Errorf("expected HEAD (%s) to match original HEAD (%s)", strings.TrimSpace(headAfter), headBefore)
+	}
+}
+
 func TestEnsureGitignored_DoesNotCommitUnrelatedStagedFiles(t *testing.T) {
 	_, repo := initBareAndClone(t)
 
