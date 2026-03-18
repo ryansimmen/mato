@@ -235,6 +235,73 @@ func TestSelectAndClaimTask_FrontmatterMaxRetries(t *testing.T) {
 	}
 }
 
+func TestSelectAndClaimTask_ClaimedByWriteFailure_FallsBack(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	// Create two tasks; the first will have its file made unreadable so
+	// prependClaimedBy fails, and the second should be claimed instead.
+	writeTestFile(t, filepath.Join(dir, "backlog", "broken.md"), "# Broken\nDo broken.\n")
+	writeTestFile(t, filepath.Join(dir, "backlog", "fallback.md"), "# Fallback\nDo fallback.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "broken.md\nfallback.md\n")
+
+	// Make the first file unreadable so prependClaimedBy fails on os.ReadFile.
+	// os.Rename only needs directory permissions, so the rename to in-progress
+	// and back to backlog will still succeed.
+	if err := os.Chmod(filepath.Join(dir, "backlog", "broken.md"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-cb1", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected fallback.md to be claimed, got nil")
+	}
+	if task.Filename != "fallback.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "fallback.md")
+	}
+
+	// broken.md should be back in backlog, not stuck in in-progress
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "broken.md")); err != nil {
+		t.Fatalf("broken.md should be back in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "in-progress", "broken.md")); !os.IsNotExist(err) {
+		t.Fatal("broken.md should NOT be in in-progress after claimed-by failure")
+	}
+
+	// fallback.md should be in in-progress with claimed-by header
+	if _, err := os.Stat(filepath.Join(dir, "in-progress", "fallback.md")); err != nil {
+		t.Fatalf("fallback.md not in in-progress: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_ClaimedByWriteFailure_AllFail(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "only.md"), "# Only\nDo only.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "only.md\n")
+
+	// Make the file unreadable so prependClaimedBy fails.
+	if err := os.Chmod(filepath.Join(dir, "backlog", "only.md"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-cb2", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected nil (all candidates failed claimed-by), got %+v", task)
+	}
+
+	// The task should be back in backlog, not stuck in in-progress
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "only.md")); err != nil {
+		t.Fatalf("only.md should be back in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "in-progress", "only.md")); !os.IsNotExist(err) {
+		t.Fatal("only.md should NOT be in in-progress")
+	}
+}
+
 func TestPrependClaimedBy(t *testing.T) {
 	dir := t.TempDir()
 	taskPath := filepath.Join(dir, "task.md")
