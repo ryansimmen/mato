@@ -79,6 +79,8 @@ Expected comment patterns:
 <!-- claimed-by: agent-7  claimed-at: 2026-01-01T00:00:00Z -->
 <!-- branch: task/add-http-retries -->
 <!-- failure: agent-7 at 2026-01-01T00:03:00Z step=WORK error=tests_failed files_changed=queue.go,queue_test.go -->
+<!-- review-rejection: review-agent-3 at 2026-01-01T00:06:00Z — tests do not cover the retry backoff logic; add unit tests for exponential delays -->
+<!-- reviewed: review-agent-3 at 2026-01-01T00:07:00Z — approved -->
 <!-- merged: merge-queue at 2026-01-01T00:10:00Z -->
 ```
 
@@ -87,7 +89,11 @@ What they mean:
 - `branch:` records the pushed task branch name after a successful agent push; the merge queue reads this first and falls back to the filename-derived branch when absent.
 - `failure:` records a failed attempt; failure lines are counted for retry handling.
 - Recovery and merge logic may append `failure:` lines such as `mato-recovery` or `merge-queue`.
+- `review-rejection:` records feedback from the review agent when rejecting a task. Format: `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->`. Review rejections do **not** count against `max_retries`. The feedback is passed to the implementing agent via the `MATO_REVIEW_FEEDBACK` environment variable on the next attempt.
+- `reviewed:` records that the review agent approved the task. Format: `<!-- reviewed: <agent-id> at <timestamp> — approved -->`. The review agent writes this before moving the task to `ready-to-merge/`.
 - `merged:` records that the merge queue successfully squashed the task branch into the target branch.
+- `review-rejection:` records reviewer feedback when the review agent rejects a task.
+- `reviewed:` records that the review agent approved the task.
 - The host parses `claimed-by` and strips full-line HTML comments from the task body before agent-facing interpretation.
 
 ## Examples
@@ -127,6 +133,7 @@ Simplify the status summary formatting.
 - Put tasks with dependencies in `waiting/`.
 - Put tasks without dependencies in `backlog/`.
 - `waiting/` is for tasks with unmet dependencies. Conflict-deferred tasks stay in `backlog/` but are excluded from the `.queue` manifest.
+- Completed agent work moves through `ready-for-review/` (AI review gate) before reaching `ready-to-merge/`.
 - mato writes `.queue` from the current `backlog/`, ordered by priority and then filename.
 
 ## Backward Compatibility

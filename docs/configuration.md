@@ -40,7 +40,7 @@ Long flags support both `--flag value` and `--flag=value` forms.
 ## Subcommands
 ### `mato status`
 `mato status` reads the queue directory and reports:
-- counts for `waiting`, `backlog`, `in-progress`, `ready-to-merge`, `completed`, and `failed`
+- counts for `waiting`, `backlog`, `in-progress`, `ready-for-review`, `ready-to-merge`, `completed`, and `failed`
 - active agents discovered from `.tasks/.locks/*.pid`
 - waiting tasks plus dependency-status summaries
 - the five most recent messages from `.tasks/messages`
@@ -61,6 +61,8 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 | `MATO_DEPENDENCY_CONTEXT` | container | none | JSON array of completion details for resolved `depends_on` tasks. Each element contains `task_id`, `task_file`, `branch`, `commit_sha`, `files_changed`, `title`, and `merged_at`. Set per-run by the host only when the claimed task has `depends_on` entries with available completion data in `.tasks/messages/completions/`. |
 | `MATO_FILE_CLAIMS` | container | none | Path to the file-claims JSON index inside the container (e.g. `/workspace/.tasks/messages/file-claims.json`). The host writes this index before agent launch via `messaging.BuildAndWriteFileClaims(...)`. It maps file paths to `{task, status}` objects showing which other tasks actively claim each file. |
 | `MATO_PREVIOUS_FAILURES` | container | none | Injected when the task file contains previous `<!-- failure: ... -->` records. Contains newline-separated failure lines extracted by `extractFailureLines(...)`. Agents can read this during `VERIFY_CLAIM` to understand why earlier attempts failed and avoid repeating the same mistakes. |
+| `MATO_REVIEW_MODE` | container | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
+| `MATO_REVIEW_FEEDBACK` | container | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
 Only `MATO_DOCKER_IMAGE` is intended as a host-side configuration input. The other
 variables are injected by `mato` inside each container and are normally not set manually.
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
@@ -68,6 +70,9 @@ variables are injected by `mato` inside each container and are normally not set 
 `MATO_FILE_CLAIMS` is always injected when a task is claimed.
 `MATO_PREVIOUS_FAILURES` is conditionally injected only when the task file contains
 failure records from prior attempts.
+`MATO_REVIEW_MODE` is injected only inside review agent containers.
+`MATO_REVIEW_FEEDBACK` is conditionally injected only when the task file contains
+review rejection records from prior review attempts.
 
 ## Docker Configuration
 Each agent run uses `docker run --rm -it` with working directory `/workspace` and user
