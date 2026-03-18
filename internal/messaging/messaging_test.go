@@ -915,6 +915,99 @@ func TestWriteCompletionDetail_DefaultsMergedAt(t *testing.T) {
 	}
 }
 
+func TestWriteCompletionDetail_SanitizesPathTraversal(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	detail := CompletionDetail{
+		TaskID:   "../evil",
+		TaskFile: "evil.md",
+		Title:    "Evil task",
+	}
+	if err := WriteCompletionDetail(tasksDir, detail); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+
+	// The file must be written inside completions/, not outside it.
+	sanitized := "--evil"
+	sanitized = strings.Trim(sanitized, "-_. ")
+	expectedPath := filepath.Join(tasksDir, "messages", "completions", "evil.json")
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected sanitized file at %s, got error: %v", expectedPath, err)
+	}
+
+	// Verify we can read it back using the same TaskID.
+	got, err := ReadCompletionDetail(tasksDir, "../evil")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if got.TaskID != "../evil" {
+		t.Fatalf("TaskID = %q, want %q", got.TaskID, "../evil")
+	}
+}
+
+func TestWriteCompletionDetail_SanitizesSlashes(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	detail := CompletionDetail{
+		TaskID:   "foo/bar",
+		TaskFile: "foo-bar.md",
+		Title:    "Foo bar",
+	}
+	if err := WriteCompletionDetail(tasksDir, detail); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+
+	// File should be foo-bar.json, not foo/bar.json
+	expectedPath := filepath.Join(tasksDir, "messages", "completions", "foo-bar.json")
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected sanitized file at %s, got error: %v", expectedPath, err)
+	}
+
+	got, err := ReadCompletionDetail(tasksDir, "foo/bar")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if got.TaskID != "foo/bar" {
+		t.Fatalf("TaskID = %q, want %q", got.TaskID, "foo/bar")
+	}
+}
+
+func TestWriteCompletionDetail_NormalIDUnchanged(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	detail := CompletionDetail{
+		TaskID:   "add-http-retries",
+		TaskFile: "add-http-retries.md",
+		Title:    "Add HTTP retries",
+	}
+	if err := WriteCompletionDetail(tasksDir, detail); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+
+	// Normal kebab-case ID should remain unchanged.
+	expectedPath := filepath.Join(tasksDir, "messages", "completions", "add-http-retries.json")
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected file at %s, got error: %v", expectedPath, err)
+	}
+
+	got, err := ReadCompletionDetail(tasksDir, "add-http-retries")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if got.TaskID != "add-http-retries" {
+		t.Fatalf("TaskID = %q, want %q", got.TaskID, "add-http-retries")
+	}
+}
+
 func TestBuildAndWriteFileClaims(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"in-progress", "ready-to-merge"} {

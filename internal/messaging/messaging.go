@@ -209,7 +209,11 @@ func WriteCompletionDetail(tasksDir string, detail CompletionDetail) error {
 	if detail.TaskID == "" {
 		return fmt.Errorf("completion detail requires a task ID")
 	}
-	path := filepath.Join(tasksDir, "messages", "completions", detail.TaskID+".json")
+	safeID := strings.Trim(safeMessageFilePart.ReplaceAllString(detail.TaskID, "-"), "-_. ")
+	if safeID == "" {
+		safeID = "unknown"
+	}
+	path := filepath.Join(tasksDir, "messages", "completions", safeID+".json")
 	if err := writeJSONAtomically(path, detail); err != nil {
 		return fmt.Errorf("write completion detail: %w", err)
 	}
@@ -219,7 +223,11 @@ func WriteCompletionDetail(tasksDir string, detail CompletionDetail) error {
 // ReadCompletionDetail reads the completion-detail JSON for a given task ID.
 // Returns os.ErrNotExist if the file does not exist.
 func ReadCompletionDetail(tasksDir, taskID string) (*CompletionDetail, error) {
-	path := filepath.Join(tasksDir, "messages", "completions", taskID+".json")
+	safeID := strings.Trim(safeMessageFilePart.ReplaceAllString(taskID, "-"), "-_. ")
+	if safeID == "" {
+		safeID = "unknown"
+	}
+	path := filepath.Join(tasksDir, "messages", "completions", safeID+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
