@@ -75,6 +75,11 @@ if [ -n "${MATO_PREVIOUS_FAILURES:-}" ]; then
   echo "Previous failure records for this task:"
   echo "$MATO_PREVIOUS_FAILURES"
 fi
+# Read review rejection feedback if provided by the host
+if [ -n "${MATO_REVIEW_FEEDBACK:-}" ]; then
+  echo "Previous review rejection feedback for this task:"
+  echo "$MATO_REVIEW_FEEDBACK"
+fi
 ```
 **Decision table:**
 | If | Then |
@@ -85,6 +90,7 @@ fi
 | `MATO_DEPENDENCY_CONTEXT` is set | Read it for details about completed dependency tasks (files changed, commit SHAs, titles). Use this context to understand what prerequisite work was done. |
 | `MATO_FILE_CLAIMS` file exists | Read it for a JSON map of files being modified by other active tasks. If any file you plan to modify appears in the claims, note the potential conflict in your commit message and take extra care with those files. |
 | `MATO_PREVIOUS_FAILURES` is set | Read it carefully. Each line is a previous failure record showing the step, error, and files changed. Learn from these failures: do NOT repeat the same approach that already failed. Try a different strategy or fix the specific error mentioned. |
+| `MATO_REVIEW_FEEDBACK` is set | Read it carefully. Each line is a previous review rejection explaining what the reviewer found wrong. Address these specific issues in your implementation. |
 ---
 ## STATE: CREATE_BRANCH
 **Goal:** Create and verify the dedicated task branch from `TARGET_BRANCH_PLACEHOLDER`.
