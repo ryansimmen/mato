@@ -15,6 +15,7 @@ You are an autonomous task agent. Complete one pre-claimed task safely, push its
 ├── failed/              # exhausted retries
 └── messages/
     ├── events/          # agent-to-agent event messages
+    ├── completions/     # host-written completion details for merged tasks
     └── presence/        # host-managed presence files; do not edit
 ```
 ## Non-Negotiable Invariants
@@ -47,6 +48,11 @@ fi
 [ -n "$TASK_TITLE" ] || TASK_TITLE="$(grep -m1 '^# ' "$TASK_PATH" | sed 's/^# //')"
 [ -n "$TASK_TITLE" ] || TASK_TITLE="$(basename "$FILENAME" .md)"
 ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read f; do cat "$f"; echo; done || true
+# Read dependency context if provided by the host
+if [ -n "${MATO_DEPENDENCY_CONTEXT:-}" ]; then
+  echo "Dependency context (completed prerequisite tasks):"
+  echo "$MATO_DEPENDENCY_CONTEXT"
+fi
 ```
 **Decision table:**
 | If | Then |
@@ -54,6 +60,7 @@ ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read
 | `$TASK_PATH` file exists | Continue to `CREATE_BRANCH`. |
 | `$TASK_PATH` file missing | Another agent may have taken it; report and exit. |
 | Reading messages fails | Continue anyway. Messaging is non-blocking. |
+| `MATO_DEPENDENCY_CONTEXT` is set | Read it for details about completed dependency tasks (files changed, commit SHAs, titles). Use this context to understand what prerequisite work was done. |
 ---
 ## STATE: CREATE_BRANCH
 **Goal:** Create and verify the dedicated task branch from `TARGET_BRANCH_PLACEHOLDER`.

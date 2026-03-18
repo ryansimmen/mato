@@ -24,6 +24,7 @@ func TestInitMessaging(t *testing.T) {
 	for _, dir := range []string{
 		filepath.Join(tasksDir, "messages", "events"),
 		filepath.Join(tasksDir, "messages", "presence"),
+		filepath.Join(tasksDir, "messages", "completions"),
 	} {
 		info, err := os.Stat(dir)
 		if err != nil {
@@ -774,4 +775,142 @@ func findEventFile(t *testing.T, eventsDir, id string) string {
 	}
 	t.Fatalf("message file for %q not found", id)
 	return ""
+}
+
+func TestWriteCompletionDetail(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	mergedAt := time.Date(2026, time.March, 17, 21, 35, 0, 0, time.UTC)
+	detail := CompletionDetail{
+		TaskID:       "add-http-retries",
+		TaskFile:     "add-http-retries.md",
+		Branch:       "task/add-http-retries",
+		CommitSHA:    "abc123def",
+		FilesChanged: []string{"pkg/client/http.go", "pkg/client/retry.go"},
+		Title:        "Add HTTP retries",
+		MergedAt:     mergedAt,
+	}
+	if err := WriteCompletionDetail(tasksDir, detail); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+
+	path := filepath.Join(tasksDir, "messages", "completions", "add-http-retries.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("completion detail file missing: %v", err)
+	}
+	if !json.Valid(data) {
+		t.Fatal("completion detail file should contain valid JSON")
+	}
+
+	var got CompletionDetail
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if got.TaskID != detail.TaskID {
+		t.Fatalf("TaskID = %q, want %q", got.TaskID, detail.TaskID)
+	}
+	if got.CommitSHA != detail.CommitSHA {
+		t.Fatalf("CommitSHA = %q, want %q", got.CommitSHA, detail.CommitSHA)
+	}
+	if !reflect.DeepEqual(got.FilesChanged, detail.FilesChanged) {
+		t.Fatalf("FilesChanged = %v, want %v", got.FilesChanged, detail.FilesChanged)
+	}
+	if !got.MergedAt.Equal(mergedAt) {
+		t.Fatalf("MergedAt = %v, want %v", got.MergedAt, mergedAt)
+	}
+}
+
+func TestReadCompletionDetail(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	mergedAt := time.Date(2026, time.March, 17, 21, 35, 0, 0, time.UTC)
+	detail := CompletionDetail{
+		TaskID:       "add-retries",
+		TaskFile:     "add-retries.md",
+		Branch:       "task/add-retries",
+		CommitSHA:    "def456abc",
+		FilesChanged: []string{"main.go"},
+		Title:        "Add retries",
+		MergedAt:     mergedAt,
+	}
+	if err := WriteCompletionDetail(tasksDir, detail); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+
+	got, err := ReadCompletionDetail(tasksDir, "add-retries")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if got.TaskID != "add-retries" {
+		t.Fatalf("TaskID = %q, want %q", got.TaskID, "add-retries")
+	}
+	if got.CommitSHA != "def456abc" {
+		t.Fatalf("CommitSHA = %q, want %q", got.CommitSHA, "def456abc")
+	}
+	if !reflect.DeepEqual(got.FilesChanged, []string{"main.go"}) {
+		t.Fatalf("FilesChanged = %v, want [main.go]", got.FilesChanged)
+	}
+}
+
+func TestReadCompletionDetail_NotFound(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	_, err := ReadCompletionDetail(tasksDir, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent completion detail")
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected os.ErrNotExist, got %v", err)
+	}
+}
+
+func TestWriteCompletionDetail_EmptyTaskID(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	err := WriteCompletionDetail(tasksDir, CompletionDetail{})
+	if err == nil {
+		t.Fatal("expected error for empty task ID")
+	}
+	if !strings.Contains(err.Error(), "requires a task ID") {
+		t.Fatalf("error = %q, want 'requires a task ID'", err)
+	}
+}
+
+func TestWriteCompletionDetail_DefaultsMergedAt(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	before := time.Now().UTC()
+	detail := CompletionDetail{
+		TaskID:   "auto-time",
+		TaskFile: "auto-time.md",
+		Title:    "Auto time",
+	}
+	if err := WriteCompletionDetail(tasksDir, detail); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+	after := time.Now().UTC()
+
+	got, err := ReadCompletionDetail(tasksDir, "auto-time")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if got.MergedAt.Before(before) || got.MergedAt.After(after) {
+		t.Fatalf("MergedAt = %v, want between %v and %v", got.MergedAt, before, after)
+	}
 }
