@@ -14,8 +14,10 @@ import (
 // Tests can override these to inject failures without filesystem permission
 // tricks.
 var (
-	claimPrependFn  = prependClaimedBy
-	claimRollbackFn = os.Rename
+	claimPrependFn         = prependClaimedBy
+	claimRollbackFn        = os.Rename
+	retryExhaustedMoveFn   = os.Rename
+	retryExhaustedRollback = os.Rename
 )
 
 // ClaimedTask holds the pre-resolved metadata for a task claimed on the host
@@ -60,8 +62,13 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		}
 
 		if failures >= maxRetries {
-			if err := os.Rename(dst, filepath.Join(failedDir, name)); err != nil {
+			if err := retryExhaustedMoveFn(dst, filepath.Join(failedDir, name)); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not move retry-exhausted task %s to failed: %v\n", name, err)
+				// Move back to backlog so the task is not left orphaned
+				// in in-progress/ without a claimed-by marker.
+				if rbErr := retryExhaustedRollback(dst, src); rbErr != nil {
+					return nil, fmt.Errorf("retry-exhausted rollback failed for %s (task stranded in in-progress): move-to-failed: %v, rollback: %w", name, err, rbErr)
+				}
 			}
 			continue
 		}
