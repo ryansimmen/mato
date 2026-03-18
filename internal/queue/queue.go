@@ -159,7 +159,7 @@ func RecoverOrphanedTasks(tasksDir string) {
 }
 
 func laterStateDuplicateDir(tasksDir, name string) string {
-	for _, laterDir := range []string{"ready-to-merge", "completed", "failed"} {
+	for _, laterDir := range []string{"ready-for-review", "ready-to-merge", "completed", "failed"} {
 		if _, err := os.Stat(filepath.Join(tasksDir, laterDir, name)); err == nil {
 			return laterDir
 		} else if !os.IsNotExist(err) {
@@ -283,7 +283,7 @@ func completedTaskIDs(tasksDir string) map[string]struct{} {
 // nonCompletedTaskIDs returns the set of task IDs found in all directories except completed/.
 func nonCompletedTaskIDs(tasksDir string) map[string]struct{} {
 	ids := make(map[string]struct{})
-	for _, dir := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "failed"} {
+	for _, dir := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "failed"} {
 		entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
 		if err != nil {
 			continue
@@ -305,7 +305,7 @@ func nonCompletedTaskIDs(tasksDir string) map[string]struct{} {
 // allKnownTaskIDs returns the set of task IDs found across all queue directories.
 func allKnownTaskIDs(tasksDir string) map[string]struct{} {
 	ids := make(map[string]struct{})
-	for _, dir := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed"} {
+	for _, dir := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
 		entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
 		if err != nil {
 			continue
@@ -359,7 +359,7 @@ func CollectActiveAffects(tasksDir string) []ActiveTask {
 
 func collectActiveAffects(tasksDir string) []backlogTask {
 	var active []backlogTask
-	for _, dir := range []string{"in-progress", "ready-to-merge"} {
+	for _, dir := range []string{"in-progress", "ready-for-review", "ready-to-merge"} {
 		dirPath := filepath.Join(tasksDir, dir)
 		entries, err := os.ReadDir(dirPath)
 		if err != nil {
@@ -399,7 +399,7 @@ func hasActiveOverlap(tasksDir string, affects []string) bool {
 	// proper priority ordering. Including backlog here would cause priority
 	// inversion: a high-priority waiting task would be blocked by a lower-priority
 	// backlog task that hasn't even been claimed yet.
-	for _, dir := range []string{"in-progress", "ready-to-merge"} {
+	for _, dir := range []string{"in-progress", "ready-for-review", "ready-to-merge"} {
 		dirPath := filepath.Join(tasksDir, dir)
 		entries, err := os.ReadDir(dirPath)
 		if err != nil {

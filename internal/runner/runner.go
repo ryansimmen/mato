@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +25,11 @@ import (
 
 //go:embed task-instructions.md
 var taskInstructions string
+
+//go:embed review-instructions.md
+var reviewInstructions string
+
+var reviewBranchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
 
 func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
@@ -201,6 +208,16 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			recoverStuckTask(tasksDir, agentID, claimed)
 		}
 
+		if reviewTask := selectTaskForReview(tasksDir); reviewTask != nil {
+			fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
+			if err := runReview(repoRoot, tasksDir, agentID, reviewTask, copilotArgs, image, workdir,
+				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
+				gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
+				systemCertsDir, hasSystemCerts); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
+			}
+		}
+
 		if cleanup, ok := merge.AcquireLock(tasksDir); ok {
 			func() {
 				defer cleanup()
@@ -211,9 +228,10 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			}()
 		}
 
-		isIdle := !hasBacklogTasks && !merge.HasReadyTasks(tasksDir)
+		hasReviewTasks := selectTaskForReview(tasksDir) != nil
+		isIdle := !hasBacklogTasks && !hasReviewTasks && !merge.HasReadyTasks(tasksDir)
 		if checkIdleTransition(isIdle, &wasIdle) {
-			fmt.Println("No tasks found in backlog or ready-to-merge. Waiting...")
+			fmt.Println("No tasks found in backlog, ready-for-review, or ready-to-merge. Waiting...")
 		}
 
 		select {
@@ -281,6 +299,9 @@ func runOnce(repoRoot, tasksDir, agentID string, claimed *queue.ClaimedTask, cop
 		}
 		if failures := extractFailureLines(claimed.TaskPath); failures != "" {
 			args = append(args, "-e", "MATO_PREVIOUS_FAILURES="+failures)
+		}
+		if reviewFeedback := extractReviewRejections(claimed.TaskPath); reviewFeedback != "" {
+			args = append(args, "-e", "MATO_REVIEW_FEEDBACK="+reviewFeedback)
 		}
 	}
 	args = append(args,
@@ -433,4 +454,199 @@ func extractFailureLines(taskPath string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// selectTaskForReview scans ready-for-review/ and returns the highest-priority
+// task that needs review. Returns nil if no tasks need review.
+func selectTaskForReview(tasksDir string) *queue.ClaimedTask {
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	entries, err := os.ReadDir(reviewDir)
+	if err != nil {
+		return nil
+	}
+
+	type candidate struct {
+		name     string
+		priority int
+		branch   string
+		title    string
+		path     string
+	}
+
+	var candidates []candidate
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(reviewDir, entry.Name())
+		meta, body, err := frontmatter.ParseTaskFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse review candidate %s: %v\n", entry.Name(), err)
+			continue
+		}
+		branch := parseBranchFromTaskFile(path)
+		if branch == "" {
+			branch = "task/" + frontmatter.SanitizeBranchName(entry.Name())
+		}
+		title := frontmatter.ExtractTitle(entry.Name(), body)
+		candidates = append(candidates, candidate{
+			name:     entry.Name(),
+			priority: meta.Priority,
+			branch:   branch,
+			title:    title,
+			path:     path,
+		})
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].priority != candidates[j].priority {
+			return candidates[i].priority < candidates[j].priority
+		}
+		return candidates[i].name < candidates[j].name
+	})
+
+	c := candidates[0]
+	return &queue.ClaimedTask{
+		Filename: c.name,
+		Branch:   c.branch,
+		Title:    c.title,
+		TaskPath: c.path,
+	}
+}
+
+// parseBranchFromTaskFile reads a task file and extracts the branch name from
+// a <!-- branch: ... --> HTML comment. Returns "" if not found.
+func parseBranchFromTaskFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	m := reviewBranchRe.FindStringSubmatch(string(data))
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+func runReview(repoRoot, tasksDir, agentID string, task *queue.ClaimedTask, copilotArgs []string,
+	image, workdir string,
+	copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot string,
+	gitName, gitEmail, homeDir, ghConfigDir string, hasGhConfig bool,
+	systemCertsDir string, hasSystemCerts bool,
+) error {
+	targetBranch := "main"
+	if out, err := git.Output(repoRoot, "symbolic-ref", "--short", "HEAD"); err == nil {
+		if b := strings.TrimSpace(out); b != "" {
+			targetBranch = b
+		}
+	}
+
+	prompt := strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
+	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", targetBranch)
+	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
+
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		return fmt.Errorf("create clone for review: %w", err)
+	}
+	defer git.RemoveClone(cloneDir)
+
+	if err := configureReceiveDeny(repoRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
+	}
+
+	containerHome := homeDir
+	copilotDir := filepath.Join(homeDir, ".copilot")
+	goModCache := filepath.Join(homeDir, "go", "pkg", "mod")
+	goBuildCache := filepath.Join(homeDir, ".cache", "go-build")
+
+	fmt.Printf("Launching review agent from %s (clone: %s)\n", repoRoot, cloneDir)
+	args := []string{
+		"run", "--rm", "-it",
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
+		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
+		"-v", fmt.Sprintf("%s:%s", repoRoot, repoRoot),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", gitUploadPackPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", gitReceivePackPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", ghPath),
+		"-v", fmt.Sprintf("%s:/usr/local/go:ro", goRoot),
+		"-e", "GOROOT=/usr/local/go",
+		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	args = append(args,
+		"-e", "MATO_AGENT_ID="+agentID,
+		"-e", "MATO_REVIEW_MODE=1",
+		"-e", "MATO_MESSAGING_ENABLED=1",
+		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", workdir),
+	)
+	args = append(args,
+		"-e", "MATO_TASK_FILE="+task.Filename,
+		"-e", "MATO_TASK_BRANCH="+task.Branch,
+		"-e", "MATO_TASK_TITLE="+task.Title,
+		"-e", fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/ready-for-review/%s", workdir, task.Filename),
+	)
+	args = append(args,
+		"-e", "GIT_CONFIG_COUNT=1",
+		"-e", "GIT_CONFIG_KEY_0=safe.directory",
+		"-e", "GIT_CONFIG_VALUE_0=*",
+	)
+	if n := strings.TrimSpace(gitName); n != "" {
+		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
+	}
+	if e := strings.TrimSpace(gitEmail); e != "" {
+		args = append(args, "-e", "GIT_AUTHOR_EMAIL="+e, "-e", "GIT_COMMITTER_EMAIL="+e)
+	}
+	args = append(args,
+		"-e", fmt.Sprintf("HOME=%s", containerHome),
+		"-v", fmt.Sprintf("%s:%s/.copilot", copilotDir, containerHome),
+		"-e", fmt.Sprintf("GOPATH=%s/go", containerHome),
+		"-e", fmt.Sprintf("GOMODCACHE=%s/go/pkg/mod", containerHome),
+		"-e", fmt.Sprintf("GOCACHE=%s/.cache/go-build", containerHome),
+		"-v", fmt.Sprintf("%s:%s/go/pkg/mod", goModCache, containerHome),
+		"-v", fmt.Sprintf("%s:%s/.cache/go-build", goBuildCache, containerHome),
+	)
+	if hasGhConfig {
+		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", ghConfigDir, containerHome))
+	}
+	if hasSystemCerts {
+		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", systemCertsDir))
+	}
+	args = append(args,
+		"-w", workdir,
+		image,
+		"copilot", "-p", prompt, "--autopilot", "--allow-all",
+	)
+	if !hasModelArg(copilotArgs) {
+		args = append(args, "--model", "claude-opus-4.6")
+	}
+	args = append(args, copilotArgs...)
+
+	cmd := exec.Command("docker", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// extractReviewRejections returns all review-rejection comment lines from a task file,
+// joined by newlines. Returns "" if none found or file cannot be read.
+func extractReviewRejections(taskPath string) string {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return ""
+	}
+	var rejections []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "<!-- review-rejection:") {
+			rejections = append(rejections, strings.TrimSpace(line))
+		}
+	}
+	return strings.Join(rejections, "\n")
 }
