@@ -210,7 +210,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 		if reviewTask := selectTaskForReview(tasksDir); reviewTask != nil {
 			fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
-			if err := runReview(repoRoot, tasksDir, agentID, reviewTask, copilotArgs, image, workdir,
+			if err := runReview(repoRoot, tasksDir, agentID, reviewTask, branch, copilotArgs, image, workdir,
 				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
 				gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
 				systemCertsDir, hasSystemCerts); err != nil {
@@ -532,21 +532,14 @@ func parseBranchFromTaskFile(path string) string {
 	return m[1]
 }
 
-func runReview(repoRoot, tasksDir, agentID string, task *queue.ClaimedTask, copilotArgs []string,
+func runReview(repoRoot, tasksDir, agentID string, task *queue.ClaimedTask, branch string, copilotArgs []string,
 	image, workdir string,
 	copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot string,
 	gitName, gitEmail, homeDir, ghConfigDir string, hasGhConfig bool,
 	systemCertsDir string, hasSystemCerts bool,
 ) error {
-	targetBranch := "main"
-	if out, err := git.Output(repoRoot, "symbolic-ref", "--short", "HEAD"); err == nil {
-		if b := strings.TrimSpace(out); b != "" {
-			targetBranch = b
-		}
-	}
-
 	prompt := strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
-	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", targetBranch)
+	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
 	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
 
 	cloneDir, err := git.CreateClone(repoRoot)
