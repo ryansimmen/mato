@@ -3,6 +3,7 @@ package queue
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -674,5 +675,100 @@ func TestIsFailedDirUnavailable(t *testing.T) {
 	// nil should not match.
 	if IsFailedDirUnavailable(nil) {
 		t.Fatal("IsFailedDirUnavailable should return false for nil")
+	}
+}
+
+func TestSelectAndClaimTask_InvalidYAML_WarnsAndUsesDefaults(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	// Task with invalid YAML frontmatter
+	writeTestFile(t, filepath.Join(dir, "backlog", "bad-yaml.md"), strings.Join([]string{
+		"---",
+		"priority: [invalid",
+		"---",
+		"# Bad YAML task",
+		"Do something.",
+		"",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(dir, ".queue"), "bad-yaml.md\n")
+
+	// Capture stderr to verify warning is printed.
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	task, claimErr := SelectAndClaimTask(dir, "agent-warn", nil)
+
+	w.Close()
+	captured, readErr := io.ReadAll(r)
+	os.Stderr = origStderr
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+
+	if claimErr != nil {
+		t.Fatalf("SelectAndClaimTask: %v", claimErr)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task, got nil")
+	}
+
+	// Default maxRetries (3) should be used, so the task should be claimed
+	// since there are 0 failures.
+	if task.Filename != "bad-yaml.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "bad-yaml.md")
+	}
+
+	// Verify the warning was printed to stderr.
+	stderrOutput := string(captured)
+	if !strings.Contains(stderrOutput, "warning: could not parse task metadata for bad-yaml.md") {
+		t.Fatalf("expected parse-error warning on stderr, got: %q", stderrOutput)
+	}
+	if !strings.Contains(stderrOutput, "using defaults") {
+		t.Fatalf("expected 'using defaults' in warning, got: %q", stderrOutput)
+	}
+}
+
+func TestSelectAndClaimTask_InvalidYAML_ExhaustedRetries_UsesDefault(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	// Task with invalid YAML and 3 failures (matching default max_retries=3).
+	writeTestFile(t, filepath.Join(dir, "backlog", "bad-exhausted.md"), strings.Join([]string{
+		"---",
+		"max_retries: !!invalid",
+		"---",
+		"# Exhausted bad YAML",
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"<!-- failure: three -->",
+		"",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(dir, ".queue"), "bad-exhausted.md\n")
+
+	// Suppress stderr warning output during test.
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	task, claimErr := SelectAndClaimTask(dir, "agent-exhaust", nil)
+
+	w.Close()
+	r.Close()
+	os.Stderr = origStderr
+
+	if claimErr != nil {
+		t.Fatalf("SelectAndClaimTask: %v", claimErr)
+	}
+	// With default maxRetries=3 and 3 failures, the task should be exhausted
+	// and moved to failed/.
+	if task != nil {
+		t.Fatalf("expected nil (default max_retries=3 exhausted), got %+v", task)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "failed", "bad-exhausted.md")); err != nil {
+		t.Fatalf("bad-exhausted.md not in failed: %v", err)
 	}
 }

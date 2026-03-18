@@ -78,7 +78,9 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		// claimed-by header doesn't interfere with frontmatter parsing.
 		meta, body, parseErr := frontmatter.ParseTaskFile(src)
 		maxRetries := 3
-		if parseErr == nil {
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, using defaults: %v\n", name, parseErr)
+		} else {
 			maxRetries = meta.MaxRetries
 		}
 		failures := countFailureLines(src)
