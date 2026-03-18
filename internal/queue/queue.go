@@ -142,9 +142,14 @@ func RecoverOrphanedTasks(tasksDir string) {
 
 		f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err == nil {
-			fmt.Fprintf(f, "\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
+			_, writeErr := fmt.Fprintf(f, "\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
 				time.Now().UTC().Format(time.RFC3339))
-			f.Close()
+			closeErr := f.Close()
+			if writeErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", e.Name(), writeErr)
+			} else if closeErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", e.Name(), closeErr)
+			}
 		}
 
 		fmt.Printf("Recovered orphaned task %s back to backlog\n", e.Name())
