@@ -10,6 +10,14 @@ import (
 	"mato/internal/frontmatter"
 )
 
+// Testing hooks for the claim path. Default to real implementations.
+// Tests can override these to inject failures without filesystem permission
+// tricks.
+var (
+	claimPrependFn  = prependClaimedBy
+	claimRollbackFn = os.Rename
+)
+
 // ClaimedTask holds the pre-resolved metadata for a task claimed on the host
 // side, before the agent container is launched.
 type ClaimedTask struct {
@@ -59,13 +67,17 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		}
 
 		claimedAt := time.Now().UTC().Format(time.RFC3339)
-		if err := prependClaimedBy(dst, agentID, claimedAt); err != nil {
+		if err := claimPrependFn(dst, agentID, claimedAt); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write claimed-by header for %s: %v\n", name, err)
 			// Move the task back to backlog so it is not left in in-progress
 			// without ownership metadata, which would confuse RecoverOrphanedTasks
 			// and other agents.
-			if rbErr := os.Rename(dst, src); rbErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move %s back to backlog after claimed-by failure: %v\n", name, rbErr)
+			if rbErr := claimRollbackFn(dst, src); rbErr != nil {
+				// Both the claimed-by write and the rollback rename failed.
+				// The task is now stranded in in-progress/ without ownership.
+				// Return a hard error so the host can act instead of silently
+				// leaving an orphan.
+				return nil, fmt.Errorf("claim rollback failed for %s (task stranded in in-progress): prepend: %v, rollback: %w", name, err, rbErr)
 			}
 			continue
 		}
