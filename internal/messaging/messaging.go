@@ -263,7 +263,7 @@ func ReadCompletionDetail(tasksDir, taskID string) (*CompletionDetail, error) {
 	path := filepath.Join(tasksDir, "messages", "completions", safeID+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read completion detail %s: %w", taskID, err)
 	}
 	var detail CompletionDetail
 	if err := json.Unmarshal(data, &detail); err != nil {
