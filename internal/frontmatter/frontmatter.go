@@ -88,7 +88,7 @@ func ParseTaskFile(path string) (TaskMeta, string, error) {
 		body = strings.Join(lines[end+1:], "\n")
 	}
 
-	return meta, StripHTMLCommentLines(body), nil
+	return meta, stripHTMLCommentLines(body), nil
 }
 
 func TaskFileStem(path string) string {
@@ -96,7 +96,7 @@ func TaskFileStem(path string) string {
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
-func StripHTMLCommentLines(body string) string {
+func stripHTMLCommentLines(body string) string {
 	lines := strings.Split(body, "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {
