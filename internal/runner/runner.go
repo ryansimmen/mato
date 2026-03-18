@@ -334,7 +334,9 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	}
 
 	f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err == nil {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not open task file to append failure record for %s: %v\n", claimed.Filename, err)
+	} else {
 		_, writeErr := fmt.Fprintf(f, "\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
 			agentID, time.Now().UTC().Format(time.RFC3339))
 		closeErr := f.Close()

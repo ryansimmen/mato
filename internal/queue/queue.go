@@ -141,7 +141,9 @@ func RecoverOrphanedTasks(tasksDir string) {
 		}
 
 		f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err == nil {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not open task file to append failure record for %s: %v\n", e.Name(), err)
+		} else {
 			_, writeErr := fmt.Fprintf(f, "\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
 				time.Now().UTC().Format(time.RFC3339))
 			closeErr := f.Close()

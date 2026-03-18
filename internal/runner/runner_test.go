@@ -372,3 +372,48 @@ func TestExtractFailureLines_NonexistentFile(t *testing.T) {
 		t.Fatalf("expected empty string for nonexistent file, got %q", got)
 	}
 }
+
+func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"backlog", "in-progress"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "readonly-task.md"
+	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Read-only task\n"), 0o444)
+	t.Cleanup(func() {
+		os.Chmod(filepath.Join(tasksDir, "backlog", taskFile), 0o644)
+	})
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/readonly-task",
+		Title:    "Read-only task",
+		TaskPath: inProgressPath,
+	}
+
+	recoverStuckTask(tasksDir, "agent1", claimed)
+
+	// Task should be moved to backlog even though append will fail
+	backlogPath := filepath.Join(tasksDir, "backlog", taskFile)
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("task should be moved to backlog even when append fails: %v", err)
+	}
+
+	// Original content preserved
+	if !strings.Contains(string(data), "# Read-only task") {
+		t.Fatal("task content should be preserved")
+	}
+
+	// Failure record should NOT be present since file was read-only
+	if strings.Contains(string(data), "<!-- failure:") {
+		t.Fatal("failure record should not be present when append fails on read-only file")
+	}
+
+	// Task should no longer be in in-progress
+	if _, err := os.Stat(inProgressPath); err == nil {
+		t.Fatal("task file still in in-progress/ after recovery")
+	}
+}

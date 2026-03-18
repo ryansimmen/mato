@@ -1494,3 +1494,85 @@ func TestProcessQueue_CompletionDetailFilesChanged(t *testing.T) {
 		}
 	}
 }
+
+func TestFailMergeTask_MovesTaskEvenWhenAppendFails(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "ready-to-merge")
+	dst := filepath.Join(dir, "backlog")
+	os.MkdirAll(src, 0o755)
+	os.MkdirAll(dst, 0o755)
+
+	taskFile := filepath.Join(src, "broken-append.md")
+	os.WriteFile(taskFile, []byte("# Broken append task\n"), 0o444)
+	t.Cleanup(func() {
+		os.Chmod(taskFile, 0o644)
+		os.Chmod(filepath.Join(dst, "broken-append.md"), 0o644)
+	})
+
+	dstPath := filepath.Join(dst, "broken-append.md")
+	err := failMergeTask(taskFile, dstPath, "test failure")
+
+	// The function should succeed (move worked) even though append failed
+	if err != nil {
+		t.Fatalf("failMergeTask should succeed when append fails but move works: %v", err)
+	}
+
+	// Task should be in destination
+	data, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("task should be moved to destination: %v", err)
+	}
+
+	// Content should be preserved
+	if !strings.Contains(string(data), "# Broken append task") {
+		t.Fatal("task content should be preserved")
+	}
+
+	// Source should no longer exist
+	if _, err := os.Stat(taskFile); err == nil {
+		t.Fatal("source file should no longer exist after move")
+	}
+}
+
+func TestFailMergeTask_NoDst_ReturnsAppendError(t *testing.T) {
+	dir := t.TempDir()
+	taskFile := filepath.Join(dir, "task.md")
+	os.WriteFile(taskFile, []byte("# Task\n"), 0o444)
+	t.Cleanup(func() {
+		os.Chmod(taskFile, 0o644)
+	})
+
+	// When dst is empty and append fails, should return the error
+	err := failMergeTask(taskFile, "", "test failure")
+	if err == nil {
+		t.Fatal("failMergeTask with empty dst should return append error when file is read-only")
+	}
+}
+
+func TestFailMergeTask_BothAppendAndMoveFail(t *testing.T) {
+	dir := t.TempDir()
+	taskFile := filepath.Join(dir, "task.md")
+	os.WriteFile(taskFile, []byte("# Task\n"), 0o444)
+
+	// Create a regular file where the destination directory should be,
+	// so MkdirAll fails when trying to create subdirectories under it.
+	blocker := filepath.Join(dir, "blocked-dir")
+	os.WriteFile(blocker, []byte("not a directory"), 0o644)
+	t.Cleanup(func() {
+		os.Chmod(taskFile, 0o644)
+	})
+
+	dstPath := filepath.Join(blocker, "sub", "task.md")
+
+	err := failMergeTask(taskFile, dstPath, "test failure")
+	if err == nil {
+		t.Fatal("failMergeTask should return error when both append and move fail")
+	}
+	// Error should mention both failures
+	if !strings.Contains(err.Error(), "move task file") {
+		t.Fatalf("error should mention move failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "append failure record") {
+		t.Fatalf("error should mention append failure, got: %v", err)
+	}
+}
