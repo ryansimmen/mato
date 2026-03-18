@@ -301,8 +301,13 @@ func shouldFailTask(taskPath string) bool {
 
 func cleanupTaskBranch(repoRoot, branchName string) {
 	// Clean up the stale task branch so the next agent can push a fresh one.
-	_, _ = git.Output(repoRoot, "branch", "-D", branchName)
-	_, _ = git.Output(repoRoot, "push", "origin", "--delete", branchName)
+	// Cleanup is best-effort: log warnings but never abort the merge flow.
+	if _, err := git.Output(repoRoot, "branch", "-D", branchName); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not delete local task branch %s: %v\n", branchName, err)
+	}
+	if _, err := git.Output(repoRoot, "push", "origin", "--delete", branchName); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not delete remote task branch %s: %v\n", branchName, err)
+	}
 }
 
 func failMergeTask(src, dst, reason string) error {
