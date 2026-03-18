@@ -1086,7 +1086,7 @@ func TestBuildAndWriteFileClaims(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "add-locks.md"),
 		[]byte("---\naffects:\n  - internal/merge/merge.go\n---\n# Add Locks\n"), 0o644)
 
-	if err := BuildAndWriteFileClaims(tasksDir); err != nil {
+	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
 	}
 
@@ -1125,7 +1125,7 @@ func TestBuildAndWriteFileClaims_Empty(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	if err := BuildAndWriteFileClaims(tasksDir); err != nil {
+	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
 	}
 
@@ -1157,7 +1157,7 @@ func TestBuildAndWriteFileClaims_AtomicWrite(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"),
 		[]byte("---\naffects:\n  - file-a.go\n---\n# Task A\n"), 0o644)
 
-	if err := BuildAndWriteFileClaims(tasksDir); err != nil {
+	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
 	}
 
@@ -1197,7 +1197,7 @@ func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "task-b.md"),
 		[]byte("---\naffects:\n  - shared.go\n---\n# Task B\n"), 0o644)
 
-	if err := BuildAndWriteFileClaims(tasksDir); err != nil {
+	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
 	}
 
@@ -1222,6 +1222,141 @@ func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 	// The first writer should be from in-progress (collectActiveAffects scans it first)
 	if c.Task != "task-a.md" {
 		t.Fatalf("expected first writer task-a.md, got %q", c.Task)
+	}
+}
+
+func TestBuildAndWriteFileClaims_ExcludeTask(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// The excluded task (simulating the just-claimed task)
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "my-task.md"),
+		[]byte("---\naffects:\n  - internal/foo.go\n  - internal/bar.go\n---\n# My Task\n"), 0o644)
+
+	// Another in-progress task that should remain
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "other-task.md"),
+		[]byte("---\naffects:\n  - internal/baz.go\n---\n# Other Task\n"), 0o644)
+
+	if err := BuildAndWriteFileClaims(tasksDir, "my-task.md"); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("file-claims.json not written: %v", err)
+	}
+
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// Only the non-excluded task's files should appear
+	if len(claims) != 1 {
+		t.Fatalf("expected 1 claim, got %d: %v", len(claims), claims)
+	}
+	if _, ok := claims["internal/foo.go"]; ok {
+		t.Fatal("excluded task's file internal/foo.go should not appear in claims")
+	}
+	if _, ok := claims["internal/bar.go"]; ok {
+		t.Fatal("excluded task's file internal/bar.go should not appear in claims")
+	}
+	if c, ok := claims["internal/baz.go"]; !ok || c.Task != "other-task.md" {
+		t.Fatalf("expected claim for internal/baz.go from other-task.md, got %+v", claims)
+	}
+}
+
+func TestBuildAndWriteFileClaims_EmptyExclude(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-x.md"),
+		[]byte("---\naffects:\n  - x.go\n---\n# Task X\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "task-y.md"),
+		[]byte("---\naffects:\n  - y.go\n---\n# Task Y\n"), 0o644)
+
+	// Empty excludeTask means all tasks are included (backward compat)
+	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("file-claims.json not written: %v", err)
+	}
+
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if len(claims) != 2 {
+		t.Fatalf("expected 2 claims, got %d: %v", len(claims), claims)
+	}
+	if _, ok := claims["x.go"]; !ok {
+		t.Fatal("expected claim for x.go")
+	}
+	if _, ok := claims["y.go"]; !ok {
+		t.Fatal("expected claim for y.go")
+	}
+}
+
+func TestBuildAndWriteFileClaims_ExcludeOnlyMatchingTask(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Three tasks: one to exclude, two to keep
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "excluded.md"),
+		[]byte("---\naffects:\n  - shared.go\n  - only-excluded.go\n---\n# Excluded\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "kept-a.md"),
+		[]byte("---\naffects:\n  - shared.go\n  - a.go\n---\n# Kept A\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "kept-b.md"),
+		[]byte("---\naffects:\n  - b.go\n---\n# Kept B\n"), 0o644)
+
+	if err := BuildAndWriteFileClaims(tasksDir, "excluded.md"); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("file-claims.json not written: %v", err)
+	}
+
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// Should have 3 files: shared.go (from kept-a), a.go, b.go
+	if len(claims) != 3 {
+		t.Fatalf("expected 3 claims, got %d: %v", len(claims), claims)
+	}
+	if _, ok := claims["only-excluded.go"]; ok {
+		t.Fatal("only-excluded.go should not appear in claims")
+	}
+	if c := claims["shared.go"]; c.Task != "kept-a.md" {
+		t.Fatalf("shared.go should be claimed by kept-a.md, got %q", c.Task)
+	}
+	if c := claims["a.go"]; c.Task != "kept-a.md" {
+		t.Fatalf("a.go should be claimed by kept-a.md, got %q", c.Task)
+	}
+	if c := claims["b.go"]; c.Task != "kept-b.md" {
+		t.Fatalf("b.go should be claimed by kept-b.md, got %q", c.Task)
 	}
 }
 
