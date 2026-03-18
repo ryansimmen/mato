@@ -266,6 +266,18 @@ func TestShowIncludesProgressSection(t *testing.T) {
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
+	// Register both agents as active so their progress messages are shown.
+	cleanup1, err := queue.RegisterAgent(tasksDir, "7da2c4fa")
+	if err != nil {
+		t.Fatalf("RegisterAgent 7da2c4fa: %v", err)
+	}
+	defer cleanup1()
+	cleanup2, err := queue.RegisterAgent(tasksDir, "a1b2c3d4")
+	if err != nil {
+		t.Fatalf("RegisterAgent a1b2c3d4: %v", err)
+	}
+	defer cleanup2()
+
 	// Write a progress message.
 	if err := messaging.WriteMessage(tasksDir, messaging.Message{
 		ID:     "prog1",
@@ -595,6 +607,89 @@ func captureShow(t *testing.T, repoRoot string) string {
 		t.Fatalf("Show: %v", callErr)
 	}
 	return string(out)
+}
+
+func TestProgressFilteredToActiveAgents(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Register only agent-1 as active (agent-2 is dead — no lock file).
+	cleanup, err := queue.RegisterAgent(tasksDir, "active01")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	// Write progress for both the active and a dead agent.
+	for _, msg := range []messaging.Message{
+		{ID: "p1", From: "active01", Type: "progress", Task: "live.md", Body: "Step: WORK", SentAt: time.Now().UTC().Add(-1 * time.Minute)},
+		{ID: "p2", From: "dead0000", Type: "progress", Task: "ghost.md", Body: "Step: MARK_READY", SentAt: time.Now().UTC().Add(-500 * time.Minute)},
+	} {
+		if err := messaging.WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	output := captureShow(t, repoRoot)
+
+	// Active agent's progress should appear in Current Agent Progress.
+	if !contains(output, "agent-active01") {
+		t.Errorf("output should contain active agent progress, got:\n%s", output)
+	}
+	// Dead agent should NOT appear in Current Agent Progress section.
+	// Extract just the Current Agent Progress section for verification.
+	progressStart := strings.Index(output, "Current Agent Progress")
+	progressEnd := strings.Index(output[progressStart:], "\n\n")
+	if progressStart < 0 || progressEnd < 0 {
+		t.Fatalf("could not find Current Agent Progress section in output:\n%s", output)
+	}
+	progressSection := output[progressStart : progressStart+progressEnd]
+	if contains(progressSection, "dead0000") {
+		t.Errorf("Current Agent Progress should NOT contain dead agent, got:\n%s", progressSection)
+	}
+	if contains(progressSection, "ghost.md") {
+		t.Errorf("Current Agent Progress should NOT contain dead agent's task, got:\n%s", progressSection)
+	}
+}
+
+func TestRecentMessagesAgentPrefix(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Message with bare ID (no "agent-" prefix).
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID:     "m1",
+		From:   "abc12345",
+		Type:   "intent",
+		Task:   "some-task.md",
+		Body:   "Starting",
+		SentAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	output := captureShow(t, repoRoot)
+
+	// Recent Messages should show "agent-abc12345", not bare "abc12345".
+	if !contains(output, "agent-abc12345") {
+		t.Errorf("Recent Messages should show 'agent-abc12345', got:\n%s", output)
+	}
 }
 
 func contains(s, substr string) bool {
