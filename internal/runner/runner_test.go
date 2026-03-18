@@ -282,6 +282,48 @@ func TestConfigureReceiveDeny_Failure(t *testing.T) {
 	}
 }
 
+func TestCheckIdleTransition(t *testing.T) {
+	tests := []struct {
+		name        string
+		sequence    []bool // sequence of isIdle values per iteration
+		wantPrints  []bool // expected shouldPrint results per iteration
+	}{
+		{
+			name:       "prints once on entering idle",
+			sequence:   []bool{true, true, true},
+			wantPrints: []bool{true, false, false},
+		},
+		{
+			name:       "prints again after leaving and re-entering idle",
+			sequence:   []bool{true, true, false, true, true},
+			wantPrints: []bool{true, false, false, true, false},
+		},
+		{
+			name:       "never prints when always active",
+			sequence:   []bool{false, false, false},
+			wantPrints: []bool{false, false, false},
+		},
+		{
+			name:       "alternating prints each time",
+			sequence:   []bool{true, false, true, false},
+			wantPrints: []bool{true, false, true, false},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wasIdle := false
+			for i, isIdle := range tt.sequence {
+				got := checkIdleTransition(isIdle, &wasIdle)
+				if got != tt.wantPrints[i] {
+					t.Errorf("iteration %d: checkIdleTransition(%v) = %v, want %v",
+						i, isIdle, got, tt.wantPrints[i])
+				}
+			}
+		})
+	}
+}
+
 func TestExtractFailureLines_NoFailures(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
 	os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644)

@@ -147,6 +147,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
+	wasIdle := false
 	for {
 		queue.RecoverOrphanedTasks(tasksDir)
 		queue.CleanStaleLocks(tasksDir)
@@ -197,7 +198,8 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			}
 		}
 
-		if !hasBacklogTasks && !merge.HasReadyTasks(tasksDir) {
+		isIdle := !hasBacklogTasks && !merge.HasReadyTasks(tasksDir)
+		if checkIdleTransition(isIdle, &wasIdle) {
 			fmt.Println("No tasks found in backlog or ready-to-merge. Waiting...")
 		}
 
@@ -386,6 +388,14 @@ func buildDependencyContext(tasksDir string, claimed *queue.ClaimedTask) string 
 func configureReceiveDeny(repoRoot string) error {
 	_, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead")
 	return err
+}
+
+// checkIdleTransition returns true when the system transitions from active to
+// idle, so the caller should print the idle message exactly once per idle period.
+func checkIdleTransition(isIdle bool, wasIdle *bool) bool {
+	shouldPrint := isIdle && !*wasIdle
+	*wasIdle = isIdle
+	return shouldPrint
 }
 
 // extractFailureLines reads a task file and returns all failure record lines
