@@ -1394,3 +1394,66 @@ func TestWriteMessage_ProgressType(t *testing.T) {
 		t.Fatalf("body = %q, want %q", messages[0].Body, "Step: WORK")
 	}
 }
+
+func TestReadAllCompletionDetails(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	t1 := time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, time.March, 17, 14, 0, 0, 0, time.UTC)
+
+	for _, d := range []CompletionDetail{
+		{TaskID: "task-a", TaskFile: "task-a.md", Branch: "task/a", CommitSHA: "aaa", Title: "Task A", MergedAt: t1},
+		{TaskID: "task-b", TaskFile: "task-b.md", Branch: "task/b", CommitSHA: "bbb", Title: "Task B", MergedAt: t2},
+		{TaskID: "task-c", TaskFile: "task-c.md", Branch: "task/c", CommitSHA: "ccc", Title: "Task C", MergedAt: t3},
+	} {
+		if err := WriteCompletionDetail(tasksDir, d); err != nil {
+			t.Fatalf("WriteCompletionDetail %s: %v", d.TaskID, err)
+		}
+	}
+
+	got, err := ReadAllCompletionDetails(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllCompletionDetails: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 completion details, got %d", len(got))
+	}
+	if got[0].TaskID != "task-c" {
+		t.Fatalf("got[0].TaskID = %q, want %q", got[0].TaskID, "task-c")
+	}
+	if got[1].TaskID != "task-b" {
+		t.Fatalf("got[1].TaskID = %q, want %q", got[1].TaskID, "task-b")
+	}
+	if got[2].TaskID != "task-a" {
+		t.Fatalf("got[2].TaskID = %q, want %q", got[2].TaskID, "task-a")
+	}
+}
+
+func TestReadAllCompletionDetailsEmptyDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	got, err := ReadAllCompletionDetails(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllCompletionDetails: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil, got %v", got)
+	}
+}
+
+func TestReadAllCompletionDetailsNonExistentDir(t *testing.T) {
+	got, err := ReadAllCompletionDetails(filepath.Join(t.TempDir(), "nonexistent"))
+	if err != nil {
+		t.Fatalf("ReadAllCompletionDetails should not error on missing dir: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil, got %v", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
+	"mato/internal/process"
 	"mato/internal/queue"
 )
 
@@ -48,6 +50,9 @@ func Show(repoRoot, tasksDir string) error {
 	inProgressTasks := listTasksInDir(tasksDir, "in-progress")
 	readyToMergeTasks := listTasksInDir(tasksDir, "ready-to-merge")
 	failedTasks := listTasksInDir(tasksDir, "failed")
+	reverseDeps := reverseDependencies(tasksDir)
+	completions, _ := messaging.ReadAllCompletionDetails(tasksDir)
+	mergeLockActive := isMergeLockActive(tasksDir)
 	messages, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
 		return err
@@ -73,6 +78,11 @@ func Show(repoRoot, tasksDir string) error {
 	fmt.Printf("  ready-to-merge: %d\n", counts["ready-to-merge"])
 	fmt.Printf("  completed:      %d\n", counts["completed"])
 	fmt.Printf("  failed:         %d\n", counts["failed"])
+	if mergeLockActive {
+		fmt.Printf("  merge queue:    active\n")
+	} else {
+		fmt.Printf("  merge queue:    idle\n")
+	}
 
 	// ── Active Agents ──
 	presenceMap, _ := messaging.ReadAllPresence(tasksDir)
@@ -121,12 +131,39 @@ func Show(repoRoot, tasksDir string) error {
 		fmt.Println()
 		fmt.Println("In-Progress Tasks")
 		fmt.Println("─────────────────")
+		now := time.Now()
 		for _, task := range inProgressTasks {
-			claimedBy := queue.ParseClaimedBy(filepath.Join(tasksDir, "in-progress", task.name))
+			taskPath := filepath.Join(tasksDir, "in-progress", task.name)
+			claimedBy := queue.ParseClaimedBy(taskPath)
+
+			// Build info parts: title, agent, time-in-state, retry budget, reverse deps.
+			var parts []string
 			if claimedBy != "" {
-				fmt.Printf("  %s  (agent %s)\n", task.name, claimedBy)
+				parts = append(parts, fmt.Sprintf("agent %s", claimedBy))
+			}
+			if claimedAt := parseClaimedAt(taskPath); !claimedAt.IsZero() {
+				parts = append(parts, formatDuration(now.Sub(claimedAt)))
+			}
+			failCount := countFailureRecords(taskPath)
+			if failCount > 0 {
+				parts = append(parts, fmt.Sprintf("%d/%d retries used", failCount, task.maxRetries))
+			}
+			taskID := task.id
+			if taskID == "" {
+				taskID = frontmatter.TaskFileStem(task.name)
+			}
+			if waiters, ok := reverseDeps[taskID]; ok {
+				parts = append(parts, fmt.Sprintf("%d %s waiting", len(waiters), pluralize(len(waiters), "task", "tasks")))
+			}
+
+			label := task.name
+			if task.title != "" {
+				label = fmt.Sprintf("%s — %s", task.name, task.title)
+			}
+			if len(parts) > 0 {
+				fmt.Printf("  %s  (%s)\n", label, strings.Join(parts, ", "))
 			} else {
-				fmt.Printf("  %s\n", task.name)
+				fmt.Printf("  %s\n", label)
 			}
 		}
 	}
@@ -137,7 +174,11 @@ func Show(repoRoot, tasksDir string) error {
 		fmt.Println("Ready to Merge")
 		fmt.Println("──────────────")
 		for _, task := range readyToMergeTasks {
-			fmt.Printf("  %s  (priority %d)\n", task.name, task.priority)
+			label := task.name
+			if task.title != "" {
+				label = fmt.Sprintf("%s — %s", task.name, task.title)
+			}
+			fmt.Printf("  %s  (priority %d)\n", label, task.priority)
 		}
 	}
 
@@ -149,7 +190,11 @@ func Show(repoRoot, tasksDir string) error {
 		fmt.Println("  (none)")
 	} else {
 		for _, task := range waitingTasks {
-			fmt.Printf("  %s\n", task.Name)
+			label := task.Name
+			if task.Title != "" {
+				label = fmt.Sprintf("%s — %s", task.Name, task.Title)
+			}
+			fmt.Printf("  %s\n", label)
 			fmt.Printf("    depends on: %s\n", strings.Join(task.Dependencies, ", "))
 		}
 	}
@@ -180,8 +225,42 @@ func Show(repoRoot, tasksDir string) error {
 		fmt.Println("Failed Tasks")
 		fmt.Println("────────────")
 		for _, task := range failedTasks {
-			failCount := countFailureRecords(filepath.Join(tasksDir, "failed", task.name))
-			fmt.Printf("  %s  (%d failures)\n", task.name, failCount)
+			taskPath := filepath.Join(tasksDir, "failed", task.name)
+			failCount := countFailureRecords(taskPath)
+			label := task.name
+			if task.title != "" {
+				label = fmt.Sprintf("%s — %s", task.name, task.title)
+			}
+			reason := lastFailureReason(taskPath)
+			info := fmt.Sprintf("%d/%d retries exhausted", failCount, task.maxRetries)
+			if reason != "" {
+				info += fmt.Sprintf(", last: %s", reason)
+			}
+			fmt.Printf("  %s  (%s)\n", label, info)
+		}
+	}
+
+	// ── Recent Completions ──
+	if len(completions) > 0 {
+		fmt.Println()
+		fmt.Println("Recent Completions")
+		fmt.Println("──────────────────")
+		show := completions
+		if len(show) > 5 {
+			show = show[:5]
+		}
+		now := time.Now()
+		for _, c := range show {
+			ago := formatDuration(now.Sub(c.MergedAt))
+			shortSHA := c.CommitSHA
+			if len(shortSHA) > 7 {
+				shortSHA = shortSHA[:7]
+			}
+			label := c.TaskFile
+			if c.Title != "" {
+				label = fmt.Sprintf("%s — %s", c.TaskFile, c.Title)
+			}
+			fmt.Printf("  %s  (merged %s ago, %d %s, %s)\n", label, ago, len(c.FilesChanged), pluralize(len(c.FilesChanged), "file", "files"), shortSHA)
 		}
 	}
 
@@ -208,8 +287,11 @@ func Show(repoRoot, tasksDir string) error {
 }
 
 type taskEntry struct {
-	name     string
-	priority int
+	name       string
+	title      string
+	id         string
+	priority   int
+	maxRetries int
 }
 
 func listTasksInDir(tasksDir, dir string) []taskEntry {
@@ -222,12 +304,17 @@ func listTasksInDir(tasksDir, dir string) []taskEntry {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
-		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, dir, e.Name()))
+		meta, body, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, dir, e.Name()))
 		priority := 50
+		maxRetries := 3
+		var title, id string
 		if err == nil {
 			priority = meta.Priority
+			maxRetries = meta.MaxRetries
+			id = meta.ID
+			title = frontmatter.ExtractTitle(e.Name(), body)
 		}
-		tasks = append(tasks, taskEntry{name: e.Name(), priority: priority})
+		tasks = append(tasks, taskEntry{name: e.Name(), title: title, id: id, priority: priority, maxRetries: maxRetries})
 	}
 	sort.Slice(tasks, func(i, j int) bool {
 		if tasks[i].priority != tasks[j].priority {
@@ -260,6 +347,7 @@ func (a statusAgent) displayName() string {
 
 type waitingTaskSummary struct {
 	Name         string
+	Title        string
 	Priority     int
 	Dependencies []string
 }
@@ -336,11 +424,12 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 			continue
 		}
 		path := filepath.Join(tasksDir, "waiting", entry.Name())
-		meta, _, err := frontmatter.ParseTaskFile(path)
+		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse %s: %v\n", path, err)
 			continue
 		}
+		title := frontmatter.ExtractTitle(entry.Name(), body)
 
 		deps := make([]string, 0, len(meta.DependsOn))
 		for _, dep := range meta.DependsOn {
@@ -360,6 +449,7 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 
 		waiting = append(waiting, waitingTaskSummary{
 			Name:         entry.Name(),
+			Title:        title,
 			Priority:     meta.Priority,
 			Dependencies: deps,
 		})
@@ -439,4 +529,81 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d sec", sec)
 	}
 	return fmt.Sprintf("%d min", int(d.Minutes()))
+}
+
+var claimedAtRe = regexp.MustCompile(`claimed-at:\s*(\S+)`)
+
+// parseClaimedAt extracts the claimed-at timestamp from a task file's HTML comment.
+func parseClaimedAt(path string) time.Time {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}
+	}
+	m := claimedAtRe.FindStringSubmatch(string(data))
+	if len(m) < 2 {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, m[1])
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+var failureLineRe = regexp.MustCompile(`<!-- failure:.*?—\s*(.+?)\s*-->`)
+
+// lastFailureReason extracts the reason from the last <!-- failure: ... --> comment.
+func lastFailureReason(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	matches := failureLineRe.FindAllStringSubmatch(string(data), -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[len(matches)-1][1]
+}
+
+// reverseDependencies scans waiting/ tasks and returns a map from dependency ID
+// to the list of task filenames that depend on it.
+func reverseDependencies(tasksDir string) map[string][]string {
+	entries, err := os.ReadDir(filepath.Join(tasksDir, "waiting"))
+	if err != nil {
+		return nil
+	}
+	result := make(map[string][]string)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, "waiting", entry.Name()))
+		if err != nil {
+			continue
+		}
+		for _, dep := range meta.DependsOn {
+			result[dep] = append(result[dep], entry.Name())
+		}
+	}
+	return result
+}
+
+// isMergeLockActive checks whether the merge queue lock is held by a live process.
+func isMergeLockActive(tasksDir string) bool {
+	data, err := os.ReadFile(filepath.Join(tasksDir, ".locks", "merge.lock"))
+	if err != nil {
+		return false
+	}
+	identity := strings.TrimSpace(string(data))
+	if identity == "" {
+		return false
+	}
+	return process.IsLockHolderAlive(identity)
+}
+
+func pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
 }
