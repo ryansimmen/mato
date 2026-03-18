@@ -1203,3 +1203,154 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 		t.Fatalf("merged file missing from target branch: %v", err)
 	}
 }
+
+func TestFormatSquashCommitMessage_WithAllTrailers(t *testing.T) {
+	task := mergeQueueTask{
+		title:   "Add feature",
+		id:      "add-feature",
+		affects: []string{"internal/merge/merge.go", "internal/merge/merge_test.go"},
+	}
+	got := formatSquashCommitMessage(task)
+	want := "Add feature\n\nTask-ID: add-feature\nAffects: internal/merge/merge.go, internal/merge/merge_test.go"
+	if got != want {
+		t.Fatalf("formatSquashCommitMessage() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestFormatSquashCommitMessage_NoMetadata(t *testing.T) {
+	task := mergeQueueTask{
+		title: "Simple task",
+	}
+	got := formatSquashCommitMessage(task)
+	if got != "Simple task" {
+		t.Fatalf("formatSquashCommitMessage() = %q, want %q", got, "Simple task")
+	}
+}
+
+func TestFormatSquashCommitMessage_OnlyID(t *testing.T) {
+	task := mergeQueueTask{
+		title: "Task with ID",
+		id:    "task-id-only",
+	}
+	got := formatSquashCommitMessage(task)
+	want := "Task with ID\n\nTask-ID: task-id-only"
+	if got != want {
+		t.Fatalf("formatSquashCommitMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatSquashCommitMessage_OnlyAffects(t *testing.T) {
+	task := mergeQueueTask{
+		title:   "Task with affects",
+		affects: []string{"file.go"},
+	}
+	got := formatSquashCommitMessage(task)
+	want := "Task with affects\n\nAffects: file.go"
+	if got != want {
+		t.Fatalf("formatSquashCommitMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestProcessQueue_CommitIncludesTrailers(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/add-trailers-feature", "mato"); err != nil {
+		t.Fatalf("git checkout task branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "trailers.txt"), []byte("trailers\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile trailers.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "trailers.txt"); err != nil {
+		t.Fatalf("git add trailers.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "add trailers feature"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "add-trailers-feature.md")
+	taskContent := "---\nid: add-trailers-feature\npriority: 5\naffects:\n  - internal/merge/merge.go\n  - internal/merge/merge_test.go\n---\n# Add trailers feature\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+
+	msg, err := git.Output(repoRoot, "log", "--format=%B", "-1", "mato")
+	if err != nil {
+		t.Fatalf("git log mato: %v", err)
+	}
+	msg = strings.TrimSpace(msg)
+	if !strings.Contains(msg, "Task-ID: add-trailers-feature") {
+		t.Fatalf("commit message missing Task-ID trailer:\n%s", msg)
+	}
+	if !strings.Contains(msg, "Affects: internal/merge/merge.go, internal/merge/merge_test.go") {
+		t.Fatalf("commit message missing Affects trailer:\n%s", msg)
+	}
+	// Verify title is on the first line
+	lines := strings.SplitN(msg, "\n", 2)
+	if lines[0] != "Add trailers feature" {
+		t.Fatalf("commit message first line = %q, want %q", lines[0], "Add trailers feature")
+	}
+}
+
+func TestProcessQueue_CommitOmitsTrailersWhenEmpty(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/no-metadata", "mato"); err != nil {
+		t.Fatalf("git checkout task branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "plain.txt"), []byte("plain\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile plain.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "plain.txt"); err != nil {
+		t.Fatalf("git add plain.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "plain work"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	// No explicit id or affects in frontmatter. The frontmatter parser
+	// defaults id to the filename stem, so Task-ID will still appear.
+	// Only Affects should be absent.
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "no-metadata.md")
+	taskContent := "---\npriority: 5\n---\n# No metadata task\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+
+	msg, err := git.Output(repoRoot, "log", "--format=%B", "-1", "mato")
+	if err != nil {
+		t.Fatalf("git log mato: %v", err)
+	}
+	msg = strings.TrimSpace(msg)
+	if !strings.HasPrefix(msg, "No metadata task") {
+		t.Fatalf("commit message should start with title, got:\n%s", msg)
+	}
+	if strings.Contains(msg, "Affects:") {
+		t.Fatalf("commit message should not contain Affects trailer when affects is empty:\n%s", msg)
+	}
+}

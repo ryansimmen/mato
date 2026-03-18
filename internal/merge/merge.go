@@ -21,6 +21,8 @@ type mergeQueueTask struct {
 	title    string
 	priority int
 	branch   string
+	id       string
+	affects  []string
 }
 
 var branchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
@@ -65,6 +67,8 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 			title:    frontmatter.ExtractTitle(entry.Name(), body),
 			priority: meta.Priority,
 			branch:   parseBranchFromFile(path),
+			id:       meta.ID,
+			affects:  meta.Affects,
 		})
 	}
 
@@ -157,7 +161,7 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
 		return nil
 	}
 
-	if _, err := git.Output(cloneDir, "commit", "-m", task.title); err != nil {
+	if _, err := git.Output(cloneDir, "commit", "-m", formatSquashCommitMessage(task)); err != nil {
 		return fmt.Errorf("commit squash merge: %w", err)
 	}
 	if _, err := git.Output(cloneDir, "push", "origin", branch); err != nil {
@@ -165,6 +169,20 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
 	}
 
 	return nil
+}
+
+func formatSquashCommitMessage(task mergeQueueTask) string {
+	var trailers []string
+	if task.id != "" {
+		trailers = append(trailers, "Task-ID: "+task.id)
+	}
+	if len(task.affects) > 0 {
+		trailers = append(trailers, "Affects: "+strings.Join(task.affects, ", "))
+	}
+	if len(trailers) == 0 {
+		return task.title
+	}
+	return task.title + "\n\n" + strings.Join(trailers, "\n")
 }
 
 func configureMergeCloneIdentity(repoRoot, cloneDir string) error {
