@@ -1,5 +1,5 @@
 # Mato Architecture
-This document describes the architecture implemented by `main.go`, `runner.go`, `queue.go`, `git.go`, `merge.go`, `frontmatter.go`, `messaging.go`, `status.go`, and the embedded task prompt in `task-instructions.md`.
+This document describes the architecture implemented by `main.go`, `runner.go`, `queue.go`, `git.go`, `merge.go`, `frontmatter.go`, `messaging.go`, `status.go`, and the embedded prompts in `task-instructions.md` and `review-instructions.md`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.tasks/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
@@ -40,13 +40,13 @@ High-level flow:
 1. Resolve `repoRoot` with `git rev-parse --show-toplevel`.
 2. Ensure the target branch exists with `git.EnsureBranch(...)`; if the local branch exists, check it out; otherwise fetch the branch from `origin` (non-fatal on failure), then if `origin/<branch>` exists create the local branch from the remote-tracking ref; otherwise create it from `HEAD`.
 3. Resolve `tasksDir`; default is `<repoRoot>/.tasks`.
-4. Create queue directories: `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, `completed/`, and `failed/`.
+4. Create queue directories: `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`.
 5. Create messaging directories with `messaging.Init(...)`: `.tasks/messages/events/`, `.tasks/messages/completions/`, and `.tasks/messages/presence/`.
 6. Generate an agent ID with `queue.GenerateAgentID()`.
 7. Register the process as active by writing `.tasks/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
 8. Ensure `/.tasks/` is in `.gitignore` via `git.EnsureGitignored(...)`.
 9. Resolve host tools and config: Docker image, `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity.
-10. Build the embedded prompt by replacing placeholders in `task-instructions.md` with `/workspace/.tasks`, the configured target branch, and `/workspace/.tasks/messages`.
+10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.tasks`, the configured target branch, and `/workspace/.tasks/messages`.
 11. Install `SIGINT`/`SIGTERM` handlers.
 ### Polling loop
 The loop in `Run()` polls every 10 seconds. The exact order is:
@@ -65,6 +65,9 @@ if claimed != nil:
     messaging.WriteMessage(...) intent
     runOnce(...)
     recoverStuckTask(...)
+reviewTask := selectTaskForReview(tasksDir)
+if reviewTask != "":
+    runReview(reviewTask, ...)
 merge.AcquireLock(tasksDir) + merge.ProcessQueue(...)
 if no claimed task and no ready-to-merge: print idle message
 wait for signal or 10 seconds
@@ -154,15 +157,15 @@ State-by-state behavior:
 - `WORK`: read the task body, ignoring YAML frontmatter and comment-only metadata lines, implement the task, and run the repository's existing validation commands with up to 3 attempts.
 - `COMMIT`: `git add -A`, commit with the task title, and continue only if a commit is created.
 - `PUSH_BRANCH`: compute changed files relative to the target branch, write one best-effort `conflict-warning` message, push `origin <task-branch>` with `git push --force-with-lease` up to 3 attempts, append `<!-- branch: ... -->` after a successful push, and verify the remote branch exists.
-- `MARK_READY`: move the task file `in-progress/ -> ready-to-merge/`, write one best-effort `completion` message, and exit.
+- `MARK_READY`: move the task file `in-progress/ -> ready-for-review/`, write one best-effort `completion` message, and exit.
 - `ON_FAILURE`: append a structured `<!-- failure: ... -->` line, try to check out the target branch, then always move the task back to `backlog/`. The host checks the retry budget on the next cycle via `SelectAndClaimTask`.
 The prompt enforces several invariants: one task per run; agents use `--force-with-lease` for task branches only; they never push directly to the target branch; and they send at most 2 messages per task (`conflict-warning`, `completion`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States
 The queue is encoded directly in directories under `.tasks/`.
 ```text
-waiting/ --deps met--> backlog/ --host claim--> in-progress/ --mark ready--> ready-to-merge/ --merge--> completed/
-   ^                      |                          |
-   |                      |                          +--ON_FAILURE--> backlog/
+waiting/ --deps met--> backlog/ --host claim--> in-progress/ --mark ready--> ready-for-review/ --approved--> ready-to-merge/ --merge--> completed/
+   ^                      |                          |                              |
+   |                      |                          +--ON_FAILURE--> backlog/       +--review rejection--> backlog/
    +--dep not met---------+                          +--host orphan recovery--> backlog/
                           |                          +--host retry exhaustion--> failed/
                           +--conflict-deferred tasks stay in backlog/ but excluded from .queue
@@ -171,9 +174,10 @@ State meanings:
 | State | Meaning | Entered by | Left by |
 | --- | --- | --- | --- |
 | `waiting/` | blocked task | authored there initially for dependency tracking | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed and no active overlap exists |
-| `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, or `ON_FAILURE` requeue | host `SelectAndClaimTask` moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
+| `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, `ON_FAILURE` requeue, or review rejection | host `SelectAndClaimTask` moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
 | `in-progress/` | task owned by one agent | host `SelectAndClaimTask` | `MARK_READY`, `ON_FAILURE`, or host orphan recovery |
-| `ready-to-merge/` | branch pushed, waiting for host merge | prompt `MARK_READY` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
+| `ready-for-review/` | branch pushed, waiting for AI review | prompt `MARK_READY` | review agent moves it to `ready-to-merge/` on approval, or to `backlog/` on rejection |
+| `ready-to-merge/` | reviewed and approved, waiting for host merge | review agent approval | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
 | `failed/` | retry budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when failure count reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
 Retry counting is comment-based, not directory-based. The host checks for `<!-- failure:` lines in `SelectAndClaimTask` and in the merge queue. Host recovery and merge failures also append those lines.
@@ -227,7 +231,24 @@ Merge failure handling is branch-specific:
 2. Squash merge conflict: append `<!-- failure: merge-queue ... -->`, move the task `ready-to-merge/ -> backlog/`, and delete the stale task branch locally and on `origin` so a future agent run can push a fresh branch.
 3. Push failure after a successful squash commit: append `<!-- failure: merge-queue ... -->` but leave the task file in `ready-to-merge/` for retry on the next merge pass.
 4. Parse errors are also recorded as merge-queue failures and requeued to `backlog/`.
-## 7. Conflict Prevention
+## 7. Review Agent
+After a task agent pushes its branch and moves the task to `ready-for-review/`, the host launches a review agent to evaluate the changes before merging.
+
+### How it works
+1. `selectTaskForReview(tasksDir)` scans `ready-for-review/*.md` for the next task to review.
+2. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts).
+3. The review agent diffs the task branch against the target branch, analyzes the changes, and renders a verdict.
+4. **Approved**: the review agent appends `<!-- reviewed: <agent-id> at <timestamp> — approved -->` and moves the task to `ready-to-merge/`.
+5. **Rejected**: the review agent appends `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->` and moves the task back to `backlog/` for a retry by the implementing agent.
+
+### Key properties
+- Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` lines are counted for the retry budget.
+- On retry, the host injects previous review feedback via the `MATO_REVIEW_FEEDBACK` environment variable so the implementing agent can address the reviewer's concerns.
+- The review agent uses the embedded prompt `review-instructions.md`.
+- The review agent sends `progress` and `completion` messages like the task agent.
+- The review verdict (approve/reject) is communicated via task file movement and HTML comments, not via the messaging system.
+
+## 8. Conflict Prevention
 `queue.DeferredOverlappingTasks(tasksDir)` prevents multiple backlog tasks from claiming the same files simultaneously.
 Algorithm:
 1. Scan `backlog/*.md` and `in-progress/*.md` + `ready-to-merge/*.md` (active tasks).
@@ -243,7 +264,7 @@ Algorithm:
 - duplicates are removed from the overlap report
 - the overlap list is sorted before logging
 Important consequence: `affects` is metadata, not a live diff. `mato` does not interpret it as globs or path prefixes.
-## 8. Code Structure
+## 9. Code Structure
 
 The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypoint, `internal/` for library packages.
 
@@ -253,9 +274,11 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `parseArgs(...)` handles `--repo`, `--branch`, `--tasks-dir`, `--help`, `--`, and forwards all other args to Copilot CLI.
 
 ### `internal/runner/`
-- Embeds `task-instructions.md` (the agent prompt/state machine).
+- Embeds `task-instructions.md` (the task agent prompt/state machine) and `review-instructions.md` (the review agent prompt).
 - `Run(...)` initializes the repo/queue and executes the polling loop.
-- `runOnce(...)` builds the temp clone + Docker runtime for one agent run.
+- `runOnce(...)` builds the temp clone + Docker runtime for one task agent run.
+- `selectTaskForReview(...)` scans `ready-for-review/` for the next task to review.
+- `runReview(...)` builds the temp clone + Docker runtime for one review agent run.
 
 ### `internal/queue/`
 - Agent identity (`GenerateAgentID`) and liveness via `.locks/*.pid`.
@@ -300,25 +323,27 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### Test files
 Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignored`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
-## 9. Host-Curated Knowledge Flow
+## 10. Host-Curated Knowledge Flow
 The host acts as a knowledge broker between agents, following an agent → host → agent pattern. Individual agents produce information as side effects of their work (conflict warnings with changed-file lists, failure records in task metadata), and the host aggregates this information and injects curated context into new agents before they start.
 
 Concrete examples:
 - **Failure context**: When an agent fails, it appends a `<!-- failure: ... -->` comment to the task file. On the next attempt, the host reads these lines via `extractFailureLines(...)` and injects them as `MATO_PREVIOUS_FAILURES`, so the new agent can learn from prior mistakes without parsing the task file itself.
 - **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
 - **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records and injects them as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
+- **Review feedback**: When the review agent rejects a task, it appends `<!-- review-rejection: ... -->` to the task file. On the next attempt, the host reads these lines and injects them as `MATO_REVIEW_FEEDBACK`, so the implementing agent can address the reviewer's concerns.
 
 This pattern keeps agents stateless and single-task-focused while the host provides the coordination intelligence. No agent needs to query other agents directly — the host curates and delivers the relevant context at launch time.
 
-## 10. End-to-End Summary
+## 11. End-to-End Summary
 Responsibility is split cleanly:
-- the host owns queue maintenance, dependency promotion, overlap prevention, stale-state cleanup, and merging;
-- the agent owns one isolated task execution;
+- the host owns queue maintenance, dependency promotion, overlap prevention, stale-state cleanup, review orchestration, and merging;
+- task agents own isolated task execution;
+- review agents own change evaluation and approval/rejection;
 - Git branches carry code changes;
 - task files carry scheduling metadata and retry history;
 - `.locks/` and `.queue` provide coarse coordination;
 - `.tasks/messages/` provides advisory coordination.
 
-The merge queue enriches each squash commit with git trailers (`Task-ID`, `Affects`) and writes completion detail files that flow back to dependent agents via `MATO_DEPENDENCY_CONTEXT`. This creates an agent → merge → dependent-agent knowledge chain: an agent pushes its branch, the merge queue records what changed, and the next agent that depends on that work receives the context automatically.
+The merge queue enriches each squash commit with git trailers (`Task-ID`, `Affects`) and writes completion detail files that flow back to dependent agents via `MATO_DEPENDENCY_CONTEXT`. This creates an agent → review → merge → dependent-agent knowledge chain: a task agent pushes its branch, the review agent evaluates the changes, the merge queue records what changed, and the next agent that depends on that work receives the context automatically.
 
 In practice, `mato` is a queue scheduler built from ordinary filesystem state, Git branches, and short-lived Dockerized Copilot runs rather than a centralized service.

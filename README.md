@@ -1,6 +1,6 @@
 # Multi Agent Task Orchestrator (mato)
 
-Runs autonomous Copilot agents against a filesystem-backed task queue in Docker. Agents claim work, coordinate through `.tasks/`, push task branches, and the host merge queue squash-merges completed work into the target branch.
+Runs autonomous Copilot agents against a filesystem-backed task queue in Docker. Agents claim work, coordinate through `.tasks/`, push task branches, and the host merge queue squash-merges completed work into the target branch. Every task branch is automatically reviewed by an AI review agent before merging. The review agent checks for bugs, logic errors, regressions, and convention violations. See [Architecture](docs/architecture.md) for details.
 
 ## Requirements
 
@@ -79,7 +79,8 @@ After the frontmatter, write normal markdown instructions for the agent.
 ├── waiting/         # blocked tasks waiting on dependencies or conflicts
 ├── backlog/         # ready to run
 ├── in-progress/     # claimed by an active agent
-├── ready-to-merge/  # completed by an agent, waiting for host merge
+├── ready-for-review/# completed by agent, waiting for AI review
+├── ready-to-merge/  # approved by review agent, waiting for host merge
 ├── completed/       # merged successfully
 ├── failed/          # exceeded retry limit
 ├── messages/
@@ -96,8 +97,9 @@ Failed tasks are retried up to 3 times before moving to `failed/`.
 2. Mato promotes ready tasks into `backlog/`, orders them by priority, and defers exact `affects` conflicts.
 3. An agent claims a backlog task, works in an isolated clone, and pushes a `task/<name>` branch.
 4. Agents communicate through `.tasks/messages/` so concurrent runs can share intent and completion events.
-5. The host merge queue processes `ready-to-merge/` and squash-merges finished task branches into the target branch.
-6. Tasks move to `completed/` on success. Missing branches move to `failed/`, merge conflicts requeue to `backlog/` for a fresh attempt, and push failures are retried in `ready-to-merge/`.
+5. A review agent automatically evaluates each completed task branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with feedback for the next attempt.
+6. The host merge queue processes `ready-to-merge/` and squash-merges finished task branches into the target branch.
+7. Tasks move to `completed/` on success. Missing branches move to `failed/`, merge conflicts requeue to `backlog/` for a fresh attempt, and push failures are retried in `ready-to-merge/`.
 
 If the queue is empty, mato keeps polling until new work appears. The loop exits cleanly on `Ctrl+C`.
 
@@ -109,7 +111,7 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 
 `mato status` prints a terminal-friendly snapshot of the queue:
 
-- counts for `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, `completed/`, and `failed/`
+- counts for `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`
 - active agents from `.locks/`
 - waiting tasks with dependency progress
 - the last 5 coordination messages from `.tasks/messages/events/`
