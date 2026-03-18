@@ -206,7 +206,7 @@ This is the main multi-process safety mechanism for host-side merges.
 `merge.ProcessQueue(...)` scans `ready-to-merge/*.md`, parses each task, and sorts by ascending `priority`, then filename.
 For each task:
 1. Parse the task file with `frontmatter.ParseTaskFile(...)`.
-2. Derive the squash commit message with `taskTitle(...)` from the first non-empty body line; leading `#` is stripped. The message is enriched with git commit trailers via `formatSquashCommitMessage(task)`: `Task-ID: <id>` (if task ID is set) and `Affects: <comma-separated files>` (if `affects` metadata is present). If neither trailer applies, the plain title is used.
+2. Derive the task title with `frontmatter.ExtractTitle(...)` from the first non-empty body line; leading `#` is stripped. The squash commit message is enriched with git commit trailers via `formatSquashCommitMessage(task)`: `Task-ID: <id>` (if task ID is set) and `Affects: <comma-separated files>` (if `affects` metadata is present). If neither trailer applies, the plain title is used.
 3. Read `<!-- branch: ... -->` from the task file when present; if absent, fall back to `task/<sanitizeBranchName(filename)>`.
 4. Create a fresh temp clone.
 5. Configure clone identity from repo Git config, then global config, with fallbacks `mato` and `mato@local.invalid`.
