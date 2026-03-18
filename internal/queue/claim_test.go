@@ -516,6 +516,13 @@ func TestSelectAndClaimTask_RetryExhausted_MoveToFailedFails_RollbackToBacklog(t
 	if !errors.Is(err, errFailedDirUnavailable) {
 		t.Fatalf("error should wrap errFailedDirUnavailable: %v", err)
 	}
+	var fdErr *FailedDirUnavailableError
+	if !errors.As(err, &fdErr) {
+		t.Fatalf("error should be a *FailedDirUnavailableError: %v", err)
+	}
+	if fdErr.TaskFilename != "exhausted.md" {
+		t.Fatalf("TaskFilename = %q, want %q", fdErr.TaskFilename, "exhausted.md")
+	}
 	if !strings.Contains(err.Error(), "simulated move-to-failed failure") {
 		t.Fatalf("error should include move-to-failed cause: %v", err)
 	}
@@ -649,5 +656,23 @@ func TestRecoverOrphanedTasks_HandlesStrandedWithoutClaimedBy(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- failure:") {
 		t.Fatal("recovered task should have a failure record appended")
+	}
+}
+
+func TestIsFailedDirUnavailable(t *testing.T) {
+	// Wrapped error should match.
+	err := &FailedDirUnavailableError{TaskFilename: "test.md", MoveErr: fmt.Errorf("perm denied")}
+	if !IsFailedDirUnavailable(err) {
+		t.Fatal("IsFailedDirUnavailable should return true for FailedDirUnavailableError")
+	}
+
+	// Plain error should not match.
+	if IsFailedDirUnavailable(fmt.Errorf("unrelated error")) {
+		t.Fatal("IsFailedDirUnavailable should return false for unrelated errors")
+	}
+
+	// nil should not match.
+	if IsFailedDirUnavailable(nil) {
+		t.Fatal("IsFailedDirUnavailable should return false for nil")
 	}
 }
