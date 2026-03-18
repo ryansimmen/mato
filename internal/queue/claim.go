@@ -61,6 +61,13 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		claimedAt := time.Now().UTC().Format(time.RFC3339)
 		if err := prependClaimedBy(dst, agentID, claimedAt); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write claimed-by header for %s: %v\n", name, err)
+			// Move the task back to backlog so it is not left in in-progress
+			// without ownership metadata, which would confuse RecoverOrphanedTasks
+			// and other agents.
+			if rbErr := os.Rename(dst, src); rbErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move %s back to backlog after claimed-by failure: %v\n", name, rbErr)
+			}
+			continue
 		}
 
 		branch := "task/" + frontmatter.SanitizeBranchName(name)
