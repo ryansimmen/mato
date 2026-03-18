@@ -394,7 +394,7 @@ func TestPromptPushAndMarkReady(t *testing.T) {
 	}
 
 	mustGitOutput(t, repoRoot, "rev-parse", "--verify", "refs/heads/task/my-task")
-	mustExist(t, filepath.Join(tasksDir, "ready-to-merge", "my-task.md"))
+	mustExist(t, filepath.Join(tasksDir, "ready-for-review", "my-task.md"))
 	mustNotExist(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
 
 	warning := findPromptEventMessage(t, tasksDir, "conflict-warning")
@@ -405,7 +405,7 @@ func TestPromptPushAndMarkReady(t *testing.T) {
 	if completion.Task != "my-task.md" || completion.Branch != "task/my-task" || completion.From != "test-agent-4" {
 		t.Fatalf("completion message = %+v, want my-task/task/my-task/test-agent-4", completion)
 	}
-	if !strings.Contains(out, "Completed my-task.md on task/my-task and moved it to ready-to-merge/.") {
+	if !strings.Contains(out, "Completed my-task.md on task/my-task and moved it to ready-for-review/.") {
 		t.Fatalf("mark ready output missing completion line: %s", out)
 	}
 }
@@ -435,7 +435,7 @@ func TestPromptRecordsBranchInTaskFile(t *testing.T) {
 		t.Fatalf("runBash record branch metadata: %v\noutput:\n%s", err, out)
 	}
 
-	readyTask := filepath.Join(tasksDir, "ready-to-merge", "my-task.md")
+	readyTask := filepath.Join(tasksDir, "ready-for-review", "my-task.md")
 	contents := readFile(t, readyTask)
 	if !strings.Contains(contents, "<!-- branch: task/my-task -->") {
 		t.Fatalf("ready task missing branch metadata: %s", contents)
@@ -651,16 +651,22 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 		t.Fatalf("runBash full lifecycle: %v\noutput:\n%s", err, out)
 	}
 
-	readyTask := filepath.Join(tasksDir, "ready-to-merge", "add-hello.md")
+	readyTask := filepath.Join(tasksDir, "ready-for-review", "add-hello.md")
 	mustExist(t, readyTask)
 	mustNotExist(t, filepath.Join(tasksDir, "backlog", "add-hello.md"))
+
+	// Simulate review approval: move task from ready-for-review/ to ready-to-merge/
+	mergeTask := filepath.Join(tasksDir, "ready-to-merge", "add-hello.md")
+	if err := os.Rename(readyTask, mergeTask); err != nil {
+		t.Fatalf("move to ready-to-merge: %v", err)
+	}
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 
 	mustExist(t, filepath.Join(tasksDir, "completed", "add-hello.md"))
-	mustNotExist(t, readyTask)
+	mustNotExist(t, mergeTask)
 	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "mato:hello.txt")); got != "hello world" {
 		t.Fatalf("hello.txt on mato = %q, want %q", got, "hello world")
 	}

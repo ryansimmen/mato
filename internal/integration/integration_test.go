@@ -29,7 +29,7 @@ func setupTestRepo(t *testing.T) (repoRoot string, tasksDir string) {
 	mustGitOutput(t, dir, "checkout", "-b", "mato")
 
 	tasksDir = filepath.Join(dir, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed"} {
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
 		}
