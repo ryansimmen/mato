@@ -591,6 +591,105 @@ func TestWriteMessageAtomicWrite(t *testing.T) {
 	}
 }
 
+func TestFilesFieldRoundtrip(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	msg := Message{
+		ID:     "files-rt",
+		From:   "agent-1",
+		Type:   "conflict-warning",
+		Task:   "task.md",
+		Branch: "feature/test",
+		Files:  []string{"internal/messaging/messaging.go", "docs/messaging.md"},
+		Body:   "About to push",
+		SentAt: time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC),
+	}
+	if err := WriteMessage(tasksDir, msg); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	got, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(got))
+	}
+	if !reflect.DeepEqual(got[0].Files, msg.Files) {
+		t.Fatalf("Files = %v, want %v", got[0].Files, msg.Files)
+	}
+	if !reflect.DeepEqual(got[0], msg) {
+		t.Fatalf("round-trip message = %#v, want %#v", got[0], msg)
+	}
+}
+
+func TestFilesFieldBackwardCompat(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Write a message without the files field (simulates old-format JSON)
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	raw := `{"id":"no-files","from":"agent","type":"intent","task":"task.md","branch":"branch","body":"hello","sent_at":"2024-05-01T12:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(eventsDir, "no-files.json"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(got))
+	}
+	if got[0].Files != nil {
+		t.Fatalf("Files should be nil for messages without files field, got %v", got[0].Files)
+	}
+	if got[0].ID != "no-files" {
+		t.Fatalf("ID = %q, want %q", got[0].ID, "no-files")
+	}
+}
+
+func TestFilesFieldOmitempty(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	msg := Message{
+		ID:     "no-files-omit",
+		From:   "agent",
+		Type:   "intent",
+		Task:   "task.md",
+		Branch: "branch",
+		Body:   "working",
+		SentAt: time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC),
+	}
+	if err := WriteMessage(tasksDir, msg); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(entries))
+	}
+	data, err := os.ReadFile(filepath.Join(eventsDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), `"files"`) {
+		t.Fatalf("JSON should not contain files key when Files is nil, got: %s", data)
+	}
+}
+
 func findEventFile(t *testing.T, eventsDir, id string) string {
 	t.Helper()
 	entries, err := os.ReadDir(eventsDir)
