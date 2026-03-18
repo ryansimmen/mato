@@ -11,11 +11,12 @@ The host runner enables messaging by creating the directories with `messaging.In
 ```text
 .tasks/
 └── messages/
-    ├── events/      # inter-agent event messages
-    └── presence/    # reserved for host-managed agent presence files
+    ├── events/        # inter-agent event messages
+    ├── completions/   # host-written completion details for merged tasks
+    └── presence/      # reserved for host-managed agent presence files
 ```
 
-Agents write coordination messages to `events/`. The `presence/` directory exists and stale-file cleanup still runs, but no production code currently writes presence files; it is reserved for future host-side tooling. Task agents should not edit `presence/` directly.
+Agents write coordination messages to `events/`. The `completions/` directory holds host-written completion details for merged tasks (see below). The `presence/` directory exists and stale-file cleanup still runs, but no production code currently writes presence files; it is reserved for future host-side tooling. Task agents should not edit `presence/` directly.
 
 ## Message Format
 Event files are JSON objects matching `Message` in `messaging.go`:
@@ -74,6 +75,48 @@ The protocol is intentionally narrow:
 - no ad hoc or extra message types
 
 Treat messages as coordination hints, not as locks, leases, or durable state.
+
+## Completion Details
+
+When the host merge queue successfully squash-merges a task branch, it writes a completion detail file to `.tasks/messages/completions/<task-id>.json`. These files capture what happened during the merge so that dependent tasks can benefit from the context.
+
+### Who writes it
+
+The merge queue (`merge.ProcessQueue`) writes the file immediately after a successful squash-merge commit and push, before moving the task to `completed/`.
+
+### Format
+
+Completion detail files are JSON objects matching `CompletionDetail` in `messaging.go`:
+
+```json
+{
+  "task_id": "add-http-retries",
+  "task_file": "add-http-retries.md",
+  "branch": "task/add-http-retries",
+  "commit_sha": "a1b2c3d4e5f6...",
+  "files_changed": ["pkg/client/http.go", "pkg/client/retry.go"],
+  "title": "Add HTTP retries",
+  "merged_at": "2026-03-17T21:35:00Z"
+}
+```
+
+Field meanings:
+- `task_id`: the task's `id` from frontmatter (or filename stem)
+- `task_file`: original task markdown filename
+- `branch`: the task branch that was merged
+- `commit_sha`: SHA of the squash-merge commit on the target branch
+- `files_changed`: files modified by the squash commit
+- `title`: human-readable task title
+- `merged_at`: UTC timestamp of the merge
+
+### How dependent tasks use it
+
+When the host claims a task that has `depends_on` entries, `runner.buildDependencyContext(...)` reads the completion detail file for each resolved dependency. If any completion files are found, the host injects them as the `MATO_DEPENDENCY_CONTEXT` environment variable (a JSON array of `CompletionDetail` objects). The agent prompt reads this variable during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks.
+
+### Write and read helpers
+
+- `messaging.WriteCompletionDetail(tasksDir, detail)` atomically writes the JSON file. It sets `merged_at` to the current UTC time if not already provided and validates that `task_id` is non-empty.
+- `messaging.ReadCompletionDetail(tasksDir, taskID)` reads and parses the JSON file, returning `os.ErrNotExist` if the file is not found.
 
 ## Presence
 Presence files live in `.tasks/messages/presence/` and are intended to be host-managed.

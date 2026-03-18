@@ -41,7 +41,7 @@ High-level flow:
 2. Ensure the target branch exists with `git.EnsureBranch(...)`; if it exists, check it out, otherwise create it from `HEAD`.
 3. Resolve `tasksDir`; default is `<repoRoot>/.tasks`.
 4. Create queue directories: `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, `completed/`, and `failed/`.
-5. Create messaging directories with `messaging.Init(...)`: `.tasks/messages/events/` and `.tasks/messages/presence/`.
+5. Create messaging directories with `messaging.Init(...)`: `.tasks/messages/events/`, `.tasks/messages/completions/`, and `.tasks/messages/presence/`.
 6. Generate an agent ID with `queue.GenerateAgentID()`.
 7. Register the process as active by writing `.tasks/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
 8. Ensure `/.tasks/` is in `.gitignore` via `git.EnsureGitignored(...)`.
@@ -122,6 +122,7 @@ Environment variables injected by the host:
 - `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_EMAIL` if host Git config supplies an email
 - `HOME=<host home path>`
 - `GOPATH=<home>/go`, `GOMODCACHE=<home>/go/pkg/mod`, `GOCACHE=<home>/.cache/go-build`
+- `MATO_DEPENDENCY_CONTEXT=<JSON array>` (conditionally, only when the task has `depends_on` entries with available completion data)
 The final command is:
 ```text
 copilot -p <embedded task prompt> --autopilot --allow-all [copilotArgs...]
@@ -205,7 +206,7 @@ This is the main multi-process safety mechanism for host-side merges.
 `merge.ProcessQueue(...)` scans `ready-to-merge/*.md`, parses each task, and sorts by ascending `priority`, then filename.
 For each task:
 1. Parse the task file with `frontmatter.ParseTaskFile(...)`.
-2. Derive the squash commit message with `taskTitle(...)` from the first non-empty body line; leading `#` is stripped.
+2. Derive the squash commit message with `taskTitle(...)` from the first non-empty body line; leading `#` is stripped. The message is enriched with git commit trailers via `formatSquashCommitMessage(task)`: `Task-ID: <id>` (if task ID is set) and `Affects: <comma-separated files>` (if `affects` metadata is present). If neither trailer applies, the plain title is used.
 3. Read `<!-- branch: ... -->` from the task file when present; if absent, fall back to `task/<sanitizeBranchName(filename)>`.
 4. Create a fresh temp clone.
 5. Configure clone identity from repo Git config, then global config, with fallbacks `mato` and `mato@local.invalid`.
@@ -213,9 +214,10 @@ For each task:
 7. `git checkout -B <target-branch> origin/<target-branch>`
 8. Verify `origin/<task-branch>` exists.
 9. `git merge --squash origin/<task-branch>`
-10. `git commit -m <task title>`
+10. `git commit -m <formatted message with trailers>`
 11. `git push origin <target-branch>`
-12. Append `<!-- merged: merge-queue at ... -->` and rename the task file `ready-to-merge/ -> completed/`
+12. After a successful push, write a completion detail file to `.tasks/messages/completions/<task-id>.json` with the commit SHA, changed files, branch, title, and merge timestamp (see `docs/messaging.md` for the full schema). This file is used by `runner.buildDependencyContext(...)` to inject `MATO_DEPENDENCY_CONTEXT` when a dependent task runs.
+13. Append `<!-- merged: merge-queue at ... -->` and rename the task file `ready-to-merge/ -> completed/`
 ### Conflict and failure handling
 Merge failure handling is branch-specific:
 1. Missing task branch: append `<!-- failure: merge-queue ... -->` and move the task `ready-to-merge/ -> failed/`.
@@ -281,10 +283,11 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Strips comment-only HTML metadata lines from the body.
 
 ### `internal/messaging/`
-- `Message` and `presence` JSON types.
-- `messaging.Init(...)` creates the event/presence directories.
+- `Message` and `presence` JSON types, plus `CompletionDetail` for merge-time completion data.
+- `messaging.Init(...)` creates the event, presence, and completions directories.
 - Atomic JSON write helpers.
 - Message reading, stale presence cleanup, and old-event garbage collection.
+- `WriteCompletionDetail(...)` and `ReadCompletionDetail(...)` for storing and retrieving per-task merge results used by the dependency context flow.
 
 ### `internal/status/`
 - `mato status` implementation.
@@ -302,4 +305,7 @@ Responsibility is split cleanly:
 - task files carry scheduling metadata and retry history;
 - `.locks/` and `.queue` provide coarse coordination;
 - `.tasks/messages/` provides advisory coordination.
+
+The merge queue enriches each squash commit with git trailers (`Task-ID`, `Affects`) and writes completion detail files that flow back to dependent agents via `MATO_DEPENDENCY_CONTEXT`. This creates an agent → merge → dependent-agent knowledge chain: an agent pushes its branch, the merge queue records what changed, and the next agent that depends on that work receives the context automatically.
+
 In practice, `mato` is a queue scheduler built from ordinary filesystem state, Git branches, and short-lived Dockerized Copilot runs rather than a centralized service.

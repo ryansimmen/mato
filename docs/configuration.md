@@ -58,8 +58,11 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 | `MATO_TASK_BRANCH` | container | none | Derived task branch name (e.g. `task/my-task`). Set per-run by the host after claiming a task. |
 | `MATO_TASK_TITLE` | container | none | Extracted from the first non-empty body line in the task file (heading markers stripped if present), falling back to filename stem. Set per-run by the host after claiming a task. |
 | `MATO_TASK_PATH` | container | none | Absolute path to the task file in `in-progress/` (e.g. `/workspace/.tasks/in-progress/my-task.md`). Set per-run by the host after claiming a task. |
+| `MATO_DEPENDENCY_CONTEXT` | container | none | JSON array of completion details for resolved `depends_on` tasks. Each element contains `task_id`, `task_file`, `branch`, `commit_sha`, `files_changed`, `title`, and `merged_at`. Set per-run by the host only when the claimed task has `depends_on` entries with available completion data in `.tasks/messages/completions/`. |
 Only `MATO_DOCKER_IMAGE` is intended as a host-side configuration input. The other
 variables are injected by `mato` inside each container and are normally not set manually.
+`MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
+`depends_on` entries whose completion details are available.
 
 ## Docker Configuration
 Each agent run uses `docker run --rm -it` with working directory `/workspace` and user
