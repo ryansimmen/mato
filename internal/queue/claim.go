@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,11 @@ import (
 
 	"mato/internal/frontmatter"
 )
+
+// errFailedDirUnavailable is returned when a retry-exhausted task cannot be
+// moved to failed/ but was safely rolled back to backlog/. The host should
+// treat this as a hard error to avoid livelocking on the same task.
+var errFailedDirUnavailable = errors.New("failed directory unavailable for retry-exhausted task")
 
 // Testing hooks for the claim path. Default to real implementations.
 // Tests can override these to inject failures without filesystem permission
@@ -69,6 +75,10 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 				if rbErr := retryExhaustedRollback(dst, src); rbErr != nil {
 					return nil, fmt.Errorf("retry-exhausted rollback failed for %s (task stranded in in-progress): move-to-failed: %v, rollback: %w", name, err, rbErr)
 				}
+				// Rollback succeeded, but the task is now back in backlog/
+				// while still retry-exhausted. Return a hard error so the
+				// host does not immediately re-claim and livelock.
+				return nil, fmt.Errorf("%s rolled back to backlog (move-to-failed: %v): %w", name, err, errFailedDirUnavailable)
 			}
 			continue
 		}

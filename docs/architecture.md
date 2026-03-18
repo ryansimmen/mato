@@ -71,7 +71,7 @@ Important details from the implementation:
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
 - `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state.
-- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts failure lines, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the retry budget—moving exhausted tasks to `failed/` and continuing to the next candidate. `HasAvailableTasks` is a separate helper but is not called in the polling loop.
+- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts failure lines, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the retry budget—moving exhausted tasks to `failed/` (or returning a hard `errFailedDirUnavailable` error if `failed/` is unavailable, to prevent livelock). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
@@ -133,7 +133,7 @@ Before launching a Docker container, the host calls `queue.SelectAndClaimTask(ta
 1. Reads `.tasks/.queue` if present, otherwise lists `backlog/*.md` alphabetically.
 2. Parses each candidate's frontmatter and counts `<!-- failure:` lines.
 3. Atomically renames the candidate from `backlog/` to `in-progress/`.
-4. If failures >= `max_retries` (default 3), moves the task from `in-progress/` to `failed/` and continues to the next candidate.
+4. If failures >= `max_retries` (default 3), moves the task from `in-progress/` to `failed/` and continues to the next candidate. If `failed/` is unavailable, the task is rolled back to `backlog/` and a hard error (`errFailedDirUnavailable`) is returned to prevent the host from livelocking on the same retry-exhausted task.
 5. Prepends a `<!-- claimed-by: ... -->` header to the task file.
 6. Returns the filename, derived branch name, extracted title, and host-side path.
 
