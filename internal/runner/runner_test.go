@@ -375,6 +375,73 @@ func TestExtractFailureLines_NonexistentFile(t *testing.T) {
 	}
 }
 
+func TestExtractReviewRejections_NoRejections(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644)
+
+	got := extractReviewRejections(f)
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
+func TestExtractReviewRejections_SingleRejection(t *testing.T) {
+	content := "---\npriority: 5\n---\n# My Task\nDo something.\n<!-- review-rejection: reviewer-1 at 2026-01-01T00:03:00Z reason=missing_tests -->\n"
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte(content), 0o644)
+
+	got := extractReviewRejections(f)
+	if !strings.Contains(got, "reason=missing_tests") {
+		t.Fatalf("expected rejection line with reason=missing_tests, got %q", got)
+	}
+	if strings.Count(got, "\n") != 0 {
+		t.Fatalf("expected single line (no newlines), got %q", got)
+	}
+}
+
+func TestExtractReviewRejections_MultipleRejections(t *testing.T) {
+	content := "---\npriority: 5\n---\n# My Task\n<!-- review-rejection: reviewer-1 at 2026-01-01T00:01:00Z reason=missing_tests -->\n<!-- review-rejection: reviewer-2 at 2026-01-01T00:02:00Z reason=style_issues -->\n"
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte(content), 0o644)
+
+	got := extractReviewRejections(f)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 rejection lines, got %d: %q", len(lines), got)
+	}
+	if !strings.Contains(lines[0], "reviewer-1") {
+		t.Fatalf("first line should contain reviewer-1, got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "reviewer-2") {
+		t.Fatalf("second line should contain reviewer-2, got %q", lines[1])
+	}
+}
+
+func TestExtractReviewRejections_MixedRecords(t *testing.T) {
+	content := "---\npriority: 5\n---\n# My Task\n<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed files_changed=main.go -->\n<!-- review-rejection: reviewer-1 at 2026-01-01T00:02:00Z reason=missing_tests -->\n<!-- failure: agent-2 at 2026-01-01T00:03:00Z step=COMMIT error=no_changes files_changed=none -->\n"
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte(content), 0o644)
+
+	got := extractReviewRejections(f)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 rejection line, got %d: %q", len(lines), got)
+	}
+	if !strings.Contains(lines[0], "reviewer-1") {
+		t.Fatalf("line should contain reviewer-1, got %q", lines[0])
+	}
+	if strings.Contains(got, "failure") {
+		t.Fatalf("should not contain failure lines, got %q", got)
+	}
+}
+
+func TestExtractReviewRejections_NonexistentFile(t *testing.T) {
+	got := extractReviewRejections(filepath.Join(t.TempDir(), "nonexistent.md"))
+	if got != "" {
+		t.Fatalf("expected empty string for nonexistent file, got %q", got)
+	}
+}
+
 func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"backlog", "in-progress"} {
@@ -417,6 +484,152 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	// Task should no longer be in in-progress
 	if _, err := os.Stat(inProgressPath); err == nil {
 		t.Fatal("task file still in in-progress/ after recovery")
+	}
+}
+
+func TestSelectTaskForReview_EmptyDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "ready-for-review"), 0o755)
+
+	got := selectTaskForReview(tasksDir)
+	if got != nil {
+		t.Fatalf("expected nil for empty ready-for-review/, got %+v", got)
+	}
+}
+
+func TestSelectTaskForReview_NonexistentDir(t *testing.T) {
+	got := selectTaskForReview(filepath.Join(t.TempDir(), "nonexistent"))
+	if got != nil {
+		t.Fatalf("expected nil for nonexistent tasks dir, got %+v", got)
+	}
+}
+
+func TestSelectTaskForReview_SingleTask(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	os.MkdirAll(reviewDir, 0o755)
+
+	content := "<!-- claimed-by: abc12345  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: test-task\npriority: 10\n---\n# Test Task\nDo something.\n\n<!-- branch: task/test-task -->\n"
+	os.WriteFile(filepath.Join(reviewDir, "test-task.md"), []byte(content), 0o644)
+
+	got := selectTaskForReview(tasksDir)
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if got.Filename != "test-task.md" {
+		t.Fatalf("Filename = %q, want %q", got.Filename, "test-task.md")
+	}
+	if got.Branch != "task/test-task" {
+		t.Fatalf("Branch = %q, want %q", got.Branch, "task/test-task")
+	}
+	if got.Title != "Test Task" {
+		t.Fatalf("Title = %q, want %q", got.Title, "Test Task")
+	}
+}
+
+func TestSelectTaskForReview_HighestPriority(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	os.MkdirAll(reviewDir, 0o755)
+
+	// Priority 20 — lower priority (higher number)
+	os.WriteFile(filepath.Join(reviewDir, "low-pri.md"), []byte(
+		"---\npriority: 20\n---\n# Low Priority\n<!-- branch: task/low-pri -->\n"), 0o644)
+
+	// Priority 5 — highest priority (lowest number)
+	os.WriteFile(filepath.Join(reviewDir, "high-pri.md"), []byte(
+		"---\npriority: 5\n---\n# High Priority\n<!-- branch: task/high-pri -->\n"), 0o644)
+
+	// Priority 10 — middle
+	os.WriteFile(filepath.Join(reviewDir, "mid-pri.md"), []byte(
+		"---\npriority: 10\n---\n# Mid Priority\n<!-- branch: task/mid-pri -->\n"), 0o644)
+
+	got := selectTaskForReview(tasksDir)
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if got.Filename != "high-pri.md" {
+		t.Fatalf("expected highest priority task, got %q", got.Filename)
+	}
+}
+
+func TestSelectTaskForReview_SamePriorityAlphabetical(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	os.MkdirAll(reviewDir, 0o755)
+
+	os.WriteFile(filepath.Join(reviewDir, "beta-task.md"), []byte(
+		"---\npriority: 10\n---\n# Beta\n<!-- branch: task/beta -->\n"), 0o644)
+	os.WriteFile(filepath.Join(reviewDir, "alpha-task.md"), []byte(
+		"---\npriority: 10\n---\n# Alpha\n<!-- branch: task/alpha -->\n"), 0o644)
+
+	got := selectTaskForReview(tasksDir)
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if got.Filename != "alpha-task.md" {
+		t.Fatalf("expected alphabetically first task, got %q", got.Filename)
+	}
+}
+
+func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	os.MkdirAll(reviewDir, 0o755)
+
+	// Non-.md files should be ignored
+	os.WriteFile(filepath.Join(reviewDir, "notes.txt"), []byte("not a task"), 0o644)
+	os.WriteFile(filepath.Join(reviewDir, ".hidden"), []byte("hidden"), 0o644)
+	os.MkdirAll(filepath.Join(reviewDir, "subdir"), 0o755)
+
+	got := selectTaskForReview(tasksDir)
+	if got != nil {
+		t.Fatalf("expected nil when only non-.md files present, got %+v", got)
+	}
+}
+
+func TestSelectTaskForReview_BranchFallback(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	os.MkdirAll(reviewDir, 0o755)
+
+	// No branch comment — should fall back to task/<sanitized-name>
+	os.WriteFile(filepath.Join(reviewDir, "my-task.md"), []byte(
+		"---\npriority: 5\n---\n# My Task\nNo branch comment here.\n"), 0o644)
+
+	got := selectTaskForReview(tasksDir)
+	if got == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if got.Branch != "task/my-task" {
+		t.Fatalf("Branch = %q, want %q (fallback)", got.Branch, "task/my-task")
+	}
+}
+
+func TestParseBranchFromTaskFile_WithBranch(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte("---\npriority: 5\n---\n# Task\n\n<!-- branch: task/foo-bar -->\n"), 0o644)
+
+	got := parseBranchFromTaskFile(f)
+	if got != "task/foo-bar" {
+		t.Fatalf("got %q, want %q", got, "task/foo-bar")
+	}
+}
+
+func TestParseBranchFromTaskFile_WithoutBranch(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte("---\npriority: 5\n---\n# Task\nNo branch.\n"), 0o644)
+
+	got := parseBranchFromTaskFile(f)
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+func TestParseBranchFromTaskFile_NonexistentFile(t *testing.T) {
+	got := parseBranchFromTaskFile(filepath.Join(t.TempDir(), "nonexistent.md"))
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
 	}
 }
 
