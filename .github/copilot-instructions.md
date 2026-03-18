@@ -70,10 +70,10 @@ When asked to implement a change, follow this process:
 ## Key Architecture Facts
 
 - Tasks are markdown files with optional YAML frontmatter
-- Host manages queue: `waiting/` → `backlog/` → `in-progress/` → `ready-to-merge/` → `completed/` (or `failed/` when retry budget is exhausted or task branch is missing)
+- Host manages queue: `waiting/` → `backlog/` → `in-progress/` → `ready-for-review/` → `ready-to-merge/` → `completed/` (or `failed/` when retry budget is exhausted or task branch is missing)
 - Agents run in Docker, push task branches only, never the target branch
 - Host merge queue squash-merges task branches serially
-- `affects:` metadata prevents concurrent conflicting tasks (checked against in-progress/ and ready-to-merge/)
+- `affects:` metadata prevents concurrent conflicting tasks (checked against in-progress/, ready-for-review/, and ready-to-merge/)
 - Conflict-deferred tasks stay in backlog/ but are excluded from `.queue` manifest
 - `max_retries` is enforced by the host: `queue.SelectAndClaimTask` checks before launching an agent, and host merge queue checks after merge failures
 - Task selection, claiming, retry-budget checks, and intent messages are handled by Go (host-side) before the agent container launches

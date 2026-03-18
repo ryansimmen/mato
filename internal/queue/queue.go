@@ -341,11 +341,11 @@ type backlogTask struct {
 // along with the files it declares in its affects: metadata.
 type ActiveTask struct {
 	Name    string
-	Dir     string   // "in-progress" or "ready-to-merge"
+	Dir     string   // "in-progress", "ready-for-review", or "ready-to-merge"
 	Affects []string
 }
 
-// CollectActiveAffects returns tasks in in-progress/ and ready-to-merge/
+// CollectActiveAffects returns tasks in in-progress/, ready-for-review/, and ready-to-merge/
 // that have non-empty affects: metadata. This is the exported wrapper
 // around the internal collectActiveAffects for use by the messaging package.
 func CollectActiveAffects(tasksDir string) []ActiveTask {
@@ -393,8 +393,9 @@ func hasActiveOverlap(tasksDir string, affects []string) bool {
 	if len(affects) == 0 {
 		return false
 	}
-	// Only check in-progress and ready-to-merge — these represent tasks that are
-	// actively being worked on or awaiting merge. We intentionally exclude backlog/
+	// Only check in-progress, ready-for-review, and ready-to-merge — these represent
+	// tasks that are actively being worked on, under review, or awaiting merge.
+	// We intentionally exclude backlog/
 	// because DeferredOverlappingTasks handles backlog-vs-backlog conflicts with
 	// proper priority ordering. Including backlog here would cause priority
 	// inversion: a high-priority waiting task would be blocked by a lower-priority
@@ -423,7 +424,7 @@ func hasActiveOverlap(tasksDir string, affects []string) bool {
 
 // DeferredOverlappingTasks returns the set of backlog task filenames that should
 // be excluded from the queue because they conflict with higher-priority backlog
-// tasks or active tasks in in-progress/ready-to-merge. Tasks remain in backlog/
+// tasks or active tasks in in-progress/ready-for-review/ready-to-merge. Tasks remain in backlog/
 // (no file movement) to avoid churn between waiting/ and backlog/.
 // DeferralInfo describes why a task was excluded from the runnable queue.
 type DeferralInfo struct {

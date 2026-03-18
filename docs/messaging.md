@@ -53,7 +53,7 @@ Only these four message types are valid:
 - `intent`: sent by the host (Go) right after a task is claimed, before the agent container starts
 - `progress`: sent by the agent at each state machine transition, for observability (one per step: `VERIFY_CLAIM`, `CREATE_BRANCH`, `WORK`, `COMMIT`, `PUSH_BRANCH`, `MARK_READY`)
 - `conflict-warning`: sent by the agent in `PUSH_BRANCH`, before `git push`, with the changed file list
-- `completion`: sent by the agent in `MARK_READY`, after moving the task to `ready-to-merge/`, with the final changed file list
+- `completion`: sent by the agent in `MARK_READY`, after moving the task to `ready-for-review/`, with the final changed file list
 
 No other message types are part of the protocol.
 
@@ -78,14 +78,15 @@ The file is a JSON object mapping file paths to claim records:
 ```json
 {
   "pkg/client/http.go": {"task": "add-http-retries.md", "status": "in-progress"},
-  "internal/auth/auth.go": {"task": "fix-auth-bug.md", "status": "ready-to-merge"}
+  "internal/auth/auth.go": {"task": "fix-auth-bug.md", "status": "ready-for-review"},
+  "cmd/server/main.go": {"task": "refactor-server.md", "status": "ready-to-merge"}
 }
 ```
 
-Each key is a file path from a task's `affects:` metadata. Each value is a `FileClaim` with the task filename and its current queue status (`in-progress` or `ready-to-merge`).
+Each key is a file path from a task's `affects:` metadata. Each value is a `FileClaim` with the task filename and its current queue status (`in-progress`, `ready-for-review`, or `ready-to-merge`).
 
 ### How it is built
-`BuildAndWriteFileClaims` scans tasks in `in-progress/` and `ready-to-merge/` via `queue.CollectActiveAffects(...)`, then builds a map of file path → claim. First writer wins: if multiple tasks claim the same file, only the first is recorded.
+`BuildAndWriteFileClaims` scans tasks in `in-progress/`, `ready-for-review/`, and `ready-to-merge/` via `queue.CollectActiveAffects(...)`, then builds a map of file path → claim. First writer wins: if multiple tasks claim the same file, only the first is recorded.
 
 ### How agents use it
 The host injects `MATO_FILE_CLAIMS` pointing to the file-claims path inside the container. Agents can read this file during `VERIFY_CLAIM` to detect potential conflicts with other active tasks and adjust their approach accordingly.
