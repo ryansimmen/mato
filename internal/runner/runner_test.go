@@ -3,6 +3,7 @@ package runner
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -247,6 +248,37 @@ func TestBuildDependencyContext_NoCompletionFiles(t *testing.T) {
 	result := buildDependencyContext(tasksDir, claimed)
 	if result != "" {
 		t.Fatalf("expected empty dependency context when no completion files exist, got %q", result)
+	}
+}
+
+func TestConfigureReceiveDeny_Success(t *testing.T) {
+	// Create a real git repo to test the config call
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	if err := configureReceiveDeny(repoDir); err != nil {
+		t.Fatalf("configureReceiveDeny should succeed on a valid repo: %v", err)
+	}
+
+	// Verify the config was set
+	cmd = exec.Command("git", "-C", repoDir, "config", "receive.denyCurrentBranch")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("reading config: %v (%s)", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "updateInstead" {
+		t.Fatalf("receive.denyCurrentBranch = %q, want %q", got, "updateInstead")
+	}
+}
+
+func TestConfigureReceiveDeny_Failure(t *testing.T) {
+	// Point at a nonexistent directory so git config fails
+	err := configureReceiveDeny(filepath.Join(t.TempDir(), "nonexistent"))
+	if err == nil {
+		t.Fatal("configureReceiveDeny should fail for a nonexistent repo")
 	}
 }
 
