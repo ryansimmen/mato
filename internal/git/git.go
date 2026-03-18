@@ -49,8 +49,10 @@ func RemoveClone(dir string) {
 func EnsureBranch(repoRoot, branch string) error {
 	// If the local branch already exists, just check it out.
 	if _, err := Output(repoRoot, "rev-parse", "--verify", "refs/heads/"+branch); err == nil {
-		_, err := Output(repoRoot, "checkout", branch)
-		return err
+		if _, err := Output(repoRoot, "checkout", branch); err != nil {
+			return fmt.Errorf("checkout branch %s: %w", branch, err)
+		}
+		return nil
 	}
 	// Fetch the specific branch from origin to refresh the remote-tracking ref.
 	// Failure is non-fatal: the repo may be offline or have no remote.
