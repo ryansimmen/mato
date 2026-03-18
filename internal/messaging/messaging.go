@@ -128,6 +128,7 @@ func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse message %s: %v\n", entry.Name(), err)
 			continue
 		}
 		if msg.SentAt.After(since) {
@@ -182,6 +183,7 @@ func ReadAllPresence(tasksDir string) (map[string]PresenceInfo, error) {
 		}
 		var info PresenceInfo
 		if err := json.Unmarshal(data, &info); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse message %s: %v\n", entry.Name(), err)
 			continue
 		}
 		result[info.AgentID] = info
