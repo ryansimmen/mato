@@ -231,6 +231,33 @@ func ReadCompletionDetail(tasksDir, taskID string) (*CompletionDetail, error) {
 	return &detail, nil
 }
 
+// FileClaim describes which task is actively modifying a given file.
+type FileClaim struct {
+	Task   string `json:"task"`
+	Status string `json:"status"`
+}
+
+// BuildAndWriteFileClaims builds a file-claims.json index from tasks in
+// in-progress/ and ready-to-merge/ that have affects: metadata, then writes
+// it atomically to .tasks/messages/file-claims.json.
+func BuildAndWriteFileClaims(tasksDir string) error {
+	active := queue.CollectActiveAffects(tasksDir)
+	claims := make(map[string]FileClaim, len(active)*2)
+	for _, t := range active {
+		for _, file := range t.Affects {
+			// First writer wins; later entries don't overwrite.
+			if _, exists := claims[file]; !exists {
+				claims[file] = FileClaim{Task: t.Name, Status: t.Dir}
+			}
+		}
+	}
+	path := filepath.Join(tasksDir, "messages", "file-claims.json")
+	if err := writeJSONAtomically(path, claims); err != nil {
+		return fmt.Errorf("write file claims: %w", err)
+	}
+	return nil
+}
+
 func writeJSONAtomically(path string, value any) error {
 	dir := filepath.Dir(path)
 	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")

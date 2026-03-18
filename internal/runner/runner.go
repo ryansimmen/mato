@@ -164,7 +164,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			fmt.Fprintf(os.Stderr, "warning: could not claim task: %v\n", claimErr)
 		}
 		hasBacklogTasks := claimed != nil
-		if hasBacklogTasks {
+		if claimed != nil {
 			messaging.WriteMessage(tasksDir, messaging.Message{
 				From:   agentID,
 				Type:   "intent",
@@ -172,6 +172,10 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 				Branch: claimed.Branch,
 				Body:   "Starting work",
 			})
+
+			if err := messaging.BuildAndWriteFileClaims(tasksDir); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)
+			}
 
 			if err := runOnce(repoRoot, tasksDir, agentID, claimed, copilotArgs, image, workdir, prompt,
 				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
@@ -251,6 +255,7 @@ func runOnce(repoRoot, tasksDir, agentID string, claimed *queue.ClaimedTask, cop
 			"-e", "MATO_TASK_BRANCH="+claimed.Branch,
 			"-e", "MATO_TASK_TITLE="+claimed.Title,
 			"-e", fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/in-progress/%s", workdir, claimed.Filename),
+			"-e", fmt.Sprintf("MATO_FILE_CLAIMS=%s/.tasks/messages/file-claims.json", workdir),
 		)
 		if depCtx := buildDependencyContext(tasksDir, claimed); depCtx != "" {
 			args = append(args, "-e", "MATO_DEPENDENCY_CONTEXT="+depCtx)

@@ -914,3 +914,159 @@ func TestWriteCompletionDetail_DefaultsMergedAt(t *testing.T) {
 		t.Fatalf("MergedAt = %v, want between %v and %v", got.MergedAt, before, after)
 	}
 }
+
+func TestBuildAndWriteFileClaims(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Create in-progress task with affects
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "fix-race.md"),
+		[]byte("---\naffects:\n  - internal/queue/queue.go\n  - internal/queue/queue_test.go\n---\n# Fix Race\n"), 0o644)
+
+	// Create ready-to-merge task with affects
+	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "add-locks.md"),
+		[]byte("---\naffects:\n  - internal/merge/merge.go\n---\n# Add Locks\n"), 0o644)
+
+	if err := BuildAndWriteFileClaims(tasksDir); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	path := filepath.Join(tasksDir, "messages", "file-claims.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("file-claims.json not written: %v", err)
+	}
+
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if len(claims) != 3 {
+		t.Fatalf("expected 3 claims, got %d: %v", len(claims), claims)
+	}
+
+	if c, ok := claims["internal/queue/queue.go"]; !ok || c.Task != "fix-race.md" || c.Status != "in-progress" {
+		t.Fatalf("unexpected claim for queue.go: %+v", c)
+	}
+	if c, ok := claims["internal/queue/queue_test.go"]; !ok || c.Task != "fix-race.md" || c.Status != "in-progress" {
+		t.Fatalf("unexpected claim for queue_test.go: %+v", c)
+	}
+	if c, ok := claims["internal/merge/merge.go"]; !ok || c.Task != "add-locks.md" || c.Status != "ready-to-merge" {
+		t.Fatalf("unexpected claim for merge.go: %+v", c)
+	}
+}
+
+func TestBuildAndWriteFileClaims_Empty(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	if err := BuildAndWriteFileClaims(tasksDir); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	path := filepath.Join(tasksDir, "messages", "file-claims.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("file-claims.json not written: %v", err)
+	}
+
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if len(claims) != 0 {
+		t.Fatalf("expected empty claims, got %d: %v", len(claims), claims)
+	}
+}
+
+func TestBuildAndWriteFileClaims_AtomicWrite(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"),
+		[]byte("---\naffects:\n  - file-a.go\n---\n# Task A\n"), 0o644)
+
+	if err := BuildAndWriteFileClaims(tasksDir); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	// Verify no temp files remain in messages dir
+	entries, err := os.ReadDir(filepath.Join(tasksDir, "messages"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Fatalf("temporary file should not remain: %q", e.Name())
+		}
+	}
+
+	// Verify the file is valid JSON
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !json.Valid(data) {
+		t.Fatal("file-claims.json should contain valid JSON")
+	}
+}
+
+func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Two tasks claim the same file
+	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"),
+		[]byte("---\naffects:\n  - shared.go\n---\n# Task A\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "task-b.md"),
+		[]byte("---\naffects:\n  - shared.go\n---\n# Task B\n"), 0o644)
+
+	if err := BuildAndWriteFileClaims(tasksDir); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// Should have exactly one entry for shared.go (first writer wins)
+	if len(claims) != 1 {
+		t.Fatalf("expected 1 claim, got %d", len(claims))
+	}
+	c, ok := claims["shared.go"]
+	if !ok {
+		t.Fatal("expected claim for shared.go")
+	}
+	// The first writer should be from in-progress (collectActiveAffects scans it first)
+	if c.Task != "task-a.md" {
+		t.Fatalf("expected first writer task-a.md, got %q", c.Task)
+	}
+}

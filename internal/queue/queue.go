@@ -330,6 +330,26 @@ type backlogTask struct {
 	affects  []string
 }
 
+// ActiveTask describes a task currently being worked on or awaiting merge,
+// along with the files it declares in its affects: metadata.
+type ActiveTask struct {
+	Name    string
+	Dir     string   // "in-progress" or "ready-to-merge"
+	Affects []string
+}
+
+// CollectActiveAffects returns tasks in in-progress/ and ready-to-merge/
+// that have non-empty affects: metadata. This is the exported wrapper
+// around the internal collectActiveAffects for use by the messaging package.
+func CollectActiveAffects(tasksDir string) []ActiveTask {
+	internal := collectActiveAffects(tasksDir)
+	result := make([]ActiveTask, len(internal))
+	for i, t := range internal {
+		result[i] = ActiveTask{Name: t.name, Dir: t.dir, Affects: t.affects}
+	}
+	return result
+}
+
 func collectActiveAffects(tasksDir string) []backlogTask {
 	var active []backlogTask
 	for _, dir := range []string{"in-progress", "ready-to-merge"} {
