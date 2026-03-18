@@ -114,7 +114,7 @@ func Show(repoRoot, tasksDir string) error {
 			agentIDs = append(agentIDs, id)
 		}
 		sort.Strings(agentIDs)
-		now := time.Now()
+		now := time.Now().UTC()
 		for _, id := range agentIDs {
 			pm := progressByAgent[id]
 			ago := formatDuration(now.Sub(pm.SentAt))
@@ -131,7 +131,7 @@ func Show(repoRoot, tasksDir string) error {
 		fmt.Println()
 		fmt.Println("In-Progress Tasks")
 		fmt.Println("─────────────────")
-		now := time.Now()
+		now := time.Now().UTC()
 		for _, task := range inProgressTasks {
 			taskPath := filepath.Join(tasksDir, "in-progress", task.name)
 			claimedBy := queue.ParseClaimedBy(taskPath)
@@ -249,7 +249,7 @@ func Show(repoRoot, tasksDir string) error {
 		if len(show) > 5 {
 			show = show[:5]
 		}
-		now := time.Now()
+		now := time.Now().UTC()
 		for _, c := range show {
 			ago := formatDuration(now.Sub(c.MergedAt))
 			shortSHA := c.CommitSHA
