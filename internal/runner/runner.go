@@ -173,6 +173,8 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 				Body:   "Starting work",
 			})
 
+			messaging.WritePresence(tasksDir, agentID, claimed.Filename, claimed.Branch)
+
 			if err := messaging.BuildAndWriteFileClaims(tasksDir); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)
 			}

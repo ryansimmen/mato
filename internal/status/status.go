@@ -73,6 +73,7 @@ func Show(repoRoot, tasksDir string) error {
 	fmt.Printf("  failed:         %d\n", counts["failed"])
 
 	// ── Active Agents ──
+	presenceMap, _ := messaging.ReadAllPresence(tasksDir)
 	fmt.Println()
 	fmt.Println("Active Agents")
 	fmt.Println("─────────────")
@@ -80,7 +81,11 @@ func Show(repoRoot, tasksDir string) error {
 		fmt.Println("  (none)")
 	} else {
 		for _, agent := range agents {
-			fmt.Printf("  %s (PID %d)\n", agent.displayName(), agent.PID)
+			if p, ok := presenceMap[agent.ID]; ok {
+				fmt.Printf("  %s (PID %d): %s on %s\n", agent.displayName(), agent.PID, p.Task, p.Branch)
+			} else {
+				fmt.Printf("  %s (PID %d)\n", agent.displayName(), agent.PID)
+			}
 		}
 	}
 

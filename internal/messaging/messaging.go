@@ -36,7 +36,8 @@ type CompletionDetail struct {
 	MergedAt     time.Time `json:"merged_at"`
 }
 
-type presence struct {
+// PresenceInfo describes a running agent's current task and branch.
+type PresenceInfo struct {
 	AgentID   string    `json:"agent_id"`
 	Task      string    `json:"task"`
 	Branch    string    `json:"branch"`
@@ -144,7 +145,7 @@ func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 }
 
 func WritePresence(tasksDir, agentID, taskFile, branch string) error {
-	info := presence{
+	info := PresenceInfo{
 		AgentID:   agentID,
 		Task:      taskFile,
 		Branch:    branch,
@@ -156,6 +157,35 @@ func WritePresence(tasksDir, agentID, taskFile, branch string) error {
 		return fmt.Errorf("write presence: %w", err)
 	}
 	return nil
+}
+
+// ReadAllPresence reads all presence JSON files and returns a map keyed by agent ID.
+func ReadAllPresence(tasksDir string) (map[string]PresenceInfo, error) {
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	entries, err := os.ReadDir(presenceDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read presence dir: %w", err)
+	}
+
+	result := make(map[string]PresenceInfo, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(presenceDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var info PresenceInfo
+		if err := json.Unmarshal(data, &info); err != nil {
+			continue
+		}
+		result[info.AgentID] = info
+	}
+	return result, nil
 }
 
 func CleanStalePresence(tasksDir string) {

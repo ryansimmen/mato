@@ -156,3 +156,81 @@ func TestActiveAgentsLegacyPIDOnly(t *testing.T) {
 		t.Errorf("expected ID legacy01, got %s", agents[0].ID)
 	}
 }
+
+func TestShowIncludesPresenceInfo(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Register an agent so it shows up as active.
+	cleanup, err := queue.RegisterAgent(tasksDir, "abc12345")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	// Write presence for this agent.
+	if err := messaging.WritePresence(tasksDir, "abc12345", "fix-race.md", "task/fix-race"); err != nil {
+		t.Fatalf("WritePresence: %v", err)
+	}
+
+	// Capture stdout.
+	originalStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = originalStdout }()
+
+	callErr := Show(repoRoot, "")
+	w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("io.ReadAll: %v", err)
+	}
+	if callErr != nil {
+		t.Fatalf("Show: %v", callErr)
+	}
+
+	output := string(out)
+	wantAgent := "agent-abc12345"
+	wantTask := "fix-race.md"
+	wantBranch := "task/fix-race"
+
+	if !contains(output, wantAgent) {
+		t.Errorf("output should contain %q", wantAgent)
+	}
+	if !contains(output, wantTask) {
+		t.Errorf("output should contain task %q", wantTask)
+	}
+	if !contains(output, wantBranch) {
+		t.Errorf("output should contain branch %q", wantBranch)
+	}
+
+	// Verify the line has the expected format.
+	expectedLine := "agent-abc12345 (PID"
+	if !contains(output, expectedLine) {
+		t.Errorf("output should contain %q, got:\n%s", expectedLine, output)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && len(substr) > 0 && containsSubstring(s, substr)
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
