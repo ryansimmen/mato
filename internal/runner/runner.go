@@ -2,6 +2,7 @@ package runner
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/merge"
 	"mato/internal/messaging"
@@ -250,6 +252,9 @@ func runOnce(repoRoot, tasksDir, agentID string, claimed *queue.ClaimedTask, cop
 			"-e", "MATO_TASK_TITLE="+claimed.Title,
 			"-e", fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/in-progress/%s", workdir, claimed.Filename),
 		)
+		if depCtx := buildDependencyContext(tasksDir, claimed); depCtx != "" {
+			args = append(args, "-e", "MATO_DEPENDENCY_CONTEXT="+depCtx)
+		}
 	}
 	args = append(args,
 		"-e", "GIT_CONFIG_COUNT=1",
@@ -335,4 +340,30 @@ func hasModelArg(args []string) bool {
 		}
 	}
 	return false
+}
+
+// buildDependencyContext collects completion details for all resolved
+// dependencies of the given task and returns them as a JSON array string.
+// Returns "" if the task has no dependencies or none have completion files.
+func buildDependencyContext(tasksDir string, claimed *queue.ClaimedTask) string {
+	meta, _, err := frontmatter.ParseTaskFile(claimed.TaskPath)
+	if err != nil || len(meta.DependsOn) == 0 {
+		return ""
+	}
+	var details []messaging.CompletionDetail
+	for _, dep := range meta.DependsOn {
+		detail, err := messaging.ReadCompletionDetail(tasksDir, dep)
+		if err != nil {
+			continue
+		}
+		details = append(details, *detail)
+	}
+	if len(details) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(details)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }

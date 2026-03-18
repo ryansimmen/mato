@@ -12,6 +12,7 @@ import (
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
+	"mato/internal/messaging"
 	"mato/internal/process"
 )
 
@@ -30,6 +31,11 @@ var branchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
 var errTaskBranchNotPushed = errors.New("task branch not pushed by agent")
 var errSquashMergeConflict = errors.New("squash merge conflict")
 var errPushAfterSquashFailed = errors.New("push failed after squash merge")
+
+type mergeResult struct {
+	commitSHA    string
+	filesChanged []string
+}
 
 const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 
@@ -91,12 +97,26 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 			continue
 		}
 
-		if err := mergeReadyTask(repoRoot, branch, task); err != nil {
+		result, err := mergeReadyTask(repoRoot, branch, task)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not merge task %s: %v\n", task.name, err)
 			if failureErr := handleMergeFailure(repoRoot, tasksDir, task, err); failureErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not record merge failure for task %s: %v\n", task.name, failureErr)
 			}
 			continue
+		}
+		if result != nil {
+			detail := messaging.CompletionDetail{
+				TaskID:       task.id,
+				TaskFile:     task.name,
+				Branch:       taskBranchName(task),
+				CommitSHA:    result.commitSHA,
+				FilesChanged: result.filesChanged,
+				Title:        task.title,
+			}
+			if err := messaging.WriteCompletionDetail(tasksDir, detail); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write completion detail for task %s: %v\n", task.name, err)
+			}
 		}
 		if err := markTaskMerged(task.path); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: merged task %s but could not mark completion: %v\n", task.name, err)
@@ -128,29 +148,29 @@ func HasReadyTasks(tasksDir string) bool {
 	return false
 }
 
-func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
+func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult, error) {
 	cloneDir, err := git.CreateClone(repoRoot)
 	if err != nil {
-		return fmt.Errorf("create temp clone: %w", err)
+		return nil, fmt.Errorf("create temp clone: %w", err)
 	}
 	defer git.RemoveClone(cloneDir)
 
 	if err := configureMergeCloneIdentity(repoRoot, cloneDir); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := git.Output(cloneDir, "fetch", "origin"); err != nil {
-		return fmt.Errorf("fetch origin: %w", err)
+		return nil, fmt.Errorf("fetch origin: %w", err)
 	}
 	if _, err := git.Output(cloneDir, "checkout", "-B", branch, "origin/"+branch); err != nil {
-		return fmt.Errorf("checkout target branch %s: %w", branch, err)
+		return nil, fmt.Errorf("checkout target branch %s: %w", branch, err)
 	}
 
 	taskBranch := taskBranchName(task)
 	if _, err := git.Output(cloneDir, "rev-parse", "--verify", "origin/"+taskBranch); err != nil {
-		return fmt.Errorf("%w: task branch %s not found on origin (agent may not have pushed)", errTaskBranchNotPushed, taskBranch)
+		return nil, fmt.Errorf("%w: task branch %s not found on origin (agent may not have pushed)", errTaskBranchNotPushed, taskBranch)
 	}
 	if _, err := git.Output(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
-		return fmt.Errorf("%w: %s: %v", errSquashMergeConflict, taskBranch, err)
+		return nil, fmt.Errorf("%w: %s: %v", errSquashMergeConflict, taskBranch, err)
 	}
 
 	// If the squash produced no staged changes, the task branch is already
@@ -158,17 +178,30 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) error {
 	// post-push bookkeeping failed).  Return success without a duplicate
 	// commit so the caller can finish the bookkeeping.
 	if _, err := git.Output(cloneDir, "diff", "--cached", "--quiet"); err == nil {
-		return nil
+		return nil, nil
 	}
 
 	if _, err := git.Output(cloneDir, "commit", "-m", formatSquashCommitMessage(task)); err != nil {
-		return fmt.Errorf("commit squash merge: %w", err)
+		return nil, fmt.Errorf("commit squash merge: %w", err)
 	}
 	if _, err := git.Output(cloneDir, "push", "origin", branch); err != nil {
-		return fmt.Errorf("%w: push %s: %v", errPushAfterSquashFailed, branch, err)
+		return nil, fmt.Errorf("%w: push %s: %v", errPushAfterSquashFailed, branch, err)
 	}
 
-	return nil
+	// Capture merge result for completion detail.
+	sha, _ := git.Output(cloneDir, "rev-parse", "HEAD")
+	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", "HEAD~1..HEAD")
+	var filesChanged []string
+	for _, f := range strings.Split(strings.TrimSpace(filesOut), "\n") {
+		if f != "" {
+			filesChanged = append(filesChanged, f)
+		}
+	}
+
+	return &mergeResult{
+		commitSHA:    strings.TrimSpace(sha),
+		filesChanged: filesChanged,
+	}, nil
 }
 
 func formatSquashCommitMessage(task mergeQueueTask) string {

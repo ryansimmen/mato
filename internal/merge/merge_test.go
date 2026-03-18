@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
+	"mato/internal/messaging"
 )
 
 func setupTestRepo(t *testing.T) string {
@@ -44,6 +46,9 @@ func setupTasksDir(t *testing.T) string {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
 		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
 	}
 	return tasksDir
 }
@@ -1352,5 +1357,140 @@ func TestProcessQueue_CommitOmitsTrailersWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(msg, "Affects:") {
 		t.Fatalf("commit message should not contain Affects trailer when affects is empty:\n%s", msg)
+	}
+}
+
+func TestProcessQueue_WritesCompletionDetail(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/add-completion", "mato"); err != nil {
+		t.Fatalf("git checkout task branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "completion.txt"), []byte("completion\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile completion.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "completion.txt"); err != nil {
+		t.Fatalf("git add completion.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "add completion feature"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "add-completion.md")
+	taskContent := "---\nid: add-completion\npriority: 5\naffects:\n  - completion.txt\n---\n# Add completion\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+
+	// Verify completion detail was written
+	detail, err := messaging.ReadCompletionDetail(tasksDir, "add-completion")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if detail.TaskID != "add-completion" {
+		t.Fatalf("TaskID = %q, want %q", detail.TaskID, "add-completion")
+	}
+	if detail.TaskFile != "add-completion.md" {
+		t.Fatalf("TaskFile = %q, want %q", detail.TaskFile, "add-completion.md")
+	}
+	if detail.Branch != "task/add-completion" {
+		t.Fatalf("Branch = %q, want %q", detail.Branch, "task/add-completion")
+	}
+	if detail.CommitSHA == "" {
+		t.Fatal("CommitSHA should not be empty")
+	}
+	if detail.Title != "Add completion" {
+		t.Fatalf("Title = %q, want %q", detail.Title, "Add completion")
+	}
+	if detail.MergedAt.IsZero() {
+		t.Fatal("MergedAt should not be zero")
+	}
+	if len(detail.FilesChanged) == 0 {
+		t.Fatal("FilesChanged should not be empty")
+	}
+	foundCompletionTxt := false
+	for _, f := range detail.FilesChanged {
+		if f == "completion.txt" {
+			foundCompletionTxt = true
+		}
+	}
+	if !foundCompletionTxt {
+		t.Fatalf("FilesChanged = %v, want to contain completion.txt", detail.FilesChanged)
+	}
+
+	// Verify JSON is well-formed
+	path := filepath.Join(tasksDir, "messages", "completions", "add-completion.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !json.Valid(data) {
+		t.Fatal("completion detail file should contain valid JSON")
+	}
+}
+
+func TestProcessQueue_CompletionDetailFilesChanged(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/multi-file", "mato"); err != nil {
+		t.Fatalf("git checkout task branch: %v", err)
+	}
+	// Create multiple files to verify files_changed captures all of them
+	for _, name := range []string{"file-a.txt", "file-b.txt", "file-c.txt"} {
+		if err := os.WriteFile(filepath.Join(repoRoot, name), []byte(name+"\n"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile %s: %v", name, err)
+		}
+	}
+	if _, err := git.Output(repoRoot, "add", "-A"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "add multiple files"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "multi-file.md")
+	taskContent := "---\nid: multi-file\npriority: 5\n---\n# Multi file task\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+
+	detail, err := messaging.ReadCompletionDetail(tasksDir, "multi-file")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if len(detail.FilesChanged) != 3 {
+		t.Fatalf("FilesChanged = %v, want 3 files", detail.FilesChanged)
+	}
+	want := map[string]bool{"file-a.txt": true, "file-b.txt": true, "file-c.txt": true}
+	for _, f := range detail.FilesChanged {
+		if !want[f] {
+			t.Fatalf("unexpected file in FilesChanged: %q", f)
+		}
 	}
 }

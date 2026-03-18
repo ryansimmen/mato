@@ -24,6 +24,18 @@ type Message struct {
 	SentAt time.Time `json:"sent_at"`
 }
 
+// CompletionDetail records metadata about a task that was successfully
+// merged, so downstream dependent tasks can see what changed.
+type CompletionDetail struct {
+	TaskID       string   `json:"task_id"`
+	TaskFile     string   `json:"task_file"`
+	Branch       string   `json:"branch"`
+	CommitSHA    string   `json:"commit_sha"`
+	FilesChanged []string `json:"files_changed"`
+	Title        string   `json:"title"`
+	MergedAt     time.Time `json:"merged_at"`
+}
+
 type presence struct {
 	AgentID   string    `json:"agent_id"`
 	Task      string    `json:"task"`
@@ -44,6 +56,7 @@ func Init(tasksDir string) error {
 	for _, dir := range []string{
 		filepath.Join(tasksDir, "messages", "events"),
 		filepath.Join(tasksDir, "messages", "presence"),
+		filepath.Join(tasksDir, "messages", "completions"),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create messaging directory %s: %w", dir, err)
@@ -183,6 +196,39 @@ func CleanOldMessages(tasksDir string, maxAge time.Duration) {
 			os.Remove(filepath.Join(eventsDir, entry.Name()))
 		}
 	}
+}
+
+// WriteCompletionDetail writes a completion-detail JSON file for a merged task
+// so downstream dependent tasks can read what changed.
+func WriteCompletionDetail(tasksDir string, detail CompletionDetail) error {
+	if detail.MergedAt.IsZero() {
+		detail.MergedAt = time.Now().UTC()
+	} else {
+		detail.MergedAt = detail.MergedAt.UTC()
+	}
+	if detail.TaskID == "" {
+		return fmt.Errorf("completion detail requires a task ID")
+	}
+	path := filepath.Join(tasksDir, "messages", "completions", detail.TaskID+".json")
+	if err := writeJSONAtomically(path, detail); err != nil {
+		return fmt.Errorf("write completion detail: %w", err)
+	}
+	return nil
+}
+
+// ReadCompletionDetail reads the completion-detail JSON for a given task ID.
+// Returns os.ErrNotExist if the file does not exist.
+func ReadCompletionDetail(tasksDir, taskID string) (*CompletionDetail, error) {
+	path := filepath.Join(tasksDir, "messages", "completions", taskID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var detail CompletionDetail
+	if err := json.Unmarshal(data, &detail); err != nil {
+		return nil, fmt.Errorf("parse completion detail %s: %w", taskID, err)
+	}
+	return &detail, nil
 }
 
 func writeJSONAtomically(path string, value any) error {

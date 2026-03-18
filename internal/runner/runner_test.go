@@ -1,11 +1,13 @@
 package runner
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"mato/internal/messaging"
 	"mato/internal/queue"
 )
 
@@ -137,5 +139,113 @@ func TestHasModelArg(t *testing.T) {
 				t.Fatalf("hasModelArg(%v) = %v, want %v", tt.args, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildDependencyContext_WithCompletionFiles(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create a task that depends on "dep-a" and "dep-b"
+	taskFile := "my-task.md"
+	taskPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	taskContent := "---\ndepends_on:\n  - dep-a\n  - dep-b\n---\n# My Task\n"
+	os.WriteFile(taskPath, []byte(taskContent), 0o644)
+
+	// Write completion detail for dep-a only
+	if err := messaging.WriteCompletionDetail(tasksDir, messaging.CompletionDetail{
+		TaskID:       "dep-a",
+		TaskFile:     "dep-a.md",
+		Branch:       "task/dep-a",
+		CommitSHA:    "sha-a",
+		FilesChanged: []string{"a.go"},
+		Title:        "Dep A",
+	}); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/my-task",
+		Title:    "My Task",
+		TaskPath: taskPath,
+	}
+
+	result := buildDependencyContext(tasksDir, claimed)
+	if result == "" {
+		t.Fatal("expected non-empty dependency context")
+	}
+
+	var details []messaging.CompletionDetail
+	if err := json.Unmarshal([]byte(result), &details); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if len(details) != 1 {
+		t.Fatalf("expected 1 dependency detail, got %d", len(details))
+	}
+	if details[0].TaskID != "dep-a" {
+		t.Fatalf("TaskID = %q, want %q", details[0].TaskID, "dep-a")
+	}
+	if details[0].CommitSHA != "sha-a" {
+		t.Fatalf("CommitSHA = %q, want %q", details[0].CommitSHA, "sha-a")
+	}
+}
+
+func TestBuildDependencyContext_NoDeps(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	taskFile := "no-deps.md"
+	taskPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	taskContent := "---\npriority: 5\n---\n# No deps\n"
+	os.WriteFile(taskPath, []byte(taskContent), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/no-deps",
+		Title:    "No deps",
+		TaskPath: taskPath,
+	}
+
+	result := buildDependencyContext(tasksDir, claimed)
+	if result != "" {
+		t.Fatalf("expected empty dependency context, got %q", result)
+	}
+}
+
+func TestBuildDependencyContext_NoCompletionFiles(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	taskFile := "has-deps.md"
+	taskPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	taskContent := "---\ndepends_on:\n  - missing-dep\n---\n# Has deps\n"
+	os.WriteFile(taskPath, []byte(taskContent), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/has-deps",
+		Title:    "Has deps",
+		TaskPath: taskPath,
+	}
+
+	result := buildDependencyContext(tasksDir, claimed)
+	if result != "" {
+		t.Fatalf("expected empty dependency context when no completion files exist, got %q", result)
 	}
 }
