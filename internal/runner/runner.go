@@ -202,8 +202,8 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		}
 
 		if cleanup, ok := merge.AcquireLock(tasksDir); ok {
+			defer cleanup()
 			merged := merge.ProcessQueue(repoRoot, tasksDir, branch)
-			cleanup()
 			if merged > 0 {
 				fmt.Printf("Merged %d task(s) into %s\n", merged, branch)
 			}
