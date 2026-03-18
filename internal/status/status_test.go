@@ -222,6 +222,90 @@ func TestShowIncludesPresenceInfo(t *testing.T) {
 	}
 }
 
+func TestShowIncludesProgressSection(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Write a progress message.
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID:     "prog1",
+		From:   "7da2c4fa",
+		Type:   "progress",
+		Task:   "fix-race.md",
+		Branch: "task/fix-race",
+		Body:   "Step: WORK",
+		SentAt: time.Now().UTC().Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Write a second progress message from a different agent.
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID:     "prog2",
+		From:   "a1b2c3d4",
+		Type:   "progress",
+		Task:   "add-retries.md",
+		Branch: "task/add-retries",
+		Body:   "Step: PUSH_BRANCH",
+		SentAt: time.Now().UTC().Add(-30 * time.Second),
+	}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Capture stdout.
+	originalStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = originalStdout }()
+
+	callErr := Show(repoRoot, "")
+	w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("io.ReadAll: %v", err)
+	}
+	if callErr != nil {
+		t.Fatalf("Show: %v", callErr)
+	}
+
+	output := string(out)
+
+	// Check section header appears.
+	if !contains(output, "Current Agent Progress") {
+		t.Errorf("output should contain 'Current Agent Progress' section header, got:\n%s", output)
+	}
+
+	// Check first agent progress line.
+	if !contains(output, "agent-7da2c4fa") {
+		t.Errorf("output should contain 'agent-7da2c4fa', got:\n%s", output)
+	}
+	if !contains(output, "Step: WORK") {
+		t.Errorf("output should contain 'Step: WORK', got:\n%s", output)
+	}
+	if !contains(output, "fix-race.md") {
+		t.Errorf("output should contain 'fix-race.md', got:\n%s", output)
+	}
+
+	// Check second agent progress line.
+	if !contains(output, "agent-a1b2c3d4") {
+		t.Errorf("output should contain 'agent-a1b2c3d4', got:\n%s", output)
+	}
+	if !contains(output, "Step: PUSH_BRANCH") {
+		t.Errorf("output should contain 'Step: PUSH_BRANCH', got:\n%s", output)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && len(substr) > 0 && containsSubstring(s, substr)
 }

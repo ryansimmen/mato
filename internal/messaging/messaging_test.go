@@ -1224,3 +1224,37 @@ func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 		t.Fatalf("expected first writer task-a.md, got %q", c.Task)
 	}
 }
+
+func TestWriteMessage_ProgressType(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	msg := Message{
+		ID:     "progress1",
+		From:   "agent-abc12345",
+		Type:   "progress",
+		Task:   "fix-race.md",
+		Branch: "task/fix-race",
+		Body:   "Step: WORK",
+		SentAt: time.Date(2026, time.March, 18, 2, 30, 0, 0, time.UTC),
+	}
+	if err := WriteMessage(tasksDir, msg); err != nil {
+		t.Fatalf("WriteMessage with type progress should succeed: %v", err)
+	}
+
+	messages, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if messages[0].Type != "progress" {
+		t.Fatalf("type = %q, want %q", messages[0].Type, "progress")
+	}
+	if messages[0].Body != "Step: WORK" {
+		t.Fatalf("body = %q, want %q", messages[0].Body, "Step: WORK")
+	}
+}

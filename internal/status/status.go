@@ -52,8 +52,10 @@ func Show(repoRoot, tasksDir string) error {
 	if err != nil {
 		return err
 	}
-	if len(messages) > 5 {
-		messages = messages[len(messages)-5:]
+	// Keep all messages for progress extraction; trim for recent display later.
+	recentMessages := messages
+	if len(recentMessages) > 5 {
+		recentMessages = recentMessages[len(recentMessages)-5:]
 	}
 
 	runnable := counts["backlog"] - len(deferred)
@@ -86,6 +88,31 @@ func Show(repoRoot, tasksDir string) error {
 			} else {
 				fmt.Printf("  %s (PID %d)\n", agent.displayName(), agent.PID)
 			}
+		}
+	}
+
+	// ── Current Agent Progress ──
+	progressByAgent := latestProgressByAgent(messages)
+	fmt.Println()
+	fmt.Println("Current Agent Progress")
+	fmt.Println("──────────────────────")
+	if len(progressByAgent) == 0 {
+		fmt.Println("  (none)")
+	} else {
+		agentIDs := make([]string, 0, len(progressByAgent))
+		for id := range progressByAgent {
+			agentIDs = append(agentIDs, id)
+		}
+		sort.Strings(agentIDs)
+		now := time.Now()
+		for _, id := range agentIDs {
+			pm := progressByAgent[id]
+			ago := formatDuration(now.Sub(pm.SentAt))
+			displayID := id
+			if !strings.HasPrefix(displayID, "agent-") {
+				displayID = "agent-" + displayID
+			}
+			fmt.Printf("  %s: %s (%s) — %s ago\n", displayID, pm.Body, pm.Task, ago)
 		}
 	}
 
@@ -162,11 +189,11 @@ func Show(repoRoot, tasksDir string) error {
 	fmt.Println()
 	fmt.Println("Recent Messages")
 	fmt.Println("───────────────")
-	if len(messages) == 0 {
+	if len(recentMessages) == 0 {
 		fmt.Println("  (none)")
 	} else {
-		for i := len(messages) - 1; i >= 0; i-- {
-			msg := messages[i]
+		for i := len(recentMessages) - 1; i >= 0; i-- {
+			msg := recentMessages[i]
 			line := strings.TrimSpace(strings.ReplaceAll(msg.Body, "\n", " "))
 			if line == "" {
 				line = msg.Type
@@ -386,4 +413,30 @@ func taskStatesByID(tasksDir string) (map[string]string, error) {
 		}
 	}
 	return states, nil
+}
+
+// latestProgressByAgent returns the most recent progress message per agent.
+func latestProgressByAgent(messages []messaging.Message) map[string]messaging.Message {
+	result := make(map[string]messaging.Message)
+	for _, msg := range messages {
+		if msg.Type != "progress" {
+			continue
+		}
+		if existing, ok := result[msg.From]; !ok || msg.SentAt.After(existing.SentAt) {
+			result[msg.From] = msg
+		}
+	}
+	return result
+}
+
+// formatDuration returns a human-friendly "X min ago" or "X sec ago" string.
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		sec := int(d.Seconds())
+		if sec < 1 {
+			sec = 1
+		}
+		return fmt.Sprintf("%d sec", sec)
+	}
+	return fmt.Sprintf("%d min", int(d.Minutes()))
 }
