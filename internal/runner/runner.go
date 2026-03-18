@@ -335,9 +335,14 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 
 	f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err == nil {
-		fmt.Fprintf(f, "\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
+		_, writeErr := fmt.Fprintf(f, "\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
 			agentID, time.Now().UTC().Format(time.RFC3339))
-		f.Close()
+		closeErr := f.Close()
+		if writeErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, writeErr)
+		} else if closeErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, closeErr)
+		}
 	}
 
 	fmt.Printf("Recovered task %s after agent exit\n", claimed.Filename)
