@@ -41,12 +41,20 @@ func RemoveClone(dir string) {
 // EnsureBranch ensures the target branch exists and checks it out.
 // It prefers the remote-tracking branch (origin/<branch>) as the starting point
 // when the local branch is missing, falling back to HEAD only when neither exists.
+//
+// Before checking for the remote-tracking ref, it fetches the branch from origin
+// so that refs/remotes/origin/<branch> is up to date. If the fetch fails (e.g.
+// offline, no remote configured), the function falls back to whatever
+// remote-tracking ref is already cached locally, or ultimately to HEAD.
 func EnsureBranch(repoRoot, branch string) error {
 	// If the local branch already exists, just check it out.
 	if _, err := Output(repoRoot, "rev-parse", "--verify", "refs/heads/"+branch); err == nil {
 		_, err := Output(repoRoot, "checkout", branch)
 		return err
 	}
+	// Fetch the specific branch from origin to refresh the remote-tracking ref.
+	// Failure is non-fatal: the repo may be offline or have no remote.
+	_, _ = Output(repoRoot, "fetch", "--quiet", "origin", branch)
 	// If the remote-tracking branch exists, create the local branch from it.
 	if _, err := Output(repoRoot, "rev-parse", "--verify", "refs/remotes/origin/"+branch); err == nil {
 		if _, err := Output(repoRoot, "checkout", "-b", branch, "origin/"+branch); err != nil {
