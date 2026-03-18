@@ -222,7 +222,9 @@ func runOnce(repoRoot, tasksDir, agentID string, claimed *queue.ClaimedTask, cop
 	}
 	defer git.RemoveClone(cloneDir)
 
-	git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead")
+	if err := configureReceiveDeny(repoRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
+	}
 
 	containerHome := homeDir
 	copilotDir := filepath.Join(homeDir, ".copilot")
@@ -376,6 +378,14 @@ func buildDependencyContext(tasksDir string, claimed *queue.ClaimedTask) string 
 		return ""
 	}
 	return string(data)
+}
+
+// configureReceiveDeny sets receive.denyCurrentBranch=updateInstead on the
+// host repo so that Docker agent clones can push back into the checked-out
+// target branch. Returns an error if the git config command fails.
+func configureReceiveDeny(repoRoot string) error {
+	_, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead")
+	return err
 }
 
 // extractFailureLines reads a task file and returns all failure record lines
