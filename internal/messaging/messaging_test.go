@@ -517,6 +517,67 @@ func TestCleanStalePresence(t *testing.T) {
 	}
 }
 
+func TestReadAllPresence(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	if err := WritePresence(tasksDir, "agent-a", "task-a.md", "task/branch-a"); err != nil {
+		t.Fatalf("WritePresence a: %v", err)
+	}
+	if err := WritePresence(tasksDir, "agent-b", "task-b.md", "task/branch-b"); err != nil {
+		t.Fatalf("WritePresence b: %v", err)
+	}
+
+	result, err := ReadAllPresence(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllPresence: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 presence entries, got %d", len(result))
+	}
+	a, ok := result["agent-a"]
+	if !ok {
+		t.Fatal("expected presence for agent-a")
+	}
+	if a.Task != "task-a.md" || a.Branch != "task/branch-a" {
+		t.Fatalf("agent-a presence = %+v", a)
+	}
+	b, ok := result["agent-b"]
+	if !ok {
+		t.Fatal("expected presence for agent-b")
+	}
+	if b.Task != "task-b.md" || b.Branch != "task/branch-b" {
+		t.Fatalf("agent-b presence = %+v", b)
+	}
+}
+
+func TestReadAllPresenceEmptyDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	result, err := ReadAllPresence(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllPresence: %v", err)
+	}
+	if len(result) != 0 {
+		t.Fatalf("expected empty map, got %d entries", len(result))
+	}
+}
+
+func TestReadAllPresenceNonExistentDir(t *testing.T) {
+	result, err := ReadAllPresence(filepath.Join(t.TempDir(), "nonexistent"))
+	if err != nil {
+		t.Fatalf("ReadAllPresence should not error on missing dir: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("expected nil, got %v", result)
+	}
+}
+
 func TestCleanOldMessages(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {
