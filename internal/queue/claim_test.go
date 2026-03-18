@@ -235,6 +235,47 @@ func TestSelectAndClaimTask_FrontmatterMaxRetries(t *testing.T) {
 	}
 }
 
+func TestPrependClaimedBy(t *testing.T) {
+	dir := t.TempDir()
+	taskPath := filepath.Join(dir, "task.md")
+
+	original := "---\npriority: 10\n---\n# My Task\nDo the thing.\n"
+	writeTestFile(t, taskPath, original)
+
+	if err := prependClaimedBy(taskPath, "agent-42", "2026-01-15T10:00:00Z"); err != nil {
+		t.Fatalf("prependClaimedBy: %v", err)
+	}
+
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+
+	got := string(data)
+	wantPrefix := "<!-- claimed-by: agent-42  claimed-at: 2026-01-15T10:00:00Z -->\n"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("missing claimed-by header:\ngot:  %q\nwant prefix: %q", got, wantPrefix)
+	}
+
+	// Original content must be preserved after the header
+	if rest := got[len(wantPrefix):]; rest != original {
+		t.Fatalf("original content not preserved:\ngot:  %q\nwant: %q", rest, original)
+	}
+}
+
+func TestPrependClaimedBy_NonexistentFile(t *testing.T) {
+	dir := t.TempDir()
+	taskPath := filepath.Join(dir, "missing.md")
+
+	err := prependClaimedBy(taskPath, "agent-1", "2026-01-15T10:00:00Z")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file, got nil")
+	}
+	if !strings.Contains(err.Error(), "read task file for claimed-by header") {
+		t.Fatalf("error missing context: %v", err)
+	}
+}
+
 func TestSelectAndClaimTask_ZeroMaxRetries(t *testing.T) {
 	dir := setupClaimTestDir(t)
 	writeTestFile(t, filepath.Join(dir, "backlog", "zero-retry.md"), strings.Join([]string{
