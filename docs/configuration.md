@@ -56,7 +56,7 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 | `MATO_MESSAGES_DIR` | container | `/workspace/.tasks/messages` | Injected path to the shared messages directory for custom tooling. The embedded prompt separately hardcodes the same `/workspace/.tasks/messages` path. |
 | `MATO_TASK_FILE` | container | none | Claimed task filename (e.g. `my-task.md`). Set per-run by the host after claiming a task. |
 | `MATO_TASK_BRANCH` | container | none | Derived task branch name (e.g. `task/my-task`). Set per-run by the host after claiming a task. |
-| `MATO_TASK_TITLE` | container | none | Extracted task title from the `# ` heading in the task file. Set per-run by the host after claiming a task. |
+| `MATO_TASK_TITLE` | container | none | Extracted from the first non-empty body line in the task file (heading markers stripped if present), falling back to filename stem. Set per-run by the host after claiming a task. |
 | `MATO_TASK_PATH` | container | none | Absolute path to the task file in `in-progress/` (e.g. `/workspace/.tasks/in-progress/my-task.md`). Set per-run by the host after claiming a task. |
 Only `MATO_DOCKER_IMAGE` is intended as a host-side configuration input. The other
 variables are injected by `mato` inside each container and are normally not set manually.
