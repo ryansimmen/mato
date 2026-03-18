@@ -49,6 +49,7 @@ var ValidMessageTypes = map[string]bool{
 	"intent":           true,
 	"conflict-warning": true,
 	"completion":       true,
+	"progress":         true,
 }
 
 var safeMessageFilePart = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
