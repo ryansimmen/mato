@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -930,7 +931,7 @@ func TestReadCompletionDetail_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent completion detail")
 	}
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected os.ErrNotExist, got %v", err)
 	}
 }
