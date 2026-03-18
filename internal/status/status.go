@@ -186,11 +186,17 @@ func Show(repoRoot, tasksDir string) error {
 			taskPath := filepath.Join(tasksDir, "ready-for-review", task.name)
 			branch := parseBranchComment(taskPath)
 			var parts []string
-			parts = append(parts, task.title)
+			if task.title != "" {
+				parts = append(parts, task.title)
+			}
 			if branch != "" {
 				parts = append(parts, "on "+branch)
 			}
-			fmt.Printf("  %s — %s\n", task.name, strings.Join(parts, " "))
+			if len(parts) > 0 {
+				fmt.Printf("  %s — %s\n", task.name, strings.Join(parts, " "))
+			} else {
+				fmt.Printf("  %s\n", task.name)
+			}
 		}
 	}
 
