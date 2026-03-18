@@ -297,7 +297,17 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### Test files
 Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignored`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
-## 9. End-to-End Summary
+## 9. Host-Curated Knowledge Flow
+The host acts as a knowledge broker between agents, following an agent → host → agent pattern. Individual agents produce information as side effects of their work (conflict warnings with changed-file lists, failure records in task metadata), and the host aggregates this information and injects curated context into new agents before they start.
+
+Concrete examples:
+- **Failure context**: When an agent fails, it appends a `<!-- failure: ... -->` comment to the task file. On the next attempt, the host reads these lines via `extractFailureLines(...)` and injects them as `MATO_PREVIOUS_FAILURES`, so the new agent can learn from prior mistakes without parsing the task file itself.
+- **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
+- **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records and injects them as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
+
+This pattern keeps agents stateless and single-task-focused while the host provides the coordination intelligence. No agent needs to query other agents directly — the host curates and delivers the relevant context at launch time.
+
+## 10. End-to-End Summary
 Responsibility is split cleanly:
 - the host owns queue maintenance, dependency promotion, overlap prevention, stale-state cleanup, and merging;
 - the agent owns one isolated task execution;

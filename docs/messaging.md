@@ -55,10 +55,43 @@ Only these four message types are valid:
 
 No other message types are part of the protocol.
 
+## Type Validation
+`WriteMessage` validates the `type` field against `ValidMessageTypes` before writing. If the type is empty or not one of the four accepted values (`intent`, `progress`, `conflict-warning`, `completion`), `WriteMessage` returns an error and the message is not written. This prevents ad-hoc or mistyped message types from polluting the event stream.
+
+Valid types (defined in `messaging.go`):
+- `intent`
+- `progress`
+- `conflict-warning`
+- `completion`
+
+## File Claims
+The host writes a file-claims index to `.tasks/messages/file-claims.json` before each agent launch. This index tells agents which files are actively claimed by other tasks.
+
+### Who writes it
+The host calls `messaging.BuildAndWriteFileClaims(tasksDir, excludeTask)` immediately after claiming a task, before launching the agent container. The just-claimed task is excluded so the agent does not see its own `affects:` entries as conflicts.
+
+### What it contains
+The file is a JSON object mapping file paths to claim records:
+
+```json
+{
+  "pkg/client/http.go": {"task": "add-http-retries.md", "status": "in-progress"},
+  "internal/auth/auth.go": {"task": "fix-auth-bug.md", "status": "ready-to-merge"}
+}
+```
+
+Each key is a file path from a task's `affects:` metadata. Each value is a `FileClaim` with the task filename and its current queue status (`in-progress` or `ready-to-merge`).
+
+### How it is built
+`BuildAndWriteFileClaims` scans tasks in `in-progress/` and `ready-to-merge/` via `queue.CollectActiveAffects(...)`, then builds a map of file path → claim. First writer wins: if multiple tasks claim the same file, only the first is recorded.
+
+### How agents use it
+The host injects `MATO_FILE_CLAIMS` pointing to the file-claims path inside the container. Agents can read this file during `VERIFY_CLAIM` to detect potential conflicts with other active tasks and adjust their approach accordingly.
+
 ## Agent Checkpoints
 Messaging maps directly to the task-agent state machine. Each step emits a `progress` message for observability:
 - **Host (before agent start)**: write one `intent` via `messaging.WriteMessage(...)` after claiming the task
-- `VERIFY_CLAIM`: write one `progress`, then read recent `events/*.json` for coordination awareness
+- `VERIFY_CLAIM`: write one `progress`, then read recent `events/*.json` for coordination awareness. If `MATO_PREVIOUS_FAILURES` is set, the agent can review prior failure records to avoid repeating the same mistakes.
 - `CREATE_BRANCH`: write one `progress`
 - `WORK`: write one `progress`
 - `COMMIT`: write one `progress`
