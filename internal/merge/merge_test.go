@@ -847,6 +847,36 @@ func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_DuplicateInCompletedIsRemoved(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+
+	// Place a task in ready-to-merge with a merged record.
+	rtmFile := filepath.Join(tasksDir, "ready-to-merge", "dup-task.md")
+	if err := os.WriteFile(rtmFile, []byte("---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile rtm: %v", err)
+	}
+
+	// Place a copy in completed (simulating a prior successful move).
+	completedFile := filepath.Join(tasksDir, "completed", "dup-task.md")
+	if err := os.WriteFile(completedFile, []byte("---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile completed: %v", err)
+	}
+
+	// ProcessQueue should detect the duplicate and remove the ready-to-merge copy.
+	// We don't need a real repo since the task already has a merged record.
+	repoRoot := t.TempDir()
+	ProcessQueue(repoRoot, tasksDir, "mato")
+
+	// The ready-to-merge copy should be gone.
+	if _, err := os.Stat(rtmFile); !os.IsNotExist(err) {
+		t.Fatalf("expected ready-to-merge copy to be removed, but it still exists")
+	}
+	// The completed copy should still be there.
+	if _, err := os.Stat(completedFile); err != nil {
+		t.Fatalf("completed copy should still exist: %v", err)
+	}
+}
+
 func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := setupTasksDir(t)
