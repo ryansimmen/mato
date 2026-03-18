@@ -53,6 +53,11 @@ if [ -n "${MATO_DEPENDENCY_CONTEXT:-}" ]; then
   echo "Dependency context (completed prerequisite tasks):"
   echo "$MATO_DEPENDENCY_CONTEXT"
 fi
+# Read file claims if provided by the host
+if [ -n "${MATO_FILE_CLAIMS:-}" ] && [ -f "${MATO_FILE_CLAIMS}" ]; then
+  echo "Files currently being modified by other tasks:"
+  cat "${MATO_FILE_CLAIMS}"
+fi
 ```
 **Decision table:**
 | If | Then |
@@ -61,6 +66,7 @@ fi
 | `$TASK_PATH` file missing | Another agent may have taken it; report and exit. |
 | Reading messages fails | Continue anyway. Messaging is non-blocking. |
 | `MATO_DEPENDENCY_CONTEXT` is set | Read it for details about completed dependency tasks (files changed, commit SHAs, titles). Use this context to understand what prerequisite work was done. |
+| `MATO_FILE_CLAIMS` file exists | Read it for a JSON map of files being modified by other active tasks. If any file you plan to modify appears in the claims, note the potential conflict in your commit message and take extra care with those files. |
 ---
 ## STATE: CREATE_BRANCH
 **Goal:** Create and verify the dedicated task branch from `TARGET_BRANCH_PLACEHOLDER`.
