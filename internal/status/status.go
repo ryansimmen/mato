@@ -103,19 +103,26 @@ func Show(repoRoot, tasksDir string) error {
 
 	// ── Current Agent Progress ──
 	progressByAgent := latestProgressByAgent(messages)
+	// Only show progress for currently active agents.
+	activeAgentIDs := make(map[string]struct{}, len(agents))
+	for _, a := range agents {
+		activeAgentIDs[a.ID] = struct{}{}
+	}
 	fmt.Println()
 	fmt.Println("Current Agent Progress")
 	fmt.Println("──────────────────────")
-	if len(progressByAgent) == 0 {
+	activeProgress := make([]string, 0)
+	for id := range progressByAgent {
+		if _, ok := activeAgentIDs[id]; ok {
+			activeProgress = append(activeProgress, id)
+		}
+	}
+	sort.Strings(activeProgress)
+	if len(activeProgress) == 0 {
 		fmt.Println("  (none)")
 	} else {
-		agentIDs := make([]string, 0, len(progressByAgent))
-		for id := range progressByAgent {
-			agentIDs = append(agentIDs, id)
-		}
-		sort.Strings(agentIDs)
 		now := time.Now().UTC()
-		for _, id := range agentIDs {
+		for _, id := range activeProgress {
 			pm := progressByAgent[id]
 			ago := formatDuration(now.Sub(pm.SentAt))
 			displayID := id
@@ -279,7 +286,11 @@ func Show(repoRoot, tasksDir string) error {
 			} else {
 				line = msg.Type + " — " + line
 			}
-			fmt.Printf("  [%s] %s: %s\n", msg.SentAt.Local().Format("15:04:05"), msg.From, line)
+			from := msg.From
+			if !strings.HasPrefix(from, "agent-") {
+				from = "agent-" + from
+			}
+			fmt.Printf("  [%s] %s: %s\n", msg.SentAt.Local().Format("15:04:05"), from, line)
 		}
 	}
 
