@@ -295,6 +295,7 @@ func ReadAllCompletionDetails(tasksDir string) ([]CompletionDetail, error) {
 		}
 		var detail CompletionDetail
 		if err := json.Unmarshal(data, &detail); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse completion detail %s: %v\n", entry.Name(), err)
 			continue
 		}
 		details = append(details, detail)
