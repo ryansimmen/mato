@@ -14,7 +14,7 @@ import (
 // LockIdentity returns "PID:starttime" for the given process.
 // Falls back to just "PID" if start time is unavailable (non-Linux).
 func LockIdentity(pid int) string {
-	startTime := ProcessStartTime(pid)
+	startTime := processStartTime(pid)
 	if startTime != "" {
 		return fmt.Sprintf("%d:%s", pid, startTime)
 	}
@@ -30,12 +30,12 @@ func IsLockHolderAlive(identity string) bool {
 	if err != nil || pid <= 0 {
 		return false
 	}
-	if !IsProcessActive(pid) {
+	if !isProcessActive(pid) {
 		return false
 	}
 	// If we have a start time, verify it matches (detect PID reuse).
 	if len(parts) == 2 && parts[1] != "" {
-		currentStart := ProcessStartTime(pid)
+		currentStart := processStartTime(pid)
 		if currentStart != "" && currentStart != parts[1] {
 			return false // PID was reused by a different process
 		}
@@ -43,9 +43,9 @@ func IsLockHolderAlive(identity string) bool {
 	return true
 }
 
-// ProcessStartTime reads the start time of a process from /proc/<pid>/stat.
+// processStartTime reads the start time of a process from /proc/<pid>/stat.
 // Returns empty string if unavailable (non-Linux or process gone).
-func ProcessStartTime(pid int) string {
+func processStartTime(pid int) string {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return ""
@@ -66,8 +66,8 @@ func ProcessStartTime(pid int) string {
 	return fields[19]
 }
 
-// IsProcessActive checks whether a process with the given PID is currently running.
-func IsProcessActive(pid int) bool {
+// isProcessActive checks whether a process with the given PID is currently running.
+func isProcessActive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
