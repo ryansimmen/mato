@@ -13,10 +13,10 @@ The host runner enables messaging by creating the directories with `messaging.In
 └── messages/
     ├── events/        # inter-agent event messages
     ├── completions/   # host-written completion details for merged tasks
-    └── presence/      # reserved for host-managed agent presence files
+    └── presence/      # host-managed agent presence files
 ```
 
-Agents write coordination messages to `events/`. The `completions/` directory holds host-written completion details for merged tasks (see below). The `presence/` directory exists and stale-file cleanup still runs, but no production code currently writes presence files; it is reserved for future host-side tooling. Task agents should not edit `presence/` directly.
+Agents write coordination messages to `events/`. The `completions/` directory holds host-written completion details for merged tasks (see below). The `presence/` directory holds host-written agent presence files; the host writes a presence entry when claiming a task, and `CleanStalePresence` actively cleans up stale entries. Task agents should not edit `presence/` directly.
 
 ## Message Format
 Event files are JSON objects matching `Message` in `messaging.go`:
@@ -25,7 +25,7 @@ Event files are JSON objects matching `Message` in `messaging.go`:
 {
   "id": "string",
   "from": "string",
-  "type": "intent | conflict-warning | completion",
+  "type": "intent | progress | conflict-warning | completion",
   "task": "task-file-name.md",
   "branch": "task/some-branch",
   "files": ["path/one", "path/two"],
@@ -37,7 +37,7 @@ Event files are JSON objects matching `Message` in `messaging.go`:
 Field meanings:
 - `id`: unique message ID
 - `from`: sending agent ID
-- `type`: one of the three allowed message types
+- `type`: one of the four allowed message types
 - `task`: task file being worked
 - `branch`: task branch
 - `files`: changed file paths; usually empty for `intent`
@@ -47,30 +47,31 @@ Field meanings:
 `files` uses `omitempty`, so empty lists may be absent from the JSON.
 
 ## Message Types
-Only these three message types are valid:
+Only these four message types are valid:
 - `intent`: sent by the host (Go) right after a task is claimed, before the agent container starts
+- `progress`: sent by the agent at each state machine transition, for observability (one per step: `VERIFY_CLAIM`, `CREATE_BRANCH`, `WORK`, `COMMIT`, `PUSH_BRANCH`, `MARK_READY`)
 - `conflict-warning`: sent by the agent in `PUSH_BRANCH`, before `git push`, with the changed file list
 - `completion`: sent by the agent in `MARK_READY`, after moving the task to `ready-to-merge/`, with the final changed file list
 
 No other message types are part of the protocol.
 
 ## Agent Checkpoints
-Messaging maps directly to the task-agent state machine:
+Messaging maps directly to the task-agent state machine. Each step emits a `progress` message for observability:
 - **Host (before agent start)**: write one `intent` via `messaging.WriteMessage(...)` after claiming the task
-- `VERIFY_CLAIM`: read recent `events/*.json` for coordination awareness
-- `CREATE_BRANCH`: no messaging
-- `WORK`: no required messaging
-- `COMMIT`: no required messaging
-- `PUSH_BRANCH`: write one `conflict-warning` before pushing
-- `MARK_READY`: move the task file, then write one `completion`
+- `VERIFY_CLAIM`: write one `progress`, then read recent `events/*.json` for coordination awareness
+- `CREATE_BRANCH`: write one `progress`
+- `WORK`: write one `progress`
+- `COMMIT`: write one `progress`
+- `PUSH_BRANCH`: write one `progress`, then write one `conflict-warning` before pushing
+- `MARK_READY`: write one `progress`, move the task file, then write one `completion`
 - `ON_FAILURE`: no failure message; failure details go into the task file itself
 
 This is another reason the channel is advisory: queue transitions and git operations still drive progress even if message I/O is unavailable.
 
 ## Guardrails
 The protocol is intentionally narrow:
-- maximum 3 messages per task
-- one `intent`, one `conflict-warning`, one `completion`
+- maximum 9 messages per task: 1 `intent` + up to 6 `progress` + 1 `conflict-warning` + 1 `completion`
+- the agent sends at most 8 messages (the host sends the `intent`)
 - message read/write failures must not block task work
 - no ad hoc or extra message types
 
@@ -119,10 +120,10 @@ When the host claims a task that has `depends_on` entries, `runner.buildDependen
 - `messaging.ReadCompletionDetail(tasksDir, taskID)` reads and parses the JSON file, returning `os.ErrNotExist` if the file is not found.
 
 ## Presence
-Presence files live in `.tasks/messages/presence/` and are intended to be host-managed.
-`messaging.WritePresence(tasksDir, agentID, taskFile, branch)` can write JSON with `agent_id`, `task`, `branch`, and `updated_at` to `<sanitized-agent-id>.json`, but current production code does not call it.
+Presence files live in `.tasks/messages/presence/` and are host-managed.
+The host runner calls `messaging.WritePresence(tasksDir, agentID, taskFile, branch)` immediately after claiming a task, writing JSON with `agent_id`, `task`, `branch`, and `updated_at` to `<sanitized-agent-id>.json`. Task agents should not edit `presence/` directly.
 
-`messaging.CleanStalePresence(tasksDir)` still removes any presence entries for agents that are no longer active. It checks `.tasks/.locks/<agent>.pid` through `queue.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass.
+`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It checks `.tasks/.locks/<agent>.pid` through `queue.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
 
 ## Garbage Collection
 `messaging.CleanOldMessages(tasksDir, 24*time.Hour)` garbage-collects event files.
