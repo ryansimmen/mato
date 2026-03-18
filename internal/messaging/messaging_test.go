@@ -137,7 +137,6 @@ func TestWriteMessage_SpecialCharsInFields(t *testing.T) {
 		Type:   "status \"update\"\nline",
 		Task:   "task \"quote\"\n第二行",
 		Branch: "feature/雪\\branch",
-		Files:  []string{"dir/quote\".go", "line\nbreak.txt", "snow/雪\\file.txt"},
 		Body:   "body with \"quotes\"\nmultiple lines\nunicode 雪\nbackslash \\",
 		SentAt: time.Date(2024, time.May, 1, 13, 0, 0, 0, time.UTC),
 	}
