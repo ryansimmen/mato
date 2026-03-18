@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -506,14 +507,17 @@ func TestSelectAndClaimTask_RetryExhausted_MoveToFailedFails_RollbackToBacklog(t
 	}
 
 	task, err := SelectAndClaimTask(dir, "agent-re1", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected error when move-to-failed fails and rollback succeeds, got nil")
 	}
-	if task == nil {
-		t.Fatal("expected healthy.md to be claimed, got nil")
+	if task != nil {
+		t.Fatalf("expected nil task, got %+v", task)
 	}
-	if task.Filename != "healthy.md" {
-		t.Fatalf("Filename = %q, want %q", task.Filename, "healthy.md")
+	if !errors.Is(err, errFailedDirUnavailable) {
+		t.Fatalf("error should wrap errFailedDirUnavailable: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated move-to-failed failure") {
+		t.Fatalf("error should include move-to-failed cause: %v", err)
 	}
 
 	// exhausted.md should be back in backlog (rollback succeeded)
@@ -522,6 +526,11 @@ func TestSelectAndClaimTask_RetryExhausted_MoveToFailedFails_RollbackToBacklog(t
 	}
 	if _, err := os.Stat(filepath.Join(dir, "in-progress", "exhausted.md")); !os.IsNotExist(err) {
 		t.Fatal("exhausted.md should NOT be in in-progress")
+	}
+
+	// healthy.md should still be in backlog (not attempted after hard error)
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "healthy.md")); err != nil {
+		t.Fatalf("healthy.md should still be in backlog: %v", err)
 	}
 }
 
@@ -559,6 +568,9 @@ func TestSelectAndClaimTask_RetryExhausted_DoubleFailure_ReturnsError(t *testing
 	}
 	if !strings.Contains(err.Error(), "retry-exhausted rollback failed") {
 		t.Fatalf("error should mention retry-exhausted rollback failure: %v", err)
+	}
+	if errors.Is(err, errFailedDirUnavailable) {
+		t.Fatal("double-failure error should NOT wrap errFailedDirUnavailable (task is stranded, not rolled back)")
 	}
 	if !strings.Contains(err.Error(), "simulated move-to-failed failure") {
 		t.Fatalf("error should include move-to-failed cause: %v", err)
