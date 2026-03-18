@@ -21,7 +21,8 @@ type TaskMeta struct {
 	DependsOn           []string `yaml:"depends_on"`
 	Affects             []string `yaml:"affects"`
 	Tags                []string `yaml:"tags"`
-	EstimatedComplexity string   `yaml:"estimated_complexity"`
+	// EstimatedComplexity is parsed for external consumers; not used internally.
+	EstimatedComplexity string `yaml:"estimated_complexity"`
 	MaxRetries          int      `yaml:"max_retries"`
 }
 
