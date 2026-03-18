@@ -52,6 +52,160 @@ func initBareAndClone(t *testing.T) (bare, clone string) {
 	return bare, clone
 }
 
+func TestEnsureBranch_PrefersRemoteTrackingBranch(t *testing.T) {
+	bare, clone := initBareAndClone(t)
+
+	// Create the target branch on the remote via the clone, then remove it locally.
+	cmd := exec.Command("git", "-C", clone, "checkout", "-b", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkout -b mato: %v\n%s", err, out)
+	}
+	// Add a commit so mato diverges from main.
+	matoFile := filepath.Join(clone, "mato.txt")
+	if err := os.WriteFile(matoFile, []byte("mato content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", clone, "add", "mato.txt")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone, "commit", "-m", "mato commit")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone, "push", "origin", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git push mato: %v\n%s", err, out)
+	}
+
+	// Now make a second clone that has origin/mato but no local mato branch,
+	// and whose HEAD has diverged.
+	clone2 := t.TempDir()
+	cmd = exec.Command("git", "clone", bare, clone2)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("second clone: %v\n%s", err, out)
+	}
+	for _, kv := range [][2]string{{"user.name", "test"}, {"user.email", "test@test.com"}} {
+		cmd = exec.Command("git", "-C", clone2, "config", kv[0], kv[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", kv[0], err, out)
+		}
+	}
+
+	// Add a diverging commit on the default branch (main/master).
+	diverge := filepath.Join(clone2, "diverge.txt")
+	if err := os.WriteFile(diverge, []byte("diverged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", clone2, "add", "diverge.txt")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add diverge: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone2, "commit", "-m", "diverging commit")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit diverge: %v\n%s", err, out)
+	}
+
+	// Record HEAD before EnsureBranch.
+	headBefore, err := Output(clone2, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	headBefore = strings.TrimSpace(headBefore)
+
+	// Record origin/mato SHA.
+	remoteMato, err := Output(clone2, "rev-parse", "origin/mato")
+	if err != nil {
+		t.Fatalf("rev-parse origin/mato: %v", err)
+	}
+	remoteMato = strings.TrimSpace(remoteMato)
+
+	// Ensure HEAD and origin/mato are different (diverged).
+	if headBefore == remoteMato {
+		t.Fatal("test setup error: HEAD should differ from origin/mato")
+	}
+
+	// EnsureBranch should create local mato from origin/mato, not HEAD.
+	if err := EnsureBranch(clone2, "mato"); err != nil {
+		t.Fatalf("EnsureBranch: %v", err)
+	}
+
+	// Verify we're on the mato branch.
+	branch, err := Output(clone2, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	if strings.TrimSpace(branch) != "mato" {
+		t.Errorf("expected to be on branch mato, got %q", strings.TrimSpace(branch))
+	}
+
+	// Verify HEAD matches origin/mato, not the old diverged HEAD.
+	headAfter, err := Output(clone2, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD after: %v", err)
+	}
+	headAfter = strings.TrimSpace(headAfter)
+	if headAfter != remoteMato {
+		t.Errorf("expected HEAD to match origin/mato (%s), got %s", remoteMato, headAfter)
+	}
+	if headAfter == headBefore {
+		t.Errorf("HEAD should NOT match the diverged HEAD (%s)", headBefore)
+	}
+}
+
+func TestEnsureBranch_FallsBackToHEAD(t *testing.T) {
+	_, clone := initBareAndClone(t)
+
+	// No local or remote "newbranch" exists; should create from HEAD.
+	headBefore, err := Output(clone, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	headBefore = strings.TrimSpace(headBefore)
+
+	if err := EnsureBranch(clone, "newbranch"); err != nil {
+		t.Fatalf("EnsureBranch: %v", err)
+	}
+
+	branch, err := Output(clone, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	if strings.TrimSpace(branch) != "newbranch" {
+		t.Errorf("expected to be on branch newbranch, got %q", strings.TrimSpace(branch))
+	}
+
+	headAfter, err := Output(clone, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD after: %v", err)
+	}
+	if strings.TrimSpace(headAfter) != headBefore {
+		t.Errorf("expected HEAD (%s) to match original HEAD (%s)", strings.TrimSpace(headAfter), headBefore)
+	}
+}
+
+func TestEnsureBranch_LocalBranchExists(t *testing.T) {
+	_, clone := initBareAndClone(t)
+
+	// Create a local branch first.
+	cmd := exec.Command("git", "-C", clone, "branch", "existing")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git branch existing: %v\n%s", err, out)
+	}
+
+	if err := EnsureBranch(clone, "existing"); err != nil {
+		t.Fatalf("EnsureBranch: %v", err)
+	}
+
+	branch, err := Output(clone, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	if strings.TrimSpace(branch) != "existing" {
+		t.Errorf("expected to be on branch existing, got %q", strings.TrimSpace(branch))
+	}
+}
+
 func TestEnsureGitignored_DoesNotCommitUnrelatedStagedFiles(t *testing.T) {
 	_, repo := initBareAndClone(t)
 
