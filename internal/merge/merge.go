@@ -319,13 +319,17 @@ func failMergeTask(src, dst, reason string) error {
 		reason = "merge queue failure"
 	}
 
-	if err := appendTaskRecord(src, "<!-- failure: merge-queue at %s — %s -->", time.Now().UTC().Format(time.RFC3339), reason); err != nil {
-		return err
+	appendErr := appendTaskRecord(src, "<!-- failure: merge-queue at %s — %s -->", time.Now().UTC().Format(time.RFC3339), reason)
+	if appendErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not append failure record to %s: %v\n", filepath.Base(src), appendErr)
 	}
 	if dst == "" {
-		return nil
+		return appendErr
 	}
 	if err := moveTaskFile(src, dst); err != nil {
+		if appendErr != nil {
+			return fmt.Errorf("move task file after merge failure: %w (also failed to append failure record: %v)", err, appendErr)
+		}
 		return fmt.Errorf("move task file after merge failure: %w", err)
 	}
 	return nil
