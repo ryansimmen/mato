@@ -510,7 +510,7 @@ func TestConcurrentMessageWriting(t *testing.T) {
 		msg := messaging.Message{
 			ID:     fmt.Sprintf("msg-%02d", i),
 			From:   fmt.Sprintf("agent-%02d", i),
-			Type:   "status",
+			Type:   "intent",
 			Task:   fmt.Sprintf("task-%02d.md", i),
 			Branch: fmt.Sprintf("task/branch-%02d", i),
 			Body:   fmt.Sprintf("message body %02d", i),
@@ -613,7 +613,7 @@ func TestReadMessagesDuringCleanup(t *testing.T) {
 		msg := messaging.Message{
 			ID:     fmt.Sprintf("cleanup-msg-%02d", i),
 			From:   "cleanup-agent",
-			Type:   "status",
+			Type:   "intent",
 			Body:   fmt.Sprintf("message body %02d", i),
 			SentAt: base.Add(time.Duration(i) * time.Nanosecond),
 		}

@@ -324,9 +324,9 @@ func TestMessagingLifecycle(t *testing.T) {
 
 	base := time.Unix(1_700_000_000, 0).UTC()
 	messages := []messaging.Message{
-		{ID: "msg-1", From: "agent-a", Type: "status", Body: "first", SentAt: base},
-		{ID: "msg-2", From: "agent-b", Type: "status", Body: "second", SentAt: base.Add(time.Second)},
-		{ID: "msg-3", From: "agent-c", Type: "result", Body: "third", SentAt: base.Add(2 * time.Second)},
+		{ID: "msg-1", From: "agent-a", Type: "intent", Body: "first", SentAt: base},
+		{ID: "msg-2", From: "agent-b", Type: "intent", Body: "second", SentAt: base.Add(time.Second)},
+		{ID: "msg-3", From: "agent-c", Type: "completion", Body: "third", SentAt: base.Add(2 * time.Second)},
 	}
 	for _, msg := range messages {
 		if err := messaging.WriteMessage(tasksDir, msg); err != nil {
@@ -384,7 +384,7 @@ func TestStatusWithPopulatedQueue(t *testing.T) {
 		msg := messaging.Message{
 			ID:     fmt.Sprintf("status-msg-%d", i+1),
 			From:   "status-agent",
-			Type:   "status",
+			Type:   "intent",
 			Body:   fmt.Sprintf("message %d", i+1),
 			SentAt: time.Unix(1_700_000_100+int64(i), 0).UTC(),
 		}
