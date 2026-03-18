@@ -38,13 +38,23 @@ func RemoveClone(dir string) {
 	os.RemoveAll(dir)
 }
 
-// EnsureBranch creates the target branch from HEAD if it doesn't already exist
-// and checks it out so subsequent operations (like .gitignore commits) land on it.
+// EnsureBranch ensures the target branch exists and checks it out.
+// It prefers the remote-tracking branch (origin/<branch>) as the starting point
+// when the local branch is missing, falling back to HEAD only when neither exists.
 func EnsureBranch(repoRoot, branch string) error {
+	// If the local branch already exists, just check it out.
 	if _, err := Output(repoRoot, "rev-parse", "--verify", "refs/heads/"+branch); err == nil {
 		_, err := Output(repoRoot, "checkout", branch)
 		return err
 	}
+	// If the remote-tracking branch exists, create the local branch from it.
+	if _, err := Output(repoRoot, "rev-parse", "--verify", "refs/remotes/origin/"+branch); err == nil {
+		if _, err := Output(repoRoot, "checkout", "-b", branch, "origin/"+branch); err != nil {
+			return fmt.Errorf("create branch %s from origin/%s: %w", branch, branch, err)
+		}
+		return nil
+	}
+	// Neither local nor remote exists; create from HEAD.
 	if _, err := Output(repoRoot, "checkout", "-b", branch); err != nil {
 		return fmt.Errorf("create branch %s: %w", branch, err)
 	}
