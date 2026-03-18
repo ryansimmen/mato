@@ -84,7 +84,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 ├── failed/          # exceeded retry limit
 ├── messages/
 │   ├── events/      # coordination events and status updates
-│   └── presence/    # agent presence tracking (reserved for future use)
+│   └── presence/    # host-managed agent presence tracking
 └── .locks/          # PID locks for agents and merge queue
 ```
 
