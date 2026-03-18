@@ -99,6 +99,86 @@ func CleanStaleLocks(tasksDir string) {
 	}
 }
 
+// AcquireReviewLock attempts to acquire an exclusive lock for reviewing a
+// specific task file. Returns a cleanup function and true if acquired, or
+// nil and false if the lock is already held by a live process.
+// The lock file stores "PID:starttime" to detect PID reuse.
+func AcquireReviewLock(tasksDir, taskFilename string) (func(), bool) {
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: create locks dir for review lock: %v\n", err)
+		return nil, false
+	}
+
+	lockFile := filepath.Join(locksDir, "review-"+taskFilename+".lock")
+	identity := process.LockIdentity(os.Getpid())
+
+	for attempts := 0; attempts < 2; attempts++ {
+		f, err := os.OpenFile(lockFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			if _, writeErr := f.WriteString(identity); writeErr != nil {
+				f.Close()
+				os.Remove(lockFile)
+				fmt.Fprintf(os.Stderr, "warning: write review lock: %v\n", writeErr)
+				return nil, false
+			}
+			if closeErr := f.Close(); closeErr != nil {
+				os.Remove(lockFile)
+				fmt.Fprintf(os.Stderr, "warning: close review lock: %v\n", closeErr)
+				return nil, false
+			}
+			return func() { os.Remove(lockFile) }, true
+		}
+		if !os.IsExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: create review lock: %v\n", err)
+			return nil, false
+		}
+
+		data, readErr := os.ReadFile(lockFile)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "warning: read review lock: %v\n", readErr)
+			return nil, false
+		}
+
+		content := strings.TrimSpace(string(data))
+		if content == "" || process.IsLockHolderAlive(content) {
+			return nil, false
+		}
+		if removeErr := os.Remove(lockFile); removeErr != nil && !os.IsNotExist(removeErr) {
+			fmt.Fprintf(os.Stderr, "warning: remove stale review lock: %v\n", removeErr)
+			return nil, false
+		}
+	}
+
+	return nil, false
+}
+
+// CleanStaleReviewLocks removes review lock files for processes that are no
+// longer running, so that review tasks are not permanently blocked by dead
+// agents.
+func CleanStaleReviewLocks(tasksDir string) {
+	locksDir := filepath.Join(tasksDir, ".locks")
+	entries, err := os.ReadDir(locksDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "review-") || !strings.HasSuffix(e.Name(), ".lock") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(locksDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if !process.IsLockHolderAlive(strings.TrimSpace(string(data))) {
+			os.Remove(filepath.Join(locksDir, e.Name()))
+		}
+	}
+}
+
 // RecoverOrphanedTasks moves any files in in-progress/ back to backlog/.
 // This handles the case where a previous run was killed (e.g. Ctrl+C)
 // before the agent could clean up. A failure record is appended so the
