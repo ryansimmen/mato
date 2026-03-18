@@ -279,10 +279,15 @@ type FileClaim struct {
 // BuildAndWriteFileClaims builds a file-claims.json index from tasks in
 // in-progress/ and ready-to-merge/ that have affects: metadata, then writes
 // it atomically to .tasks/messages/file-claims.json.
-func BuildAndWriteFileClaims(tasksDir string) error {
+// If excludeTask is non-empty, skip the task with that filename so the
+// just-claimed task does not see its own files as conflicting.
+func BuildAndWriteFileClaims(tasksDir, excludeTask string) error {
 	active := queue.CollectActiveAffects(tasksDir)
 	claims := make(map[string]FileClaim, len(active)*2)
 	for _, t := range active {
+		if excludeTask != "" && t.Name == excludeTask {
+			continue
+		}
 		for _, file := range t.Affects {
 			// First writer wins; later entries don't overwrite.
 			if _, exists := claims[file]; !exists {
