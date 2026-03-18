@@ -262,6 +262,9 @@ func runOnce(repoRoot, tasksDir, agentID string, claimed *queue.ClaimedTask, cop
 		if depCtx := buildDependencyContext(tasksDir, claimed); depCtx != "" {
 			args = append(args, "-e", "MATO_DEPENDENCY_CONTEXT="+depCtx)
 		}
+		if failures := extractFailureLines(claimed.TaskPath); failures != "" {
+			args = append(args, "-e", "MATO_PREVIOUS_FAILURES="+failures)
+		}
 	}
 	args = append(args,
 		"-e", "GIT_CONFIG_COUNT=1",
@@ -373,4 +376,21 @@ func buildDependencyContext(tasksDir string, claimed *queue.ClaimedTask) string 
 		return ""
 	}
 	return string(data)
+}
+
+// extractFailureLines reads a task file and returns all failure record lines
+// (lines containing "<!-- failure:") joined by newlines.
+// Returns "" if the file has no failure records or cannot be read.
+func extractFailureLines(taskPath string) string {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return ""
+	}
+	var lines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "<!-- failure:") {
+			lines = append(lines, strings.TrimSpace(line))
+		}
+	}
+	return strings.Join(lines, "\n")
 }

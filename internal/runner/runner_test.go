@@ -249,3 +249,52 @@ func TestBuildDependencyContext_NoCompletionFiles(t *testing.T) {
 		t.Fatalf("expected empty dependency context when no completion files exist, got %q", result)
 	}
 }
+
+func TestExtractFailureLines_NoFailures(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644)
+
+	got := extractFailureLines(f)
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
+func TestExtractFailureLines_SingleFailure(t *testing.T) {
+	content := "---\npriority: 5\n---\n# My Task\nDo something.\n<!-- failure: agent-7 at 2026-01-01T00:03:00Z step=WORK error=tests_failed files_changed=queue.go -->\n"
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte(content), 0o644)
+
+	got := extractFailureLines(f)
+	if !strings.Contains(got, "step=WORK") {
+		t.Fatalf("expected failure line with step=WORK, got %q", got)
+	}
+	if strings.Count(got, "\n") != 0 {
+		t.Fatalf("expected single line (no newlines), got %q", got)
+	}
+}
+
+func TestExtractFailureLines_MultipleFailures(t *testing.T) {
+	content := "---\npriority: 5\n---\n# My Task\n<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed files_changed=main.go -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z step=COMMIT error=no_changes files_changed=none -->\n"
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte(content), 0o644)
+
+	got := extractFailureLines(f)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 failure lines, got %d: %q", len(lines), got)
+	}
+	if !strings.Contains(lines[0], "agent-1") {
+		t.Fatalf("first line should contain agent-1, got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "agent-2") {
+		t.Fatalf("second line should contain agent-2, got %q", lines[1])
+	}
+}
+
+func TestExtractFailureLines_NonexistentFile(t *testing.T) {
+	got := extractFailureLines(filepath.Join(t.TempDir(), "nonexistent.md"))
+	if got != "" {
+		t.Fatalf("expected empty string for nonexistent file, got %q", got)
+	}
+}
