@@ -81,6 +81,33 @@ func promptStateBlock(t *testing.T, state string) string {
 	return strings.TrimSpace(section[:blockEnd])
 }
 
+// promptPreamble extracts the variable-initialization bash block that precedes
+// all STATE sections. Tests that run individual state blocks must prepend this
+// so variables like AGENT_ID are always defined under bash strict mode.
+func promptPreamble(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(taskInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(task instructions): %v", err)
+	}
+	text := string(data)
+	firstState := strings.Index(text, "## STATE:")
+	if firstState < 0 {
+		t.Fatal("no STATE sections found in task instructions")
+	}
+	preamble := text[:firstState]
+	blockStart := strings.Index(preamble, "```bash\n")
+	if blockStart < 0 {
+		return ""
+	}
+	preamble = preamble[blockStart+len("```bash\n"):]
+	blockEnd := strings.Index(preamble, "\n```")
+	if blockEnd < 0 {
+		t.Fatal("preamble bash block terminator not found")
+	}
+	return strings.TrimSpace(preamble[:blockEnd])
+}
+
 func TestPromptCreateBranchDoesNotDeleteRemoteBranch(t *testing.T) {
 	block := promptStateBlock(t, "CREATE_BRANCH")
 	if strings.Contains(block, `git push origin --delete "$BRANCH"`) {
@@ -224,6 +251,7 @@ func TestPromptVerifyClaim(t *testing.T) {
 	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
 
 	script := strings.Join([]string{
+		promptPreamble(t),
 		promptStateBlock(t, "VERIFY_CLAIM"),
 		`echo "FILENAME=$FILENAME"`,
 		`echo "BRANCH=$BRANCH"`,
@@ -266,6 +294,7 @@ func TestPromptCreateBranchAndCommit(t *testing.T) {
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	script := strings.Join([]string{
+		promptPreamble(t),
 		`BRANCH="task/my-task"`,
 		`FILENAME="my-task.md"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
@@ -305,6 +334,7 @@ func TestPromptCommitIncludesDescription(t *testing.T) {
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	script := strings.Join([]string{
+		promptPreamble(t),
 		`BRANCH="task/my-task"`,
 		`FILENAME="my-task.md"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
@@ -349,7 +379,7 @@ func TestPromptPushAndMarkReady(t *testing.T) {
 	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
 
 	script := strings.Join([]string{
-		`AGENT_ID="${MATO_AGENT_ID:-unknown}"`,
+		promptPreamble(t),
 		`FILENAME="my-task.md"`,
 		`BRANCH="task/my-task"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
@@ -391,7 +421,7 @@ func TestPromptRecordsBranchInTaskFile(t *testing.T) {
 	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
 
 	script := strings.Join([]string{
-		`AGENT_ID="${MATO_AGENT_ID:-unknown}"`,
+		promptPreamble(t),
 		`FILENAME="my-task.md"`,
 		`BRANCH="task/my-task"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
@@ -427,7 +457,7 @@ func TestExistingRemoteBranchIsReplacedWhenTaskBranchIsPushed(t *testing.T) {
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	script := strings.Join([]string{
-		`AGENT_ID="${MATO_AGENT_ID:-unknown}"`,
+		promptPreamble(t),
 		`FILENAME="my-task.md"`,
 		`BRANCH="task/my-task"`,
 		`TASK_TITLE="My Task"`,
@@ -468,7 +498,7 @@ func TestPromptOnFailure(t *testing.T) {
 	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task", "mato")
 
 	script := strings.Join([]string{
-		`AGENT_ID="${MATO_AGENT_ID:-unknown}"`,
+		promptPreamble(t),
 		`FILENAME="my-task.md"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
 		`FAIL_STEP="WORK"`,
@@ -515,7 +545,7 @@ func TestPromptOnFailureAlwaysRequeues(t *testing.T) {
 	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task", "mato")
 
 	script := strings.Join([]string{
-		`AGENT_ID="${MATO_AGENT_ID:-unknown}"`,
+		promptPreamble(t),
 		`FILENAME="my-task.md"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
 		`FAIL_STEP="WORK"`,
@@ -598,6 +628,7 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
 	script := strings.Join([]string{
+		promptPreamble(t),
 		promptStateBlock(t, "VERIFY_CLAIM"),
 		promptStateBlock(t, "CREATE_BRANCH"),
 		promptStateBlock(t, "WORK"),
@@ -635,10 +666,16 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	}
 
 	messages := readPromptEventMessages(t, tasksDir)
-	if len(messages) != 2 {
-		t.Fatalf("message count = %d, want 2 (conflict-warning + completion; intent is now host-side)", len(messages))
+	var coreMessages []promptEventMessage
+	for _, msg := range messages {
+		if msg.Type == "conflict-warning" || msg.Type == "completion" {
+			coreMessages = append(coreMessages, msg)
+		}
 	}
-	types := []string{messages[0].Type, messages[1].Type}
+	if len(coreMessages) != 2 {
+		t.Fatalf("core message count = %d, want 2 (conflict-warning + completion)", len(coreMessages))
+	}
+	types := []string{coreMessages[0].Type, coreMessages[1].Type}
 	sort.Strings(types)
 	if strings.Join(types, ",") != "completion,conflict-warning" {
 		t.Fatalf("message types = %v, want conflict-warning/completion", types)

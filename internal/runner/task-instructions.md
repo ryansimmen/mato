@@ -24,12 +24,18 @@ You are an autonomous task agent. Complete one pre-claimed task safely, push its
 - Never delete unrelated files or revert someone else’s work; change only files required by the task plus task-file moves and up to 3 message files.
 - Preserve the `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` comment patterns exactly.
 - Messaging is best-effort: if reading or writing messages fails, continue the task anyway.
-- Send at most 8 messages per task: one `conflict-warning`, one `completion`, and up to 6 `progress` messages (one per state machine step). The `intent` message is sent by the host before the agent starts. Do NOT send messages for any other reason.
+- Send at most 8 agent-written messages per task: one `conflict-warning`, one `completion`, and up to 6 `progress` messages (one per state machine step). The `intent` message is sent by the host before the agent starts. Do NOT send messages for any other reason.
 - Do not stop midway. End only after the task file is moved to `ready-to-merge/` or `backlog/` via `ON_FAILURE`.
 ## Workflow State Machine
 Execute states in this exact order:
 `VERIFY_CLAIM → CREATE_BRANCH → WORK → COMMIT → PUSH_BRANCH → MARK_READY`
 If any state becomes unrecoverable, transition immediately to `ON_FAILURE`.
+
+### Variable Initialization
+Always available to every state block:
+```bash
+AGENT_ID="${MATO_AGENT_ID:-unknown}"
+```
 ---
 ## STATE: VERIFY_CLAIM
 **Goal:** Read the pre-claimed task details from environment variables set by the host, confirm the task file exists in `in-progress/`, and review recent coordination messages.
@@ -40,7 +46,6 @@ FILENAME="${MATO_TASK_FILE:?MATO_TASK_FILE is required}"
 BRANCH="${MATO_TASK_BRANCH:?MATO_TASK_BRANCH is required}"
 TASK_TITLE="${MATO_TASK_TITLE:-}"
 TASK_PATH="${MATO_TASK_PATH:?MATO_TASK_PATH is required}"
-AGENT_ID="${MATO_AGENT_ID:-unknown}"
 if [ ! -f "$TASK_PATH" ]; then
   echo "Task file not found at $TASK_PATH. Exiting."
   exit 0
@@ -246,4 +251,4 @@ mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/backlog/$FILENAME"
 | Failure came from branch creation, commit, or ready-move | Record the matching state name and a brief description. |
 | Task is moved back to `backlog/` | The host will check the retry budget before the next attempt. |
 ## Final Reminder
-Stay disciplined: one task, one branch, one commit sequence, at most 9 messages (1 intent + 6 progress + 1 conflict-warning + 1 completion), bounded retries, and only `--force-with-lease` pushes for the dedicated task branch.
+Stay disciplined: one task, one branch, one commit sequence, at most 9 total messages (1 host intent + 8 agent-written), bounded retries, and only `--force-with-lease` pushes for the dedicated task branch.
