@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -364,5 +365,150 @@ func TestSelectAndClaimTask_ZeroMaxRetries(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, "failed", "zero-retry.md")); err != nil {
 		t.Fatalf("zero-retry.md not in failed: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_RollbackFailure_ReturnsError(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "stuck.md"), "# Stuck\nDo stuck.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "stuck.md\n")
+
+	origPrepend := claimPrependFn
+	origRollback := claimRollbackFn
+	t.Cleanup(func() {
+		claimPrependFn = origPrepend
+		claimRollbackFn = origRollback
+	})
+
+	claimPrependFn = func(path, agentID, claimedAt string) error {
+		return fmt.Errorf("simulated prepend failure")
+	}
+	claimRollbackFn = func(src, dst string) error {
+		return fmt.Errorf("simulated rollback failure")
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-rb1", nil)
+	if err == nil {
+		t.Fatal("expected error when both prepend and rollback fail, got nil")
+	}
+	if task != nil {
+		t.Fatalf("expected nil task on double failure, got %+v", task)
+	}
+	if !strings.Contains(err.Error(), "claim rollback failed") {
+		t.Fatalf("error should mention claim rollback failure: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated prepend failure") {
+		t.Fatalf("error should include prepend cause: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated rollback failure") {
+		t.Fatalf("error should include rollback cause: %v", err)
+	}
+
+	// Task should be stranded in in-progress (the rollback failed)
+	if _, err := os.Stat(filepath.Join(dir, "in-progress", "stuck.md")); err != nil {
+		t.Fatalf("stuck.md should remain in in-progress after double failure: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_RollbackFailure_SkipsFurtherCandidates(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "first.md"), "# First\nDo first.\n")
+	writeTestFile(t, filepath.Join(dir, "backlog", "second.md"), "# Second\nDo second.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "first.md\nsecond.md\n")
+
+	origPrepend := claimPrependFn
+	origRollback := claimRollbackFn
+	t.Cleanup(func() {
+		claimPrependFn = origPrepend
+		claimRollbackFn = origRollback
+	})
+
+	// Only the first task triggers double failure; second should not be tried.
+	calls := 0
+	claimPrependFn = func(path, agentID, claimedAt string) error {
+		calls++
+		return fmt.Errorf("simulated prepend failure")
+	}
+	claimRollbackFn = func(src, dst string) error {
+		return fmt.Errorf("simulated rollback failure")
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-rb2", nil)
+	if err == nil {
+		t.Fatal("expected error on double failure")
+	}
+	if task != nil {
+		t.Fatalf("expected nil task, got %+v", task)
+	}
+	if calls != 1 {
+		t.Fatalf("prependClaimedBy called %d times, want 1 (should stop after first double failure)", calls)
+	}
+
+	// second.md should still be in backlog (not attempted)
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "second.md")); err != nil {
+		t.Fatalf("second.md should still be in backlog: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_PrependFails_RollbackSucceeds_ContinuesToNext(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "broken.md"), "# Broken\nDo broken.\n")
+	writeTestFile(t, filepath.Join(dir, "backlog", "healthy.md"), "# Healthy\nDo healthy.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "broken.md\nhealthy.md\n")
+
+	origPrepend := claimPrependFn
+	t.Cleanup(func() { claimPrependFn = origPrepend })
+
+	calls := 0
+	claimPrependFn = func(path, agentID, claimedAt string) error {
+		calls++
+		if calls == 1 {
+			return fmt.Errorf("simulated prepend failure")
+		}
+		// Second call succeeds (real implementation)
+		return prependClaimedBy(path, agentID, claimedAt)
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-rb3", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected healthy.md to be claimed, got nil")
+	}
+	if task.Filename != "healthy.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "healthy.md")
+	}
+
+	// broken.md should be back in backlog (rollback succeeded)
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "broken.md")); err != nil {
+		t.Fatalf("broken.md should be back in backlog: %v", err)
+	}
+}
+
+func TestRecoverOrphanedTasks_HandlesStrandedWithoutClaimedBy(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Simulate a task stranded in in-progress without a claimed-by marker
+	// (the scenario that occurs after a double failure).
+	writeTestFile(t, filepath.Join(dir, "in-progress", "orphan.md"), "# Orphan\nDo orphan.\n")
+
+	RecoverOrphanedTasks(dir)
+
+	// Task should be recovered to backlog
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "orphan.md")); err != nil {
+		t.Fatalf("orphan.md should be recovered to backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "in-progress", "orphan.md")); !os.IsNotExist(err) {
+		t.Fatal("orphan.md should no longer be in in-progress")
+	}
+
+	// Verify a failure record was appended
+	data, err := os.ReadFile(filepath.Join(dir, "backlog", "orphan.md"))
+	if err != nil {
+		t.Fatalf("read recovered task: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- failure:") {
+		t.Fatal("recovered task should have a failure record appended")
 	}
 }
