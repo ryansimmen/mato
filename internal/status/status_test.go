@@ -720,6 +720,12 @@ func TestReadyForReviewSection(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
+	// Write a task with unparseable frontmatter (produces empty title).
+	taskContent3 := "<!-- branch: task/empty-title -->\n---\n: invalid yaml [\n---\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, "ready-for-review", "no-title.md"), []byte(taskContent3), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
 	originalStdout := os.Stdout
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -758,8 +764,17 @@ func TestReadyForReviewSection(t *testing.T) {
 		t.Errorf("output should contain task title 'Fix typo in docs', got:\n%s", output)
 	}
 	// The queue overview should show the count.
-	if !contains(output, "ready-review:   2") {
-		t.Errorf("output should contain 'ready-review:   2', got:\n%s", output)
+	if !contains(output, "ready-review:   3") {
+		t.Errorf("output should contain 'ready-review:   3', got:\n%s", output)
+	}
+
+	// Empty-title task should not produce a double space or trailing dash.
+	if !contains(output, "no-title.md — on task/empty-title") {
+		t.Errorf("output should show 'no-title.md — on task/empty-title' (no double space), got:\n%s", output)
+	}
+	// Ensure the empty title doesn't produce "—  on" (double space after dash).
+	if contains(output, "no-title.md —  on") {
+		t.Errorf("output should NOT have double space after dash for empty title, got:\n%s", output)
 	}
 }
 
