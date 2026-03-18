@@ -129,6 +129,8 @@ Presence files live in `.tasks/messages/presence/` and are intended to be host-m
 The runner calls it once per main loop iteration, deleting `.tasks/messages/events/*.json` files older than 24 hours.
 Age is based on file modification time, not the JSON `sent_at` value. Unreadable entries are skipped silently.
 
+Completion detail files in `completions/` are not garbage-collected; they persist for the lifetime of the task queue so that dependent tasks can read them regardless of when they run.
+
 ## Reading Semantics
 `messaging.ReadMessages(tasksDir, since)` scans every `.json` file in `events/`, unmarshals each file into `Message`, keeps only messages with `sent_at` strictly after `since`, and sorts the result by `sent_at` then `id`.
 Consumers should assume messages can be missing, delayed, duplicated by intent, or already deleted.
