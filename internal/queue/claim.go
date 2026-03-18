@@ -11,10 +11,31 @@ import (
 	"mato/internal/frontmatter"
 )
 
-// errFailedDirUnavailable is returned when a retry-exhausted task cannot be
-// moved to failed/ but was safely rolled back to backlog/. The host should
-// treat this as a hard error to avoid livelocking on the same task.
+// errFailedDirUnavailable is the sentinel wrapped by FailedDirUnavailableError.
 var errFailedDirUnavailable = errors.New("failed directory unavailable for retry-exhausted task")
+
+// FailedDirUnavailableError is returned when a retry-exhausted task cannot be
+// moved to failed/ but was safely rolled back to backlog/. It carries the task
+// filename so the host loop can exclude it from future selection and avoid
+// livelocking on the same task.
+type FailedDirUnavailableError struct {
+	TaskFilename string // backlog filename that was rolled back
+	MoveErr      error  // underlying rename/permission error
+}
+
+func (e *FailedDirUnavailableError) Error() string {
+	return fmt.Sprintf("%s rolled back to backlog (move-to-failed: %v): %s",
+		e.TaskFilename, e.MoveErr, errFailedDirUnavailable)
+}
+
+func (e *FailedDirUnavailableError) Unwrap() error { return errFailedDirUnavailable }
+
+// IsFailedDirUnavailable reports whether err wraps the sentinel returned when
+// a retry-exhausted task could not be moved to failed/ and was rolled back to
+// backlog/.
+func IsFailedDirUnavailable(err error) bool {
+	return errors.Is(err, errFailedDirUnavailable)
+}
 
 // Testing hooks for the claim path. Default to real implementations.
 // Tests can override these to inject failures without filesystem permission
@@ -78,7 +99,7 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 				// Rollback succeeded, but the task is now back in backlog/
 				// while still retry-exhausted. Return a hard error so the
 				// host does not immediately re-claim and livelock.
-				return nil, fmt.Errorf("%s rolled back to backlog (move-to-failed: %v): %w", name, err, errFailedDirUnavailable)
+				return nil, &FailedDirUnavailableError{TaskFilename: name, MoveErr: err}
 			}
 			continue
 		}

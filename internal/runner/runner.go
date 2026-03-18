@@ -3,6 +3,7 @@ package runner
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -148,6 +149,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	defer signal.Stop(sigCh)
 
 	wasIdle := false
+	failedDirExcluded := make(map[string]struct{})
 	for {
 		queue.RecoverOrphanedTasks(tasksDir)
 		queue.CleanStaleLocks(tasksDir)
@@ -156,12 +158,21 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 		queue.ReconcileReadyQueue(tasksDir)
 		deferred := queue.DeferredOverlappingTasks(tasksDir)
+		// Merge in tasks excluded due to failed/ being unavailable so they
+		// are not re-selected on each poll, preventing livelock.
+		for name := range failedDirExcluded {
+			deferred[name] = struct{}{}
+		}
 		if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 		}
 
 		claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred)
-		if claimErr != nil {
+		var fdErr *queue.FailedDirUnavailableError
+		if errors.As(claimErr, &fdErr) {
+			failedDirExcluded[fdErr.TaskFilename] = struct{}{}
+			fmt.Fprintf(os.Stderr, "warning: excluding retry-exhausted task %s from future polls (failed/ directory unavailable)\n", fdErr.TaskFilename)
+		} else if claimErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not claim task: %v\n", claimErr)
 		}
 		hasBacklogTasks := claimed != nil

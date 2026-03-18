@@ -2,6 +2,8 @@ package runner
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -415,5 +417,76 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	// Task should no longer be in in-progress
 	if _, err := os.Stat(inProgressPath); err == nil {
 		t.Fatal("task file still in in-progress/ after recovery")
+	}
+}
+
+func TestFailedDirUnavailable_ExclusionLogic(t *testing.T) {
+	// Simulate the runner loop's exclusion behavior: when SelectAndClaimTask
+	// returns a FailedDirUnavailableError, the runner should add the task to
+	// the deferred set so it is not re-selected on the next poll.
+
+	excluded := make(map[string]struct{})
+
+	// Simulate first error for task "exhausted.md"
+	err1 := fmt.Errorf("wrap: %w", &queue.FailedDirUnavailableError{
+		TaskFilename: "exhausted.md",
+		MoveErr:      fmt.Errorf("permission denied"),
+	})
+	var fdErr *queue.FailedDirUnavailableError
+	if !errors.As(err1, &fdErr) {
+		t.Fatal("errors.As should match FailedDirUnavailableError")
+	}
+	excluded[fdErr.TaskFilename] = struct{}{}
+
+	if _, ok := excluded["exhausted.md"]; !ok {
+		t.Fatal("exhausted.md should be in exclusion set")
+	}
+
+	// Simulate second error for a different task
+	err2 := &queue.FailedDirUnavailableError{
+		TaskFilename: "another-exhausted.md",
+		MoveErr:      fmt.Errorf("no space"),
+	}
+	if !errors.As(err2, &fdErr) {
+		t.Fatal("errors.As should match direct FailedDirUnavailableError")
+	}
+	excluded[fdErr.TaskFilename] = struct{}{}
+
+	// Both should be excluded
+	if len(excluded) != 2 {
+		t.Fatalf("expected 2 excluded tasks, got %d", len(excluded))
+	}
+
+	// Merging into deferred should work
+	deferred := map[string]struct{}{"overlap-task.md": {}}
+	for name := range excluded {
+		deferred[name] = struct{}{}
+	}
+	if len(deferred) != 3 {
+		t.Fatalf("expected 3 deferred tasks after merge, got %d", len(deferred))
+	}
+	for _, want := range []string{"exhausted.md", "another-exhausted.md", "overlap-task.md"} {
+		if _, ok := deferred[want]; !ok {
+			t.Fatalf("%s should be in merged deferred set", want)
+		}
+	}
+
+	// A non-FailedDirUnavailableError should NOT match
+	plainErr := fmt.Errorf("unrelated claim error")
+	if errors.As(plainErr, &fdErr) {
+		t.Fatal("plain error should not match FailedDirUnavailableError")
+	}
+}
+
+func TestFailedDirUnavailable_IsPredicateFromRunner(t *testing.T) {
+	err := &queue.FailedDirUnavailableError{
+		TaskFilename: "test.md",
+		MoveErr:      fmt.Errorf("disk full"),
+	}
+	if !queue.IsFailedDirUnavailable(err) {
+		t.Fatal("IsFailedDirUnavailable should return true")
+	}
+	if queue.IsFailedDirUnavailable(fmt.Errorf("other")) {
+		t.Fatal("IsFailedDirUnavailable should return false for unrelated errors")
 	}
 }
