@@ -272,6 +272,41 @@ func ReadCompletionDetail(tasksDir, taskID string) (*CompletionDetail, error) {
 	return &detail, nil
 }
 
+// ReadAllCompletionDetails reads all completion-detail JSON files and returns
+// them sorted by MergedAt descending (most recent first).
+func ReadAllCompletionDetails(tasksDir string) ([]CompletionDetail, error) {
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	entries, err := os.ReadDir(completionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read completions dir: %w", err)
+	}
+
+	var details []CompletionDetail
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(completionsDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var detail CompletionDetail
+		if err := json.Unmarshal(data, &detail); err != nil {
+			continue
+		}
+		details = append(details, detail)
+	}
+
+	sort.Slice(details, func(i, j int) bool {
+		return details[i].MergedAt.After(details[j].MergedAt)
+	})
+
+	return details, nil
+}
+
 // FileClaim describes which task is actively modifying a given file.
 type FileClaim struct {
 	Task   string `json:"task"`
