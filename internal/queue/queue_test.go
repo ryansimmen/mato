@@ -1194,3 +1194,104 @@ func TestReconcileReadyQueue_UniqueCompletedIDStillWorks(t *testing.T) {
 		t.Fatal("consumer task should be promoted when dep is uniquely completed")
 	}
 }
+
+func TestAcquireReviewLock_Success(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+
+	cleanup, ok := AcquireReviewLock(tasksDir, "test-task.md")
+	if !ok {
+		t.Fatal("expected lock acquisition to succeed")
+	}
+
+	lockFile := filepath.Join(tasksDir, ".locks", "review-test-task.md.lock")
+	if _, err := os.Stat(lockFile); err != nil {
+		t.Fatalf("lock file should exist: %v", err)
+	}
+	data, _ := os.ReadFile(lockFile)
+	pidStr := strconv.Itoa(os.Getpid())
+	if !strings.HasPrefix(strings.TrimSpace(string(data)), pidStr) {
+		t.Errorf("lock content = %q, want PID prefix %q", string(data), pidStr)
+	}
+
+	cleanup()
+	if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
+		t.Error("cleanup should remove lock file")
+	}
+}
+
+func TestAcquireReviewLock_BlockedByLiveProcess(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(locksDir, 0o755)
+
+	// Pre-create a lock held by the current process (alive).
+	lockFile := filepath.Join(locksDir, "review-held-task.md.lock")
+	os.WriteFile(lockFile, []byte(process.LockIdentity(os.Getpid())), 0o644)
+
+	_, ok := AcquireReviewLock(tasksDir, "held-task.md")
+	if ok {
+		t.Fatal("should not acquire lock held by a live process")
+	}
+}
+
+func TestAcquireReviewLock_ReclaimsStaleLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(locksDir, 0o755)
+
+	// Pre-create a lock with a dead PID.
+	lockFile := filepath.Join(locksDir, "review-stale-task.md.lock")
+	os.WriteFile(lockFile, []byte("2147483647:99999999"), 0o644)
+
+	cleanup, ok := AcquireReviewLock(tasksDir, "stale-task.md")
+	if !ok {
+		t.Fatal("should reclaim lock held by a dead process")
+	}
+	cleanup()
+}
+
+func TestAcquireReviewLock_TwoLocksOnDifferentTasks(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+
+	cleanup1, ok1 := AcquireReviewLock(tasksDir, "task-a.md")
+	if !ok1 {
+		t.Fatal("first lock should succeed")
+	}
+	defer cleanup1()
+
+	cleanup2, ok2 := AcquireReviewLock(tasksDir, "task-b.md")
+	if !ok2 {
+		t.Fatal("second lock on different task should succeed")
+	}
+	defer cleanup2()
+}
+
+func TestCleanStaleReviewLocks(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(locksDir, 0o755)
+
+	// Live process lock — should survive.
+	os.WriteFile(filepath.Join(locksDir, "review-live.md.lock"),
+		[]byte(process.LockIdentity(os.Getpid())), 0o644)
+	// Dead process lock — should be cleaned.
+	os.WriteFile(filepath.Join(locksDir, "review-dead.md.lock"),
+		[]byte("2147483647:99999999"), 0o644)
+	// Non-review lock — should be ignored.
+	os.WriteFile(filepath.Join(locksDir, "agent.pid"),
+		[]byte("2147483647:99999999"), 0o644)
+
+	CleanStaleReviewLocks(tasksDir)
+
+	if _, err := os.Stat(filepath.Join(locksDir, "review-live.md.lock")); err != nil {
+		t.Error("live review lock should survive cleanup")
+	}
+	if _, err := os.Stat(filepath.Join(locksDir, "review-dead.md.lock")); !os.IsNotExist(err) {
+		t.Error("stale review lock should be removed")
+	}
+	if _, err := os.Stat(filepath.Join(locksDir, "agent.pid")); err != nil {
+		t.Error("non-review lock should not be touched")
+	}
+}

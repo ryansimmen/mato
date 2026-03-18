@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"mato/internal/messaging"
+	"mato/internal/process"
 	"mato/internal/queue"
 )
 
@@ -701,5 +702,122 @@ func TestFailedDirUnavailable_IsPredicateFromRunner(t *testing.T) {
 	}
 	if queue.IsFailedDirUnavailable(fmt.Errorf("other")) {
 		t.Fatal("IsFailedDirUnavailable should return false for unrelated errors")
+	}
+}
+
+func TestSelectAndLockReview_AcquiresLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+
+	os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
+		"---\npriority: 10\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644)
+
+	task, cleanup := selectAndLockReview(tasksDir)
+	if task == nil {
+		t.Fatal("expected non-nil task")
+	}
+	if task.Filename != "task-a.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "task-a.md")
+	}
+
+	// Lock file should exist.
+	lockFile := filepath.Join(tasksDir, ".locks", "review-task-a.md.lock")
+	if _, err := os.Stat(lockFile); err != nil {
+		t.Fatalf("lock file should exist: %v", err)
+	}
+
+	cleanup()
+	if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
+		t.Error("cleanup should remove lock file")
+	}
+}
+
+func TestSelectAndLockReview_SkipsLockedTask(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(locksDir, 0o755)
+
+	// Two tasks: task-a (priority 5) and task-b (priority 10).
+	os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
+		"---\npriority: 5\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644)
+	os.WriteFile(filepath.Join(reviewDir, "task-b.md"), []byte(
+		"---\npriority: 10\n---\n# Task B\n<!-- branch: task/task-b -->\n"), 0o644)
+
+	// Lock task-a (highest priority) — simulates another agent holding it.
+	// Use real lock identity so IsLockHolderAlive recognizes it as alive.
+	os.WriteFile(filepath.Join(locksDir, "review-task-a.md.lock"),
+		[]byte(process.LockIdentity(os.Getpid())), 0o644)
+
+	task, cleanup := selectAndLockReview(tasksDir)
+	if task == nil {
+		t.Fatal("expected non-nil task (should fall back to task-b)")
+	}
+	if task.Filename != "task-b.md" {
+		t.Fatalf("Filename = %q, want %q (should skip locked task-a)", task.Filename, "task-b.md")
+	}
+	cleanup()
+}
+
+func TestSelectAndLockReview_AllLocked(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	locksDir := filepath.Join(tasksDir, ".locks")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(locksDir, 0o755)
+
+	os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
+		"---\npriority: 5\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644)
+
+	// Lock it — simulates another agent holding it.
+	// Use real lock identity so IsLockHolderAlive recognizes it as alive.
+	os.WriteFile(filepath.Join(locksDir, "review-task-a.md.lock"),
+		[]byte(process.LockIdentity(os.Getpid())), 0o644)
+
+	task, cleanup := selectAndLockReview(tasksDir)
+	if task != nil {
+		cleanup()
+		t.Fatal("expected nil when all tasks are locked")
+	}
+}
+
+func TestSelectAndLockReview_EmptyDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "ready-for-review"), 0o755)
+
+	task, cleanup := selectAndLockReview(tasksDir)
+	if task != nil {
+		cleanup()
+		t.Fatal("expected nil for empty ready-for-review/")
+	}
+}
+
+func TestReviewCandidates_SortedByPriority(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	os.MkdirAll(reviewDir, 0o755)
+
+	os.WriteFile(filepath.Join(reviewDir, "low.md"), []byte(
+		"---\npriority: 20\n---\n# Low\n"), 0o644)
+	os.WriteFile(filepath.Join(reviewDir, "high.md"), []byte(
+		"---\npriority: 5\n---\n# High\n"), 0o644)
+	os.WriteFile(filepath.Join(reviewDir, "mid.md"), []byte(
+		"---\npriority: 10\n---\n# Mid\n"), 0o644)
+
+	candidates := reviewCandidates(tasksDir)
+	if len(candidates) != 3 {
+		t.Fatalf("expected 3 candidates, got %d", len(candidates))
+	}
+	if candidates[0].Filename != "high.md" {
+		t.Errorf("first candidate = %q, want %q", candidates[0].Filename, "high.md")
+	}
+	if candidates[1].Filename != "mid.md" {
+		t.Errorf("second candidate = %q, want %q", candidates[1].Filename, "mid.md")
+	}
+	if candidates[2].Filename != "low.md" {
+		t.Errorf("third candidate = %q, want %q", candidates[2].Filename, "low.md")
 	}
 }

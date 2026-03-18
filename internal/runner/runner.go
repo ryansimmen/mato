@@ -160,6 +160,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	for {
 		queue.RecoverOrphanedTasks(tasksDir)
 		queue.CleanStaleLocks(tasksDir)
+		queue.CleanStaleReviewLocks(tasksDir)
 		messaging.CleanStalePresence(tasksDir)
 		messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 
@@ -208,7 +209,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			recoverStuckTask(tasksDir, agentID, claimed)
 		}
 
-		if reviewTask := selectTaskForReview(tasksDir); reviewTask != nil {
+		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir); reviewTask != nil {
 			fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
 			if err := runReview(repoRoot, tasksDir, agentID, reviewTask, branch, copilotArgs, image, workdir,
 				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
@@ -216,6 +217,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 				systemCertsDir, hasSystemCerts); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
 			}
+			reviewCleanup()
 		}
 
 		if cleanup, ok := merge.AcquireLock(tasksDir); ok {
@@ -456,9 +458,9 @@ func extractFailureLines(taskPath string) string {
 	return strings.Join(lines, "\n")
 }
 
-// selectTaskForReview scans ready-for-review/ and returns the highest-priority
-// task that needs review. Returns nil if no tasks need review.
-func selectTaskForReview(tasksDir string) *queue.ClaimedTask {
+// reviewCandidates scans ready-for-review/ and returns all review candidates
+// sorted by priority (ascending) then filename.
+func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 	reviewDir := filepath.Join(tasksDir, "ready-for-review")
 	entries, err := os.ReadDir(reviewDir)
 	if err != nil {
@@ -466,11 +468,8 @@ func selectTaskForReview(tasksDir string) *queue.ClaimedTask {
 	}
 
 	type candidate struct {
-		name     string
+		task     *queue.ClaimedTask
 		priority int
-		branch   string
-		title    string
-		path     string
 	}
 
 	var candidates []candidate
@@ -490,32 +489,52 @@ func selectTaskForReview(tasksDir string) *queue.ClaimedTask {
 		}
 		title := frontmatter.ExtractTitle(entry.Name(), body)
 		candidates = append(candidates, candidate{
-			name:     entry.Name(),
+			task: &queue.ClaimedTask{
+				Filename: entry.Name(),
+				Branch:   branch,
+				Title:    title,
+				TaskPath: path,
+			},
 			priority: meta.Priority,
-			branch:   branch,
-			title:    title,
-			path:     path,
 		})
-	}
-
-	if len(candidates) == 0 {
-		return nil
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].priority != candidates[j].priority {
 			return candidates[i].priority < candidates[j].priority
 		}
-		return candidates[i].name < candidates[j].name
+		return candidates[i].task.Filename < candidates[j].task.Filename
 	})
 
-	c := candidates[0]
-	return &queue.ClaimedTask{
-		Filename: c.name,
-		Branch:   c.branch,
-		Title:    c.title,
-		TaskPath: c.path,
+	result := make([]*queue.ClaimedTask, len(candidates))
+	for i, c := range candidates {
+		result[i] = c.task
 	}
+	return result
+}
+
+// selectTaskForReview scans ready-for-review/ and returns the highest-priority
+// task that needs review. Returns nil if no tasks need review.
+// This does not acquire a lock; use selectAndLockReview for mutual exclusion.
+func selectTaskForReview(tasksDir string) *queue.ClaimedTask {
+	candidates := reviewCandidates(tasksDir)
+	if len(candidates) == 0 {
+		return nil
+	}
+	return candidates[0]
+}
+
+// selectAndLockReview returns the highest-priority review candidate that this
+// agent can exclusively lock, along with a cleanup function to release the
+// lock. Returns (nil, nil) when no unlocked review task is available.
+func selectAndLockReview(tasksDir string) (*queue.ClaimedTask, func()) {
+	for _, task := range reviewCandidates(tasksDir) {
+		cleanup, ok := queue.AcquireReviewLock(tasksDir, task.Filename)
+		if ok {
+			return task, cleanup
+		}
+	}
+	return nil, nil
 }
 
 // parseBranchFromTaskFile reads a task file and extracts the branch name from
