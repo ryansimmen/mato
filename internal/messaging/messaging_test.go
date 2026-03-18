@@ -134,7 +134,7 @@ func TestWriteMessage_SpecialCharsInFields(t *testing.T) {
 	msg := Message{
 		ID:     "special-1",
 		From:   "agent \"雪\"\nbackslash \\",
-		Type:   "status \"update\"\nline",
+		Type:   "intent",
 		Task:   "task \"quote\"\n第二行",
 		Branch: "feature/雪\\branch",
 		Body:   "body with \"quotes\"\nmultiple lines\nunicode 雪\nbackslash \\",
@@ -687,6 +687,77 @@ func TestFilesFieldOmitempty(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"files"`) {
 		t.Fatalf("JSON should not contain files key when Files is nil, got: %s", data)
+	}
+}
+
+func TestWriteMessage_ValidTypes(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	for msgType := range ValidMessageTypes {
+		msg := Message{
+			From:   "agent",
+			Type:   msgType,
+			Task:   "task.md",
+			Branch: "branch",
+			Body:   "test",
+		}
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage with type %q should succeed: %v", msgType, err)
+		}
+	}
+
+	got, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(got) != len(ValidMessageTypes) {
+		t.Fatalf("expected %d messages, got %d", len(ValidMessageTypes), len(got))
+	}
+}
+
+func TestWriteMessage_InvalidType(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	msg := Message{
+		From:   "agent",
+		Type:   "unknown-type",
+		Task:   "task.md",
+		Branch: "branch",
+		Body:   "test",
+	}
+	err := WriteMessage(tasksDir, msg)
+	if err == nil {
+		t.Fatal("WriteMessage with unknown type should return an error")
+	}
+	if !strings.Contains(err.Error(), "unknown message type") {
+		t.Fatalf("error should mention unknown message type, got: %v", err)
+	}
+}
+
+func TestWriteMessage_EmptyType(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	msg := Message{
+		From:   "agent",
+		Task:   "task.md",
+		Branch: "branch",
+		Body:   "test",
+	}
+	err := WriteMessage(tasksDir, msg)
+	if err == nil {
+		t.Fatal("WriteMessage with empty type should return an error")
+	}
+	if !strings.Contains(err.Error(), "empty message type") {
+		t.Fatalf("error should mention empty message type, got: %v", err)
 	}
 }
 

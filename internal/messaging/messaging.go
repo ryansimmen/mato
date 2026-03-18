@@ -31,6 +31,13 @@ type presence struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// ValidMessageTypes defines the set of accepted message types for WriteMessage.
+var ValidMessageTypes = map[string]bool{
+	"intent":           true,
+	"conflict-warning": true,
+	"completion":       true,
+}
+
 var safeMessageFilePart = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 func Init(tasksDir string) error {
@@ -46,6 +53,13 @@ func Init(tasksDir string) error {
 }
 
 func WriteMessage(tasksDir string, msg Message) error {
+	if msg.Type == "" {
+		return fmt.Errorf("write message: empty message type")
+	}
+	if !ValidMessageTypes[msg.Type] {
+		return fmt.Errorf("write message: unknown message type %q", msg.Type)
+	}
+
 	if msg.ID == "" {
 		id, err := queue.GenerateAgentID()
 		if err != nil {
