@@ -128,10 +128,39 @@ func selectCandidates(tasksDir string, deferred map[string]struct{}) ([]string, 
 func prependClaimedBy(taskPath, agentID, claimedAt string) error {
 	existing, err := os.ReadFile(taskPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("read task file for claimed-by header: %w", err)
 	}
 	header := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: %s -->\n", agentID, claimedAt)
-	return os.WriteFile(taskPath, append([]byte(header), existing...), 0o644)
+	content := append([]byte(header), existing...)
+
+	dir := filepath.Dir(taskPath)
+	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(taskPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for claimed-by header: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	cleanup := func() {
+		tmpFile.Close()
+		os.Remove(tmpName)
+	}
+
+	if err := tmpFile.Chmod(0o644); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod temp file for claimed-by header: %w", err)
+	}
+	if _, err := tmpFile.Write(content); err != nil {
+		cleanup()
+		return fmt.Errorf("write temp file for claimed-by header: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp file for claimed-by header: %w", err)
+	}
+	if err := os.Rename(tmpName, taskPath); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp file for claimed-by header: %w", err)
+	}
+	return nil
 }
 
 func countFailureLines(taskPath string) int {
