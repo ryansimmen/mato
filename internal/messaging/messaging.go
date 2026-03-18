@@ -19,7 +19,6 @@ type Message struct {
 	Type   string    `json:"type"`
 	Task   string    `json:"task"`
 	Branch string    `json:"branch"`
-	Files  []string  `json:"files,omitempty"`
 	Body   string    `json:"body"`
 	SentAt time.Time `json:"sent_at"`
 }
