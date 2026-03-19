@@ -139,6 +139,27 @@ Simplify the status summary formatting.
 - Completed agent work moves through `ready-for-review/` (AI review gate) before reaching `ready-to-merge/`.
 - mato writes `.queue` from the current `backlog/`, ordered by priority and then filename.
 
+## Branch Naming
+Each task automatically gets a git branch derived from its filename. The branch name is computed by `SanitizeBranchName()` in `internal/frontmatter/frontmatter.go` and prefixed with `task/` by the runner.
+
+**Sanitization rules (applied in order):**
+1. Strip the `.md` suffix
+2. Replace any character that is not alphanumeric or a hyphen (`[^a-zA-Z0-9-]`) with `-`
+3. Collapse consecutive dashes into a single dash
+4. Trim leading and trailing dashes
+5. If the result is empty, fall back to `unnamed`
+
+**Examples:**
+
+| Task filename | Branch name |
+| --- | --- |
+| `add-http-retries.md` | `task/add-http-retries` |
+| `fix  spaces & symbols!.md` | `task/fix-spaces-symbols` |
+| `--leading-dashes--.md` | `task/leading-dashes` |
+| `___.md` | `task/unnamed` |
+
+Users don't need to do anything special — just pick a descriptive kebab-case filename and mato handles the rest. The `<!-- branch: ... -->` runtime comment records the actual branch name after the agent pushes, but the branch is always deterministic from the filename.
+
 ## Backward Compatibility
 Plain markdown task files work fine. If frontmatter is missing, mato applies these defaults:
 - `id`: filename without `.md`
