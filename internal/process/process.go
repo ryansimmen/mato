@@ -50,14 +50,23 @@ func processStartTime(pid int) string {
 	if err != nil {
 		return ""
 	}
-	// Field 22 (1-indexed) is starttime. Find it after the comm field
-	// which is enclosed in parens and may contain spaces.
-	s := string(data)
-	closeParenIdx := strings.LastIndex(s, ")")
-	if closeParenIdx < 0 || closeParenIdx+2 >= len(s) {
+	return parseStartTime(string(data))
+}
+
+// parseStartTime extracts the starttime field from /proc/<pid>/stat content.
+// The comm field (field 2) is wrapped in parens and may contain spaces or
+// closing parens. Per the Linux kernel, the first '(' marks the start
+// and the last ')' marks the end of the comm field.
+func parseStartTime(s string) string {
+	openIdx := strings.Index(s, "(")
+	if openIdx < 0 {
 		return ""
 	}
-	fields := strings.Fields(s[closeParenIdx+2:])
+	closeIdx := strings.LastIndex(s, ")")
+	if closeIdx < 0 || closeIdx <= openIdx || closeIdx+2 >= len(s) {
+		return ""
+	}
+	fields := strings.Fields(s[closeIdx+2:])
 	// After the closing paren, fields are: state(1), ppid(2), pgrp(3), ...
 	// starttime is field 20 (0-indexed from after the paren)
 	if len(fields) < 20 {
