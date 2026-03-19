@@ -180,7 +180,7 @@ State meanings:
 | `ready-to-merge/` | reviewed and approved, waiting for host merge | review agent approval | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
 | `failed/` | retry budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when failure count reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
-Retry counting is comment-based, not directory-based. The host checks for `<!-- failure:` lines in `SelectAndClaimTask` and in the merge queue. Host recovery and merge failures also append those lines.
+Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure:` lines, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure:` lines, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's retry budget, and vice versa.
 ## 5. Dependency Resolution
 `queue.ReconcileReadyQueue(tasksDir)` in `queue.go` promotes waiting tasks whose dependencies are satisfied.
 How it works:
@@ -242,7 +242,8 @@ After a task agent pushes its branch and moves the task to `ready-for-review/`, 
 5. **Rejected**: the review agent appends `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->` and moves the task back to `backlog/` for a retry by the implementing agent.
 
 ### Key properties
-- Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` lines are counted for the retry budget.
+- Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` lines are counted for the task retry budget.
+- Review infrastructure failures (network errors, diff timeouts) are recorded as `<!-- review-failure: ... -->` and counted separately from task failures. This ensures transient review issues do not exhaust the task's retry budget.
 - On retry, the host injects previous review feedback via the `MATO_REVIEW_FEEDBACK` environment variable so the implementing agent can address the reviewer's concerns.
 - The review agent uses the embedded prompt `review-instructions.md`.
 - The review agent sends `progress` and `completion` messages like the task agent.

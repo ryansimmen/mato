@@ -229,6 +229,8 @@ func prependClaimedBy(taskPath, agentID, claimedAt string) error {
 // CountFailureLines counts the number of <!-- failure: ... --> HTML comment
 // metadata lines in a task file. Only lines that start with the marker are
 // counted so that references to the marker inside the task body are ignored.
+// Lines starting with <!-- review-failure: are excluded; those are tracked
+// separately via CountReviewFailureLines.
 func CountFailureLines(taskPath string) (int, error) {
 	data, err := os.ReadFile(taskPath)
 	if err != nil {
@@ -236,7 +238,27 @@ func CountFailureLines(taskPath string) (int, error) {
 	}
 	count := 0
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "<!-- failure:") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<!-- failure:") && !strings.HasPrefix(trimmed, "<!-- review-failure:") {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// CountReviewFailureLines counts the number of <!-- review-failure: ... -->
+// HTML comment metadata lines in a task file. These are review infrastructure
+// failures (e.g. network blips during git fetch, diff timeouts) that are
+// tracked separately from task agent failures so they don't consume the
+// task's retry budget.
+func CountReviewFailureLines(taskPath string) (int, error) {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return 0, fmt.Errorf("count review failure lines: %w", err)
+	}
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "<!-- review-failure:") {
 			count++
 		}
 	}

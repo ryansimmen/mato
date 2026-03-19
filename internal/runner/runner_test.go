@@ -887,26 +887,26 @@ func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
-	// Task with 3 failures (default max_retries=3) — should be moved to failed/
+	// Task with 3 review-failures (default max_retries=3) — should be moved to failed/
 	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 5",
 		"---",
 		"# Exhausted Task",
-		"<!-- failure: one -->",
-		"<!-- failure: two -->",
-		"<!-- failure: three -->",
+		"<!-- review-failure: one -->",
+		"<!-- review-failure: two -->",
+		"<!-- review-failure: three -->",
 		"<!-- branch: task/exhausted -->",
 		"",
 	}, "\n")), 0o644)
 
-	// Task with 1 failure — should still be a candidate
+	// Task with 1 review-failure — should still be a candidate
 	os.WriteFile(filepath.Join(reviewDir, "healthy.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 10",
 		"---",
 		"# Healthy Task",
-		"<!-- failure: one -->",
+		"<!-- review-failure: one -->",
 		"<!-- branch: task/healthy -->",
 		"",
 	}, "\n")), 0o644)
@@ -935,14 +935,14 @@ func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
-	// Task with max_retries=1 and 1 failure — should be exhausted
+	// Task with max_retries=1 and 1 review-failure — should be exhausted
 	os.WriteFile(filepath.Join(reviewDir, "custom.md"), []byte(strings.Join([]string{
 		"---",
 		"max_retries: 1",
 		"priority: 5",
 		"---",
 		"# Custom Retries",
-		"<!-- failure: one -->",
+		"<!-- review-failure: one -->",
 		"<!-- branch: task/custom -->",
 		"",
 	}, "\n")), 0o644)
@@ -964,12 +964,12 @@ func TestSelectTaskForReview_SkipsRetryExhausted(t *testing.T) {
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
-	// Only task has exhausted retries — selectTaskForReview should return nil
+	// Only task has exhausted review retries — selectTaskForReview should return nil
 	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
 		"# Exhausted",
-		"<!-- failure: one -->",
-		"<!-- failure: two -->",
-		"<!-- failure: three -->",
+		"<!-- review-failure: one -->",
+		"<!-- review-failure: two -->",
+		"<!-- review-failure: three -->",
 		"<!-- branch: task/exhausted -->",
 		"",
 	}, "\n")), 0o644)
@@ -991,14 +991,14 @@ func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
-	// Task with 2 failures but default max_retries=3 — should remain a candidate
+	// Task with 2 review-failures but default max_retries=3 — should remain a candidate
 	os.WriteFile(filepath.Join(reviewDir, "still-ok.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 10",
 		"---",
 		"# Still OK",
-		"<!-- failure: one -->",
-		"<!-- failure: two -->",
+		"<!-- review-failure: one -->",
+		"<!-- review-failure: two -->",
 		"<!-- branch: task/still-ok -->",
 		"",
 	}, "\n")), 0o644)
@@ -1014,6 +1014,75 @@ func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 	// Should NOT be in failed/
 	if _, err := os.Stat(filepath.Join(failedDir, "still-ok.md")); !os.IsNotExist(err) {
 		t.Fatal("task with retries remaining should not be in failed")
+	}
+}
+
+func TestReviewCandidates_TaskFailuresIgnored(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	failedDir := filepath.Join(tasksDir, "failed")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(failedDir, 0o755)
+
+	// Task with 3 task-agent failures but 0 review-failures.
+	// Task failures should NOT count toward review retry budget.
+	os.WriteFile(filepath.Join(reviewDir, "task-fails-only.md"), []byte(strings.Join([]string{
+		"---",
+		"priority: 10",
+		"---",
+		"# Task Failures Only",
+		"<!-- failure: agent-1 at 2025-01-01T00:00:00Z step=WORK error=build -->",
+		"<!-- failure: agent-2 at 2025-01-02T00:00:00Z step=WORK error=tests -->",
+		"<!-- failure: agent-3 at 2025-01-03T00:00:00Z step=PUSH error=push -->",
+		"<!-- branch: task/task-fails-only -->",
+		"",
+	}, "\n")), 0o644)
+
+	candidates := reviewCandidates(tasksDir)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate (task failures should not exhaust review budget), got %d", len(candidates))
+	}
+	if candidates[0].Filename != "task-fails-only.md" {
+		t.Fatalf("expected task-fails-only.md, got %q", candidates[0].Filename)
+	}
+
+	// Should NOT be in failed/
+	if _, err := os.Stat(filepath.Join(failedDir, "task-fails-only.md")); !os.IsNotExist(err) {
+		t.Fatal("task with only task-agent failures should not be moved to failed by review budget check")
+	}
+}
+
+func TestReviewCandidates_ReviewFailuresSeparateFromTaskFailures(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	failedDir := filepath.Join(tasksDir, "failed")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(failedDir, 0o755)
+
+	// Task with 2 task-agent failures and 2 review-failures (max_retries=3).
+	// Only the 2 review-failures count toward review retry budget, so it should
+	// remain a candidate (2 < 3).
+	os.WriteFile(filepath.Join(reviewDir, "mixed.md"), []byte(strings.Join([]string{
+		"---",
+		"priority: 10",
+		"---",
+		"# Mixed Failures",
+		"<!-- failure: agent-1 at 2025-01-01T00:00:00Z step=WORK error=build -->",
+		"<!-- failure: agent-2 at 2025-01-02T00:00:00Z step=WORK error=tests -->",
+		"<!-- review-failure: rev-1 at 2025-01-03T00:00:00Z step=DIFF error=fetch -->",
+		"<!-- review-failure: rev-2 at 2025-01-04T00:00:00Z step=DIFF error=timeout -->",
+		"<!-- branch: task/mixed -->",
+		"",
+	}, "\n")), 0o644)
+
+	candidates := reviewCandidates(tasksDir)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate (only 2 review-failures < max_retries 3), got %d", len(candidates))
+	}
+
+	// Should NOT be in failed/
+	if _, err := os.Stat(filepath.Join(failedDir, "mixed.md")); !os.IsNotExist(err) {
+		t.Fatal("mixed-failure task should not be in failed (only 2 review-failures)")
 	}
 }
 
