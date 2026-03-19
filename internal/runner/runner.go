@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,26 @@ var reviewInstructions string
 
 var reviewBranchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
 
+// defaultAgentTimeout is the default execution timeout for Docker agent
+// containers. Override with MATO_AGENT_TIMEOUT (Go duration string).
+const defaultAgentTimeout = 30 * time.Minute
+
+// parseAgentTimeout parses a duration string for the agent timeout.
+// Returns defaultAgentTimeout if envVal is empty.
+func parseAgentTimeout(envVal string) (time.Duration, error) {
+	if envVal == "" {
+		return defaultAgentTimeout, nil
+	}
+	parsed, err := time.ParseDuration(envVal)
+	if err != nil {
+		return 0, fmt.Errorf("parse MATO_AGENT_TIMEOUT %q: %w", envVal, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("MATO_AGENT_TIMEOUT must be positive, got %v", parsed)
+	}
+	return parsed, nil
+}
+
 type dockerConfig struct {
 	image, workdir, prompt                         string
 	copilotPath, gitPath, gitUploadPackPath         string
@@ -44,6 +65,7 @@ type dockerConfig struct {
 	agentID                                        string
 	copilotArgs                                    []string
 	repoRoot, cloneDir, tasksDir                   string
+	timeout                                        time.Duration
 }
 
 func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string) []string {
@@ -173,6 +195,11 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		return err
 	}
 
+	agentTimeout, err := parseAgentTimeout(os.Getenv("MATO_AGENT_TIMEOUT"))
+	if err != nil {
+		return err
+	}
+
 	image := os.Getenv("MATO_DOCKER_IMAGE")
 	if image == "" {
 		image = "ubuntu:24.04"
@@ -268,6 +295,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		copilotArgs:        copilotArgs,
 		repoRoot:           repoRoot,
 		tasksDir:            tasksDir,
+		timeout:            agentTimeout,
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -400,11 +428,18 @@ func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 
 	args := buildDockerArgs(cfg, extraEnvs, nil)
 
-	cmd := exec.Command("docker", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	err = cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		fmt.Fprintf(os.Stderr, "error: agent timed out after %v\n", cfg.timeout)
+	}
+	return err
 }
 
 // recoverStuckTask checks whether a claimed task is still in in-progress/
@@ -662,11 +697,18 @@ func runReview(cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
 
 	args := buildDockerArgs(cfg, extraEnvs, nil)
 
-	cmd := exec.Command("docker", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	runErr := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		fmt.Fprintf(os.Stderr, "error: review agent timed out after %v\n", cfg.timeout)
+	}
+	return runErr
 }
 
 // extractReviewRejections returns all review-rejection comment lines from a task file,
