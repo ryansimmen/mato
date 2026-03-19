@@ -459,13 +459,16 @@ func extractFailureLines(taskPath string) string {
 }
 
 // reviewCandidates scans ready-for-review/ and returns all review candidates
-// sorted by priority (ascending) then filename.
+// sorted by priority (ascending) then filename. Tasks whose review retry
+// budget is exhausted are moved to failed/ and excluded from the result.
 func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 	reviewDir := filepath.Join(tasksDir, "ready-for-review")
 	entries, err := os.ReadDir(reviewDir)
 	if err != nil {
 		return nil
 	}
+
+	failedDir := filepath.Join(tasksDir, "failed")
 
 	type candidate struct {
 		task     *queue.ClaimedTask
@@ -483,6 +486,21 @@ func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 			fmt.Fprintf(os.Stderr, "warning: could not parse review candidate %s: %v\n", entry.Name(), err)
 			continue
 		}
+
+		// Check review retry budget before including as a candidate.
+		maxRetries := meta.MaxRetries
+		failures := queue.CountFailureLines(path)
+		if failures >= maxRetries {
+			dst := filepath.Join(failedDir, entry.Name())
+			if mvErr := os.Rename(path, dst); mvErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", entry.Name(), mvErr)
+			} else {
+				fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
+					entry.Name(), failures, maxRetries)
+			}
+			continue
+		}
+
 		branch := parseBranchFromTaskFile(path)
 		if branch == "" {
 			branch = "task/" + frontmatter.SanitizeBranchName(entry.Name())

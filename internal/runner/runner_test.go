@@ -821,3 +821,140 @@ func TestReviewCandidates_SortedByPriority(t *testing.T) {
 		t.Errorf("third candidate = %q, want %q", candidates[2].Filename, "low.md")
 	}
 }
+
+func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	failedDir := filepath.Join(tasksDir, "failed")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(failedDir, 0o755)
+
+	// Task with 3 failures (default max_retries=3) — should be moved to failed/
+	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
+		"---",
+		"priority: 5",
+		"---",
+		"# Exhausted Task",
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"<!-- failure: three -->",
+		"<!-- branch: task/exhausted -->",
+		"",
+	}, "\n")), 0o644)
+
+	// Task with 1 failure — should still be a candidate
+	os.WriteFile(filepath.Join(reviewDir, "healthy.md"), []byte(strings.Join([]string{
+		"---",
+		"priority: 10",
+		"---",
+		"# Healthy Task",
+		"<!-- failure: one -->",
+		"<!-- branch: task/healthy -->",
+		"",
+	}, "\n")), 0o644)
+
+	candidates := reviewCandidates(tasksDir)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Filename != "healthy.md" {
+		t.Fatalf("expected healthy.md, got %q", candidates[0].Filename)
+	}
+
+	// Exhausted task should be in failed/
+	if _, err := os.Stat(filepath.Join(failedDir, "exhausted.md")); err != nil {
+		t.Fatalf("exhausted task not moved to failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(reviewDir, "exhausted.md")); !os.IsNotExist(err) {
+		t.Fatal("exhausted task still in ready-for-review")
+	}
+}
+
+func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	failedDir := filepath.Join(tasksDir, "failed")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(failedDir, 0o755)
+
+	// Task with max_retries=1 and 1 failure — should be exhausted
+	os.WriteFile(filepath.Join(reviewDir, "custom.md"), []byte(strings.Join([]string{
+		"---",
+		"max_retries: 1",
+		"priority: 5",
+		"---",
+		"# Custom Retries",
+		"<!-- failure: one -->",
+		"<!-- branch: task/custom -->",
+		"",
+	}, "\n")), 0o644)
+
+	candidates := reviewCandidates(tasksDir)
+	if len(candidates) != 0 {
+		t.Fatalf("expected 0 candidates (custom max_retries=1 exhausted), got %d", len(candidates))
+	}
+
+	if _, err := os.Stat(filepath.Join(failedDir, "custom.md")); err != nil {
+		t.Fatalf("custom.md not moved to failed: %v", err)
+	}
+}
+
+func TestSelectTaskForReview_SkipsRetryExhausted(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	failedDir := filepath.Join(tasksDir, "failed")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(failedDir, 0o755)
+
+	// Only task has exhausted retries — selectTaskForReview should return nil
+	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
+		"# Exhausted",
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"<!-- failure: three -->",
+		"<!-- branch: task/exhausted -->",
+		"",
+	}, "\n")), 0o644)
+
+	got := selectTaskForReview(tasksDir)
+	if got != nil {
+		t.Fatalf("expected nil (all tasks retry-exhausted), got %+v", got)
+	}
+
+	if _, err := os.Stat(filepath.Join(failedDir, "exhausted.md")); err != nil {
+		t.Fatalf("exhausted task not in failed: %v", err)
+	}
+}
+
+func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	failedDir := filepath.Join(tasksDir, "failed")
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(failedDir, 0o755)
+
+	// Task with 2 failures but default max_retries=3 — should remain a candidate
+	os.WriteFile(filepath.Join(reviewDir, "still-ok.md"), []byte(strings.Join([]string{
+		"---",
+		"priority: 10",
+		"---",
+		"# Still OK",
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"<!-- branch: task/still-ok -->",
+		"",
+	}, "\n")), 0o644)
+
+	candidates := reviewCandidates(tasksDir)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Filename != "still-ok.md" {
+		t.Fatalf("expected still-ok.md, got %q", candidates[0].Filename)
+	}
+
+	// Should NOT be in failed/
+	if _, err := os.Stat(filepath.Join(failedDir, "still-ok.md")); !os.IsNotExist(err) {
+		t.Fatal("task with retries remaining should not be in failed")
+	}
+}
