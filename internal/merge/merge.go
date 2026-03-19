@@ -114,6 +114,8 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 			}
 			continue
 		}
+		// Clean up the now-merged task branch (best-effort).
+		cleanupTaskBranch(repoRoot, taskBranchName(task))
 		if result != nil {
 			detail := messaging.CompletionDetail{
 				TaskID:       task.id,
