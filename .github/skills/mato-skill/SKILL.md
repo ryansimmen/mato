@@ -27,7 +27,7 @@ Before reviewing, learn the project's conventions from these sources (read all t
 4. **Detect language & tooling**: Read build files (`Makefile`, `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, etc.) to identify the language, build system, and test runner.
 5. **Identify test patterns**: Find existing test files to understand the testing style (file naming, frameworks, assertion patterns).
 6. **Check for a task directory**: Look for `.tasks/` with subdirectories like `backlog/`, `waiting/`, `completed/`, etc. If it exists, read completed tasks for tone and style reference (the format spec below is authoritative).
-7. **Check for existing tasks**: Read `.tasks/backlog/` and `.tasks/waiting/` to avoid creating duplicates of issues that already have tasks.
+7. **Check for existing tasks**: Read `.tasks/backlog/`, `.tasks/waiting/`, `.tasks/in-progress/`, `.tasks/ready-for-review/`, and `.tasks/ready-to-merge/` to avoid creating duplicates of issues that already have tasks.
 8. **Contributing guidelines**: Read `CONTRIBUTING.md` if present for additional conventions.
 9. **Derive build/test commands**: From what you discovered, determine the exact commands to build, lint, and test the project (e.g., `go build ./...`, `npm test`, `cargo test`, `pytest`). You will need these in both workflows.
 
@@ -40,7 +40,7 @@ Review recent commits for correctness and completeness.
 1. `git log --oneline -N` (where N is specified by the user, default to 10 if not specified) then read the full message + diff for each commit.
 2. For each commit evaluate:
    - **Correctness**: Does the code change actually fix the stated problem?
-   - **Completeness**: Edge cases handled? Tests adequate?
+   - **Completeness**: Edge cases handled? Tests adequate? Does new code have corresponding test coverage?
    - **Safety**: Could the fix introduce new bugs or regressions?
    - **Style**: Does it follow the project's established conventions?
 3. Report each commit as ✅ (good), ⚠️ (has issue), or ❌ (broken).
@@ -54,7 +54,7 @@ Systematic scan for bugs and issues.
 
 1. Read source files systematically by package/module. For large codebases, prioritize core logic and recently changed files (`git log --oneline -50 --name-only` to find hot spots).
 2. Read test files to cross-reference coverage.
-3. Run the project's build, lint, and test commands to establish baseline. If the baseline is already broken, note pre-existing failures separately — do not report them as new findings.
+3. Run the project's build, vet/lint, and test commands to establish baseline. If the baseline is already broken, note pre-existing failures separately — do not report them as new findings and do not create tasks for them.
 4. Analyze for the issue categories below.
 5. Create task files or report inline (see Task Output below).
 6. Provide a summary at the end: total issues found by severity, and any systemic patterns observed.
@@ -101,7 +101,7 @@ Only flag style issues that violate the *project's own conventions* (discovered 
 If the project has a `.tasks/backlog/` directory:
 
 1. Check `.tasks/completed/` for examples of well-written task files to calibrate tone and style.
-2. Check `.tasks/backlog/` and `.tasks/waiting/` to avoid creating duplicates of existing tasks.
+2. Check `.tasks/backlog/`, `.tasks/waiting/`, `.tasks/in-progress/`, `.tasks/ready-for-review/`, and `.tasks/ready-to-merge/` to avoid creating duplicates of existing tasks.
 3. Create one task file per issue, following the format below.
 4. Use kebab-case filenames: `fix-unclosed-db-connections.md`
 5. **Placement**: Tasks with no `depends_on` go in `.tasks/backlog/`. Tasks with dependencies go in `.tasks/waiting/` — they will be promoted to `backlog/` automatically once their dependencies complete.
@@ -151,9 +151,9 @@ closing the database connection, leaking connections under load.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `id` | string | filename without `.md` | Stable task identifier. |
-| `priority` | int | `50` | Lower = higher priority. **1-10** critical, **11-30** important, **31-50** normal, **51+** low. |
-| `depends_on` | string[] | `[]` | IDs of tasks that must complete first. |
-| `affects` | string[] | `[]` | File paths this task is expected to touch. Populate with the specific files that need changing. Used to prevent conflicting concurrent work. |
+| `priority` | int | `50` | Lower = higher priority. **1-10** critical, **11-30** important, **31-50** normal, **51+** low. Map high-priority findings (bugs, data loss, security) to 1-10, medium-priority to 11-30, and low-priority to 31-50. |
+| `depends_on` | string[] | `[]` | IDs of tasks that must complete first. Use when fixing issue B requires issue A to land first (e.g., both touch the same function, or B builds on A's new API). |
+| `affects` | string[] | `[]` | File paths this task is expected to touch. **Always populate this** with the specific files that need changing. Used to prevent conflicting concurrent work when a task scheduler runs multiple agents in parallel. |
 | `tags` | string[] | `[]` | Free-form labels for categorization. |
 | `estimated_complexity` | string | — | `simple`, `medium`, or `complex`. |
 | `max_retries` | int | `3` | Max allowed failures before the task is moved to `failed/`. Only relevant when using mato as the task scheduler; can be omitted otherwise. |
