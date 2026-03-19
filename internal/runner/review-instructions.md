@@ -73,7 +73,11 @@ Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... --
 **Goal:** Fetch the task branch and compute the full diff against the target branch.
 **Commands:**
 ```bash
-git fetch origin "$BRANCH" 2>/dev/null || true
+if ! git fetch origin "$BRANCH" 2>/dev/null; then
+  FAIL_STEP="DIFF"
+  FAIL_REASON="could not fetch branch $BRANCH from origin"
+  # transition to ON_FAILURE
+fi
 git diff "TARGET_BRANCH_PLACEHOLDER...origin/$BRANCH" > /tmp/review-diff.txt
 git diff --name-only "TARGET_BRANCH_PLACEHOLDER...origin/$BRANCH"
 ```
@@ -141,6 +145,7 @@ echo "Approved $FILENAME on $BRANCH and moved it to ready-to-merge/."
 **Commands:**
 ```bash
 REJECTION_REASON="<one-paragraph summary of the specific issue(s) found>"
+ESCAPED_REASON="$(printf '%s' "$REJECTION_REASON" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/ /g' | tr '\n' ' ')"
 echo "" >> "$TASK_PATH"
 echo "<!-- review-rejection: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) — ${REJECTION_REASON} -->" >> "$TASK_PATH"
 BACKLOG_PATH="TASKS_DIR_PLACEHOLDER/backlog/$FILENAME"
@@ -149,7 +154,7 @@ TASK_PATH="$BACKLOG_PATH"
 {
   MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-complete"
   cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"completion","task":"${FILENAME}","branch":"${BRANCH}","body":"Review rejected: ${REJECTION_REASON}","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"completion","task":"${FILENAME}","branch":"${BRANCH}","body":"Review rejected: ${ESCAPED_REASON}","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 EOF
 } || true
 echo "Rejected $FILENAME and moved it back to backlog/."
