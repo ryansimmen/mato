@@ -1195,6 +1195,91 @@ func TestReconcileReadyQueue_UniqueCompletedIDStillWorks(t *testing.T) {
 	}
 }
 
+func TestReconcileReadyQueue_MovesUnparseableToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "completed", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Invalid YAML frontmatter
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "bad-yaml.md"),
+		[]byte("---\n: :\n  - [invalid\n---\n# Bad YAML\n"), 0o644)
+
+	stderr := captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir)
+		if got != 0 {
+			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		}
+	})
+
+	if _, err := os.Stat(filepath.Join(tasksDir, "failed", "bad-yaml.md")); err != nil {
+		t.Fatalf("unparseable task should be moved to failed/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "bad-yaml.md")); !os.IsNotExist(err) {
+		t.Fatal("unparseable task should no longer be in waiting/")
+	}
+	if !strings.Contains(stderr, "moving unparseable waiting task") {
+		t.Errorf("expected warning about moving unparseable task, got: %s", stderr)
+	}
+}
+
+func TestReconcileReadyQueue_MovesMissingTerminatorToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "completed", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Valid YAML but missing closing --- terminator
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "no-terminator.md"),
+		[]byte("---\nid: no-term\ndepends_on: [dep-a]\n"), 0o644)
+
+	stderr := captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir)
+		if got != 0 {
+			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		}
+	})
+
+	if _, err := os.Stat(filepath.Join(tasksDir, "failed", "no-terminator.md")); err != nil {
+		t.Fatalf("task with missing terminator should be moved to failed/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "no-terminator.md")); !os.IsNotExist(err) {
+		t.Fatal("task with missing terminator should no longer be in waiting/")
+	}
+	if !strings.Contains(stderr, "moving unparseable waiting task") {
+		t.Errorf("expected warning about moving unparseable task, got: %s", stderr)
+	}
+}
+
+func TestReconcileReadyQueue_ValidTasksStillPromotedAlongsideUnparseable(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"waiting", "backlog", "completed", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// One unparseable task
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "broken.md"),
+		[]byte("---\n: :\n  - [invalid\n---\n# Broken\n"), 0o644)
+
+	// One valid task with no deps (should be promoted)
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "good-task.md"),
+		[]byte("---\nid: good\n---\n# Good task\n"), 0o644)
+
+	captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir)
+		if got != 1 {
+			t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+		}
+	})
+
+	if _, err := os.Stat(filepath.Join(tasksDir, "failed", "broken.md")); err != nil {
+		t.Fatal("unparseable task should be in failed/")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "good-task.md")); err != nil {
+		t.Fatal("valid task should be promoted to backlog/")
+	}
+}
+
 func TestAcquireReviewLock_Success(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
