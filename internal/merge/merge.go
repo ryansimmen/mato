@@ -465,17 +465,40 @@ func taskHasMergeSuccessRecord(path string) bool {
 }
 
 func appendTaskRecord(path, format string, args ...any) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	existing, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("open task file for merge record: %w", err)
+		return fmt.Errorf("read task file for merge record: %w", err)
 	}
-	_, writeErr := fmt.Fprintf(f, "\n"+format+"\n", args...)
-	closeErr := f.Close()
-	if writeErr != nil {
-		return fmt.Errorf("append merge record: %w", writeErr)
+
+	record := fmt.Sprintf(format, args...)
+	updated := string(existing) + "\n" + record + "\n"
+
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for merge record: %w", err)
 	}
-	if closeErr != nil {
-		return fmt.Errorf("close task file after merge record: %w", closeErr)
+	tmpName := tmpFile.Name()
+	cleanup := func() {
+		tmpFile.Close()
+		os.Remove(tmpName)
+	}
+
+	if err := tmpFile.Chmod(0o644); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod temp file for merge record: %w", err)
+	}
+	if _, err := tmpFile.WriteString(updated); err != nil {
+		cleanup()
+		return fmt.Errorf("write temp file for merge record: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp file for merge record: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp file for merge record: %w", err)
 	}
 	return nil
 }
