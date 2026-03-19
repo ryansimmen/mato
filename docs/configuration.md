@@ -50,6 +50,7 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 | Variable | Scope | Default | Description |
 | --- | --- | --- | --- |
 | `MATO_DOCKER_IMAGE` | host | `ubuntu:24.04` | Docker image used for agent containers. Set this before starting `mato` to use a custom image. |
+| `MATO_AGENT_TIMEOUT` | host | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. |
 | `MATO_AGENT_ID` | container | generated per run | Agent identity injected by `mato` so the running agent can identify itself. |
 | `MATO_MAX_RETRIES` | container | `3` | Passed to container for reference; the host enforces the retry budget in `queue.SelectAndClaimTask(...)` and `shouldFailTask(...)` (in `merge.go`). Per-task overrides via `max_retries` frontmatter take precedence. |
 | `MATO_MESSAGING_ENABLED` | container | `1` | Injected by `mato` for agent-side tooling. The embedded prompt already uses hardcoded `.tasks` paths, so this is mainly useful to custom scripts or wrappers. |
@@ -63,7 +64,7 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 | `MATO_PREVIOUS_FAILURES` | container | none | Injected when the task file contains previous `<!-- failure: ... -->` records. Contains newline-separated failure lines extracted by `extractFailureLines(...)`. Agents can read this during `VERIFY_CLAIM` to understand why earlier attempts failed and avoid repeating the same mistakes. |
 | `MATO_REVIEW_MODE` | container | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
 | `MATO_REVIEW_FEEDBACK` | container | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
-Only `MATO_DOCKER_IMAGE` is intended as a host-side configuration input. The other
+Only `MATO_DOCKER_IMAGE` and `MATO_AGENT_TIMEOUT` are intended as host-side configuration inputs. The other
 variables are injected by `mato` inside each container and are normally not set manually.
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
 `depends_on` entries whose completion details are available. It contains a file
