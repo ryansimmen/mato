@@ -29,7 +29,7 @@ type TaskMeta struct {
 func ParseTaskFile(path string) (TaskMeta, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return TaskMeta{}, "", err
+		return TaskMeta{}, "", fmt.Errorf("read task file %s: %w", path, err)
 	}
 
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
