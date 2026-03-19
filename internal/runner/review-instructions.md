@@ -23,7 +23,7 @@ You are an autonomous review agent. Review one task branch, render a verdict (ap
 - Process exactly one review per run.
 - **Never modify source code, push branches, or create commits.**
 - Only read the diff, analyze it, and render a verdict by moving the task file.
-- Preserve all `<!-- claimed-by: -->`, `<!-- branch: -->`, `<!-- failure: -->`, and `<!-- review-rejection: -->` comment patterns exactly.
+- Preserve all `<!-- claimed-by: -->`, `<!-- branch: -->`, `<!-- failure: -->`, `<!-- review-failure: -->`, and `<!-- review-rejection: -->` comment patterns exactly.
 - Messaging is best-effort: if reading or writing messages fails, continue the review anyway.
 - Send at most 2 agent-written messages: one `progress` and one `completion`.
 - Do not stop midway. End only after the task file is moved.
@@ -61,7 +61,7 @@ EOF
 } || true
 ```
 Read the full task file to understand the requirements. Task files may have YAML frontmatter between `---` delimiters at the top. This is metadata for the host scheduler. Ignore it when reading task instructions. The task instructions begin after the frontmatter block (or at the start if there is no frontmatter). The `#` heading is the task title.
-Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, `<!-- failure: ... -->`, and `<!-- review-rejection: ... -->` when interpreting the task body.
+Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, `<!-- failure: ... -->`, `<!-- review-failure: ... -->`, and `<!-- review-rejection: ... -->` when interpreting the task body.
 **Decision table:**
 | If | Then |
 | --- | --- |
@@ -179,7 +179,7 @@ Use this state for unrecoverable errors only, such as inability to fetch the bra
 ```bash
 FAIL_STEP="${FAIL_STEP:-REVIEW}"
 FAIL_REASON="${FAIL_REASON:-brief description of the error}"
-echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} -->" >> "$TASK_PATH"
+echo "<!-- review-failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} -->" >> "$TASK_PATH"
 ```
 **Decision table:**
 | If | Then |

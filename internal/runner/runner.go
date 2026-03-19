@@ -608,8 +608,10 @@ func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 		}
 
 		// Check review retry budget before including as a candidate.
+		// Only count review-specific failures (<!-- review-failure: -->),
+		// not task agent failures (<!-- failure: -->).
 		maxRetries := meta.MaxRetries
-		failures, failErr := queue.CountFailureLines(path)
+		failures, failErr := queue.CountReviewFailureLines(path)
 		if failErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not count failures for review candidate %s, skipping: %v\n", entry.Name(), failErr)
 			continue

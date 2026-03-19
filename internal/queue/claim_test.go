@@ -821,6 +821,92 @@ func TestCountFailureLines_IgnoresBodyText(t *testing.T) {
 	}
 }
 
+func TestCountFailureLines_IgnoresReviewFailures(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	writeTestFile(t, path, strings.Join([]string{
+		"# Task",
+		"<!-- failure: agent-1 at 2025-01-01T00:00:00Z step=WORK error=build -->",
+		"<!-- review-failure: rev-1 at 2025-01-02T00:00:00Z step=DIFF error=fetch -->",
+		"<!-- failure: agent-2 at 2025-01-03T00:00:00Z step=PUSH error=push -->",
+		"<!-- review-failure: rev-2 at 2025-01-04T00:00:00Z step=DIFF error=timeout -->",
+	}, "\n"))
+
+	count, err := CountFailureLines(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 task failures (ignoring review-failures), got %d", count)
+	}
+}
+
+func TestCountReviewFailureLines_NonexistentFile(t *testing.T) {
+	count, err := CountReviewFailureLines("/nonexistent/path/task.md")
+	if err == nil {
+		t.Fatal("expected error for non-existent file, got nil")
+	}
+	if count != 0 {
+		t.Fatalf("expected count 0, got %d", count)
+	}
+}
+
+func TestCountReviewFailureLines_ValidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	writeTestFile(t, path, strings.Join([]string{
+		"# Task",
+		"<!-- review-failure: rev-1 at 2025-01-01T00:00:00Z step=DIFF error=fetch -->",
+		"<!-- review-failure: rev-2 at 2025-01-02T00:00:00Z step=DIFF error=timeout -->",
+	}, "\n"))
+
+	count, err := CountReviewFailureLines(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 review failures, got %d", count)
+	}
+}
+
+func TestCountReviewFailureLines_IgnoresTaskFailures(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	writeTestFile(t, path, strings.Join([]string{
+		"# Task",
+		"<!-- failure: agent-1 at 2025-01-01T00:00:00Z step=WORK error=build -->",
+		"<!-- review-failure: rev-1 at 2025-01-02T00:00:00Z step=DIFF error=fetch -->",
+		"<!-- failure: agent-2 at 2025-01-03T00:00:00Z step=PUSH error=push -->",
+	}, "\n"))
+
+	count, err := CountReviewFailureLines(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 review failure (ignoring task failures), got %d", count)
+	}
+}
+
+func TestCountReviewFailureLines_IgnoresBodyText(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	writeTestFile(t, path, strings.Join([]string{
+		"# Task",
+		"",
+		"Review failures use `<!-- review-failure: -->` markers.",
+		"<!-- review-failure: rev-1 at 2025-01-01T00:00:00Z step=DIFF error=fetch -->",
+	}, "\n"))
+
+	count, err := CountReviewFailureLines(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 actual review failure (ignoring body text), got %d", count)
+	}
+}
+
 func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 	dir := setupClaimTestDir(t)
 
