@@ -61,9 +61,9 @@ EOF
 } || true
 ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read f; do cat "$f"; echo; done || true
 # Read dependency context if provided by the host
-if [ -n "${MATO_DEPENDENCY_CONTEXT:-}" ]; then
+if [ -n "${MATO_DEPENDENCY_CONTEXT:-}" ] && [ -f "${MATO_DEPENDENCY_CONTEXT}" ]; then
   echo "Dependency context (completed prerequisite tasks):"
-  echo "$MATO_DEPENDENCY_CONTEXT"
+  cat "$MATO_DEPENDENCY_CONTEXT"
 fi
 # Read file claims if provided by the host
 if [ -n "${MATO_FILE_CLAIMS:-}" ] && [ -f "${MATO_FILE_CLAIMS}" ]; then
@@ -87,7 +87,7 @@ fi
 | `$TASK_PATH` file exists | Continue to `CREATE_BRANCH`. |
 | `$TASK_PATH` file missing | Another agent may have taken it; report and exit. |
 | Reading messages fails | Continue anyway. Messaging is non-blocking. |
-| `MATO_DEPENDENCY_CONTEXT` is set | Read it for details about completed dependency tasks (files changed, commit SHAs, titles). Use this context to understand what prerequisite work was done. |
+| `MATO_DEPENDENCY_CONTEXT` file exists | Read it for details about completed dependency tasks (files changed, commit SHAs, titles). Use this context to understand what prerequisite work was done. |
 | `MATO_FILE_CLAIMS` file exists | Read it for a JSON map of files being modified by other active tasks. If any file you plan to modify appears in the claims, note the potential conflict in your commit message and take extra care with those files. |
 | `MATO_PREVIOUS_FAILURES` is set | Read it carefully. Each line is a previous failure record showing the step, error, and files changed. Learn from these failures: do NOT repeat the same approach that already failed. Try a different strategy or fix the specific error mentioned. |
 | `MATO_REVIEW_FEEDBACK` is set | Read it carefully. Each line is a previous review rejection explaining what the reviewer found wrong. Address these specific issues in your implementation. |

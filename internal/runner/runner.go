@@ -414,8 +414,12 @@ func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 			fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/in-progress/%s", cfg.workdir, claimed.Filename),
 			fmt.Sprintf("MATO_FILE_CLAIMS=%s/.tasks/messages/file-claims.json", cfg.workdir),
 		)
-		if depCtx := buildDependencyContext(cfg.tasksDir, claimed); depCtx != "" {
-			extraEnvs = append(extraEnvs, "MATO_DEPENDENCY_CONTEXT="+depCtx)
+		if depCtxPath := writeDependencyContextFile(cfg.tasksDir, claimed); depCtxPath != "" {
+			defer removeDependencyContextFile(cfg.tasksDir, claimed.Filename)
+			extraEnvs = append(extraEnvs, fmt.Sprintf(
+				"MATO_DEPENDENCY_CONTEXT=%s/.tasks/messages/dependency-context-%s.json",
+				cfg.workdir, claimed.Filename,
+			))
 		}
 		if failures := extractFailureLines(claimed.TaskPath); failures != "" {
 			extraEnvs = append(extraEnvs, "MATO_PREVIOUS_FAILURES="+failures)
@@ -498,10 +502,13 @@ func hasModelArg(args []string) bool {
 	return false
 }
 
-// buildDependencyContext collects completion details for all resolved
-// dependencies of the given task and returns them as a JSON array string.
-// Returns "" if the task has no dependencies or none have completion files.
-func buildDependencyContext(tasksDir string, claimed *queue.ClaimedTask) string {
+// writeDependencyContextFile collects completion details for all resolved
+// dependencies of the given task and writes them as a JSON array to a file
+// in the messages directory. Returns the file path on success, or "" if the
+// task has no dependencies or none have completion files.
+// Writing to a file avoids ARG_MAX / Docker env var size limits that can
+// occur when the JSON blob is passed as an environment variable.
+func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) string {
 	meta, _, err := frontmatter.ParseTaskFile(claimed.TaskPath)
 	if err != nil || len(meta.DependsOn) == 0 {
 		return ""
@@ -521,7 +528,20 @@ func buildDependencyContext(tasksDir string, claimed *queue.ClaimedTask) string 
 	if err != nil {
 		return ""
 	}
-	return string(data)
+
+	depCtxPath := filepath.Join(tasksDir, "messages", "dependency-context-"+claimed.Filename+".json")
+	if err := os.WriteFile(depCtxPath, data, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write dependency context file: %v\n", err)
+		return ""
+	}
+	return depCtxPath
+}
+
+// removeDependencyContextFile removes the dependency context file for the
+// given task, if it exists. Errors are silently ignored.
+func removeDependencyContextFile(tasksDir string, filename string) {
+	p := filepath.Join(tasksDir, "messages", "dependency-context-"+filename+".json")
+	os.Remove(p)
 }
 
 // configureReceiveDeny sets receive.denyCurrentBranch=updateInstead on the
