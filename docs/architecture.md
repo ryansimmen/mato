@@ -214,7 +214,7 @@ This is the main multi-process safety mechanism for host-side merges.
 `merge.ProcessQueue(...)` scans `ready-to-merge/*.md`, parses each task, and sorts by ascending `priority`, then filename.
 For each task:
 1. Parse the task file with `frontmatter.ParseTaskFile(...)`.
-2. Derive the task title with `frontmatter.ExtractTitle(...)` from the first non-empty body line; leading `#` is stripped. The squash commit message is enriched with git commit trailers via `formatSquashCommitMessage(task)`: `Task-ID: <id>` (if task ID is set) and `Affects: <comma-separated files>` (if `affects` metadata is present). If neither trailer applies, the plain title is used.
+2. Derive the task title with `frontmatter.ExtractTitle(...)` from the first non-empty body line; leading `#` is stripped. Build the squash commit message via `formatSquashCommitMessage(task, agentLog)` (see [Squash commit message format](#squash-commit-message-format) below).
 3. Read `<!-- branch: ... -->` from the task file when present; if absent, fall back to `task/<sanitizeBranchName(filename)>`.
 4. Create a fresh temp clone.
 5. Configure clone identity from repo Git config, then global config, with fallbacks `mato` and `mato@local.invalid`.
@@ -226,6 +226,26 @@ For each task:
 11. `git push origin <target-branch>`
 12. After a successful push, write a completion detail file to `.tasks/messages/completions/<task-id>.json` with the commit SHA, changed files, branch, title, and merge timestamp (see `docs/messaging.md` for the full schema). This file is used by `runner.writeDependencyContextFile(...)` to create the dependency context file referenced by `MATO_DEPENDENCY_CONTEXT` when a dependent task runs.
 13. Append `<!-- merged: merge-queue at ... -->` and rename the task file `ready-to-merge/ -> completed/`
+### Squash commit message format
+`formatSquashCommitMessage(task, agentLog)` builds the squash-merge commit message from the agent's commit and the task metadata. The format is:
+
+1. **Subject line**: the agent's commit subject. If the agent made no commit (or the log is empty), the task title is used as a fallback.
+2. **Body** (optional): the agent's commit body, if present. Lines matching `Task: <filename>` and `Changed files:` sections are stripped since that metadata is redundant with the trailers.
+3. **Trailers**: appended after a blank separator line:
+   - `Task-ID: <id>` — the task's frontmatter `id` field (omitted if no id is set).
+   - `Affects: <file1>, <file2>` — comma-separated list from the task's frontmatter `affects` field (omitted if empty).
+
+Example merge commit message:
+```
+feat: add retry backoff to agent launcher
+
+Implement exponential backoff with jitter when the agent container
+fails to start, capped at 60 seconds between attempts.
+
+Task-ID: add-retry-backoff
+Affects: internal/runner/runner.go, internal/runner/runner_test.go
+```
+
 ### Conflict and failure handling
 Merge failure handling is branch-specific:
 1. Missing task branch: append `<!-- failure: merge-queue ... -->` and move the task `ready-to-merge/ -> failed/`.
