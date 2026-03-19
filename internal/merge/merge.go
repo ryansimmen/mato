@@ -184,6 +184,11 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	if _, err := git.Output(cloneDir, "rev-parse", "--verify", "origin/"+taskBranch); err != nil {
 		return nil, fmt.Errorf("%w: task branch %s not found on origin (agent may not have pushed)", errTaskBranchNotPushed, taskBranch)
 	}
+
+	// Extract the agent's commit messages before squashing so we can
+	// incorporate them into the squash commit for richer context.
+	agentLog, _ := git.Output(cloneDir, "log", "--format=%B", "origin/"+branch+"..origin/"+taskBranch)
+
 	if _, err := git.Output(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", errSquashMergeConflict, taskBranch, err)
 	}
@@ -196,7 +201,7 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 		return nil, nil
 	}
 
-	if _, err := git.Output(cloneDir, "commit", "-m", formatSquashCommitMessage(task)); err != nil {
+	if _, err := git.Output(cloneDir, "commit", "-m", formatSquashCommitMessage(task, agentLog)); err != nil {
 		return nil, fmt.Errorf("commit squash merge: %w", err)
 	}
 	if _, err := git.Output(cloneDir, "push", "origin", branch); err != nil {
@@ -219,7 +224,16 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	}, nil
 }
 
-func formatSquashCommitMessage(task mergeQueueTask) string {
+// formatSquashCommitMessage builds the squash-merge commit message.
+// It prefers the agent's commit message (from agentLog) for the subject and
+// body, falling back to the task title when no agent log is available.
+// Task-ID and Affects trailers are always appended when present.
+func formatSquashCommitMessage(task mergeQueueTask, agentLog string) string {
+	subject, body := parseAgentCommitLog(agentLog)
+	if subject == "" {
+		subject = task.title
+	}
+
 	var trailers []string
 	if task.id != "" {
 		trailers = append(trailers, "Task-ID: "+task.id)
@@ -227,10 +241,90 @@ func formatSquashCommitMessage(task mergeQueueTask) string {
 	if len(task.affects) > 0 {
 		trailers = append(trailers, "Affects: "+strings.Join(task.affects, ", "))
 	}
-	if len(trailers) == 0 {
-		return task.title
+
+	var parts []string
+	parts = append(parts, subject)
+	if body != "" || len(trailers) > 0 {
+		parts = append(parts, "") // blank line after subject
 	}
-	return task.title + "\n\n" + strings.Join(trailers, "\n")
+	if body != "" {
+		parts = append(parts, body)
+	}
+	if len(trailers) > 0 {
+		if body != "" {
+			parts = append(parts, "") // blank line before trailers
+		}
+		parts = append(parts, strings.Join(trailers, "\n"))
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// parseAgentCommitLog extracts the subject and body from the agent's commit
+// log output. For multi-commit branches, only the first commit's message is
+// used (the agent is expected to make one primary commit). Lines matching
+// "Task: <filename>" and "Changed files:" sections are stripped from the body
+// since that metadata is redundant with the trailers.
+func parseAgentCommitLog(log string) (subject, body string) {
+	log = strings.TrimSpace(log)
+	if log == "" {
+		return "", ""
+	}
+
+	lines := strings.Split(log, "\n")
+
+	// First non-empty line is the subject.
+	var subjectLine string
+	bodyStart := 0
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			subjectLine = strings.TrimSpace(line)
+			bodyStart = i + 1
+			break
+		}
+	}
+	if subjectLine == "" {
+		return "", ""
+	}
+
+	// Skip the blank line after the subject.
+	if bodyStart < len(lines) && strings.TrimSpace(lines[bodyStart]) == "" {
+		bodyStart++
+	}
+
+	// Collect body lines, filtering out mechanical "Task:" and "Changed files:" sections.
+	var bodyLines []string
+	skipChangedFiles := false
+	for i := bodyStart; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+
+		// Stop at the next commit boundary (double blank lines typically
+		// separate commits in git log --format=%B output).
+		if skipChangedFiles && trimmed == "" {
+			// End of the changed files block; stop processing this commit.
+			break
+		}
+		if skipChangedFiles {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "Task:") {
+			continue
+		}
+		if trimmed == "Changed files:" {
+			skipChangedFiles = true
+			continue
+		}
+
+		bodyLines = append(bodyLines, lines[i])
+	}
+
+	// Trim trailing blank lines.
+	for len(bodyLines) > 0 && strings.TrimSpace(bodyLines[len(bodyLines)-1]) == "" {
+		bodyLines = bodyLines[:len(bodyLines)-1]
+	}
+
+	return subjectLine, strings.Join(bodyLines, "\n")
 }
 
 func configureMergeCloneIdentity(repoRoot, cloneDir string) error {

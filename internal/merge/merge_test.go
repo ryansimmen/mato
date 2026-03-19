@@ -235,8 +235,9 @@ func TestProcessQueueMergesReadyTaskBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git log mato: %v", err)
 	}
-	if got := strings.TrimSpace(msg); got != "Add feature" {
-		t.Fatalf("merge commit message = %q, want %q", got, "Add feature")
+	// Squash commit subject comes from agent's commit message on the task branch.
+	if got := strings.TrimSpace(msg); got != "feature work" {
+		t.Fatalf("merge commit message = %q, want %q", got, "feature work")
 	}
 }
 
@@ -842,8 +843,9 @@ func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git log mato: %v", err)
 	}
-	if got := strings.Count(log, "Add feature"); got != 1 {
-		t.Fatalf("Add feature commit count = %d, want 1", got)
+	// Squash subject comes from agent commit, not task title.
+	if got := strings.Count(log, "feature work"); got != 1 {
+		t.Fatalf("feature work commit count = %d, want 1 (log=%s)", got, strings.Fields(log))
 	}
 }
 
@@ -943,7 +945,8 @@ func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
 			gotOrder = append(gotOrder, line)
 		}
 	}
-	wantOrder := []string{"A task", "B task", "C task"}
+	// Squash subjects come from the agent's commit messages on each task branch.
+	wantOrder := []string{"A task branch work", "B task branch work", "C task branch work"}
 	if len(gotOrder) != len(wantOrder) {
 		t.Fatalf("merged commit count = %d, want %d (%v)", len(gotOrder), len(wantOrder), gotOrder)
 	}
@@ -1173,8 +1176,9 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git log: %v", err)
 	}
-	if got := strings.Count(log, "Durable merge"); got != 1 {
-		t.Fatalf("Durable merge commit count = %d, want 1; log:\n%s", got, log)
+	// Squash subject comes from agent commit "durable work".
+	if got := strings.Count(log, "durable work"); got != 1 {
+		t.Fatalf("durable work commit count = %d, want 1; log:\n%s", got, log)
 	}
 }
 
@@ -1245,7 +1249,7 @@ func TestFormatSquashCommitMessage_WithAllTrailers(t *testing.T) {
 		id:      "add-feature",
 		affects: []string{"internal/merge/merge.go", "internal/merge/merge_test.go"},
 	}
-	got := formatSquashCommitMessage(task)
+	got := formatSquashCommitMessage(task, "")
 	want := "Add feature\n\nTask-ID: add-feature\nAffects: internal/merge/merge.go, internal/merge/merge_test.go"
 	if got != want {
 		t.Fatalf("formatSquashCommitMessage() =\n%q\nwant\n%q", got, want)
@@ -1256,7 +1260,7 @@ func TestFormatSquashCommitMessage_NoMetadata(t *testing.T) {
 	task := mergeQueueTask{
 		title: "Simple task",
 	}
-	got := formatSquashCommitMessage(task)
+	got := formatSquashCommitMessage(task, "")
 	if got != "Simple task" {
 		t.Fatalf("formatSquashCommitMessage() = %q, want %q", got, "Simple task")
 	}
@@ -1267,7 +1271,7 @@ func TestFormatSquashCommitMessage_OnlyID(t *testing.T) {
 		title: "Task with ID",
 		id:    "task-id-only",
 	}
-	got := formatSquashCommitMessage(task)
+	got := formatSquashCommitMessage(task, "")
 	want := "Task with ID\n\nTask-ID: task-id-only"
 	if got != want {
 		t.Fatalf("formatSquashCommitMessage() = %q, want %q", got, want)
@@ -1279,7 +1283,7 @@ func TestFormatSquashCommitMessage_OnlyAffects(t *testing.T) {
 		title:   "Task with affects",
 		affects: []string{"file.go"},
 	}
-	got := formatSquashCommitMessage(task)
+	got := formatSquashCommitMessage(task, "")
 	want := "Task with affects\n\nAffects: file.go"
 	if got != want {
 		t.Fatalf("formatSquashCommitMessage() = %q, want %q", got, want)
@@ -1332,10 +1336,10 @@ func TestProcessQueue_CommitIncludesTrailers(t *testing.T) {
 	if !strings.Contains(msg, "Affects: internal/merge/merge.go, internal/merge/merge_test.go") {
 		t.Fatalf("commit message missing Affects trailer:\n%s", msg)
 	}
-	// Verify title is on the first line
+	// Verify subject comes from agent's commit message on the task branch.
 	lines := strings.SplitN(msg, "\n", 2)
-	if lines[0] != "Add trailers feature" {
-		t.Fatalf("commit message first line = %q, want %q", lines[0], "Add trailers feature")
+	if lines[0] != "add trailers feature" {
+		t.Fatalf("commit message first line = %q, want %q", lines[0], "add trailers feature")
 	}
 }
 
@@ -1382,8 +1386,9 @@ func TestProcessQueue_CommitOmitsTrailersWhenEmpty(t *testing.T) {
 		t.Fatalf("git log mato: %v", err)
 	}
 	msg = strings.TrimSpace(msg)
-	if !strings.HasPrefix(msg, "No metadata task") {
-		t.Fatalf("commit message should start with title, got:\n%s", msg)
+	// Squash subject comes from agent's commit message, not the task title.
+	if !strings.HasPrefix(msg, "plain work") {
+		t.Fatalf("commit message should start with agent's commit subject, got:\n%s", msg)
 	}
 	if strings.Contains(msg, "Affects:") {
 		t.Fatalf("commit message should not contain Affects trailer when affects is empty:\n%s", msg)
@@ -1604,5 +1609,135 @@ func TestFailMergeTask_BothAppendAndMoveFail(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "append failure record") {
 		t.Fatalf("error should mention append failure, got: %v", err)
+	}
+}
+
+func TestFormatSquashCommitMessage_WithAgentLog(t *testing.T) {
+	task := mergeQueueTask{
+		title:   "Add feature",
+		id:      "add-feature",
+		affects: []string{"internal/merge/merge.go"},
+	}
+	agentLog := "feat: add conflict detection for overlapping affects\n\nPrevents two tasks from modifying the same files concurrently\nby checking the affects: metadata before claiming.\n\nTask: add-feature.md\n\nChanged files:\ninternal/merge/merge.go\n"
+
+	got := formatSquashCommitMessage(task, agentLog)
+
+	// Subject should come from agent log.
+	if !strings.HasPrefix(got, "feat: add conflict detection for overlapping affects\n") {
+		t.Fatalf("subject should come from agent log, got:\n%s", got)
+	}
+	// Body should include the agent's description.
+	if !strings.Contains(got, "Prevents two tasks from modifying the same files concurrently") {
+		t.Fatalf("body should include agent description, got:\n%s", got)
+	}
+	// "Task:" and "Changed files:" should be stripped.
+	if strings.Contains(got, "Task: add-feature.md") {
+		t.Fatalf("mechanical 'Task:' line should be stripped, got:\n%s", got)
+	}
+	if strings.Contains(got, "Changed files:") {
+		t.Fatalf("mechanical 'Changed files:' section should be stripped, got:\n%s", got)
+	}
+	// Trailers should be present.
+	if !strings.Contains(got, "Task-ID: add-feature") {
+		t.Fatalf("Task-ID trailer missing, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Affects: internal/merge/merge.go") {
+		t.Fatalf("Affects trailer missing, got:\n%s", got)
+	}
+}
+
+func TestFormatSquashCommitMessage_AgentLogNoBody(t *testing.T) {
+	task := mergeQueueTask{
+		title: "Fix bug",
+		id:    "fix-bug",
+	}
+	// Agent wrote a subject-only commit (no body beyond mechanical lines).
+	agentLog := "fix: correct off-by-one in queue selection\n\nTask: fix-bug.md\n\nChanged files:\ninternal/queue/queue.go\n"
+
+	got := formatSquashCommitMessage(task, agentLog)
+
+	if !strings.HasPrefix(got, "fix: correct off-by-one in queue selection\n") {
+		t.Fatalf("subject should come from agent log, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Task-ID: fix-bug") {
+		t.Fatalf("Task-ID trailer missing, got:\n%s", got)
+	}
+	// No body text between subject and trailers (only the mechanical lines were present).
+	if strings.Contains(got, "Task: fix-bug.md") {
+		t.Fatalf("mechanical 'Task:' line should be stripped, got:\n%s", got)
+	}
+}
+
+func TestFormatSquashCommitMessage_EmptyAgentLogFallsBackToTitle(t *testing.T) {
+	task := mergeQueueTask{
+		title: "Fallback title",
+		id:    "fallback-id",
+	}
+	got := formatSquashCommitMessage(task, "")
+
+	if !strings.HasPrefix(got, "Fallback title\n") {
+		t.Fatalf("should fall back to task title, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Task-ID: fallback-id") {
+		t.Fatalf("Task-ID trailer missing, got:\n%s", got)
+	}
+}
+
+func TestFormatSquashCommitMessage_WhitespaceOnlyAgentLog(t *testing.T) {
+	task := mergeQueueTask{
+		title: "Whitespace test",
+	}
+	got := formatSquashCommitMessage(task, "  \n\n  \n")
+	if got != "Whitespace test" {
+		t.Fatalf("should fall back to task title for whitespace-only log, got:\n%s", got)
+	}
+}
+
+func TestParseAgentCommitLog_SubjectAndBody(t *testing.T) {
+	log := "fix: handle nil pointer in merge queue\n\nThe merge queue crashed when a task file had no branch comment.\nAdded a nil check before accessing the branch field.\n\nTask: fix-nil.md\n\nChanged files:\ninternal/merge/merge.go\n"
+
+	subject, body := parseAgentCommitLog(log)
+	if subject != "fix: handle nil pointer in merge queue" {
+		t.Fatalf("subject = %q", subject)
+	}
+	wantBody := "The merge queue crashed when a task file had no branch comment.\nAdded a nil check before accessing the branch field."
+	if body != wantBody {
+		t.Fatalf("body = %q, want %q", body, wantBody)
+	}
+}
+
+func TestParseAgentCommitLog_SubjectOnly(t *testing.T) {
+	log := "fix: simple one-liner\n"
+
+	subject, body := parseAgentCommitLog(log)
+	if subject != "fix: simple one-liner" {
+		t.Fatalf("subject = %q", subject)
+	}
+	if body != "" {
+		t.Fatalf("body should be empty, got %q", body)
+	}
+}
+
+func TestParseAgentCommitLog_Empty(t *testing.T) {
+	subject, body := parseAgentCommitLog("")
+	if subject != "" || body != "" {
+		t.Fatalf("expected empty subject and body, got %q / %q", subject, body)
+	}
+}
+
+func TestParseAgentCommitLog_MultiCommit(t *testing.T) {
+	// git log --format=%B with multiple commits separates them with blank lines.
+	log := "feat: add review gate\n\nIntroduce ready-for-review state.\n\nTask: add-review.md\n\nChanged files:\nrunner.go\n\nfix: typo in docs\n\nTask: add-review.md\n\nChanged files:\ndocs/arch.md\n"
+
+	subject, body := parseAgentCommitLog(log)
+	if subject != "feat: add review gate" {
+		t.Fatalf("subject = %q, want first commit's subject", subject)
+	}
+	if !strings.Contains(body, "Introduce ready-for-review state") {
+		t.Fatalf("body should contain first commit's description, got %q", body)
+	}
+	// Should NOT contain the second commit's subject.
+	if strings.Contains(body, "fix: typo") {
+		t.Fatalf("body should not contain second commit's content, got %q", body)
 	}
 }

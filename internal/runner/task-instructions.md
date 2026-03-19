@@ -146,7 +146,7 @@ done
 | No build/test command exists | Perform the most relevant available verification and continue. |
 ---
 ## STATE: COMMIT
-**Goal:** Create a mandatory commit containing only the task work.
+**Goal:** Create a mandatory commit containing only the task work, with a descriptive commit message.
 **Commands:**
 ```bash
 {
@@ -158,8 +158,6 @@ EOF
 git status --short
 git add -A
 COMMIT_SUBJECT="$TASK_TITLE"
-# If the task was ambiguous, replace the note text with a short uncertainty summary:
-# COMMIT_SUBJECT="$TASK_TITLE (best-effort: explain the uncertainty briefly)"
 COMMIT_BODY="Task: ${FILENAME}
 
 Changed files:
@@ -167,13 +165,24 @@ $(git diff --cached --name-only | sort)"
 git commit -m "$COMMIT_SUBJECT" -m "$COMMIT_BODY"
 git log --oneline -1
 ```
+**Important:** Before running the commit command, replace the default `COMMIT_SUBJECT` with a descriptive summary of *what* the change actually does. Use conventional commit format (e.g., `fix:`, `feat:`, `docs:`). The subject should describe the implementation, not just repeat the task title. Keep it under 72 characters.
+
+Similarly, replace the `COMMIT_BODY` placeholder with 1-2 sentences explaining *why* the change was needed and *how* it works, followed by the `Task:` and `Changed files:` lines for traceability.
+
+Good subject examples:
+- `fix: prevent concurrent review agents from selecting the same task`
+- `feat: add MATO_REVIEW_FEEDBACK handling to agent prompt`
+- `docs: update architecture doc for review gate lifecycle`
+
+The merge queue uses your commit message as the squash-merge message on the target branch. A descriptive message helps reviewers understand the change without reading the diff.
 **Decision table:**
 | If | Then |
 | --- | --- |
 | `git commit` succeeds | Continue to `PUSH_BRANCH`. |
 | Commit fails because there are no changes | Investigate; if the task truly requires no change, transition to `ON_FAILURE`. |
 | Commit fails for another fixable reason | Fix it and retry this state. |
-| Commit message needs an ambiguity note | Append a brief best-effort note and continue. |
+| Commit message needs an ambiguity note | Append a brief best-effort note to the subject and continue. |
+| Subject line is longer than 72 chars | Shorten it. Move detail into the body. |
 ---
 ## STATE: PUSH_BRANCH
 **Goal:** Warn other agents about touched files, then push the task branch only.
