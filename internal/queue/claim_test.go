@@ -801,6 +801,26 @@ func TestCountFailureLines_ValidFile(t *testing.T) {
 	}
 }
 
+func TestCountFailureLines_IgnoresBodyText(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	writeTestFile(t, path, strings.Join([]string{
+		"# Separate review retry budget",
+		"",
+		"`CountFailureLines()` counts `<!-- failure: ... -->` records in the file.",
+		"Review failures use `<!-- failure: agent-id at timestamp -->` markers.",
+		"<!-- failure: agent-1 at 2025-01-01T00:00:00Z step=WORK error=build -->",
+	}, "\n"))
+
+	count, err := CountFailureLines(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 actual failure (ignoring body text), got %d", count)
+	}
+}
+
 func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 	dir := setupClaimTestDir(t)
 

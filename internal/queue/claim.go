@@ -227,11 +227,18 @@ func prependClaimedBy(taskPath, agentID, claimedAt string) error {
 }
 
 // CountFailureLines counts the number of <!-- failure: ... --> HTML comment
-// lines in a task file. Used to check retry budgets for both task and review paths.
+// metadata lines in a task file. Only lines that start with the marker are
+// counted so that references to the marker inside the task body are ignored.
 func CountFailureLines(taskPath string) (int, error) {
 	data, err := os.ReadFile(taskPath)
 	if err != nil {
 		return 0, fmt.Errorf("count failure lines: %w", err)
 	}
-	return strings.Count(string(data), "<!-- failure:"), nil
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "<!-- failure:") {
+			count++
+		}
+	}
+	return count, nil
 }
