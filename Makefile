@@ -18,7 +18,7 @@ clean: ## Remove build artifacts
 fmt: ## Format Go source files
 	go fmt ./...
 
-install: ## Install mato binary to GOBIN and mato-skill to ~/.copilot/skills/
+install: ## Install mato binary to GOBIN and mato skill to ~/.copilot/skills/
 	go install ./cmd/mato
 	./scripts/install-skill.sh
 

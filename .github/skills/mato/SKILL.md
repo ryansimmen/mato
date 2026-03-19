@@ -1,5 +1,5 @@
 ---
-name: mato-skill
+name: mato
 description: >
   Task planner that breaks down work into actionable task files.
   Use when asked to plan work with mato, create mato tasks, break down features,
