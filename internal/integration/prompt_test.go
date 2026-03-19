@@ -108,28 +108,24 @@ func promptPreamble(t *testing.T) string {
 	return strings.TrimSpace(preamble[:blockEnd])
 }
 
-func TestPromptCreateBranchDoesNotDeleteRemoteBranch(t *testing.T) {
-	block := promptStateBlock(t, "CREATE_BRANCH")
-	if strings.Contains(block, `git push origin --delete "$BRANCH"`) {
-		t.Fatalf("CREATE_BRANCH should not delete the remote task branch:\n%s", block)
+func TestPromptNoPushInstructions(t *testing.T) {
+	// Verify the agent prompt does not contain push instructions.
+	data, err := os.ReadFile(taskInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(task instructions): %v", err)
 	}
-}
-
-func TestPromptPushBranchUsesForceWithLease(t *testing.T) {
-	block := promptStateBlock(t, "PUSH_BRANCH")
-	if !strings.Contains(block, `git push --force-with-lease origin "$BRANCH"`) {
-		t.Fatalf("PUSH_BRANCH should use --force-with-lease:\n%s", block)
+	text := string(data)
+	if strings.Contains(text, "git push") {
+		t.Fatal("task instructions should not contain 'git push'; host handles pushing")
 	}
-	pushIdx := strings.Index(block, `git push --force-with-lease origin "$BRANCH"`)
-	recordIdx := strings.Index(block, `echo "<!-- branch: ${BRANCH} -->" >> "$TASK_PATH"`)
-	if recordIdx < 0 {
-		t.Fatalf("PUSH_BRANCH should record branch metadata after a successful push:\n%s", block)
+	if strings.Contains(text, "PUSH_BRANCH") {
+		t.Fatal("task instructions should not contain PUSH_BRANCH state")
 	}
-	if recordIdx < pushIdx {
-		t.Fatalf("branch metadata should be recorded after the push command:\n%s", block)
+	if strings.Contains(text, "CREATE_BRANCH") {
+		t.Fatal("task instructions should not contain CREATE_BRANCH state")
 	}
-	if strings.Contains(promptStateBlock(t, "MARK_READY"), `<!-- branch:`) {
-		t.Fatal("MARK_READY should not record branch metadata")
+	if strings.Contains(text, "MARK_READY") {
+		t.Fatal("task instructions should not contain MARK_READY state")
 	}
 }
 
@@ -294,18 +290,23 @@ func TestPromptVerifyClaim(t *testing.T) {
 	}
 }
 
-func TestPromptCreateBranchAndCommit(t *testing.T) {
+func TestPromptHostCreatesBranch(t *testing.T) {
+	// The host creates the task branch before the agent runs.
+	// Verify the agent can commit on the pre-created branch.
 	repoRoot, tasksDir := setupTestRepo(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-3  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+
+	// Host creates the task branch (simulating runOnce pre-agent logic)
+	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
+
 	script := strings.Join([]string{
 		promptPreamble(t),
 		`BRANCH="task/my-task"`,
 		`FILENAME="my-task.md"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
 		`TASK_TITLE="My Task"`,
-		promptStateBlock(t, "CREATE_BRANCH"),
 		`echo "hello world" > hello.txt`,
 		promptStateBlock(t, "COMMIT"),
 	}, "\n\n")
@@ -313,7 +314,7 @@ func TestPromptCreateBranchAndCommit(t *testing.T) {
 
 	out, err := runBash(t, cloneDir, nil, script)
 	if err != nil {
-		t.Fatalf("runBash create branch and commit: %v\noutput:\n%s", err, out)
+		t.Fatalf("runBash commit on host-created branch: %v\noutput:\n%s", err, out)
 	}
 
 	if got := strings.TrimSpace(mustGitOutput(t, cloneDir, "branch", "--show-current")); got != "task/my-task" {
@@ -339,13 +340,15 @@ func TestPromptCommitIncludesDescription(t *testing.T) {
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	// Host creates the task branch
+	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
+
 	script := strings.Join([]string{
 		promptPreamble(t),
 		`BRANCH="task/my-task"`,
 		`FILENAME="my-task.md"`,
 		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
 		`TASK_TITLE="My Task"`,
-		promptStateBlock(t, "CREATE_BRANCH"),
 		`echo "aaa" > a.txt`,
 		`echo "bbb" > b.txt`,
 		promptStateBlock(t, "COMMIT"),
@@ -374,84 +377,89 @@ func TestPromptCommitIncludesDescription(t *testing.T) {
 	}
 }
 
-func TestPromptPushAndMarkReady(t *testing.T) {
+func TestHostPushAndMarkReady(t *testing.T) {
+	// Simulate the host post-agent push: push branch, write marker, move to ready-for-review.
 	repoRoot, tasksDir := setupTestRepo(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-4  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task", "mato")
+	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
 	writeFile(t, filepath.Join(cloneDir, "hello.txt"), "hello world\n")
 	mustGitOutput(t, cloneDir, "add", "hello.txt")
 	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
 
-	script := strings.Join([]string{
-		promptPreamble(t),
-		`FILENAME="my-task.md"`,
-		`BRANCH="task/my-task"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
-		promptStateBlock(t, "PUSH_BRANCH"),
-		promptStateBlock(t, "MARK_READY"),
-	}, "\n\n")
-	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+	// Host pushes the branch to the repo
+	mustGitOutput(t, cloneDir, "push", "--force-with-lease", "origin", "task/my-task")
 
-	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-4"}, script)
+	// Verify the branch exists in the host repo
+	mustGitOutput(t, repoRoot, "rev-parse", "--verify", "refs/heads/task/my-task")
+
+	// Host writes branch marker
+	f, err := os.OpenFile(filepath.Join(tasksDir, "in-progress", "my-task.md"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		t.Fatalf("runBash push and mark ready: %v\noutput:\n%s", err, out)
+		t.Fatalf("open task file: %v", err)
+	}
+	fmt.Fprintf(f, "\n<!-- branch: task/my-task -->\n")
+	f.Close()
+
+	// Host moves to ready-for-review
+	if err := os.Rename(
+		filepath.Join(tasksDir, "in-progress", "my-task.md"),
+		filepath.Join(tasksDir, "ready-for-review", "my-task.md"),
+	); err != nil {
+		t.Fatalf("move to ready-for-review: %v", err)
 	}
 
-	mustGitOutput(t, repoRoot, "rev-parse", "--verify", "refs/heads/task/my-task")
 	mustExist(t, filepath.Join(tasksDir, "ready-for-review", "my-task.md"))
 	mustNotExist(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
 
-	warning := findPromptEventMessage(t, tasksDir, "conflict-warning")
-	if warning.Task != "my-task.md" || warning.Branch != "task/my-task" || warning.From != "test-agent-4" {
-		t.Fatalf("warning message = %+v, want my-task/task/my-task/test-agent-4", warning)
-	}
-	completion := findPromptEventMessage(t, tasksDir, "completion")
-	if completion.Task != "my-task.md" || completion.Branch != "task/my-task" || completion.From != "test-agent-4" {
-		t.Fatalf("completion message = %+v, want my-task/task/my-task/test-agent-4", completion)
-	}
-	if !strings.Contains(out, "Completed my-task.md on task/my-task and moved it to ready-for-review/.") {
-		t.Fatalf("mark ready output missing completion line: %s", out)
-	}
-}
-
-func TestPromptRecordsBranchInTaskFile(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
-	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-branch  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
-
-	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task", "mato")
-	writeFile(t, filepath.Join(cloneDir, "branch.txt"), "branch metadata\n")
-	mustGitOutput(t, cloneDir, "add", "branch.txt")
-	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
-
-	script := strings.Join([]string{
-		promptPreamble(t),
-		`FILENAME="my-task.md"`,
-		`BRANCH="task/my-task"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
-		promptStateBlock(t, "PUSH_BRANCH"),
-		promptStateBlock(t, "MARK_READY"),
-	}, "\n\n")
-	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
-
-	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-branch"}, script)
-	if err != nil {
-		t.Fatalf("runBash record branch metadata: %v\noutput:\n%s", err, out)
-	}
-
-	readyTask := filepath.Join(tasksDir, "ready-for-review", "my-task.md")
-	contents := readFile(t, readyTask)
+	contents := readFile(t, filepath.Join(tasksDir, "ready-for-review", "my-task.md"))
 	if !strings.Contains(contents, "<!-- branch: task/my-task -->") {
 		t.Fatalf("ready task missing branch metadata: %s", contents)
 	}
 }
 
-func TestExistingRemoteBranchIsReplacedWhenTaskBranchIsPushed(t *testing.T) {
+func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
+	// Verify branch marker is written to the task file after the host pushes.
+	repoRoot, tasksDir := setupTestRepo(t)
+	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-branch  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
+	writeFile(t, filepath.Join(cloneDir, "branch.txt"), "branch metadata\n")
+	mustGitOutput(t, cloneDir, "add", "branch.txt")
+	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
+
+	// Host pushes
+	mustGitOutput(t, cloneDir, "push", "--force-with-lease", "origin", "task/my-task")
+
+	// Before marker: no branch comment
+	contents := readFile(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
+	if strings.Contains(contents, "<!-- branch:") {
+		t.Fatalf("branch marker should not exist before host writes it: %s", contents)
+	}
+
+	// Host writes marker
+	f, err := os.OpenFile(filepath.Join(tasksDir, "in-progress", "my-task.md"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open task file: %v", err)
+	}
+	fmt.Fprintf(f, "\n<!-- branch: task/my-task -->\n")
+	f.Close()
+
+	contents = readFile(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
+	if !strings.Contains(contents, "<!-- branch: task/my-task -->") {
+		t.Fatalf("task file missing branch metadata after host write: %s", contents)
+	}
+}
+
+func TestHostReplacesExistingRemoteBranch(t *testing.T) {
+	// When a task is retried, the host creates a fresh branch and force-pushes,
+	// replacing the stale branch from the prior attempt.
 	repoRoot, tasksDir := setupTestRepo(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-stale  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
+	// Simulate a prior attempt that left a stale branch on the host repo.
 	mustGitOutput(t, repoRoot, "checkout", "-b", "task/my-task", "mato")
 	writeFile(t, filepath.Join(repoRoot, "stale.txt"), "stale branch\n")
 	mustGitOutput(t, repoRoot, "add", "stale.txt")
@@ -461,24 +469,17 @@ func TestExistingRemoteBranchIsReplacedWhenTaskBranchIsPushed(t *testing.T) {
 	mustGitOutput(t, repoRoot, "add", "base.txt")
 	mustGitOutput(t, repoRoot, "commit", "-m", "advance mato")
 
+	// Host creates a fresh clone and new task branch from the current target.
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	script := strings.Join([]string{
-		promptPreamble(t),
-		`FILENAME="my-task.md"`,
-		`BRANCH="task/my-task"`,
-		`TASK_TITLE="My Task"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
-		promptStateBlock(t, "CREATE_BRANCH"),
-		`echo "fresh branch" > fresh.txt`,
-		promptStateBlock(t, "COMMIT"),
-		promptStateBlock(t, "PUSH_BRANCH"),
-	}, "\n\n")
-	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
 
-	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-stale"}, script)
-	if err != nil {
-		t.Fatalf("runBash stale branch cleanup: %v\noutput:\n%s", err, out)
-	}
+	// Agent makes changes and commits on the fresh branch.
+	writeFile(t, filepath.Join(cloneDir, "fresh.txt"), "fresh branch\n")
+	mustGitOutput(t, cloneDir, "add", "fresh.txt")
+	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
+
+	// Host force-pushes, replacing the stale branch.
+	mustGitOutput(t, cloneDir, "push", "--force-with-lease", "origin", "task/my-task")
 
 	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "task/my-task:fresh.txt")); got != "fresh branch" {
 		t.Fatalf("fresh.txt on remote branch = %q, want %q", got, "fresh branch")
@@ -633,15 +634,16 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+	// Host creates the task branch before the agent runs.
+	mustGitOutput(t, cloneDir, "checkout", "-b", claimed.Branch)
+
 	script := strings.Join([]string{
 		promptPreamble(t),
 		promptStateBlock(t, "VERIFY_CLAIM"),
-		promptStateBlock(t, "CREATE_BRANCH"),
 		promptStateBlock(t, "WORK"),
 		`echo "hello world" > hello.txt`,
 		promptStateBlock(t, "COMMIT"),
-		promptStateBlock(t, "PUSH_BRANCH"),
-		promptStateBlock(t, "MARK_READY"),
 	}, "\n\n")
 	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
 
@@ -657,7 +659,22 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 		t.Fatalf("runBash full lifecycle: %v\noutput:\n%s", err, out)
 	}
 
+	// Host post-agent: push branch, write marker, move to ready-for-review.
+	mustGitOutput(t, cloneDir, "push", "--force-with-lease", "origin", claimed.Branch)
+
+	taskFile := filepath.Join(tasksDir, "in-progress", "add-hello.md")
+	f, fErr := os.OpenFile(taskFile, os.O_APPEND|os.O_WRONLY, 0o644)
+	if fErr != nil {
+		t.Fatalf("open task file: %v", fErr)
+	}
+	fmt.Fprintf(f, "\n<!-- branch: %s -->\n", claimed.Branch)
+	f.Close()
+
 	readyTask := filepath.Join(tasksDir, "ready-for-review", "add-hello.md")
+	if err := os.Rename(taskFile, readyTask); err != nil {
+		t.Fatalf("move to ready-for-review: %v", err)
+	}
+
 	mustExist(t, readyTask)
 	mustNotExist(t, filepath.Join(tasksDir, "backlog", "add-hello.md"))
 
@@ -675,21 +692,5 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	mustNotExist(t, mergeTask)
 	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "mato:hello.txt")); got != "hello world" {
 		t.Fatalf("hello.txt on mato = %q, want %q", got, "hello world")
-	}
-
-	messages := readPromptEventMessages(t, tasksDir)
-	var coreMessages []promptEventMessage
-	for _, msg := range messages {
-		if msg.Type == "conflict-warning" || msg.Type == "completion" {
-			coreMessages = append(coreMessages, msg)
-		}
-	}
-	if len(coreMessages) != 2 {
-		t.Fatalf("core message count = %d, want 2 (conflict-warning + completion)", len(coreMessages))
-	}
-	types := []string{coreMessages[0].Type, coreMessages[1].Type}
-	sort.Strings(types)
-	if strings.Join(types, ",") != "completion,conflict-warning" {
-		t.Fatalf("message types = %v, want conflict-warning/completion", types)
 	}
 }

@@ -65,6 +65,7 @@ type dockerConfig struct {
 	agentID                                        string
 	copilotArgs                                    []string
 	repoRoot, cloneDir, tasksDir                   string
+	targetBranch                                   string
 	timeout                                        time.Duration
 }
 
@@ -295,6 +296,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		copilotArgs:        copilotArgs,
 		repoRoot:           repoRoot,
 		tasksDir:            tasksDir,
+		targetBranch:       branch,
 		timeout:            agentTimeout,
 	}
 
@@ -407,6 +409,12 @@ func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 		if meta, _, err := frontmatter.ParseTaskFile(claimed.TaskPath); err == nil {
 			maxRetries = meta.MaxRetries
 		}
+
+		// Create task branch in the clone before launching the agent.
+		if _, err := git.Output(cloneDir, "checkout", "-b", claimed.Branch); err != nil {
+			return fmt.Errorf("create task branch %s: %w", claimed.Branch, err)
+		}
+
 		extraEnvs = append(extraEnvs,
 			"MATO_TASK_FILE="+claimed.Filename,
 			"MATO_TASK_BRANCH="+claimed.Branch,
@@ -439,20 +447,104 @@ func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	err = cmd.Run()
+	agentErr := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
 		fmt.Fprintf(os.Stderr, "error: agent timed out after %v\n", cfg.timeout)
 	}
-	return err
+
+	// Post-agent: if the task is still in in-progress/ and the agent made
+	// commits, push the branch and move the task to ready-for-review/.
+	if claimed != nil {
+		if err := postAgentPush(cfg, claimed, cloneDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: post-agent push failed: %v\n", err)
+		}
+	}
+
+	return agentErr
+}
+
+// postAgentPush checks whether the agent committed work on the task branch.
+// If commits exist and the task is still in in-progress/, the host pushes the
+// branch, writes the branch marker, and moves the task to ready-for-review/.
+func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string) error {
+	// If the agent already moved the task (ON_FAILURE → backlog/), nothing to do.
+	if _, err := os.Stat(claimed.TaskPath); err != nil {
+		return nil
+	}
+
+	// Check whether the agent made any commits above the target branch.
+	logOut, err := git.Output(cloneDir, "log", "--oneline", cfg.targetBranch+"..HEAD")
+	if err != nil {
+		return nil // can't determine; leave for recoverStuckTask
+	}
+	if strings.TrimSpace(logOut) == "" {
+		return nil // no commits; recoverStuckTask will handle recovery
+	}
+
+	// Push the task branch to the host repo.
+	if _, err := git.Output(cloneDir, "push", "--force-with-lease", "origin", claimed.Branch); err != nil {
+		return fmt.Errorf("push task branch %s: %w", claimed.Branch, err)
+	}
+
+	// Write branch marker to the task file.
+	f, err := os.OpenFile(claimed.TaskPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open task file for branch marker: %w", err)
+	}
+	_, writeErr := fmt.Fprintf(f, "\n<!-- branch: %s -->\n", claimed.Branch)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write branch marker: %w", writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close task file after branch marker: %w", closeErr)
+	}
+
+	// Move task from in-progress/ to ready-for-review/.
+	readyPath := filepath.Join(cfg.tasksDir, "ready-for-review", claimed.Filename)
+	if err := os.Rename(claimed.TaskPath, readyPath); err != nil {
+		return fmt.Errorf("move task to ready-for-review: %w", err)
+	}
+
+	// Send conflict-warning with changed files.
+	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", cfg.targetBranch+"..HEAD")
+	var filesChanged []string
+	for _, f := range strings.Split(strings.TrimSpace(filesOut), "\n") {
+		if f != "" {
+			filesChanged = append(filesChanged, f)
+		}
+	}
+	messaging.WriteMessage(cfg.tasksDir, messaging.Message{
+		From:   cfg.agentID,
+		Type:   "conflict-warning",
+		Task:   claimed.Filename,
+		Branch: claimed.Branch,
+		Files:  filesChanged,
+		Body:   "About to push",
+	})
+
+	// Send completion message.
+	messaging.WriteMessage(cfg.tasksDir, messaging.Message{
+		From:   cfg.agentID,
+		Type:   "completion",
+		Task:   claimed.Filename,
+		Branch: claimed.Branch,
+		Files:  filesChanged,
+		Body:   "Task complete, ready for review",
+	})
+	fmt.Printf("Pushed %s and moved %s to ready-for-review/\n", claimed.Branch, claimed.Filename)
+	return nil
 }
 
 // recoverStuckTask checks whether a claimed task is still in in-progress/
-// after the agent container exits. If so, the agent did not complete its
-// lifecycle (crash, OOM, SIGKILL, etc.), so the host moves the task back
+// after the agent container exits and post-agent push completes. If so, the
+// agent did not complete its lifecycle and the host could not push
+// (crash, OOM, SIGKILL, no commits, etc.), so the host moves the task back
 // to backlog/ with a failure record for a future retry attempt.
 func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
-		// Task was moved by the agent (to ready-to-merge or backlog); nothing to do.
+		// Task was moved (to ready-for-review by post-agent push, or to backlog
+		// by agent ON_FAILURE); nothing to do.
 		return
 	}
 

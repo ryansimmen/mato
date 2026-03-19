@@ -147,23 +147,24 @@ The host then writes one best-effort `intent` message via `messaging.WriteMessag
 
 ### Task state machine from `task-instructions.md`
 ```text
-VERIFY_CLAIM -> CREATE_BRANCH -> WORK -> COMMIT -> PUSH_BRANCH -> MARK_READY
-     \______________________________________________________________/
-                          unrecoverable error -> ON_FAILURE
+VERIFY_CLAIM -> WORK -> COMMIT
+     \__________________________/
+          unrecoverable error -> ON_FAILURE
 ```
+The host creates the task branch before the agent starts, and pushes it after the agent exits.
 State-by-state behavior:
 - `VERIFY_CLAIM`: read pre-resolved task details from `MATO_TASK_*` env vars, confirm the task file exists in `in-progress/`, read recent coordination messages.
-- `CREATE_BRANCH`: create `task/<safe-name>` from the target branch. The safe name is derived from the task filename stem; Go reconstructs the same name with `sanitizeForBranch(...)`.
 - `WORK`: read the task body, ignoring YAML frontmatter and comment-only metadata lines, implement the task, and run the repository's existing validation commands with up to 3 attempts.
-- `COMMIT`: `git add -A`, commit with the task title, and continue only if a commit is created.
-- `PUSH_BRANCH`: compute changed files relative to the target branch, write one best-effort `conflict-warning` message, push `origin <task-branch>` with `git push --force-with-lease` up to 3 attempts, append `<!-- branch: ... -->` after a successful push, and verify the remote branch exists.
-- `MARK_READY`: move the task file `in-progress/ -> ready-for-review/`, write one best-effort `completion` message, and exit.
+- `COMMIT`: `git add -A`, commit with the task title, and exit. The host detects commits and handles push + review transition.
 - `ON_FAILURE`: append a structured `<!-- failure: ... -->` line, try to check out the target branch, then always move the task back to `backlog/`. The host checks the retry budget on the next cycle via `SelectAndClaimTask`.
-The prompt enforces several invariants: one task per run; agents use `--force-with-lease` for task branches only; they never push directly to the target branch; and they send at most 2 messages per task (`conflict-warning`, `completion`). The `intent` message is sent by the host before the agent starts.
+
+After the agent exits, the host (`postAgentPush` in `runner.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, and sends `conflict-warning` and `completion` messages.
+
+The prompt enforces several invariants: one task per run; agents never push any branches (the host handles all pushes); they send at most 4 messages per task (3 `progress` + 1 for `ON_FAILURE`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States
 The queue is encoded directly in directories under `.tasks/`.
 ```text
-waiting/ --deps met--> backlog/ --host claim--> in-progress/ --mark ready--> ready-for-review/ --approved--> ready-to-merge/ --merge--> completed/
+waiting/ --deps met--> backlog/ --host claim--> in-progress/ --host push--> ready-for-review/ --approved--> ready-to-merge/ --merge--> completed/
    ^                      |                          |                              |
    |                      |                          +--ON_FAILURE--> backlog/       +--review rejection--> backlog/
    +--dep not met---------+                          +--host orphan recovery--> backlog/
@@ -175,8 +176,8 @@ State meanings:
 | --- | --- | --- | --- |
 | `waiting/` | blocked task | authored there initially for dependency tracking | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed and no active overlap exists |
 | `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, `ON_FAILURE` requeue, or review rejection | host `SelectAndClaimTask` moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
-| `in-progress/` | task owned by one agent | host `SelectAndClaimTask` | `MARK_READY`, `ON_FAILURE`, or host orphan recovery |
-| `ready-for-review/` | branch pushed, waiting for AI review | prompt `MARK_READY` | review agent moves it to `ready-to-merge/` on approval, or to `backlog/` on rejection |
+| `in-progress/` | task owned by one agent | host `SelectAndClaimTask` | host `postAgentPush` (to `ready-for-review/`), `ON_FAILURE`, or host orphan recovery |
+| `ready-for-review/` | branch pushed, waiting for AI review | host `postAgentPush` | review agent moves it to `ready-to-merge/` on approval, or to `backlog/` on rejection |
 | `ready-to-merge/` | reviewed and approved, waiting for host merge | review agent approval | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
 | `failed/` | retry budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when failure count reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |

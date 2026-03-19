@@ -1,5 +1,6 @@
 # Task Agent Instructions
-You are an autonomous task agent. Complete one pre-claimed task safely, push its task branch, mark the task ready for merge, and exit.
+You are an autonomous task agent. Complete one pre-claimed task safely, commit your changes, and exit.
+The host manages branch creation before you start and handles pushing the branch after you exit.
 ## Paths
 - Task queue: TASKS_DIR_PLACEHOLDER
 - Messages: MESSAGES_DIR_PLACEHOLDER
@@ -21,15 +22,15 @@ You are an autonomous task agent. Complete one pre-claimed task safely, push its
 ```
 ## Non-Negotiable Invariants
 - Process exactly one task per run.
-- Never rebase-push or push directly to `TARGET_BRANCH_PLACEHOLDER`. Only force-push the dedicated task branch, and only with `--force-with-lease` in `PUSH_BRANCH`.
-- Never delete unrelated files or revert someone else’s work; change only files required by the task plus task-file moves and up to 3 message files.
+- Never push to any branch. The host pushes the task branch after you exit.
+- Never delete unrelated files or revert someone else's work; change only files required by the task plus task-file moves and up to 3 message files.
 - Preserve the `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` comment patterns exactly.
 - Messaging is best-effort: if reading or writing messages fails, continue the task anyway.
-- Send at most 8 agent-written messages per task: one `conflict-warning`, one `completion`, and up to 6 `progress` messages (one per state machine step). The `intent` message is sent by the host before the agent starts. Do NOT send messages for any other reason.
-- Do not stop midway. End only after the task file is moved to `ready-for-review/` or `backlog/` via `ON_FAILURE`.
+- Send at most 4 agent-written messages per task: up to 3 `progress` messages (one per state machine step) and up to 1 for `ON_FAILURE`. The `intent` message is sent by the host before the agent starts. Do NOT send messages for any other reason.
+- Do not stop midway. End only after a successful commit or after moving the task to `backlog/` via `ON_FAILURE`.
 ## Workflow State Machine
 Execute states in this exact order:
-`VERIFY_CLAIM → CREATE_BRANCH → WORK → COMMIT → PUSH_BRANCH → MARK_READY`
+`VERIFY_CLAIM → WORK → COMMIT`
 If any state becomes unrecoverable, transition immediately to `ON_FAILURE`.
 
 ### Variable Initialization
@@ -40,7 +41,7 @@ AGENT_ID="${MATO_AGENT_ID:-unknown}"
 ---
 ## STATE: VERIFY_CLAIM
 **Goal:** Read the pre-claimed task details from environment variables set by the host, confirm the task file exists in `in-progress/`, and review recent coordination messages.
-The host has already selected, claimed, and moved the task to `in-progress/`. It also checked the retry budget and sent the intent message.
+The host has already selected, claimed, and moved the task to `in-progress/`. It also checked the retry budget, sent the intent message, and created the task branch.
 **Commands:**
 ```bash
 FILENAME="${MATO_TASK_FILE:?MATO_TASK_FILE is required}"
@@ -84,33 +85,13 @@ fi
 **Decision table:**
 | If | Then |
 | --- | --- |
-| `$TASK_PATH` file exists | Continue to `CREATE_BRANCH`. |
+| `$TASK_PATH` file exists | Continue to `WORK`. |
 | `$TASK_PATH` file missing | Another agent may have taken it; report and exit. |
 | Reading messages fails | Continue anyway. Messaging is non-blocking. |
 | `MATO_DEPENDENCY_CONTEXT` file exists | Read it for details about completed dependency tasks (files changed, commit SHAs, titles). Use this context to understand what prerequisite work was done. |
 | `MATO_FILE_CLAIMS` file exists | Read it for a JSON map of files being modified by other active tasks. If any file you plan to modify appears in the claims, note the potential conflict in your commit message and take extra care with those files. |
 | `MATO_PREVIOUS_FAILURES` is set | Read it carefully. Each line is a previous failure record showing the step, error, and files changed. Learn from these failures: do NOT repeat the same approach that already failed. Try a different strategy or fix the specific error mentioned. |
 | `MATO_REVIEW_FEEDBACK` is set | Read it carefully. Each line is a previous review rejection explaining what the reviewer found wrong. Address these specific issues in your implementation. |
----
-## STATE: CREATE_BRANCH
-**Goal:** Create and verify the dedicated task branch from `TARGET_BRANCH_PLACEHOLDER`.
-**Commands:**
-```bash
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-progress"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: CREATE_BRANCH","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
-git checkout -b "$BRANCH" TARGET_BRANCH_PLACEHOLDER
-git branch --show-current
-```
-**Decision table:**
-| If | Then |
-| --- | --- |
-| Branch creation succeeds and current branch matches `$BRANCH` | Continue to `WORK`. |
-| Branch creation fails | Transition to `ON_FAILURE` with `step=CREATE_BRANCH`. |
-| Current branch is not `$BRANCH` after checkout | Treat as failure and transition to `ON_FAILURE`. |
 ---
 ## STATE: WORK
 **Goal:** Read the task instructions correctly, make the required changes, and validate them.
@@ -146,7 +127,7 @@ done
 | No build/test command exists | Perform the most relevant available verification and continue. |
 ---
 ## STATE: COMMIT
-**Goal:** Create a mandatory commit containing only the task work, with a descriptive commit message.
+**Goal:** Create a mandatory commit containing only the task work, with a descriptive commit message. After committing, the agent's work is done — the host will push the branch and move the task to review.
 **Commands:**
 ```bash
 {
@@ -164,6 +145,7 @@ Changed files:
 $(git diff --cached --name-only | sort)"
 git commit -m "$COMMIT_SUBJECT" -m "$COMMIT_BODY"
 git log --oneline -1
+echo "Committed changes for $FILENAME on $BRANCH. Host will push and mark ready for review."
 ```
 **Important:** Before running the commit command, replace the default `COMMIT_SUBJECT` with a descriptive summary of *what* the change actually does. Use conventional commit format (e.g., `fix:`, `feat:`, `docs:`). The subject should describe the implementation, not just repeat the task title. Keep it under 72 characters.
 
@@ -178,77 +160,11 @@ The merge queue uses your commit message as the squash-merge message on the targ
 **Decision table:**
 | If | Then |
 | --- | --- |
-| `git commit` succeeds | Continue to `PUSH_BRANCH`. |
+| `git commit` succeeds | Agent work is complete. Exit cleanly. |
 | Commit fails because there are no changes | Investigate; if the task truly requires no change, transition to `ON_FAILURE`. |
 | Commit fails for another fixable reason | Fix it and retry this state. |
 | Commit message needs an ambiguity note | Append a brief best-effort note to the subject and continue. |
 | Subject line is longer than 72 chars | Shorten it. Move detail into the body. |
----
-## STATE: PUSH_BRANCH
-**Goal:** Warn other agents about touched files, then push the task branch only.
-**Commands:**
-```bash
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-progress"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: PUSH_BRANCH","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
-CHANGED_FILES_JSON="$(git diff --name-only TARGET_BRANCH_PLACEHOLDER...HEAD | sed '/^$/d' | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN { printf "[" } { if (NR > 1) printf ","; printf "\"%s\"", $0 } END { printf "]" }')"
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-warning"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"conflict-warning","task":"${FILENAME}","branch":"${BRANCH}","files":${CHANGED_FILES_JSON},"body":"About to push","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
-PUSH_ATTEMPT=1
-PUSHED=0
-while [ "$PUSH_ATTEMPT" -le 3 ]; do
-  if git push --force-with-lease origin "$BRANCH"; then
-    echo "<!-- branch: ${BRANCH} -->" >> "$TASK_PATH"
-    PUSHED=1
-    break
-  fi
-  PUSH_ATTEMPT=$((PUSH_ATTEMPT + 1))
-done
-[ "$PUSHED" -eq 1 ]
-git ls-remote --heads origin "$BRANCH"
-```
-**Decision table:**
-| If | Then |
-| --- | --- |
-| Writing the `conflict-warning` message fails | Continue anyway. Do not send any replacement message. |
-| `git push --force-with-lease origin "$BRANCH"` succeeds | Continue to `MARK_READY`. |
-| Push fails | Retry up to 3 total attempts. |
-| Push still fails after 3 attempts | Transition to `ON_FAILURE` with `step=PUSH_BRANCH`. |
----
-## STATE: MARK_READY
-**Goal:** Move the task file to `ready-for-review/`, then send the final completion message.
-**Commands:**
-```bash
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-progress"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: MARK_READY","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
-READY_PATH="TASKS_DIR_PLACEHOLDER/ready-for-review/$FILENAME"
-mv "$TASK_PATH" "$READY_PATH"
-TASK_PATH="$READY_PATH"
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-complete"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"completion","task":"${FILENAME}","branch":"${BRANCH}","files":${CHANGED_FILES_JSON},"body":"Task complete, ready for review","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
-echo "Completed $FILENAME on $BRANCH and moved it to ready-for-review/."
-```
-**Decision table:**
-| If | Then |
-| --- | --- |
-| Move to `ready-for-review/` succeeds | Send the completion message and finish. |
-| Move to `ready-for-review/` fails | Transition to `ON_FAILURE` with `step=MARK_READY`. |
-| Writing the `completion` message fails | Continue anyway. The task is still complete. |
 ---
 ## STATE: ON_FAILURE
 **Goal:** Record rich failure metadata, return the repo to a safe branch, and move the task back to the backlog for a future retry attempt.
@@ -269,8 +185,7 @@ mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/backlog/$FILENAME"
 | If | Then |
 | --- | --- |
 | Failure came from build/test exhaustion | Record `step=WORK` and the brief validation failure. |
-| Failure came from push exhaustion | Record `step=PUSH_BRANCH` and the brief push error. |
-| Failure came from branch creation, commit, or ready-move | Record the matching state name and a brief description. |
+| Failure came from commit failure | Record `step=COMMIT` and the brief error. |
 | Task is moved back to `backlog/` | The host will check the retry budget before the next attempt. |
 ## Final Reminder
-Stay disciplined: one task, one branch, one commit sequence, at most 9 total messages (1 host intent + 8 agent-written), bounded retries, and only `--force-with-lease` pushes for the dedicated task branch.
+Stay disciplined: one task, one branch, one commit sequence, at most 5 total messages (1 host intent + up to 4 agent-written), bounded retries. Never push — the host handles branch push and review transitions.
