@@ -160,11 +160,17 @@ func appendGitExclude(t *testing.T, cloneDir string, patterns ...string) {
 	existing := ""
 	if data, err := os.ReadFile(excludePath); err == nil {
 		existing = string(data)
+	} else if os.IsNotExist(err) {
+		// Templates directory may not be available (e.g. inside Docker);
+		// create .git/info/exclude so git excludes still work.
+		if mkErr := os.MkdirAll(filepath.Dir(excludePath), 0o755); mkErr != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", filepath.Dir(excludePath), mkErr)
+		}
 	} else {
 		t.Fatalf("os.ReadFile(%s): %v", excludePath, err)
 	}
 
-	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		t.Fatalf("os.OpenFile(%s): %v", excludePath, err)
 	}
