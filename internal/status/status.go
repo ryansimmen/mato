@@ -362,11 +362,8 @@ func listTasksInDir(tasksDir, dir string) []taskEntry {
 }
 
 func countFailureRecords(path string) int {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	return strings.Count(string(data), "<!-- failure:")
+	count, _ := queue.CountFailureLines(path)
+	return count
 }
 
 type statusAgent struct {
