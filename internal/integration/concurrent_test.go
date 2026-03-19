@@ -418,9 +418,9 @@ func TestConcurrentMergeQueueTwoHosts(t *testing.T) {
 	betaCommits := 0
 	for _, subject := range logSubjects {
 		switch subject {
-		case "Alpha":
+		case "alpha change":
 			alphaCommits++
-		case "Beta":
+		case "beta change":
 			betaCommits++
 		}
 	}
