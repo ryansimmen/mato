@@ -179,7 +179,10 @@ func ReadAllPresence(tasksDir string) (map[string]PresenceInfo, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(presenceDir, entry.Name()))
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read presence file %s: %w", entry.Name(), err)
 		}
 		var info PresenceInfo
 		if err := json.Unmarshal(data, &info); err != nil {
@@ -291,7 +294,10 @@ func ReadAllCompletionDetails(tasksDir string) ([]CompletionDetail, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(completionsDir, entry.Name()))
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read completion detail %s: %w", entry.Name(), err)
 		}
 		var detail CompletionDetail
 		if err := json.Unmarshal(data, &detail); err != nil {

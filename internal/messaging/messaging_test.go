@@ -1457,3 +1457,139 @@ func TestReadAllCompletionDetailsNonExistentDir(t *testing.T) {
 		t.Fatalf("expected nil, got %v", got)
 	}
 }
+
+func TestReadAllPresence_PropagatesReadError(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Write a valid presence file first.
+	if err := WritePresence(tasksDir, "agent-ok", "task-ok.md", "task/ok"); err != nil {
+		t.Fatalf("WritePresence: %v", err)
+	}
+
+	// Create an unreadable file in the presence directory.
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	badFile := filepath.Join(presenceDir, "bad-agent.json")
+	if err := os.WriteFile(badFile, []byte(`{}`), 0o000); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := ReadAllPresence(tasksDir)
+	if err == nil {
+		t.Fatal("expected error from ReadAllPresence when file is unreadable, got nil")
+	}
+	if !strings.Contains(err.Error(), "read presence file") {
+		t.Fatalf("expected 'read presence file' in error, got: %v", err)
+	}
+}
+
+func TestReadAllPresence_SkipsDeletedFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	if err := WritePresence(tasksDir, "agent-a", "task-a.md", "task/a"); err != nil {
+		t.Fatalf("WritePresence: %v", err)
+	}
+
+	// Write a second presence file, then delete it to simulate a race.
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	vanishing := filepath.Join(presenceDir, "vanishing.json")
+	if err := os.WriteFile(vanishing, []byte(`{"agent_id":"vanishing"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Remove(vanishing); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	// Even though vanishing.json was listed by ReadDir and then removed,
+	// ReadAllPresence should skip it (ErrNotExist) and return the valid entry.
+	result, err := ReadAllPresence(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllPresence: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(result))
+	}
+	if _, ok := result["agent-a"]; !ok {
+		t.Fatal("expected presence for agent-a")
+	}
+}
+
+func TestReadAllCompletionDetails_PropagatesReadError(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Write a valid completion detail first.
+	d := CompletionDetail{
+		TaskID:   "task-ok",
+		TaskFile: "task-ok.md",
+		Branch:   "task/ok",
+		CommitSHA: "abc",
+		Title:    "OK",
+		MergedAt: time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC),
+	}
+	if err := WriteCompletionDetail(tasksDir, d); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+
+	// Create an unreadable file in the completions directory.
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	badFile := filepath.Join(completionsDir, "bad-task.json")
+	if err := os.WriteFile(badFile, []byte(`{}`), 0o000); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := ReadAllCompletionDetails(tasksDir)
+	if err == nil {
+		t.Fatal("expected error from ReadAllCompletionDetails when file is unreadable, got nil")
+	}
+	if !strings.Contains(err.Error(), "read completion detail") {
+		t.Fatalf("expected 'read completion detail' in error, got: %v", err)
+	}
+}
+
+func TestReadAllCompletionDetails_SkipsDeletedFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	d := CompletionDetail{
+		TaskID:   "task-a",
+		TaskFile: "task-a.md",
+		Branch:   "task/a",
+		CommitSHA: "aaa",
+		Title:    "Task A",
+		MergedAt: time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC),
+	}
+	if err := WriteCompletionDetail(tasksDir, d); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
+
+	// Write then delete a completion file to simulate a race.
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	vanishing := filepath.Join(completionsDir, "vanishing.json")
+	if err := os.WriteFile(vanishing, []byte(`{"task_id":"vanishing"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Remove(vanishing); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	got, err := ReadAllCompletionDetails(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllCompletionDetails: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 detail, got %d", len(got))
+	}
+	if got[0].TaskID != "task-a" {
+		t.Fatalf("got[0].TaskID = %q, want %q", got[0].TaskID, "task-a")
+	}
+}
