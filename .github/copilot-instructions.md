@@ -11,7 +11,7 @@ When asked to implement a change, follow this process:
 3. **Update docs** — If the change affects behavior, update the relevant docs:
    - `README.md` — user-facing quickstart and overview
    - `docs/architecture.md` — system design and code structure
-   - `docs/task-format.md` — task file format reference (also update `.github/skills/mato-skill/SKILL.md` if changing the task format — it's distributed standalone via `scripts/install-skill.sh`)
+   - `docs/task-format.md` — task file format reference (also update `.github/skills/mato/SKILL.md` if changing the task format — it's distributed standalone via `scripts/install-skill.sh`)
    - `docs/messaging.md` — messaging protocol
    - `docs/configuration.md` — CLI flags, env vars, Makefile targets
 
@@ -74,4 +74,4 @@ When asked to implement a change, follow this process:
 - **Messaging**: `.tasks/messages/` has `events/`, `presence/`, and `completions/` subdirs. Message types: `intent`, `progress`, `conflict-warning`, `completion`. The host writes file claims (`file-claims.json`) from active tasks' `affects` metadata.
 - **Docker defaults**: Image `ubuntu:24.04` (override via `MATO_DOCKER_IMAGE`), model `claude-opus-4.6` (override by passing `--model` in copilot args). Key injected env vars: `MATO_AGENT_ID`, `MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`, `MATO_MESSAGING_ENABLED`, `MATO_PREVIOUS_FAILURES`, `MATO_REVIEW_FEEDBACK`, `MATO_FILE_CLAIMS`, `MATO_DEPENDENCY_CONTEXT`.
 - **`mato status`**: Shows queue overview, active agents, in-progress/deferred/blocked tasks, recent completions and messages. See `internal/status/status.go`.
-- **Skills**: `.github/skills/mato-skill/SKILL.md` is a standalone code review skill installed via `scripts/install-skill.sh` to `~/.copilot/skills/`.
+- **Skills**: `.github/skills/mato/SKILL.md` is a standalone task planning skill installed via `scripts/install-skill.sh` to `~/.copilot/skills/`.

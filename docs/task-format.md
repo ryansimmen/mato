@@ -1,6 +1,6 @@
 # mato Task File Format Reference
 
-<!-- NOTE: The task format spec is also duplicated in .github/skills/mato-skill/SKILL.md
+<!-- NOTE: The task format spec is also duplicated in .github/skills/mato/SKILL.md
      (distributed standalone via scripts/install-skill.sh). Keep both in sync. -->
 
 ## Overview
