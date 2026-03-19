@@ -241,6 +241,84 @@ func TestProcessQueueMergesReadyTaskBranch(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_CleansTaskBranchAfterSuccessfulMerge(t *testing.T) {
+	repoRoot := setupTestRepo(t)
+	originDir := filepath.Join(t.TempDir(), "origin.git")
+	if _, err := git.Output("", "init", "--bare", originDir); err != nil {
+		t.Fatalf("git init --bare origin: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "remote", "add", "origin", originDir); err != nil {
+		t.Fatalf("git remote add origin: %v", err)
+	}
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "push", "-u", "origin", "mato"); err != nil {
+		t.Fatalf("git push -u origin mato: %v", err)
+	}
+
+	taskBranch := "task/cleanup-test"
+	if _, err := git.Output(repoRoot, "checkout", "-b", taskBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", taskBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "feature.txt"), []byte("new feature\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile feature.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "feature.txt"); err != nil {
+		t.Fatalf("git add feature.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "add feature"); err != nil {
+		t.Fatalf("git commit add feature: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "push", "-u", "origin", taskBranch); err != nil {
+		t.Fatalf("git push -u origin %s: %v", taskBranch, err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	// Verify the task branch exists on origin before merge.
+	if out, err := git.Output(repoRoot, "ls-remote", "--heads", "origin", taskBranch); err != nil {
+		t.Fatalf("git ls-remote before ProcessQueue: %v", err)
+	} else if strings.TrimSpace(out) == "" {
+		t.Fatalf("expected task branch %s to exist on origin before ProcessQueue", taskBranch)
+	}
+
+	taskFile := filepath.Join(tasksDir, "ready-to-merge", "cleanup-test.md")
+	taskContent := "---\npriority: 5\n---\n<!-- branch: " + taskBranch + " -->\n# Cleanup test\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task file: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "completed", "cleanup-test.md")); err != nil {
+		t.Fatalf("completed task file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "feature.txt")); err != nil {
+		t.Fatalf("merged feature file missing from target branch: %v", err)
+	}
+
+	// Verify the task branch was deleted from origin after successful merge.
+	if out, err := git.Output(repoRoot, "ls-remote", "--heads", "origin", taskBranch); err != nil {
+		t.Fatalf("git ls-remote after ProcessQueue: %v", err)
+	} else if strings.TrimSpace(out) != "" {
+		t.Fatalf("expected task branch %s to be deleted from origin after successful merge, got %q", taskBranch, out)
+	}
+
+	// Verify the local task branch was also deleted.
+	if out, err := git.Output(repoRoot, "branch", "--list", taskBranch); err != nil {
+		t.Fatalf("git branch --list: %v", err)
+	} else if strings.TrimSpace(out) != "" {
+		t.Fatalf("expected local task branch %s to be deleted after successful merge, got %q", taskBranch, out)
+	}
+}
+
 func TestProcessQueue_UsesBranchFromTaskFile(t *testing.T) {
 	repoRoot := setupTestRepo(t)
 	tasksDir := setupTasksDir(t)
