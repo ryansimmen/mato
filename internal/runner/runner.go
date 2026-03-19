@@ -560,8 +560,9 @@ func checkIdleTransition(isIdle bool, wasIdle *bool) bool {
 	return shouldPrint
 }
 
-// extractFailureLines reads a task file and returns all failure record lines
-// (lines containing "<!-- failure:") joined by newlines.
+// extractFailureLines reads a task file and returns all failure record
+// metadata lines (lines starting with "<!-- failure:") joined by newlines.
+// References to the marker inside the task body are ignored.
 // Returns "" if the file has no failure records or cannot be read.
 func extractFailureLines(taskPath string) string {
 	data, err := os.ReadFile(taskPath)
@@ -570,7 +571,7 @@ func extractFailureLines(taskPath string) string {
 	}
 	var lines []string
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, "<!-- failure:") {
+		if strings.HasPrefix(strings.TrimSpace(line), "<!-- failure:") {
 			lines = append(lines, strings.TrimSpace(line))
 		}
 	}

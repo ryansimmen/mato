@@ -412,6 +412,21 @@ func TestExtractFailureLines_MultipleFailures(t *testing.T) {
 	}
 }
 
+func TestExtractFailureLines_IgnoresBodyText(t *testing.T) {
+	content := "---\npriority: 5\n---\n# Retry budget\n`CountFailureLines()` counts `<!-- failure: ... -->` records.\n<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed -->\n"
+	f := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(f, []byte(content), 0o644)
+
+	got := extractFailureLines(f)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 failure line (ignoring body text), got %d: %q", len(lines), got)
+	}
+	if !strings.Contains(lines[0], "agent-1") {
+		t.Fatalf("expected agent-1 failure line, got %q", lines[0])
+	}
+}
+
 func TestExtractFailureLines_NonexistentFile(t *testing.T) {
 	got := extractFailureLines(filepath.Join(t.TempDir(), "nonexistent.md"))
 	if got != "" {
