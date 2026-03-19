@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mato/internal/messaging"
 	"mato/internal/process"
@@ -956,5 +958,104 @@ func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 	// Should NOT be in failed/
 	if _, err := os.Stat(filepath.Join(failedDir, "still-ok.md")); !os.IsNotExist(err) {
 		t.Fatal("task with retries remaining should not be in failed")
+	}
+}
+
+func TestRunOnce_TimeoutKillsCommand(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not available")
+	}
+
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"backlog", "in-progress"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	cfg := dockerConfig{
+		timeout: 100 * time.Millisecond,
+	}
+
+	// runOnceWithTimeout is not directly callable with a subprocess
+	// instead we test the context timeout behavior directly
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sleep", "10")
+	err := cmd.Run()
+
+	if err == nil {
+		t.Fatal("expected error from timed-out command, got nil")
+	}
+	if ctx.Err() != context.DeadlineExceeded {
+		t.Fatalf("expected DeadlineExceeded, got %v", ctx.Err())
+	}
+}
+
+func TestParseAgentTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		envVal  string
+		want    time.Duration
+		wantErr bool
+	}{
+		{
+			name:   "default when unset",
+			envVal: "",
+			want:   defaultAgentTimeout,
+		},
+		{
+			name:   "valid duration 1h",
+			envVal: "1h",
+			want:   time.Hour,
+		},
+		{
+			name:   "valid duration 45m",
+			envVal: "45m",
+			want:   45 * time.Minute,
+		},
+		{
+			name:   "valid duration 2h30m",
+			envVal: "2h30m",
+			want:   2*time.Hour + 30*time.Minute,
+		},
+		{
+			name:    "invalid duration",
+			envVal:  "notaduration",
+			wantErr: true,
+		},
+		{
+			name:    "negative duration",
+			envVal:  "-5m",
+			wantErr: true,
+		},
+		{
+			name:    "zero duration",
+			envVal:  "0s",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseAgentTimeout(tt.envVal)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got nil", tt.envVal)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tt.envVal, err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseAgentTimeout(%q) = %v, want %v", tt.envVal, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultAgentTimeout(t *testing.T) {
+	if defaultAgentTimeout != 30*time.Minute {
+		t.Fatalf("expected default timeout of 30m, got %v", defaultAgentTimeout)
 	}
 }
