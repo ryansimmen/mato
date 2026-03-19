@@ -78,7 +78,6 @@ if ! git fetch origin "$BRANCH" 2>/dev/null; then
   FAIL_REASON="could not fetch branch $BRANCH from origin"
   # transition to ON_FAILURE
 fi
-git diff "TARGET_BRANCH_PLACEHOLDER...origin/$BRANCH" > /tmp/review-diff.txt
 git diff --name-only "TARGET_BRANCH_PLACEHOLDER...origin/$BRANCH"
 ```
 Read the full content of each changed file on the task branch for context:
