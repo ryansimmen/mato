@@ -360,10 +360,12 @@ func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 
 	fmt.Printf("Launching agent from %s (clone: %s)\n", cfg.repoRoot, cloneDir)
 
-	extraEnvs := []string{
-		"MATO_MAX_RETRIES=3",
-	}
+	maxRetries := 3
+	extraEnvs := []string{}
 	if claimed != nil {
+		if meta, _, err := frontmatter.ParseTaskFile(claimed.TaskPath); err == nil {
+			maxRetries = meta.MaxRetries
+		}
 		extraEnvs = append(extraEnvs,
 			"MATO_TASK_FILE="+claimed.Filename,
 			"MATO_TASK_BRANCH="+claimed.Branch,
@@ -381,6 +383,7 @@ func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 			extraEnvs = append(extraEnvs, "MATO_REVIEW_FEEDBACK="+reviewFeedback)
 		}
 	}
+	extraEnvs = append(extraEnvs, fmt.Sprintf("MATO_MAX_RETRIES=%d", maxRetries))
 
 	args := buildDockerArgs(cfg, extraEnvs, nil)
 
