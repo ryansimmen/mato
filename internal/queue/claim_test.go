@@ -772,3 +772,73 @@ func TestSelectAndClaimTask_InvalidYAML_ExhaustedRetries_UsesDefault(t *testing.
 		t.Fatalf("bad-exhausted.md not in failed: %v", err)
 	}
 }
+
+func TestCountFailureLines_NonexistentFile(t *testing.T) {
+	count, err := CountFailureLines("/nonexistent/path/task.md")
+	if err == nil {
+		t.Fatal("expected error for non-existent file, got nil")
+	}
+	if count != 0 {
+		t.Fatalf("expected count 0, got %d", count)
+	}
+}
+
+func TestCountFailureLines_ValidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	writeTestFile(t, path, strings.Join([]string{
+		"# Task",
+		"<!-- failure: agent-1 at 2025-01-01T00:00:00Z step=WORK error=build -->",
+		"<!-- failure: agent-2 at 2025-01-02T00:00:00Z step=PUSH error=push -->",
+	}, "\n"))
+
+	count, err := CountFailureLines(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 failures, got %d", count)
+	}
+}
+
+func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Create a task file in backlog, then make it unreadable.
+	taskPath := filepath.Join(dir, "backlog", "unreadable.md")
+	writeTestFile(t, taskPath, "# Unreadable\nDo stuff.\n")
+	if err := os.Chmod(taskPath, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(taskPath, 0o644) })
+
+	// Also add a readable fallback task.
+	writeTestFile(t, filepath.Join(dir, "backlog", "readable.md"), "# Readable\nDo stuff.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "unreadable.md\nreadable.md\n")
+
+	// Capture stderr to verify warning.
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	task, err := SelectAndClaimTask(dir, "agent-x", nil)
+
+	w.Close()
+	stderrBytes, _ := io.ReadAll(r)
+	os.Stderr = oldStderr
+
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected readable.md to be claimed, got nil")
+	}
+	if task.Filename != "readable.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "readable.md")
+	}
+
+	stderrStr := string(stderrBytes)
+	if !strings.Contains(stderrStr, "could not count failures") {
+		t.Fatalf("expected warning about unreadable file in stderr, got: %s", stderrStr)
+	}
+}

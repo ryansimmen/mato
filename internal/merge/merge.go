@@ -14,6 +14,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/process"
+	"mato/internal/queue"
 )
 
 type mergeQueueTask struct {
@@ -401,12 +402,12 @@ func shouldFailTask(taskPath string) bool {
 		maxRetries = meta.MaxRetries
 	}
 
-	data, err := os.ReadFile(taskPath)
-	if err != nil {
+	failures, failErr := queue.CountFailureLines(taskPath)
+	if failErr != nil {
+		// Can't read the file — conservative choice: don't move to failed.
 		return false
 	}
 
-	failures := strings.Count(string(data), "<!-- failure:")
 	return failures >= maxRetries
 }
 
