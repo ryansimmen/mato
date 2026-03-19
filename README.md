@@ -1,6 +1,6 @@
 # Multi Agent Task Orchestrator (mato)
 
-Runs autonomous Copilot agents against a filesystem-backed task queue in Docker. Agents claim work, coordinate through `.tasks/`, push task branches, and the host merge queue squash-merges completed work into the target branch. Every task branch is automatically reviewed by an AI review agent before merging. The review agent checks for bugs, logic errors, regressions, and convention violations. See [Architecture](docs/architecture.md) for details.
+Runs autonomous Copilot agents against a filesystem-backed task queue in Docker. Agents claim work, coordinate through `.tasks/`, commit on task branches, and the host pushes task branches and squash-merges completed work into the target branch. Every task branch is automatically reviewed by an AI review agent before merging. The review agent checks for bugs, logic errors, regressions, and convention violations. See [Architecture](docs/architecture.md) for details.
 
 ## Requirements
 
@@ -95,7 +95,7 @@ Failed tasks are retried up to 3 times before moving to `failed/`.
 
 1. Add tasks to `waiting/` or `backlog/`.
 2. Mato promotes ready tasks into `backlog/`, orders them by priority, and defers exact `affects` conflicts.
-3. An agent claims a backlog task, works in an isolated clone, and pushes a `task/<name>` branch.
+3. An agent claims a backlog task, works in an isolated clone on a host-created `task/<name>` branch, and commits. The host pushes the branch after the agent exits.
 4. Agents communicate through `.tasks/messages/` so concurrent runs can share intent and completion events.
 5. A review agent automatically evaluates each completed task branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with feedback for the next attempt.
 6. The host merge queue processes `ready-to-merge/` and squash-merges finished task branches into the target branch.

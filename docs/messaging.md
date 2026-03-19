@@ -51,9 +51,9 @@ Field meanings:
 ## Message Types
 Only these four message types are valid:
 - `intent`: sent by the host (Go) right after a task is claimed, before the agent container starts
-- `progress`: sent by the agent at each state machine transition, for observability (one per step: `VERIFY_CLAIM`, `CREATE_BRANCH`, `WORK`, `COMMIT`, `PUSH_BRANCH`, `MARK_READY`)
-- `conflict-warning`: sent by the agent in `PUSH_BRANCH`, before `git push`, with the changed file list
-- `completion`: sent by the agent in `MARK_READY`, after moving the task to `ready-for-review/`, with the final changed file list
+- `progress`: sent by the agent at each state machine transition, for observability (one per step: `VERIFY_CLAIM`, `WORK`, `COMMIT`)
+- `conflict-warning`: sent by the host after pushing the task branch, with the changed file list
+- `completion`: sent by the host after moving the task to `ready-for-review/`, with the final changed file list
 
 No other message types are part of the protocol.
 
@@ -95,19 +95,17 @@ The host injects `MATO_FILE_CLAIMS` pointing to the file-claims path inside the 
 Messaging maps directly to the task-agent state machine. Each step emits a `progress` message for observability:
 - **Host (before agent start)**: write one `intent` via `messaging.WriteMessage(...)` after claiming the task
 - `VERIFY_CLAIM`: write one `progress`, then read recent `events/*.json` for coordination awareness. If `MATO_PREVIOUS_FAILURES` is set, the agent can review prior failure records to avoid repeating the same mistakes.
-- `CREATE_BRANCH`: write one `progress`
 - `WORK`: write one `progress`
 - `COMMIT`: write one `progress`
-- `PUSH_BRANCH`: write one `progress`, then write one `conflict-warning` before pushing
-- `MARK_READY`: write one `progress`, move the task file, then write one `completion`
 - `ON_FAILURE`: no failure message; failure details go into the task file itself
+- **Host (after agent exits)**: if commits exist, write one `conflict-warning` and one `completion` after pushing the branch and moving the task to `ready-for-review/`
 
 This is another reason the channel is advisory: queue transitions and git operations still drive progress even if message I/O is unavailable.
 
 ## Guardrails
 The protocol is intentionally narrow:
-- maximum 9 messages per task: 1 `intent` + up to 6 `progress` + 1 `conflict-warning` + 1 `completion`
-- the agent sends at most 8 messages (the host sends the `intent`)
+- maximum 6 messages per task: 1 `intent` + up to 3 `progress` + 1 `conflict-warning` + 1 `completion`
+- the agent sends at most 4 messages (the host sends `intent`, `conflict-warning`, and `completion`)
 - message read/write failures must not block task work
 - no ad hoc or extra message types
 
