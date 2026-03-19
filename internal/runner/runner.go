@@ -37,6 +37,8 @@ type dockerConfig struct {
 	gitReceivePackPath, ghPath, goRoot              string
 	gitName, gitEmail, homeDir, ghConfigDir         string
 	hasGhConfig                                    bool
+	gitTemplatesDir                                string
+	hasGitTemplates                                bool
 	systemCertsDir                                 string
 	hasSystemCerts                                 bool
 	agentID                                        string
@@ -95,6 +97,9 @@ func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string
 	)
 	if cfg.hasGhConfig {
 		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", cfg.ghConfigDir, containerHome))
+	}
+	if cfg.hasGitTemplates {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", cfg.gitTemplatesDir, cfg.gitTemplatesDir))
 	}
 	if cfg.hasSystemCerts {
 		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", cfg.systemCertsDir))
@@ -215,6 +220,12 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	}
 	goRoot := runtime.GOROOT()
 
+	gitTemplatesDir := "/usr/share/git-core/templates"
+	hasGitTemplates := false
+	if info, statErr := os.Stat(gitTemplatesDir); statErr == nil && info.IsDir() {
+		hasGitTemplates = true
+	}
+
 	systemCertsDir := "/etc/ssl/certs"
 	hasSystemCerts := false
 	if info, statErr := os.Stat(systemCertsDir); statErr == nil && info.IsDir() {
@@ -249,6 +260,8 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		homeDir:            homeDir,
 		ghConfigDir:        ghConfigDir,
 		hasGhConfig:        hasGhConfig,
+		gitTemplatesDir:    gitTemplatesDir,
+		hasGitTemplates:    hasGitTemplates,
 		systemCertsDir:     systemCertsDir,
 		hasSystemCerts:     hasSystemCerts,
 		agentID:            agentID,
