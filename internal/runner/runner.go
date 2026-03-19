@@ -361,7 +361,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 	cloneDir, err := git.CreateClone(cfg.repoRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("create clone: %w", err)
 	}
 	defer git.RemoveClone(cloneDir)
 
