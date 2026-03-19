@@ -418,13 +418,19 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	}
 
 	dst := filepath.Join(tasksDir, "backlog", claimed.Filename)
-	if _, err := os.Stat(dst); err == nil {
-		fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: destination already exists in backlog\n", claimed.Filename)
+	// Use os.Link + os.Remove instead of os.Rename to atomically prevent
+	// overwriting an existing file at dst (TOCTOU race fix). os.Link fails
+	// with os.ErrExist if the destination already exists.
+	if err := os.Link(claimed.TaskPath, dst); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: destination already exists in backlog\n", claimed.Filename)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
+		}
 		return
 	}
-	if err := os.Rename(claimed.TaskPath, dst); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
-		return
+	if err := os.Remove(claimed.TaskPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not remove in-progress task %s after linking to backlog: %v\n", claimed.Filename, err)
 	}
 
 	f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
