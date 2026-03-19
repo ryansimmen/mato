@@ -1650,29 +1650,37 @@ func TestFailMergeTask_MovesTaskEvenWhenAppendFails(t *testing.T) {
 func TestFailMergeTask_NoDst_ReturnsAppendError(t *testing.T) {
 	dir := t.TempDir()
 	taskFile := filepath.Join(dir, "task.md")
-	os.WriteFile(taskFile, []byte("# Task\n"), 0o444)
+	os.WriteFile(taskFile, []byte("# Task\n"), 0o644)
+
+	// Make directory read-only so temp file creation fails during atomic write.
+	os.Chmod(dir, 0o555)
 	t.Cleanup(func() {
-		os.Chmod(taskFile, 0o644)
+		os.Chmod(dir, 0o755)
 	})
 
 	// When dst is empty and append fails, should return the error
 	err := failMergeTask(taskFile, "", "test failure")
 	if err == nil {
-		t.Fatal("failMergeTask with empty dst should return append error when file is read-only")
+		t.Fatal("failMergeTask with empty dst should return append error when directory is read-only")
 	}
 }
 
 func TestFailMergeTask_BothAppendAndMoveFail(t *testing.T) {
 	dir := t.TempDir()
-	taskFile := filepath.Join(dir, "task.md")
-	os.WriteFile(taskFile, []byte("# Task\n"), 0o444)
+	subdir := filepath.Join(dir, "tasks")
+	os.MkdirAll(subdir, 0o755)
+	taskFile := filepath.Join(subdir, "task.md")
+	os.WriteFile(taskFile, []byte("# Task\n"), 0o644)
 
 	// Create a regular file where the destination directory should be,
 	// so MkdirAll fails when trying to create subdirectories under it.
 	blocker := filepath.Join(dir, "blocked-dir")
 	os.WriteFile(blocker, []byte("not a directory"), 0o644)
+
+	// Make the task directory read-only so atomic write fails.
+	os.Chmod(subdir, 0o555)
 	t.Cleanup(func() {
-		os.Chmod(taskFile, 0o644)
+		os.Chmod(subdir, 0o755)
 	})
 
 	dstPath := filepath.Join(blocker, "sub", "task.md")
@@ -1817,5 +1825,77 @@ func TestParseAgentCommitLog_MultiCommit(t *testing.T) {
 	// Should NOT contain the second commit's subject.
 	if strings.Contains(body, "fix: typo") {
 		t.Fatalf("body should not contain second commit's content, got %q", body)
+	}
+}
+
+func TestAppendTaskRecord_AtomicWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	original := "# Test task\nSome content\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	if err := appendTaskRecord(path, "<!-- merged: merge-queue at %s -->", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatalf("appendTaskRecord: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile after append: %v", err)
+	}
+	content := string(data)
+
+	if !strings.HasPrefix(content, original) {
+		t.Fatalf("original content was not preserved: got %q", content)
+	}
+	if !strings.Contains(content, "<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->") {
+		t.Fatalf("appended record not found in content: %q", content)
+	}
+
+	// Verify no temp files remain after successful write.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("os.ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Fatalf("temp file was not cleaned up: %s", e.Name())
+		}
+	}
+}
+
+func TestAppendTaskRecord_NonexistentFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonexistent.md")
+
+	err := appendTaskRecord(path, "<!-- failure: test -->")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file, got nil")
+	}
+	if !strings.Contains(err.Error(), "read task file") {
+		t.Fatalf("error should mention reading task file, got: %v", err)
+	}
+}
+
+func TestAppendTaskRecord_ReadOnlyDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	// Make the directory read-only so temp file creation fails.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("os.Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	err := appendTaskRecord(path, "<!-- failure: test -->")
+	if err == nil {
+		t.Fatal("expected error when directory is read-only, got nil")
+	}
+	if !strings.Contains(err.Error(), "create temp file") {
+		t.Fatalf("error should mention temp file creation, got: %v", err)
 	}
 }
