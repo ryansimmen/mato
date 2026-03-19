@@ -357,6 +357,107 @@ func TestEnsureGitignored_DoesNotCommitUnrelatedStagedFiles(t *testing.T) {
 	}
 }
 
+func TestEnsureGitignored_UnreadableGitignoreReturnsError(t *testing.T) {
+	_, repo := initBareAndClone(t)
+
+	// Create a .gitignore that is not readable.
+	gitignorePath := filepath.Join(repo, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(gitignorePath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// Restore permissions so TempDir cleanup works.
+		os.Chmod(gitignorePath, 0o644)
+	})
+
+	err := EnsureGitignored(repo, "/.tasks/")
+	if err == nil {
+		t.Fatal("expected error for unreadable .gitignore, got nil")
+	}
+	if !strings.Contains(err.Error(), "read .gitignore") {
+		t.Errorf("expected 'read .gitignore' in error, got: %v", err)
+	}
+}
+
+func TestEnsureGitignored_CreatesNewGitignore(t *testing.T) {
+	_, repo := initBareAndClone(t)
+
+	// No .gitignore exists yet.
+	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
+		t.Fatalf("EnsureGitignored: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), "/.tasks/") {
+		t.Errorf("expected .gitignore to contain /.tasks/, got: %s", data)
+	}
+	// Verify file ends with newline.
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		t.Error("expected .gitignore to end with newline")
+	}
+}
+
+func TestEnsureGitignored_AppendsToFileWithoutTrailingNewline(t *testing.T) {
+	_, repo := initBareAndClone(t)
+
+	// Create a .gitignore without a trailing newline, commit it.
+	gitignorePath := filepath.Join(repo, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("*.log"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", repo, "add", ".gitignore")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", repo, "commit", "-m", "add gitignore")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
+		t.Fatalf("EnsureGitignored: %v", err)
+	}
+
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d: %s", len(lines), data)
+	}
+	if lines[0] != "*.log" {
+		t.Errorf("expected first line '*.log', got %q", lines[0])
+	}
+	if lines[1] != "/.tasks/" {
+		t.Errorf("expected second line '/.tasks/', got %q", lines[1])
+	}
+}
+
+func TestEnsureGitignored_AtomicWritePreservesPermissions(t *testing.T) {
+	_, repo := initBareAndClone(t)
+
+	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
+		t.Fatalf("EnsureGitignored: %v", err)
+	}
+
+	gitignorePath := filepath.Join(repo, ".gitignore")
+	info, err := os.Stat(gitignorePath)
+	if err != nil {
+		t.Fatalf("stat .gitignore: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0o644 {
+		t.Errorf("expected .gitignore permissions 0644, got %o", perm)
+	}
+}
+
 func TestEnsureGitignored_Idempotent(t *testing.T) {
 	_, repo := initBareAndClone(t)
 
