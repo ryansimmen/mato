@@ -286,7 +286,11 @@ func ReconcileReadyQueue(tasksDir string) int {
 		path := filepath.Join(waitingDir, e.Name())
 		meta, _, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse waiting task %s: %v\n", e.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", e.Name(), err)
+			failedPath := filepath.Join(tasksDir, "failed", e.Name())
+			if moveErr := safeRename(path, failedPath); moveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", e.Name(), moveErr)
+			}
 			continue
 		}
 
