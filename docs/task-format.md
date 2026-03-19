@@ -52,7 +52,7 @@ Arrays may be written as inline lists (`[a, b]`) or block lists.
 | `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries by exact string match and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). |
 | `tags` | string array | empty | Free-form categorization labels. Parsed today, but not used by queue reconciliation. |
 | `estimated_complexity` | string | empty | Human hint for task size. Use `simple`, `medium`, or `complex` by convention; current parsing does not enforce these values. |
-| `max_retries` | int | `3` | Maximum failure records before the task moves to `failed/`. The host merge queue reads this per-task from frontmatter (authoritative). The agent uses a global default via `MATO_MAX_RETRIES` env var (safety net). |
+| `max_retries` | int | `3` | Maximum number of `<!-- failure: ... -->` records before the task moves to `failed/`. A task with `max_retries: 3` is moved to `failed/` once it accumulates 3 failure records (i.e. `failures >= max_retries`). The host merge queue reads this per-task from frontmatter (authoritative). The agent uses a global default via `MATO_MAX_RETRIES` env var (safety net). |
 
 ### Frontmatter syntax examples
 Inline arrays:
@@ -92,8 +92,8 @@ Expected comment patterns:
 What they mean:
 - `claimed-by` records which agent owns an in-progress task.
 - `branch:` records the pushed task branch name after a successful agent push; the merge queue reads this first and falls back to the filename-derived branch when absent.
-- `failure:` records a failed task agent attempt; failure lines are counted against the task's `max_retries` budget. Recovery and merge logic may also append `failure:` lines (e.g. `mato-recovery` or `merge-queue`).
-- `review-failure:` records a review infrastructure failure (e.g. network blip during `git fetch`, diff timeout). These are tracked separately from task failures and do **not** count against the task's `max_retries` budget. Only review-failure lines are counted for the review retry budget.
+- `failure:` records a failed task agent attempt; failure records are counted against the task's `max_retries` budget. Recovery and merge logic may also append `failure:` records (e.g. `mato-recovery` or `merge-queue`).
+- `review-failure:` records a review infrastructure failure (e.g. network blip during `git fetch`, diff timeout). These are tracked separately from task failure records and do **not** count against the task's `max_retries` budget. Only review-failure records are counted for the review retry budget.
 - `review-rejection:` records feedback from the review agent when rejecting a task. Format: `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->`. Review rejections do **not** count against `max_retries`. The feedback is passed to the implementing agent via the `MATO_REVIEW_FEEDBACK` environment variable on the next attempt.
 - `reviewed:` records that the review agent approved the task. Format: `<!-- reviewed: <agent-id> at <timestamp> — approved -->`. The review agent writes this before moving the task to `ready-to-merge/`.
 - `merged:` records that the merge queue successfully squashed the task branch into the target branch.
