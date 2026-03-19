@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -72,9 +73,13 @@ func EnsureBranch(repoRoot, branch string) error {
 }
 
 // EnsureGitignored appends pattern to the repo's .gitignore if not already present.
+// Uses atomic write (temp file + rename) to prevent partial writes on crash.
 func EnsureGitignored(repoRoot, pattern string) error {
 	gitignorePath := filepath.Join(repoRoot, ".gitignore")
 	data, err := os.ReadFile(gitignorePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read .gitignore: %w", err)
+	}
 	if err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			if strings.TrimSpace(line) == pattern {
@@ -82,15 +87,44 @@ func EnsureGitignored(repoRoot, pattern string) error {
 			}
 		}
 	}
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open .gitignore: %w", err)
-	}
-	defer f.Close()
+
+	// Build updated content: existing data + trailing newline if needed + pattern.
+	var content string
 	if len(data) > 0 && data[len(data)-1] != '\n' {
-		fmt.Fprintln(f)
+		content = string(data) + "\n" + pattern + "\n"
+	} else {
+		content = string(data) + pattern + "\n"
 	}
-	fmt.Fprintln(f, pattern)
+
+	// Atomic write: temp file in same dir, then rename.
+	dir := filepath.Dir(gitignorePath)
+	tmpFile, err := os.CreateTemp(dir, ".gitignore.tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for .gitignore: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	cleanup := func() {
+		tmpFile.Close()
+		os.Remove(tmpName)
+	}
+
+	if err := tmpFile.Chmod(0o644); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod temp file for .gitignore: %w", err)
+	}
+	if _, err := tmpFile.WriteString(content); err != nil {
+		cleanup()
+		return fmt.Errorf("write .gitignore: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp file for .gitignore: %w", err)
+	}
+	if err := os.Rename(tmpName, gitignorePath); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp file for .gitignore: %w", err)
+	}
+
 	if _, err := Output(repoRoot, "add", "--", ".gitignore"); err != nil {
 		return fmt.Errorf("git add .gitignore: %w", err)
 	}
