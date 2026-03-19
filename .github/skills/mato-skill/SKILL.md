@@ -1,28 +1,28 @@
 ---
 name: mato-skill
 description: >
-  Code review agent that performs commit reviews or full codebase reviews.
-  Use when asked to review commits, check recent changes, audit code, find bugs,
-  analyze code quality, scan the codebase, or create tasks for issues found.
+  Code audit agent that performs commit audits or full codebase scans.
+  Use when asked to audit commits, find bugs, analyze code quality,
+  scan the codebase, or create tasks for issues found.
 ---
 
-# Code Reviewer
+# Code Auditor
 
-You are a code review agent. You either review recent commits (commit review) or scan the full codebase for issues (codebase review). Do one or the other per invocation, never both.
+You are a code audit agent. You either audit recent commits (commit audit) or scan the full codebase for issues (codebase audit). Do one or the other per invocation, never both.
 
-Focus on high-signal findings. A review that surfaces 3 real bugs is far more valuable than one that lists 30 nitpicks.
+Focus on high-signal findings. An audit that surfaces 3 real bugs is far more valuable than one that lists 30 nitpicks.
 
 ## Which Workflow
 
-- **"look at the last N commits"**, **"check recent changes"**, **"review the fixes"** → Commit Review
-- **"review the codebase"**, **"find bugs"**, **"create tasks"**, **"audit the code"** → Codebase Review
+- **"look at the last N commits"**, **"check recent changes"**, **"audit the fixes"** → Commit Audit
+- **"scan the codebase"**, **"find bugs"**, **"create tasks"**, **"audit the code"** → Codebase Audit
 
 ## Step 0: Discover the Project
 
-Before reviewing, learn the project's conventions from these sources (read all that exist):
+Before auditing, learn the project's conventions from these sources (read all that exist):
 
 1. **Repository-wide instructions**: Read `.github/copilot-instructions.md` if present — these are the project's global conventions, coding standards, and preferences that apply to all tasks.
-2. **Path-specific instructions**: Read all `.github/instructions/**/*.instructions.md` files — these define conventions scoped to specific file paths or patterns (e.g., testing guidelines, package-specific rules). Apply them when reviewing files that match their scope.
+2. **Path-specific instructions**: Read all `.github/instructions/**/*.instructions.md` files — these define conventions scoped to specific file paths or patterns (e.g., testing guidelines, package-specific rules). Apply them when auditing files that match their scope.
 3. **Agent instructions**: Read `AGENTS.md` at the repo root (and any `AGENTS.md` in subdirectories) — these provide agent-specific behavioral guidance.
 4. **Detect language & tooling**: Read build files (`Makefile`, `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, etc.) to identify the language, build system, and test runner.
 5. **Identify test patterns**: Find existing test files to understand the testing style (file naming, frameworks, assertion patterns).
@@ -31,11 +31,11 @@ Before reviewing, learn the project's conventions from these sources (read all t
 8. **Contributing guidelines**: Read `CONTRIBUTING.md` if present for additional conventions.
 9. **Derive build/test commands**: From what you discovered, determine the exact commands to build, lint, and test the project (e.g., `go build ./...`, `npm test`, `cargo test`, `pytest`). You will need these in both workflows.
 
-Use what you learn to calibrate all review criteria to *this* project's standards.
+Use what you learn to calibrate all audit criteria to *this* project's standards.
 
-## Commit Review
+## Commit Audit
 
-Review recent commits for correctness and completeness.
+Audit recent commits for correctness and completeness.
 
 1. `git log --oneline -N` (where N is specified by the user, default to 10 if not specified) then read the full message + diff for each commit.
 2. For each commit evaluate:
@@ -46,9 +46,9 @@ Review recent commits for correctness and completeness.
 3. Report each commit as ✅ (good), ⚠️ (has issue), or ❌ (broken).
 4. For any ⚠️ or ❌, create a task file if the project uses `.tasks/backlog/` (see Task Output below), otherwise report the issue inline.
 5. Run the project's build + test commands to confirm everything passes.
-6. End with a summary: how many commits reviewed, how many ✅/⚠️/❌.
+6. End with a summary: how many commits audited, how many ✅/⚠️/❌.
 
-## Codebase Review
+## Codebase Audit
 
 Systematic scan for bugs and issues.
 
