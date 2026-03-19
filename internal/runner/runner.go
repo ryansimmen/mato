@@ -31,6 +31,89 @@ var reviewInstructions string
 
 var reviewBranchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
 
+type dockerConfig struct {
+	image, workdir, prompt                         string
+	copilotPath, gitPath, gitUploadPackPath         string
+	gitReceivePackPath, ghPath, goRoot              string
+	gitName, gitEmail, homeDir, ghConfigDir         string
+	hasGhConfig                                    bool
+	systemCertsDir                                 string
+	hasSystemCerts                                 bool
+	agentID                                        string
+	copilotArgs                                    []string
+	repoRoot, cloneDir, tasksDir                   string
+}
+
+func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string) []string {
+	containerHome := cfg.homeDir
+	copilotDir := filepath.Join(cfg.homeDir, ".copilot")
+	goModCache := filepath.Join(cfg.homeDir, "go", "pkg", "mod")
+	goBuildCache := filepath.Join(cfg.homeDir, ".cache", "go-build")
+
+	args := []string{
+		"run", "--rm", "-it",
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"-v", fmt.Sprintf("%s:%s", cfg.cloneDir, cfg.workdir),
+		"-v", fmt.Sprintf("%s:%s/.tasks", cfg.tasksDir, cfg.workdir),
+		"-v", fmt.Sprintf("%s:%s", cfg.repoRoot, cfg.repoRoot),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", cfg.copilotPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", cfg.gitPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", cfg.gitUploadPackPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", cfg.gitReceivePackPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", cfg.ghPath),
+		"-v", fmt.Sprintf("%s:/usr/local/go:ro", cfg.goRoot),
+		"-e", "GOROOT=/usr/local/go",
+		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	args = append(args,
+		"-e", "MATO_AGENT_ID="+cfg.agentID,
+		"-e", "MATO_MESSAGING_ENABLED=1",
+		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", cfg.workdir),
+	)
+	for _, env := range extraEnvs {
+		args = append(args, "-e", env)
+	}
+	args = append(args,
+		"-e", "GIT_CONFIG_COUNT=1",
+		"-e", "GIT_CONFIG_KEY_0=safe.directory",
+		"-e", "GIT_CONFIG_VALUE_0=*",
+	)
+	if n := strings.TrimSpace(cfg.gitName); n != "" {
+		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
+	}
+	if e := strings.TrimSpace(cfg.gitEmail); e != "" {
+		args = append(args, "-e", "GIT_AUTHOR_EMAIL="+e, "-e", "GIT_COMMITTER_EMAIL="+e)
+	}
+	args = append(args,
+		"-e", fmt.Sprintf("HOME=%s", containerHome),
+		"-v", fmt.Sprintf("%s:%s/.copilot", copilotDir, containerHome),
+		"-e", fmt.Sprintf("GOPATH=%s/go", containerHome),
+		"-e", fmt.Sprintf("GOMODCACHE=%s/go/pkg/mod", containerHome),
+		"-e", fmt.Sprintf("GOCACHE=%s/.cache/go-build", containerHome),
+		"-v", fmt.Sprintf("%s:%s/go/pkg/mod", goModCache, containerHome),
+		"-v", fmt.Sprintf("%s:%s/.cache/go-build", goBuildCache, containerHome),
+	)
+	if cfg.hasGhConfig {
+		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", cfg.ghConfigDir, containerHome))
+	}
+	if cfg.hasSystemCerts {
+		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", cfg.systemCertsDir))
+	}
+	for _, vol := range extraVolumes {
+		args = append(args, "-v", vol)
+	}
+	args = append(args,
+		"-w", cfg.workdir,
+		cfg.image,
+		"copilot", "-p", cfg.prompt, "--autopilot", "--allow-all",
+	)
+	if !hasModelArg(cfg.copilotArgs) {
+		args = append(args, "--model", "claude-opus-4.6")
+	}
+	args = append(args, cfg.copilotArgs...)
+	return args
+}
+
 func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -151,6 +234,29 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
 	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
 
+	cfg := dockerConfig{
+		image:              image,
+		workdir:            workdir,
+		prompt:             prompt,
+		copilotPath:        copilotPath,
+		gitPath:            gitPath,
+		gitUploadPackPath:  gitUploadPackPath,
+		gitReceivePackPath: gitReceivePackPath,
+		ghPath:             ghPath,
+		goRoot:             goRoot,
+		gitName:            gitName,
+		gitEmail:           gitEmail,
+		homeDir:            homeDir,
+		ghConfigDir:        ghConfigDir,
+		hasGhConfig:        hasGhConfig,
+		systemCertsDir:     systemCertsDir,
+		hasSystemCerts:     hasSystemCerts,
+		agentID:            agentID,
+		copilotArgs:        copilotArgs,
+		repoRoot:           repoRoot,
+		tasksDir:            tasksDir,
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -199,10 +305,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 				fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)
 			}
 
-			if err := runOnce(repoRoot, tasksDir, agentID, claimed, copilotArgs, image, workdir, prompt,
-				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
-				gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
-				systemCertsDir, hasSystemCerts); err != nil {
+			if err := runOnce(cfg, claimed); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
 			}
 
@@ -211,10 +314,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir); reviewTask != nil {
 			fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
-			if err := runReview(repoRoot, tasksDir, agentID, reviewTask, branch, copilotArgs, image, workdir,
-				copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot,
-				gitName, gitEmail, homeDir, ghConfigDir, hasGhConfig,
-				systemCertsDir, hasSystemCerts); err != nil {
+			if err := runReview(cfg, reviewTask, branch); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
 			}
 			reviewCleanup()
@@ -245,102 +345,44 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	}
 }
 
-func runOnce(repoRoot, tasksDir, agentID string, claimed *queue.ClaimedTask, copilotArgs []string,
-	image, workdir, prompt string,
-	copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot string,
-	gitName, gitEmail, homeDir, ghConfigDir string, hasGhConfig bool,
-	systemCertsDir string, hasSystemCerts bool,
-) error {
-	cloneDir, err := git.CreateClone(repoRoot)
+func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
+	cloneDir, err := git.CreateClone(cfg.repoRoot)
 	if err != nil {
 		return err
 	}
 	defer git.RemoveClone(cloneDir)
 
-	if err := configureReceiveDeny(repoRoot); err != nil {
+	if err := configureReceiveDeny(cfg.repoRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
 	}
 
-	containerHome := homeDir
-	copilotDir := filepath.Join(homeDir, ".copilot")
-	goModCache := filepath.Join(homeDir, "go", "pkg", "mod")
-	goBuildCache := filepath.Join(homeDir, ".cache", "go-build")
+	cfg.cloneDir = cloneDir
 
-	fmt.Printf("Launching agent from %s (clone: %s)\n", repoRoot, cloneDir)
-	args := []string{
-		"run", "--rm", "-it",
-		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
-		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
-		"-v", fmt.Sprintf("%s:%s", repoRoot, repoRoot),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", gitUploadPackPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", gitReceivePackPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", ghPath),
-		"-v", fmt.Sprintf("%s:/usr/local/go:ro", goRoot),
-		"-e", "GOROOT=/usr/local/go",
-		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	fmt.Printf("Launching agent from %s (clone: %s)\n", cfg.repoRoot, cloneDir)
+
+	extraEnvs := []string{
+		"MATO_MAX_RETRIES=3",
 	}
-	args = append(args,
-		"-e", "MATO_AGENT_ID="+agentID,
-		"-e", "MATO_MAX_RETRIES=3",
-		"-e", "MATO_MESSAGING_ENABLED=1",
-		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", workdir),
-	)
 	if claimed != nil {
-		args = append(args,
-			"-e", "MATO_TASK_FILE="+claimed.Filename,
-			"-e", "MATO_TASK_BRANCH="+claimed.Branch,
-			"-e", "MATO_TASK_TITLE="+claimed.Title,
-			"-e", fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/in-progress/%s", workdir, claimed.Filename),
-			"-e", fmt.Sprintf("MATO_FILE_CLAIMS=%s/.tasks/messages/file-claims.json", workdir),
+		extraEnvs = append(extraEnvs,
+			"MATO_TASK_FILE="+claimed.Filename,
+			"MATO_TASK_BRANCH="+claimed.Branch,
+			"MATO_TASK_TITLE="+claimed.Title,
+			fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/in-progress/%s", cfg.workdir, claimed.Filename),
+			fmt.Sprintf("MATO_FILE_CLAIMS=%s/.tasks/messages/file-claims.json", cfg.workdir),
 		)
-		if depCtx := buildDependencyContext(tasksDir, claimed); depCtx != "" {
-			args = append(args, "-e", "MATO_DEPENDENCY_CONTEXT="+depCtx)
+		if depCtx := buildDependencyContext(cfg.tasksDir, claimed); depCtx != "" {
+			extraEnvs = append(extraEnvs, "MATO_DEPENDENCY_CONTEXT="+depCtx)
 		}
 		if failures := extractFailureLines(claimed.TaskPath); failures != "" {
-			args = append(args, "-e", "MATO_PREVIOUS_FAILURES="+failures)
+			extraEnvs = append(extraEnvs, "MATO_PREVIOUS_FAILURES="+failures)
 		}
 		if reviewFeedback := extractReviewRejections(claimed.TaskPath); reviewFeedback != "" {
-			args = append(args, "-e", "MATO_REVIEW_FEEDBACK="+reviewFeedback)
+			extraEnvs = append(extraEnvs, "MATO_REVIEW_FEEDBACK="+reviewFeedback)
 		}
 	}
-	args = append(args,
-		"-e", "GIT_CONFIG_COUNT=1",
-		"-e", "GIT_CONFIG_KEY_0=safe.directory",
-		"-e", "GIT_CONFIG_VALUE_0=*",
-	)
-	if n := strings.TrimSpace(gitName); n != "" {
-		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
-	}
-	if e := strings.TrimSpace(gitEmail); e != "" {
-		args = append(args, "-e", "GIT_AUTHOR_EMAIL="+e, "-e", "GIT_COMMITTER_EMAIL="+e)
-	}
-	args = append(args,
-		"-e", fmt.Sprintf("HOME=%s", containerHome),
-		"-v", fmt.Sprintf("%s:%s/.copilot", copilotDir, containerHome),
-		"-e", fmt.Sprintf("GOPATH=%s/go", containerHome),
-		"-e", fmt.Sprintf("GOMODCACHE=%s/go/pkg/mod", containerHome),
-		"-e", fmt.Sprintf("GOCACHE=%s/.cache/go-build", containerHome),
-		"-v", fmt.Sprintf("%s:%s/go/pkg/mod", goModCache, containerHome),
-		"-v", fmt.Sprintf("%s:%s/.cache/go-build", goBuildCache, containerHome),
-	)
-	if hasGhConfig {
-		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", ghConfigDir, containerHome))
-	}
-	if hasSystemCerts {
-		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", systemCertsDir))
-	}
-	args = append(args,
-		"-w", workdir,
-		image,
-		"copilot", "-p", prompt, "--autopilot", "--allow-all",
-	)
-	if !hasModelArg(copilotArgs) {
-		args = append(args, "--model", "claude-opus-4.6")
-	}
-	args = append(args, copilotArgs...)
+
+	args := buildDockerArgs(cfg, extraEnvs, nil)
 
 	cmd := exec.Command("docker", args...)
 	cmd.Stdin = os.Stdin
@@ -569,94 +611,34 @@ func parseBranchFromTaskFile(path string) string {
 	return m[1]
 }
 
-func runReview(repoRoot, tasksDir, agentID string, task *queue.ClaimedTask, branch string, copilotArgs []string,
-	image, workdir string,
-	copilotPath, gitPath, gitUploadPackPath, gitReceivePackPath, ghPath, goRoot string,
-	gitName, gitEmail, homeDir, ghConfigDir string, hasGhConfig bool,
-	systemCertsDir string, hasSystemCerts bool,
-) error {
-	prompt := strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
-	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
-	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
+func runReview(cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
+	cfg.prompt = strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", cfg.workdir+"/.tasks")
+	cfg.prompt = strings.ReplaceAll(cfg.prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
+	cfg.prompt = strings.ReplaceAll(cfg.prompt, "MESSAGES_DIR_PLACEHOLDER", cfg.workdir+"/.tasks/messages")
 
-	cloneDir, err := git.CreateClone(repoRoot)
+	cloneDir, err := git.CreateClone(cfg.repoRoot)
 	if err != nil {
 		return fmt.Errorf("create clone for review: %w", err)
 	}
 	defer git.RemoveClone(cloneDir)
 
-	if err := configureReceiveDeny(repoRoot); err != nil {
+	if err := configureReceiveDeny(cfg.repoRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
 	}
 
-	containerHome := homeDir
-	copilotDir := filepath.Join(homeDir, ".copilot")
-	goModCache := filepath.Join(homeDir, "go", "pkg", "mod")
-	goBuildCache := filepath.Join(homeDir, ".cache", "go-build")
+	cfg.cloneDir = cloneDir
 
-	fmt.Printf("Launching review agent from %s (clone: %s)\n", repoRoot, cloneDir)
-	args := []string{
-		"run", "--rm", "-it",
-		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", fmt.Sprintf("%s:%s", cloneDir, workdir),
-		"-v", fmt.Sprintf("%s:%s/.tasks", tasksDir, workdir),
-		"-v", fmt.Sprintf("%s:%s", repoRoot, repoRoot),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", copilotPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", gitPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", gitUploadPackPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", gitReceivePackPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", ghPath),
-		"-v", fmt.Sprintf("%s:/usr/local/go:ro", goRoot),
-		"-e", "GOROOT=/usr/local/go",
-		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	fmt.Printf("Launching review agent from %s (clone: %s)\n", cfg.repoRoot, cloneDir)
+
+	extraEnvs := []string{
+		"MATO_REVIEW_MODE=1",
+		"MATO_TASK_FILE=" + task.Filename,
+		"MATO_TASK_BRANCH=" + task.Branch,
+		"MATO_TASK_TITLE=" + task.Title,
+		fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/ready-for-review/%s", cfg.workdir, task.Filename),
 	}
-	args = append(args,
-		"-e", "MATO_AGENT_ID="+agentID,
-		"-e", "MATO_REVIEW_MODE=1",
-		"-e", "MATO_MESSAGING_ENABLED=1",
-		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", workdir),
-	)
-	args = append(args,
-		"-e", "MATO_TASK_FILE="+task.Filename,
-		"-e", "MATO_TASK_BRANCH="+task.Branch,
-		"-e", "MATO_TASK_TITLE="+task.Title,
-		"-e", fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/ready-for-review/%s", workdir, task.Filename),
-	)
-	args = append(args,
-		"-e", "GIT_CONFIG_COUNT=1",
-		"-e", "GIT_CONFIG_KEY_0=safe.directory",
-		"-e", "GIT_CONFIG_VALUE_0=*",
-	)
-	if n := strings.TrimSpace(gitName); n != "" {
-		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
-	}
-	if e := strings.TrimSpace(gitEmail); e != "" {
-		args = append(args, "-e", "GIT_AUTHOR_EMAIL="+e, "-e", "GIT_COMMITTER_EMAIL="+e)
-	}
-	args = append(args,
-		"-e", fmt.Sprintf("HOME=%s", containerHome),
-		"-v", fmt.Sprintf("%s:%s/.copilot", copilotDir, containerHome),
-		"-e", fmt.Sprintf("GOPATH=%s/go", containerHome),
-		"-e", fmt.Sprintf("GOMODCACHE=%s/go/pkg/mod", containerHome),
-		"-e", fmt.Sprintf("GOCACHE=%s/.cache/go-build", containerHome),
-		"-v", fmt.Sprintf("%s:%s/go/pkg/mod", goModCache, containerHome),
-		"-v", fmt.Sprintf("%s:%s/.cache/go-build", goBuildCache, containerHome),
-	)
-	if hasGhConfig {
-		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", ghConfigDir, containerHome))
-	}
-	if hasSystemCerts {
-		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", systemCertsDir))
-	}
-	args = append(args,
-		"-w", workdir,
-		image,
-		"copilot", "-p", prompt, "--autopilot", "--allow-all",
-	)
-	if !hasModelArg(copilotArgs) {
-		args = append(args, "--model", "claude-opus-4.6")
-	}
-	args = append(args, copilotArgs...)
+
+	args := buildDockerArgs(cfg, extraEnvs, nil)
 
 	cmd := exec.Command("docker", args...)
 	cmd.Stdin = os.Stdin
