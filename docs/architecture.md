@@ -76,8 +76,8 @@ Important details from the implementation:
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
 - `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state.
-- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts failure lines, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the retry budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
-- When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, excluded tasks are merged into the `deferred` map before calling `SelectAndClaimTask`, preventing the same retry-exhausted task from being re-selected and livelocking the host loop.
+- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts `<!-- failure: ... -->` records, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
+- When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, excluded tasks are merged into the `deferred` map before calling `SelectAndClaimTask`, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
@@ -137,9 +137,9 @@ If forwarded arguments do not already contain `--model`, `runOnce(...)` appends 
 ### Host-side task claiming
 Before launching a Docker container, the host calls `queue.SelectAndClaimTask(tasksDir, agentID, deferred)` which:
 1. Reads `.tasks/.queue` if present, otherwise lists `backlog/*.md` alphabetically.
-2. Parses each candidate's frontmatter and counts `<!-- failure:` lines.
+2. Parses each candidate's frontmatter and counts `<!-- failure: ... -->` records.
 3. Atomically renames the candidate from `backlog/` to `in-progress/`.
-4. If failures >= `max_retries` (default 3), moves the task from `in-progress/` to `failed/` and continues to the next candidate. If `failed/` is unavailable, the task is rolled back to `backlog/` and a `FailedDirUnavailableError` (carrying the task filename) is returned; the host loop adds this task to a persistent exclusion set to prevent livelocking on the same retry-exhausted task.
+4. If the number of `<!-- failure: ... -->` records >= `max_retries` (default 3), moves the task from `in-progress/` to `failed/` and continues to the next candidate. If `failed/` is unavailable, the task is rolled back to `backlog/` and a `FailedDirUnavailableError` (carrying the task filename) is returned; the host loop adds this task to a persistent exclusion set to prevent livelocking on the same retry-exhausted task.
 5. Prepends a `<!-- claimed-by: ... -->` header to the task file.
 6. Returns the filename, derived branch name, extracted title, and host-side path.
 
@@ -156,7 +156,7 @@ State-by-state behavior:
 - `VERIFY_CLAIM`: read pre-resolved task details from `MATO_TASK_*` env vars, confirm the task file exists in `in-progress/`, read recent coordination messages.
 - `WORK`: read the task body, ignoring YAML frontmatter and comment-only metadata lines, implement the task, and run the repository's existing validation commands with up to 3 attempts.
 - `COMMIT`: `git add -A`, commit with the task title, and exit. The host detects commits and handles push + review transition.
-- `ON_FAILURE`: append a structured `<!-- failure: ... -->` line, try to check out the target branch, then always move the task back to `backlog/`. The host checks the retry budget on the next cycle via `SelectAndClaimTask`.
+- `ON_FAILURE`: append a structured `<!-- failure: ... -->` record, try to check out the target branch, then always move the task back to `backlog/`. The host checks the failure record budget on the next cycle via `SelectAndClaimTask`.
 
 After the agent exits, the host (`postAgentPush` in `runner.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, and sends `conflict-warning` and `completion` messages.
 
@@ -168,7 +168,7 @@ waiting/ --deps met--> backlog/ --host claim--> in-progress/ --host push--> read
    ^                      |                          |                              |
    |                      |                          +--ON_FAILURE--> backlog/       +--review rejection--> backlog/
    +--dep not met---------+                          +--host orphan recovery--> backlog/
-                          |                          +--host retry exhaustion--> failed/
+                          |                          +--host failure record budget exhausted--> failed/
                           +--conflict-deferred tasks stay in backlog/ but excluded from .queue
 ```
 State meanings:
@@ -180,8 +180,8 @@ State meanings:
 | `ready-for-review/` | branch pushed, waiting for AI review | host `postAgentPush` | review agent moves it to `ready-to-merge/` on approval, or to `backlog/` on rejection |
 | `ready-to-merge/` | reviewed and approved, waiting for host merge | review agent approval | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
-| `failed/` | retry budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when failure count reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
-Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure:` lines, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure:` lines, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's retry budget, and vice versa.
+| `failed/` | failure record budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
+Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
 ## 5. Dependency Resolution
 `queue.ReconcileReadyQueue(tasksDir)` in `queue.go` promotes waiting tasks whose dependencies are satisfied.
 How it works:
@@ -243,8 +243,8 @@ After a task agent pushes its branch and moves the task to `ready-for-review/`, 
 5. **Rejected**: the review agent appends `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->` and moves the task back to `backlog/` for a retry by the implementing agent.
 
 ### Key properties
-- Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` lines are counted for the task retry budget.
-- Review infrastructure failures (network errors, diff timeouts) are recorded as `<!-- review-failure: ... -->` and counted separately from task failures. This ensures transient review issues do not exhaust the task's retry budget.
+- Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` records are counted for the task's failure record budget.
+- Review infrastructure failures (network errors, diff timeouts) are recorded as `<!-- review-failure: ... -->` and counted separately from task failure records. This ensures transient review issues do not exhaust the task's failure record budget.
 - On retry, the host injects previous review feedback via the `MATO_REVIEW_FEEDBACK` environment variable so the implementing agent can address the reviewer's concerns.
 - The review agent uses the embedded prompt `review-instructions.md`.
 - The review agent sends `progress` and `completion` messages like the task agent.

@@ -89,7 +89,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 └── .locks/          # PID locks for agents and merge queue
 ```
 
-Failed tasks are retried up to 3 times before moving to `failed/`.
+Tasks that accumulate `max_retries` failure records (default 3) are moved to `failed/`.
 
 ## How It Works
 
