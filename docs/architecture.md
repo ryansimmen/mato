@@ -75,7 +75,7 @@ wait for signal or 10 seconds
 Important details from the implementation:
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
-- `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state.
+- `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifest()`. Conflict-deferred tasks are excluded from the manifest so agents will not select them.
 - `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts `<!-- failure: ... -->` records, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
 - When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, excluded tasks are merged into the `deferred` map before calling `SelectAndClaimTask`, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
