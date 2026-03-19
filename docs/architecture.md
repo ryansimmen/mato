@@ -128,7 +128,7 @@ Environment variables injected by the host:
 - `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_EMAIL` if host Git config supplies an email
 - `HOME=<host home path>`
 - `GOPATH=<home>/go`, `GOMODCACHE=<home>/go/pkg/mod`, `GOCACHE=<home>/.cache/go-build`
-- `MATO_DEPENDENCY_CONTEXT=<JSON array>` (conditionally, only when the task has `depends_on` entries with available completion data)
+- `MATO_DEPENDENCY_CONTEXT=<file path>` (conditionally, only when the task has `depends_on` entries with available completion data; points to `.tasks/messages/dependency-context-<filename>.json`)
 The final command is:
 ```text
 copilot -p <embedded task prompt> --autopilot --allow-all [copilotArgs...]
@@ -223,7 +223,7 @@ For each task:
 9. `git merge --squash origin/<task-branch>`
 10. `git commit -m <formatted message with trailers>`
 11. `git push origin <target-branch>`
-12. After a successful push, write a completion detail file to `.tasks/messages/completions/<task-id>.json` with the commit SHA, changed files, branch, title, and merge timestamp (see `docs/messaging.md` for the full schema). This file is used by `runner.buildDependencyContext(...)` to inject `MATO_DEPENDENCY_CONTEXT` when a dependent task runs.
+12. After a successful push, write a completion detail file to `.tasks/messages/completions/<task-id>.json` with the commit SHA, changed files, branch, title, and merge timestamp (see `docs/messaging.md` for the full schema). This file is used by `runner.writeDependencyContextFile(...)` to create the dependency context file referenced by `MATO_DEPENDENCY_CONTEXT` when a dependent task runs.
 13. Append `<!-- merged: merge-queue at ... -->` and rename the task file `ready-to-merge/ -> completed/`
 ### Conflict and failure handling
 Merge failure handling is branch-specific:
@@ -329,7 +329,7 @@ The host acts as a knowledge broker between agents, following an agent → host 
 Concrete examples:
 - **Failure context**: When an agent fails, it appends a `<!-- failure: ... -->` comment to the task file. On the next attempt, the host reads these lines via `extractFailureLines(...)` and injects them as `MATO_PREVIOUS_FAILURES`, so the new agent can learn from prior mistakes without parsing the task file itself.
 - **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
-- **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records and injects them as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
+- **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records, writes them to a file, and injects the file path as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
 - **Review feedback**: When the review agent rejects a task, it appends `<!-- review-rejection: ... -->` to the task file. On the next attempt, the host reads these lines and injects them as `MATO_REVIEW_FEEDBACK`, so the implementing agent can address the reviewer's concerns.
 
 This pattern keeps agents stateless and single-task-focused while the host provides the coordination intelligence. No agent needs to query other agents directly — the host curates and delivers the relevant context at launch time.

@@ -58,7 +58,7 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 | `MATO_TASK_BRANCH` | container | none | Derived task branch name (e.g. `task/my-task`). Set per-run by the host after claiming a task. |
 | `MATO_TASK_TITLE` | container | none | Extracted from the first non-empty body line in the task file (heading markers stripped if present), falling back to filename stem. Set per-run by the host after claiming a task. |
 | `MATO_TASK_PATH` | container | none | Absolute path to the task file in `in-progress/` (e.g. `/workspace/.tasks/in-progress/my-task.md`). Set per-run by the host after claiming a task. |
-| `MATO_DEPENDENCY_CONTEXT` | container | none | JSON array of completion details for resolved `depends_on` tasks. Each element contains `task_id`, `task_file`, `branch`, `commit_sha`, `files_changed`, `title`, and `merged_at`. Set per-run by the host only when the claimed task has `depends_on` entries with available completion data in `.tasks/messages/completions/`. |
+| `MATO_DEPENDENCY_CONTEXT` | container | none | Path to a JSON file containing completion details for resolved `depends_on` tasks (e.g. `/workspace/.tasks/messages/dependency-context-my-task.md.json`). Each element contains `task_id`, `task_file`, `branch`, `commit_sha`, `files_changed`, `title`, and `merged_at`. Set per-run by the host only when the claimed task has `depends_on` entries with available completion data in `.tasks/messages/completions/`. Written to a file instead of passed inline to avoid ARG_MAX / Docker env var size limits. |
 | `MATO_FILE_CLAIMS` | container | none | Path to the file-claims JSON index inside the container (e.g. `/workspace/.tasks/messages/file-claims.json`). The host writes this index before agent launch via `messaging.BuildAndWriteFileClaims(...)`. It maps file paths to `{task, status}` objects showing which other tasks actively claim each file. |
 | `MATO_PREVIOUS_FAILURES` | container | none | Injected when the task file contains previous `<!-- failure: ... -->` records. Contains newline-separated failure lines extracted by `extractFailureLines(...)`. Agents can read this during `VERIFY_CLAIM` to understand why earlier attempts failed and avoid repeating the same mistakes. |
 | `MATO_REVIEW_MODE` | container | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
@@ -66,7 +66,8 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 Only `MATO_DOCKER_IMAGE` is intended as a host-side configuration input. The other
 variables are injected by `mato` inside each container and are normally not set manually.
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
-`depends_on` entries whose completion details are available.
+`depends_on` entries whose completion details are available. It contains a file
+path (not inline JSON) to avoid shell ARG_MAX limits with many dependencies.
 `MATO_FILE_CLAIMS` is always injected when a task is claimed.
 `MATO_PREVIOUS_FAILURES` is conditionally injected only when the task file contains
 failure records from prior attempts.

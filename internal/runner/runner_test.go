@@ -148,7 +148,7 @@ func TestHasModelArg(t *testing.T) {
 	}
 }
 
-func TestBuildDependencyContext_WithCompletionFiles(t *testing.T) {
+func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"in-progress"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -182,13 +182,23 @@ func TestBuildDependencyContext_WithCompletionFiles(t *testing.T) {
 		TaskPath: taskPath,
 	}
 
-	result := buildDependencyContext(tasksDir, claimed)
+	result := writeDependencyContextFile(tasksDir, claimed)
 	if result == "" {
-		t.Fatal("expected non-empty dependency context")
+		t.Fatal("expected non-empty file path")
+	}
+
+	expectedPath := filepath.Join(tasksDir, "messages", "dependency-context-"+taskFile+".json")
+	if result != expectedPath {
+		t.Fatalf("path = %q, want %q", result, expectedPath)
+	}
+
+	data, err := os.ReadFile(result)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
 	}
 
 	var details []messaging.CompletionDetail
-	if err := json.Unmarshal([]byte(result), &details); err != nil {
+	if err := json.Unmarshal(data, &details); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
 	if len(details) != 1 {
@@ -202,7 +212,7 @@ func TestBuildDependencyContext_WithCompletionFiles(t *testing.T) {
 	}
 }
 
-func TestBuildDependencyContext_NoDeps(t *testing.T) {
+func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"in-progress"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -223,13 +233,13 @@ func TestBuildDependencyContext_NoDeps(t *testing.T) {
 		TaskPath: taskPath,
 	}
 
-	result := buildDependencyContext(tasksDir, claimed)
+	result := writeDependencyContextFile(tasksDir, claimed)
 	if result != "" {
-		t.Fatalf("expected empty dependency context, got %q", result)
+		t.Fatalf("expected empty path, got %q", result)
 	}
 }
 
-func TestBuildDependencyContext_NoCompletionFiles(t *testing.T) {
+func TestWriteDependencyContextFile_NoCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"in-progress"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -250,10 +260,41 @@ func TestBuildDependencyContext_NoCompletionFiles(t *testing.T) {
 		TaskPath: taskPath,
 	}
 
-	result := buildDependencyContext(tasksDir, claimed)
+	result := writeDependencyContextFile(tasksDir, claimed)
 	if result != "" {
-		t.Fatalf("expected empty dependency context when no completion files exist, got %q", result)
+		t.Fatalf("expected empty path when no completion files exist, got %q", result)
 	}
+}
+
+func TestRemoveDependencyContextFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	filename := "my-task.md"
+	depCtxPath := filepath.Join(tasksDir, "messages", "dependency-context-"+filename+".json")
+	os.WriteFile(depCtxPath, []byte(`[{"task_id":"dep-a"}]`), 0o644)
+
+	if _, err := os.Stat(depCtxPath); err != nil {
+		t.Fatalf("file should exist before removal: %v", err)
+	}
+
+	removeDependencyContextFile(tasksDir, filename)
+
+	if _, err := os.Stat(depCtxPath); !os.IsNotExist(err) {
+		t.Fatalf("file should have been removed, got err: %v", err)
+	}
+}
+
+func TestRemoveDependencyContextFile_MissingFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Should not panic or error when file doesn't exist
+	removeDependencyContextFile(tasksDir, "nonexistent.md")
 }
 
 func TestConfigureReceiveDeny_Success(t *testing.T) {

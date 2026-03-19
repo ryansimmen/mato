@@ -148,7 +148,7 @@ Field meanings:
 
 ### How dependent tasks use it
 
-When the host claims a task that has `depends_on` entries, `runner.buildDependencyContext(...)` reads the completion detail file for each resolved dependency. If any completion files are found, the host injects them as the `MATO_DEPENDENCY_CONTEXT` environment variable (a JSON array of `CompletionDetail` objects). The agent prompt reads this variable during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks.
+When the host claims a task that has `depends_on` entries, `runner.writeDependencyContextFile(...)` reads the completion detail file for each resolved dependency and writes them as a JSON array to `.tasks/messages/dependency-context-<filename>.json`. If any completion files are found, the host injects the file path as the `MATO_DEPENDENCY_CONTEXT` environment variable. The agent prompt reads this file during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks. The context file is cleaned up after the agent container exits.
 
 ### Write and read helpers
 
