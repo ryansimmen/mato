@@ -83,7 +83,11 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		} else {
 			maxRetries = meta.MaxRetries
 		}
-		failures := CountFailureLines(src)
+		failures, failErr := CountFailureLines(src)
+		if failErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not count failures for %s, skipping: %v\n", name, failErr)
+			continue
+		}
 
 		if err := os.Rename(src, dst); err != nil {
 			// Another agent may have claimed it; try next.
@@ -224,10 +228,10 @@ func prependClaimedBy(taskPath, agentID, claimedAt string) error {
 
 // CountFailureLines counts the number of <!-- failure: ... --> HTML comment
 // lines in a task file. Used to check retry budgets for both task and review paths.
-func CountFailureLines(taskPath string) int {
+func CountFailureLines(taskPath string) (int, error) {
 	data, err := os.ReadFile(taskPath)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("count failure lines: %w", err)
 	}
-	return strings.Count(string(data), "<!-- failure:")
+	return strings.Count(string(data), "<!-- failure:"), nil
 }
