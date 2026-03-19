@@ -1,4 +1,8 @@
 # mato Task File Format Reference
+
+<!-- NOTE: The task format spec is also duplicated in .github/skills/mato-skill/SKILL.md
+     (distributed standalone via scripts/install-skill.sh). Keep both in sync. -->
+
 ## Overview
 A mato task file is a markdown `.md` file with optional YAML frontmatter.
 The frontmatter is scheduler metadata for the host; the markdown body is the agent's actual instructions.
