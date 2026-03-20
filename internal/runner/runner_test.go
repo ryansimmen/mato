@@ -1353,6 +1353,92 @@ func TestPostReviewAction_NoVerdict(t *testing.T) {
 	}
 }
 
+func TestReviewedReRegex(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		match bool
+	}{
+		{"complete marker", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved -->", true},
+		{"extra whitespace before close", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved  -->", true},
+		{"missing closing tag", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved", false},
+		{"partial write no em-dash", "<!-- reviewed: agent1 at 2026-01", false},
+		{"missing approved word", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — -->", false},
+		{"empty string", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reviewedRe.MatchString(tt.input); got != tt.match {
+				t.Errorf("reviewedRe.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestReviewRejectionReRegex(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		match bool
+	}{
+		{"complete marker", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — missing error wrapping -->", true},
+		{"reason with spaces", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — needs better test coverage for edge cases -->", true},
+		{"extra whitespace before close", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — bad code  -->", true},
+		{"missing closing tag", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — missing error wrapping", false},
+		{"partial write no em-dash", "<!-- review-rejection: agent1 at 2026-01", false},
+		{"missing reason after em-dash", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — -->", false},
+		{"no em-dash or reason", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z", false},
+		{"empty string", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reviewRejectionRe.MatchString(tt.input); got != tt.match {
+				t.Errorf("reviewRejectionRe.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestPostReviewAction_PartialRejectionMarkerTreatedAsNoVerdict(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "review-task.md"
+	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	// Partial rejection marker (no closing -->, simulating agent crash during write)
+	os.WriteFile(reviewPath, []byte(strings.Join([]string{
+		"<!-- claimed-by: task-agent -->",
+		"<!-- branch: task/review-task -->",
+		"# Review Task",
+		"",
+		"<!-- review-rejection: review-agent at 2026-01-01T00:00:00Z",
+	}, "\n")), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/review-task",
+		Title:    "Review Task",
+		TaskPath: reviewPath,
+	}
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	// Partial marker should NOT be treated as a valid rejection.
+	// Task should stay in ready-for-review/ with a review-failure record.
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("task with partial rejection marker should stay in ready-for-review/")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", taskFile)); err == nil {
+		t.Fatal("task with partial rejection marker should not be moved to backlog/")
+	}
+	data, _ := os.ReadFile(reviewPath)
+	if !strings.Contains(string(data), "<!-- review-failure:") {
+		t.Fatal("review-failure record not written for partial rejection marker")
+	}
+}
+
 func TestAppendReviewFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "task.md")
