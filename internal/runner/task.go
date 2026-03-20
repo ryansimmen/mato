@@ -148,7 +148,17 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 	}
 
 	// Write branch marker to the moved file in ready-for-review/.
-	appendToFile(readyPath, fmt.Sprintf("\n<!-- branch: %s -->\n", claimed.Branch))
+	if err := appendToFileFn(readyPath, fmt.Sprintf("\n<!-- branch: %s -->\n", claimed.Branch)); err != nil {
+		// Roll back: move file from ready-for-review/ back to in-progress/.
+		if linkErr := os.Link(readyPath, claimed.TaskPath); linkErr != nil {
+			// Rollback failed — task is stranded in ready-for-review without
+			// branch metadata. Log and return the original error.
+			fmt.Fprintf(os.Stderr, "error: branch marker write failed and rollback to in-progress/ also failed: %v\n", linkErr)
+			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", readyPath, err, linkErr)
+		}
+		os.Remove(readyPath)
+		return fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", readyPath, err)
+	}
 
 	// Send conflict-warning with changed files.
 	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", cfg.targetBranch+"..HEAD")
