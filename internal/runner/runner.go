@@ -970,12 +970,21 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 }
 
 // moveReviewedTask moves a reviewed task to the given destination directory
-// and sends a completion message.
+// and sends a completion message. It uses os.Link + os.Remove instead of
+// os.Rename to prevent silently overwriting an existing file at the
+// destination (TOCTOU race defense).
 func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, dstDir, msgBody, logPrefix string) {
 	dst := filepath.Join(tasksDir, dstDir, task.Filename)
-	if err := os.Rename(task.TaskPath, dst); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, dstDir, err)
+	if err := os.Link(task.TaskPath, dst); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: destination already exists\n", task.Filename, dstDir)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, dstDir, err)
+		}
 		return
+	}
+	if err := os.Remove(task.TaskPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not remove %s after linking to %s: %v\n", task.Filename, dstDir, err)
 	}
 	messaging.WriteMessage(tasksDir, messaging.Message{
 		From:   agentID,
