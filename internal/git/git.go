@@ -72,10 +72,72 @@ func EnsureBranch(repoRoot, branch string) error {
 	return nil
 }
 
+// gitignoreIsDirty checks whether .gitignore has pre-existing uncommitted
+// changes (staged or unstaged) that should not be swept into the mato commit.
+func gitignoreIsDirty(repoRoot string) bool {
+	out, _ := Output(repoRoot, "diff", "--name-only", "--", ".gitignore")
+	if strings.TrimSpace(out) != "" {
+		return true
+	}
+	out, _ = Output(repoRoot, "diff", "--cached", "--name-only", "--", ".gitignore")
+	return strings.TrimSpace(out) != ""
+}
+
+// addPatternToContent ensures the given pattern line is present in content,
+// appending it if missing. Returns the (possibly updated) content.
+func addPatternToContent(content, pattern string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == pattern {
+			return content
+		}
+	}
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		return content + "\n" + pattern + "\n"
+	}
+	return content + pattern + "\n"
+}
+
 // EnsureGitignored appends pattern to the repo's .gitignore if not already present.
 // Uses atomic write (temp file + rename) to prevent partial writes on crash.
-func EnsureGitignored(repoRoot, pattern string) error {
+//
+// If .gitignore has pre-existing uncommitted changes, EnsureGitignored restores
+// the committed version before modifying, so the commit contains only the new
+// pattern. The pre-existing working-tree changes are restored afterwards.
+func EnsureGitignored(repoRoot, pattern string) (retErr error) {
 	gitignorePath := filepath.Join(repoRoot, ".gitignore")
+
+	// Check for pre-existing uncommitted .gitignore changes.
+	dirty := gitignoreIsDirty(repoRoot)
+
+	var savedContent []byte
+	if dirty {
+		// Save current working tree content so we can restore it after commit.
+		var err error
+		savedContent, err = os.ReadFile(gitignorePath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read .gitignore: %w", err)
+		}
+		// Restore the committed version so our commit only includes our change.
+		if _, err := Output(repoRoot, "checkout", "HEAD", "--", ".gitignore"); err != nil {
+			// .gitignore may not exist in HEAD (e.g. newly staged file).
+			Output(repoRoot, "rm", "--cached", "--force", "--", ".gitignore")
+			os.Remove(gitignorePath)
+		}
+		defer func() {
+			if savedContent == nil {
+				return
+			}
+			if retErr != nil {
+				// On error, restore original working tree content unchanged.
+				os.WriteFile(gitignorePath, savedContent, 0o644)
+			} else {
+				// On success, restore working tree with our pattern merged in.
+				restored := addPatternToContent(string(savedContent), pattern)
+				os.WriteFile(gitignorePath, []byte(restored), 0o644)
+			}
+		}()
+	}
+
 	data, err := os.ReadFile(gitignorePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read .gitignore: %w", err)
