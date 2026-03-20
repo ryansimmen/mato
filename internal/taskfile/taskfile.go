@@ -7,11 +7,11 @@ import (
 	"regexp"
 )
 
-var branchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
+var branchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)\s*-->`)
 
 // ParseBranch reads a task file at path and extracts the branch name from
-// a <!-- branch: ... --> HTML comment. Returns "" if not found or the file
-// cannot be read.
+// a complete <!-- branch: ... --> HTML comment. Returns "" if the marker is
+// missing, malformed, unterminated, or the file cannot be read.
 func ParseBranch(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {

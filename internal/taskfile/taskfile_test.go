@@ -62,11 +62,12 @@ func TestParseBranch_NoWhitespace(t *testing.T) {
 }
 
 func TestParseBranch_WithoutClosingArrow(t *testing.T) {
-	// The regex does not require closing -->, so the branch should still parse.
+	// An unterminated branch comment must be ignored; callers fall back to
+	// filename-derived branch naming.
 	f := writeTempFile(t, "<!-- branch: task/no-close\n")
 	got := ParseBranch(f)
-	if got != "task/no-close" {
-		t.Fatalf("got %q, want %q", got, "task/no-close")
+	if got != "" {
+		t.Fatalf("got %q, want empty string for unterminated marker", got)
 	}
 }
 
@@ -131,5 +132,28 @@ func TestParseBranch_BranchWithSlashes(t *testing.T) {
 	got := ParseBranch(f)
 	if got != "task/deep/nested/branch" {
 		t.Fatalf("got %q, want %q", got, "task/deep/nested/branch")
+	}
+}
+
+func TestParseBranch_CorruptMarkers(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"partial closing", "<!-- branch: task/partial -\n"},
+		{"truncated mid-close", "<!-- branch: task/trunc --\n"},
+		{"missing branch token", "<!-- branch: -->\n"},
+		{"empty with whitespace only", "<!-- branch:    -->\n"},
+		{"no closing newline", "<!-- branch: task/cut"},
+		{"broken open tag", "<! branch: task/broken -->\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := writeTempFile(t, tt.content)
+			got := ParseBranch(f)
+			if got != "" {
+				t.Fatalf("got %q, want empty string for corrupt marker", got)
+			}
+		})
 	}
 }
