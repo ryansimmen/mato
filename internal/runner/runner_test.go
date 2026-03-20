@@ -1184,3 +1184,187 @@ func TestDefaultAgentTimeout(t *testing.T) {
 		t.Fatalf("expected default timeout of 30m, got %v", defaultAgentTimeout)
 	}
 }
+
+func TestAgentWroteFailureRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+
+	// No failure record: should return false.
+	os.WriteFile(path, []byte("# Task\nSome content\n"), 0o644)
+	if agentWroteFailureRecord(path, "abc12345") {
+		t.Fatal("expected false when no failure record exists")
+	}
+
+	// Failure from a different agent: should return false.
+	os.WriteFile(path, []byte("# Task\n<!-- failure: other-agent at 2026-01-01T00:00:00Z step=WORK error=test -->\n"), 0o644)
+	if agentWroteFailureRecord(path, "abc12345") {
+		t.Fatal("expected false for a different agent's failure record")
+	}
+
+	// Failure from the matching agent: should return true.
+	os.WriteFile(path, []byte("# Task\n<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=test -->\n"), 0o644)
+	if !agentWroteFailureRecord(path, "abc12345") {
+		t.Fatal("expected true when agent's failure record exists")
+	}
+
+	// Nonexistent file: should return false.
+	if agentWroteFailureRecord(filepath.Join(dir, "nonexistent.md"), "abc12345") {
+		t.Fatal("expected false for nonexistent file")
+	}
+}
+
+func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"backlog", "in-progress"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "my-task.md"
+	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	// Agent already wrote a failure record via ON_FAILURE.
+	os.WriteFile(inProgressPath, []byte(strings.Join([]string{
+		"<!-- claimed-by: agent-x -->\n# My Task",
+		"<!-- failure: agent-x at 2026-01-01T00:00:00Z step=WORK error=tests_failed files_changed=foo.go -->",
+		"",
+	}, "\n")), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/my-task",
+		Title:    "My Task",
+		TaskPath: inProgressPath,
+	}
+
+	recoverStuckTask(tasksDir, "agent-x", claimed)
+
+	backlogPath := filepath.Join(tasksDir, "backlog", taskFile)
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("task file not found in backlog/: %v", err)
+	}
+
+	// Should have exactly 1 failure record (the agent's), not 2.
+	count := strings.Count(string(data), "<!-- failure:")
+	if count != 1 {
+		t.Fatalf("failure record count = %d, want 1 (no duplicate)\ncontents:\n%s", count, string(data))
+	}
+	if !strings.Contains(string(data), "step=WORK") {
+		t.Fatal("original failure record should be preserved")
+	}
+}
+
+func TestPostReviewAction_Approved(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "review-task.md"
+	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	os.WriteFile(reviewPath, []byte(strings.Join([]string{
+		"<!-- claimed-by: task-agent -->",
+		"<!-- branch: task/review-task -->",
+		"# Review Task",
+		"",
+		"<!-- reviewed: review-agent at 2026-01-01T00:00:00Z — approved -->",
+	}, "\n")), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/review-task",
+		Title:    "Review Task",
+		TaskPath: reviewPath,
+	}
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	// Should be moved to ready-to-merge/.
+	if _, err := os.Stat(filepath.Join(tasksDir, "ready-to-merge", taskFile)); err != nil {
+		t.Fatal("approved task not moved to ready-to-merge/")
+	}
+	if _, err := os.Stat(reviewPath); err == nil {
+		t.Fatal("approved task still in ready-for-review/")
+	}
+}
+
+func TestPostReviewAction_Rejected(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "review-task.md"
+	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	os.WriteFile(reviewPath, []byte(strings.Join([]string{
+		"<!-- claimed-by: task-agent -->",
+		"<!-- branch: task/review-task -->",
+		"# Review Task",
+		"",
+		"<!-- review-rejection: review-agent at 2026-01-01T00:00:00Z — missing error wrapping -->",
+	}, "\n")), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/review-task",
+		Title:    "Review Task",
+		TaskPath: reviewPath,
+	}
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	// Should be moved to backlog/.
+	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", taskFile)); err != nil {
+		t.Fatal("rejected task not moved to backlog/")
+	}
+	if _, err := os.Stat(reviewPath); err == nil {
+		t.Fatal("rejected task still in ready-for-review/")
+	}
+}
+
+func TestPostReviewAction_NoVerdict(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "review-task.md"
+	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/review-task",
+		Title:    "Review Task",
+		TaskPath: reviewPath,
+	}
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	// Task should stay in ready-for-review/ with a review-failure record.
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("task with no verdict should stay in ready-for-review/")
+	}
+	data, _ := os.ReadFile(reviewPath)
+	if !strings.Contains(string(data), "<!-- review-failure:") {
+		t.Fatal("review-failure record not written for task with no verdict")
+	}
+	if !strings.Contains(string(data), "exited without rendering a verdict") {
+		t.Fatal("review-failure record missing expected reason")
+	}
+}
+
+func TestAppendReviewFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	os.WriteFile(path, []byte("# Task\n"), 0o644)
+
+	appendReviewFailure(path, "review-abc", "could not fetch branch")
+
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "<!-- review-failure: review-abc") {
+		t.Fatal("review-failure record not written")
+	}
+	if !strings.Contains(string(data), "error=could not fetch branch") {
+		t.Fatal("review-failure reason not included")
+	}
+}
