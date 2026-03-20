@@ -124,6 +124,9 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 		SilenceErrors:      true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, a := range args {
+				if a == "--" {
+					break
+				}
 				if a == "--help" || a == "-h" {
 					cmd.DisableFlagParsing = false
 					return cmd.Help()
