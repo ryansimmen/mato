@@ -850,6 +850,7 @@ func runReview(cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
 		"MATO_TASK_BRANCH=" + task.Branch,
 		"MATO_TASK_TITLE=" + task.Title,
 		fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/ready-for-review/%s", cfg.workdir, task.Filename),
+		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/.tasks/messages/verdict-%s.json", cfg.workdir, task.Filename),
 	}
 
 	args := buildDockerArgs(cfg, extraEnvs, nil)
@@ -875,57 +876,119 @@ var reviewedRe = regexp.MustCompile(`<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+app
 // Requires the em-dash separator, a non-empty reason, and the closing -->.
 var reviewRejectionRe = regexp.MustCompile(`<!-- review-rejection:\s+\S+\s+at\s+\S+\s+—\s+.+\s*-->`)
 
-// postReviewAction reads the task file after the review agent exits and handles
-// the verdict. If the agent wrote an approval marker, the host moves the task
-// to ready-to-merge/. If a rejection marker, the host moves it to backlog/.
-// If neither, the host writes a review-failure record (agent crashed).
+// reviewVerdict is the JSON structure written by the review agent to
+// communicate its verdict to the host without using shell expansion.
+type reviewVerdict struct {
+	Verdict string `json:"verdict"` // "approve" or "reject"
+	Reason  string `json:"reason"`  // rejection reason (empty for approvals)
+}
+
+// postReviewAction reads the verdict file written by the review agent and
+// handles the result. If approved, the host writes the approval marker and
+// moves the task to ready-to-merge/. If rejected, writes rejection marker
+// and moves to backlog/. If no verdict file exists, writes a review-failure.
 func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	// Task must still be in ready-for-review/ (agent no longer moves files).
 	if _, err := os.Stat(task.TaskPath); err != nil {
 		return
 	}
 
-	data, err := os.ReadFile(task.TaskPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not read review task %s: %v\n", task.Filename, err)
-		return
-	}
-	content := string(data)
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+task.Filename+".json")
+	defer os.Remove(verdictPath) // clean up regardless of outcome
 
-	if reviewedRe.MatchString(content) {
-		// Approved: move to ready-to-merge/.
-		dst := filepath.Join(tasksDir, "ready-to-merge", task.Filename)
-		if err := os.Rename(task.TaskPath, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not move approved task %s to ready-to-merge: %v\n", task.Filename, err)
-			return
+	data, err := os.ReadFile(verdictPath)
+	if err != nil {
+		// No verdict file: review agent crashed or failed to write verdict.
+		// Fall back to checking the task file for markers (backward compat).
+		taskData, readErr := os.ReadFile(task.TaskPath)
+		if readErr == nil {
+			content := string(taskData)
+			if reviewedRe.MatchString(content) {
+				moveReviewedTask(tasksDir, agentID, task, "ready-to-merge",
+					"Review approved, ready for merge", "Review approved")
+				return
+			}
+			if reviewRejectionRe.MatchString(content) {
+				moveReviewedTask(tasksDir, agentID, task, "backlog",
+					"Review rejected", "Review rejected")
+				return
+			}
 		}
-		messaging.WriteMessage(tasksDir, messaging.Message{
-			From:   agentID,
-			Type:   "completion",
-			Task:   task.Filename,
-			Branch: task.Branch,
-			Body:   "Review approved, ready for merge",
-		})
-		fmt.Printf("Review approved: moved %s to ready-to-merge/\n", task.Filename)
-	} else if reviewRejectionRe.MatchString(content) {
-		// Rejected: move to backlog/.
-		dst := filepath.Join(tasksDir, "backlog", task.Filename)
-		if err := os.Rename(task.TaskPath, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not move rejected task %s to backlog: %v\n", task.Filename, err)
-			return
-		}
-		messaging.WriteMessage(tasksDir, messaging.Message{
-			From:   agentID,
-			Type:   "completion",
-			Task:   task.Filename,
-			Branch: task.Branch,
-			Body:   "Review rejected",
-		})
-		fmt.Printf("Review rejected: moved %s to backlog/\n", task.Filename)
-	} else {
-		// No verdict marker: review agent crashed or failed to render verdict.
 		appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
 		fmt.Printf("Review incomplete: recorded review-failure for %s\n", task.Filename)
+		return
+	}
+
+	var verdict reviewVerdict
+	if err := json.Unmarshal(data, &verdict); err != nil {
+		appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not parse verdict file: %v", err))
+		fmt.Printf("Review incomplete: malformed verdict file for %s\n", task.Filename)
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	switch strings.ToLower(strings.TrimSpace(verdict.Verdict)) {
+	case "approve":
+		// Write approval marker to task file.
+		appendToFile(task.TaskPath, fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now))
+		moveReviewedTask(tasksDir, agentID, task, "ready-to-merge",
+			"Review approved, ready for merge", "Review approved")
+
+	case "reject":
+		reason := strings.TrimSpace(verdict.Reason)
+		if reason == "" {
+			reason = "no reason provided"
+		}
+		appendToFile(task.TaskPath, fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason))
+		moveReviewedTask(tasksDir, agentID, task, "backlog",
+			"Review rejected", "Review rejected")
+
+	case "error":
+		reason := strings.TrimSpace(verdict.Reason)
+		if reason == "" {
+			reason = "review agent reported an error"
+		}
+		appendReviewFailure(task.TaskPath, agentID, reason)
+		fmt.Printf("Review error: recorded review-failure for %s: %s\n", task.Filename, reason)
+
+	default:
+		appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
+		fmt.Printf("Review incomplete: unknown verdict %q for %s\n", verdict.Verdict, task.Filename)
+	}
+}
+
+// moveReviewedTask moves a reviewed task to the given destination directory
+// and sends a completion message.
+func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, dstDir, msgBody, logPrefix string) {
+	dst := filepath.Join(tasksDir, dstDir, task.Filename)
+	if err := os.Rename(task.TaskPath, dst); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, dstDir, err)
+		return
+	}
+	messaging.WriteMessage(tasksDir, messaging.Message{
+		From:   agentID,
+		Type:   "completion",
+		Task:   task.Filename,
+		Branch: task.Branch,
+		Body:   msgBody,
+	})
+	fmt.Printf("%s: moved %s to %s/\n", logPrefix, task.Filename, dstDir)
+}
+
+// appendToFile appends text to a file. Errors are logged but not fatal.
+func appendToFile(path, text string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not open %s for append: %v\n", path, err)
+		return
+	}
+	_, writeErr := f.WriteString(text)
+	closeErr := f.Close()
+	if writeErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not append to %s: %v\n", path, writeErr)
+	} else if closeErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not close %s after append: %v\n", path, closeErr)
 	}
 }
 
