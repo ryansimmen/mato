@@ -400,6 +400,86 @@ func TestProcessQueue_FallbackToDerivedBranch(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_BranchCollisionDisambiguation(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	// Two tasks whose filenames sanitize to the same branch name.
+	// "collide task.md" and "collide_task.md" both sanitize to "task/collide-task".
+	taskA := "collide task.md"
+	taskB := "collide_task.md"
+	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskA)
+	disambiguatedBranch := derivedBranch + "-" + frontmatter.BranchDisambiguator(taskB)
+
+	// Verify both filenames actually collide on the same derived branch.
+	if got := "task/" + frontmatter.SanitizeBranchName(taskB); got != derivedBranch {
+		t.Fatalf("test setup: expected both filenames to derive the same branch, got %q and %q", derivedBranch, got)
+	}
+
+	// Create git branches with changes for both tasks.
+	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "a.txt"), []byte("task A\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile a.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "a.txt"); err != nil {
+		t.Fatalf("git add a.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "task A work"); err != nil {
+		t.Fatalf("git commit task A: %v", err)
+	}
+
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", disambiguatedBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", disambiguatedBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "b.txt"), []byte("task B\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile b.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "b.txt"); err != nil {
+		t.Fatalf("git add b.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "task B work"); err != nil {
+		t.Fatalf("git commit task B: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	// Task A sits in in-progress/ with a branch comment claiming the derived branch.
+	inProgressDir := filepath.Join(tasksDir, "in-progress")
+	if err := os.MkdirAll(inProgressDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll in-progress: %v", err)
+	}
+	taskAContent := "<!-- branch: " + derivedBranch + " -->\n# Collide task A\nSome work.\n"
+	if err := os.WriteFile(filepath.Join(inProgressDir, taskA), []byte(taskAContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task A: %v", err)
+	}
+
+	// Task B in ready-to-merge/ has no branch comment, so it falls back to derived name.
+	taskBContent := "---\npriority: 5\n---\n# Collide task B\nMore work.\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", taskB), []byte(taskBContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task B: %v", err)
+	}
+
+	// Task B should use the disambiguated branch and merge successfully.
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "b.txt")); err != nil {
+		t.Fatalf("expected disambiguated branch change (b.txt) to merge: %v", err)
+	}
+}
+
 func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)

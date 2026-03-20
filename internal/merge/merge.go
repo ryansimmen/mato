@@ -50,6 +50,8 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		return 0
 	}
 
+	activeBranches := queue.CollectActiveBranches(tasksDir)
+
 	tasks := make([]mergeQueueTask, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
@@ -69,7 +71,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		taskBranch := taskfile.ParseBranch(path)
 		if taskBranch == "" {
 			taskBranch = "task/" + frontmatter.SanitizeBranchName(entry.Name())
-			if _, taken := queue.CollectActiveBranches(tasksDir)[taskBranch]; taken {
+			if _, taken := activeBranches[taskBranch]; taken {
 				taskBranch = taskBranch + "-" + frontmatter.BranchDisambiguator(entry.Name())
 			}
 		}
