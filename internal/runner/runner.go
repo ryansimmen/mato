@@ -223,6 +223,135 @@ func validateTasksDir(tasksDir string) (string, error) {
 	return abs, nil
 }
 
+// DryRun validates the task queue setup without launching Docker containers.
+// It runs one iteration of queue management (dependency promotion, overlap
+// detection, manifest writing) and reports the results, then exits.
+func DryRun(repoRoot, branch, tasksDirOverride string) error {
+	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return err
+	}
+	repoRoot = strings.TrimSpace(repoRoot)
+
+	tasksDir := tasksDirOverride
+	if tasksDir == "" {
+		tasksDir = filepath.Join(repoRoot, ".tasks")
+	}
+	tasksDir, err = validateTasksDir(tasksDir)
+	if err != nil {
+		return err
+	}
+
+	subdirs := []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"}
+
+	// Verify directory structure
+	missingDirs := 0
+	for _, sub := range subdirs {
+		dir := filepath.Join(tasksDir, sub)
+		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+			fmt.Fprintf(os.Stderr, "warning: missing directory: %s/\n", sub)
+			missingDirs++
+		}
+	}
+	if missingDirs > 0 {
+		return fmt.Errorf("%d required queue directories missing — run mato once to create them", missingDirs)
+	}
+
+	// Parse all task files and report errors
+	fmt.Println("=== Task File Validation ===")
+	parseErrors := 0
+	totalTasks := 0
+	for _, sub := range subdirs {
+		dir := filepath.Join(tasksDir, sub)
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			totalTasks++
+			path := filepath.Join(dir, e.Name())
+			if _, _, parseErr := frontmatter.ParseTaskFile(path); parseErr != nil {
+				fmt.Printf("  ERROR %s/%s: %v\n", sub, e.Name(), parseErr)
+				parseErrors++
+			}
+		}
+	}
+	if parseErrors > 0 {
+		fmt.Printf("  %d of %d task file(s) have parse errors\n", parseErrors, totalTasks)
+	} else {
+		fmt.Printf("  All %d task file(s) parsed successfully\n", totalTasks)
+	}
+
+	// Run dependency reconciliation
+	fmt.Println("\n=== Dependency Resolution ===")
+	promoted := queue.ReconcileReadyQueue(tasksDir)
+	if promoted > 0 {
+		fmt.Printf("  Promoted %d task(s) from waiting/ to backlog/\n", promoted)
+	} else {
+		fmt.Println("  No waiting tasks ready for promotion")
+	}
+
+	// Detect affects conflicts
+	fmt.Println("\n=== Affects Conflict Detection ===")
+	detailed := queue.DeferredOverlappingTasksDetailed(tasksDir)
+	if len(detailed) > 0 {
+		// Sort deferred task names for stable output.
+		names := make([]string, 0, len(detailed))
+		for name := range detailed {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			info := detailed[name]
+			fmt.Printf("  DEFERRED %s (blocked by %s in %s/, overlap: %v)\n",
+				name, info.BlockedBy, info.BlockedByDir, info.OverlapFiles)
+		}
+	} else {
+		fmt.Println("  No affects conflicts detected")
+	}
+
+	// Write and display queue manifest
+	fmt.Println("\n=== Queue Manifest ===")
+	deferredSimple := make(map[string]struct{}, len(detailed))
+	for name := range detailed {
+		deferredSimple[name] = struct{}{}
+	}
+	if writeErr := queue.WriteQueueManifest(tasksDir, deferredSimple); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", writeErr)
+	}
+	manifest, readErr := os.ReadFile(filepath.Join(tasksDir, ".queue"))
+	if readErr != nil || len(strings.TrimSpace(string(manifest))) == 0 {
+		fmt.Println("  (queue is empty)")
+	} else {
+		for i, line := range strings.Split(strings.TrimSpace(string(manifest)), "\n") {
+			fmt.Printf("  %d. %s\n", i+1, line)
+		}
+	}
+
+	// Summary counts
+	fmt.Println("\n=== Queue Summary ===")
+	for _, sub := range subdirs {
+		dir := filepath.Join(tasksDir, sub)
+		entries, _ := os.ReadDir(dir)
+		count := 0
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+				count++
+			}
+		}
+		fmt.Printf("  %-20s %d\n", sub, count)
+	}
+	if len(detailed) > 0 {
+		fmt.Printf("  %-20s %d\n", "deferred", len(detailed))
+	}
+
+	fmt.Println("\nDry run complete. No Docker containers were launched.")
+	return nil
+}
+
 func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {

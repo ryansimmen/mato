@@ -15,12 +15,16 @@ the host and bind-mounts those executables into agent containers.
 
 ## CLI Usage
 ```text
-mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [copilot-args...]
+mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [--dry-run] [copilot-args...]
 mato status [--repo <path>] [--tasks-dir <path>]
 ```
 Run mode creates the queue structure if needed, starts the Docker-based Copilot loop,
 and merges completed work into the target branch. If the target branch does not exist
 yet, `mato` creates it.
+Dry-run mode (`--dry-run`) validates the task queue setup without launching Docker
+containers. It parses all task files, promotes ready dependencies from waiting/ to
+backlog/, detects `affects` conflicts, writes the `.queue` manifest, and prints a
+summary of the queue state. Useful for verifying setup in CI or before a real run.
 Status mode prints queue counts, active agents, waiting-task dependency summaries, and
 recent messages. `mato status` rejects extra positional arguments, but it does
 silently accept `--branch` even though status ignores that value.
@@ -31,9 +35,10 @@ Copilot CLI. In run mode, unrecognized arguments are also passed through to Copi
 Long flags support both `--flag value` and `--flag=value` forms.
 | Flag | Applies to | Default | Description |
 | --- | --- | --- | --- |
-| `--repo <path>` | run, status | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
-| `--branch <name>` | run; accepted-but-ignored by status | `mato` | Target branch used for merge processing. `mato status` parses this flag via shared argument handling but does not use it. |
-| `--tasks-dir <path>` | run, status | `<repo>/.tasks` | Task queue directory. If omitted, `mato` uses `.tasks` under the resolved repository root. |
+| `--repo <path>` | run, status, dry-run | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
+| `--branch <name>` | run; accepted-but-ignored by status and dry-run | `mato` | Target branch used for merge processing. `mato status` and `mato --dry-run` parse this flag via shared argument handling but do not use it. |
+| `--tasks-dir <path>` | run, status, dry-run | `<repo>/.tasks` | Task queue directory. If omitted, `mato` uses `.tasks` under the resolved repository root. |
+| `--dry-run` | run | `false` | Validate queue setup without launching Docker containers. Parses task files, promotes dependencies, detects `affects` conflicts, writes the `.queue` manifest, and prints a summary. Exits after one pass. |
 | `--help`, `-h` | run, status | none | Show help and exit. |
 | `--` | run | none | Forward all following arguments directly to Copilot CLI without further `mato` parsing. |
 
