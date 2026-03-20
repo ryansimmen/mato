@@ -3,12 +3,14 @@ package queue
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"mato/internal/frontmatter"
@@ -664,12 +666,31 @@ func WriteQueueManifest(tasksDir string, exclude map[string]struct{}) error {
 }
 
 func safeRename(src, dst string) error {
-	if _, err := os.Stat(dst); err == nil {
-		return fmt.Errorf("destination already exists: %s", dst)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat destination %s: %w", dst, err)
+	// Use os.Link + os.Remove instead of os.Stat + os.Rename to eliminate
+	// the TOCTOU race window. os.Link fails atomically with EEXIST if the
+	// destination already exists.
+	if err := os.Link(src, dst); err != nil {
+		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
+			return fmt.Errorf("destination already exists: %s", dst)
+		}
+		// Cross-device link or other unusual error: fall back to
+		// Stat-guarded Rename as a best-effort path.
+		if errors.Is(err, syscall.EXDEV) {
+			if _, statErr := os.Stat(dst); statErr == nil {
+				return fmt.Errorf("destination already exists: %s", dst)
+			} else if !os.IsNotExist(statErr) {
+				return fmt.Errorf("stat destination %s: %w", dst, statErr)
+			}
+			return os.Rename(src, dst)
+		}
+		return fmt.Errorf("link %s to %s: %w", src, dst, err)
 	}
-	return os.Rename(src, dst)
+	// Link succeeded; remove the original.
+	if err := os.Remove(src); err != nil {
+		// The move is logically complete (dst exists), so warn but don't fail.
+		fmt.Fprintf(os.Stderr, "warning: could not remove source %s after linking to %s: %v\n", src, dst, err)
+	}
+	return nil
 }
 
 func dependsOnWaitingTask(taskID, targetID string, waitingDeps map[string][]string, visited map[string]struct{}) bool {
