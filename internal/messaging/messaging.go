@@ -10,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/queue"
+	"mato/internal/identity"
+	"mato/internal/taskfile"
 )
 
 type Message struct {
@@ -76,7 +77,7 @@ func WriteMessage(tasksDir string, msg Message) error {
 	}
 
 	if msg.ID == "" {
-		id, err := queue.GenerateAgentID()
+		id, err := identity.GenerateAgentID()
 		if err != nil {
 			return fmt.Errorf("generate message ID: %w", err)
 		}
@@ -206,7 +207,7 @@ func CleanStalePresence(tasksDir string) {
 			continue
 		}
 		agentID := strings.TrimSuffix(entry.Name(), ".json")
-		if !queue.IsAgentActive(tasksDir, agentID) {
+		if !identity.IsAgentActive(tasksDir, agentID) {
 			os.Remove(filepath.Join(presenceDir, entry.Name()))
 		}
 	}
@@ -326,7 +327,7 @@ type FileClaim struct {
 // If excludeTask is non-empty, skip the task with that filename so the
 // just-claimed task does not see its own files as conflicting.
 func BuildAndWriteFileClaims(tasksDir, excludeTask string) error {
-	active := queue.CollectActiveAffects(tasksDir)
+	active := taskfile.CollectActiveAffects(tasksDir)
 	claims := make(map[string]FileClaim, len(active)*2)
 	for _, t := range active {
 		if excludeTask != "" && t.Name == excludeTask {

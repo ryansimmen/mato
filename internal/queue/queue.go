@@ -1,8 +1,6 @@
 package queue
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,8 +12,10 @@ import (
 	"time"
 
 	"mato/internal/frontmatter"
+	"mato/internal/identity"
 	"mato/internal/lockfile"
 	"mato/internal/process"
+	"mato/internal/taskfile"
 )
 
 var claimedByRe = regexp.MustCompile(`<!-- claimed-by:\s*(\S+)`)
@@ -60,15 +60,7 @@ func RegisterAgent(tasksDir, agentID string) (func(), error) {
 // IsAgentActive checks whether the agent that wrote a lock file is still running.
 // Supports both the "PID:starttime" format and legacy "PID" format.
 func IsAgentActive(tasksDir, agentID string) bool {
-	if agentID == "" {
-		return false
-	}
-	lockFile := filepath.Join(tasksDir, ".locks", agentID+".pid")
-	data, err := os.ReadFile(lockFile)
-	if err != nil {
-		return false
-	}
-	return process.IsLockHolderAlive(strings.TrimSpace(string(data)))
+	return identity.IsAgentActive(tasksDir, agentID)
 }
 
 // ParseClaimedBy extracts the agent ID from a task file's claimed-by metadata.
@@ -489,22 +481,16 @@ type backlogTask struct {
 
 // ActiveTask describes a task currently being worked on or awaiting merge,
 // along with the files it declares in its affects: metadata.
-type ActiveTask struct {
-	Name    string
-	Dir     string // "in-progress", "ready-for-review", or "ready-to-merge"
-	Affects []string
-}
+// Deprecated: Use taskfile.ActiveTask directly. This alias exists for
+// backward compatibility with existing callers.
+type ActiveTask = taskfile.ActiveTask
 
 // CollectActiveAffects returns tasks in in-progress/, ready-for-review/, and ready-to-merge/
-// that have non-empty affects: metadata. This is the exported wrapper
-// around the internal collectActiveAffects for use by the messaging package.
+// that have non-empty affects: metadata.
+// Deprecated: Use taskfile.CollectActiveAffects directly. This wrapper exists
+// for backward compatibility with existing callers.
 func CollectActiveAffects(tasksDir string) []ActiveTask {
-	internal := collectActiveAffects(tasksDir)
-	result := make([]ActiveTask, len(internal))
-	for i, t := range internal {
-		result[i] = ActiveTask{Name: t.name, Dir: t.dir, Affects: t.affects}
-	}
-	return result
+	return taskfile.CollectActiveAffects(tasksDir)
 }
 
 func collectActiveAffects(tasksDir string) []backlogTask {
@@ -816,10 +802,10 @@ func writeFileAtomically(path string, data []byte) error {
 	return nil
 }
 
+// GenerateAgentID returns a random 8-character hex string suitable for use
+// as an agent or message identifier.
+// Deprecated: Use identity.GenerateAgentID directly. This wrapper exists for
+// backward compatibility with existing callers.
 func GenerateAgentID() (string, error) {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
+	return identity.GenerateAgentID()
 }
