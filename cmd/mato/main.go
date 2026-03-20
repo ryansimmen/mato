@@ -79,6 +79,10 @@ func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun boo
 			}
 			i++
 			val := strings.TrimSpace(next)
+			if val == "" {
+				err = fmt.Errorf("flag %s requires a value", arg)
+				return
+			}
 			switch arg {
 			case "--repo":
 				repo = val

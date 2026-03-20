@@ -44,9 +44,9 @@ mato status
 
 Useful flags:
 
-- `--repo <path>`: target repository (defaults to the current directory)
-- `--branch <name>`: merge target branch (defaults to `mato`)
-- `--tasks-dir <path>`: custom task queue location (defaults to `<repo>/.tasks`)
+- `--repo <path>`: target repository (defaults to the current directory); empty and whitespace-only values are rejected
+- `--branch <name>`: merge target branch (defaults to `mato`); empty and whitespace-only values are rejected
+- `--tasks-dir <path>`: custom task queue location (defaults to `<repo>/.tasks`); empty and whitespace-only values are rejected
 - `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
 
 Arguments after a `--` separator are always forwarded to the Copilot CLI without

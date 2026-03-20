@@ -188,6 +188,13 @@ func TestExtractKnownFlags(t *testing.T) {
 			wantRepo:  "--model",
 			wantExtra: []string{},
 		},
+		{
+			name:       "values with internal spaces accepted",
+			args:       []string{"--repo", "/path/with spaces", "--branch", "my branch"},
+			wantRepo:   "/path/with spaces",
+			wantBranch: "my branch",
+			wantExtra:  []string{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -275,6 +282,36 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			name:    "dry-run empty equals value",
 			args:    []string{"--dry-run="},
 			wantErr: `invalid value "" for flag --dry-run: must be a boolean`,
+		},
+		{
+			name:    "repo whitespace-only equals form",
+			args:    []string{"--repo=   "},
+			wantErr: "flag --repo requires a value",
+		},
+		{
+			name:    "branch whitespace-only equals form",
+			args:    []string{"--branch=\t "},
+			wantErr: "flag --branch requires a value",
+		},
+		{
+			name:    "tasks-dir whitespace-only equals form",
+			args:    []string{"--tasks-dir=  "},
+			wantErr: "flag --tasks-dir requires a value",
+		},
+		{
+			name:    "repo whitespace-only space form",
+			args:    []string{"--repo", "   "},
+			wantErr: "flag --repo requires a value",
+		},
+		{
+			name:    "branch whitespace-only space form",
+			args:    []string{"--branch", " \t "},
+			wantErr: "flag --branch requires a value",
+		},
+		{
+			name:    "tasks-dir whitespace-only space form",
+			args:    []string{"--tasks-dir", "  "},
+			wantErr: "flag --tasks-dir requires a value",
 		},
 	}
 
