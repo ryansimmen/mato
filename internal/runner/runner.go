@@ -17,6 +17,7 @@ import (
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
+	"mato/internal/identity"
 	"mato/internal/merge"
 	"mato/internal/messaging"
 	"mato/internal/queue"
@@ -224,7 +225,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		return fmt.Errorf("init messaging: %w", err)
 	}
 
-	agentID, err := queue.GenerateAgentID()
+	agentID, err := identity.GenerateAgentID()
 	if err != nil {
 		return fmt.Errorf("generate agent ID: %w", err)
 	}
