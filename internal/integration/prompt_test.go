@@ -109,7 +109,7 @@ func promptPreamble(t *testing.T) string {
 }
 
 func TestPromptNoPushInstructions(t *testing.T) {
-	// Verify the agent prompt does not contain push instructions.
+	// Verify the agent prompt does not contain push or file-move instructions.
 	data, err := os.ReadFile(taskInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(task instructions): %v", err)
@@ -126,6 +126,14 @@ func TestPromptNoPushInstructions(t *testing.T) {
 	}
 	if strings.Contains(text, "MARK_READY") {
 		t.Fatal("task instructions should not contain MARK_READY state")
+	}
+	// ON_FAILURE should not move files — the host handles that.
+	onFailure := promptStateBlock(t, "ON_FAILURE")
+	if strings.Contains(onFailure, "mv ") {
+		t.Fatal("ON_FAILURE should not move files; host handles file moves")
+	}
+	if strings.Contains(onFailure, "git checkout") {
+		t.Fatal("ON_FAILURE should not checkout branches; host handles cleanup")
 	}
 }
 
@@ -519,26 +527,23 @@ func TestPromptOnFailure(t *testing.T) {
 		t.Fatalf("runBash on failure: %v\noutput:\n%s", err, out)
 	}
 
-	// ON_FAILURE always moves to backlog; the host checks retry budget on next cycle.
-	backlogTask := filepath.Join(tasksDir, "backlog", "my-task.md")
-	mustExist(t, backlogTask)
-	mustNotExist(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
+	// ON_FAILURE writes the failure record but does NOT move the file.
+	// The host handles the move to backlog/ via recoverStuckTask.
+	inProgressTask := filepath.Join(tasksDir, "in-progress", "my-task.md")
+	mustExist(t, inProgressTask)
 
-	contents := readFile(t, backlogTask)
+	contents := readFile(t, inProgressTask)
 	if got := countFailureRecords(contents); got != 2 {
 		t.Fatalf("failure record count = %d, want 2\ncontents:\n%s", got, contents)
 	}
 	if !strings.Contains(contents, "step=WORK") || !strings.Contains(contents, "error=test failure") {
 		t.Fatalf("failure metadata missing from task: %s", contents)
 	}
-	if got := strings.TrimSpace(mustGitOutput(t, cloneDir, "branch", "--show-current")); got != "mato" {
-		t.Fatalf("current branch after failure = %q, want %q", got, "mato")
-	}
 }
 
-func TestPromptOnFailureAlwaysRequeues(t *testing.T) {
-	// Even with many prior failures, ON_FAILURE moves to backlog (not failed).
-	// The host's SelectAndClaimTask checks retry budget before the next attempt.
+func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
+	// Even with many prior failures, ON_FAILURE only writes the failure record.
+	// The host moves to backlog and handles retry budgets.
 	repoRoot, tasksDir := setupTestRepo(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", strings.Join([]string{
 		"<!-- claimed-by: test-agent-6  claimed-at: 2026-01-01T00:00:00Z -->",
@@ -566,18 +571,15 @@ func TestPromptOnFailureAlwaysRequeues(t *testing.T) {
 		t.Fatalf("runBash on failure with many priors: %v\noutput:\n%s", err, out)
 	}
 
-	// Task goes to backlog, NOT failed — the host decides on retry exhaustion.
-	backlogTask := filepath.Join(tasksDir, "backlog", "my-task.md")
-	mustExist(t, backlogTask)
-	mustNotExist(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
+	// Task stays in in-progress/, NOT moved to backlog/ — host handles that.
+	inProgressTask := filepath.Join(tasksDir, "in-progress", "my-task.md")
+	mustExist(t, inProgressTask)
+	mustNotExist(t, filepath.Join(tasksDir, "backlog", "my-task.md"))
 	mustNotExist(t, filepath.Join(tasksDir, "failed", "my-task.md"))
 
-	contents := readFile(t, backlogTask)
+	contents := readFile(t, inProgressTask)
 	if got := countFailureRecords(contents); got != 3 {
 		t.Fatalf("failure record count = %d, want 3\ncontents:\n%s", got, contents)
-	}
-	if got := strings.TrimSpace(mustGitOutput(t, cloneDir, "branch", "--show-current")); got != "mato" {
-		t.Fatalf("current branch after failure = %q, want %q", got, "mato")
 	}
 }
 

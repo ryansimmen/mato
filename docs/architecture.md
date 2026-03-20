@@ -177,8 +177,8 @@ State meanings:
 | `waiting/` | blocked task | authored there initially for dependency tracking | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed and no active overlap exists |
 | `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, `ON_FAILURE` requeue, or review rejection | host `SelectAndClaimTask` moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
 | `in-progress/` | task owned by one agent | host `SelectAndClaimTask` | host `postAgentPush` (to `ready-for-review/`), `ON_FAILURE`, or host orphan recovery |
-| `ready-for-review/` | branch pushed, waiting for AI review | host `postAgentPush` | review agent moves it to `ready-to-merge/` on approval, or to `backlog/` on rejection |
-| `ready-to-merge/` | reviewed and approved, waiting for host merge | review agent approval | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
+| `ready-for-review/` | branch pushed, waiting for AI review | host `postAgentPush` | host `postReviewAction` moves to `ready-to-merge/` on approval, or to `backlog/` on rejection |
+| `ready-to-merge/` | reviewed and approved, waiting for host merge | host `postReviewAction` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
 | `failed/` | failure record budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
 Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
@@ -253,22 +253,25 @@ Merge failure handling is branch-specific:
 3. Push failure after a successful squash commit: append `<!-- failure: merge-queue ... -->` but leave the task file in `ready-to-merge/` for retry on the next merge pass.
 4. Parse errors are also recorded as merge-queue failures and requeued to `backlog/`.
 ## 7. Review Agent
-After a task agent pushes its branch and moves the task to `ready-for-review/`, the host launches a review agent to evaluate the changes before merging.
+After the host pushes a task branch and moves the task to `ready-for-review/`, it launches a review agent to evaluate the changes before merging.
 
 ### How it works
 1. `selectTaskForReview(tasksDir)` scans `ready-for-review/*.md` for the next task to review.
-2. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts).
-3. The review agent diffs the task branch against the target branch, analyzes the changes, and renders a verdict.
-4. **Approved**: the review agent appends `<!-- reviewed: <agent-id> at <timestamp> — approved -->` and moves the task to `ready-to-merge/`.
-5. **Rejected**: the review agent appends `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->` and moves the task back to `backlog/` for a retry by the implementing agent.
+2. The host verifies the task branch exists (`git rev-parse --verify`). If the branch is missing, the host writes a `<!-- review-failure: ... -->` record and skips the review.
+3. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts).
+4. The review agent diffs the task branch against the target branch, analyzes the changes, and writes a verdict marker to the task file.
+5. After the review agent exits, the host reads the verdict marker via `postReviewAction(...)`:
+   - **Approved**: host moves the task to `ready-to-merge/` and sends a completion message.
+   - **Rejected**: host moves the task back to `backlog/` and sends a completion message.
+   - **No verdict** (agent crashed): host writes a `<!-- review-failure: ... -->` record; the task stays in `ready-for-review/` for a future attempt.
 
 ### Key properties
 - Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` records are counted for the task's failure record budget.
 - Review infrastructure failures (network errors, diff timeouts) are recorded as `<!-- review-failure: ... -->` and counted separately from task failure records. This ensures transient review issues do not exhaust the task's failure record budget.
 - On retry, the host injects previous review feedback via the `MATO_REVIEW_FEEDBACK` environment variable so the implementing agent can address the reviewer's concerns.
 - The review agent uses the embedded prompt `review-instructions.md`.
-- The review agent sends `progress` and `completion` messages like the task agent.
-- The review verdict (approve/reject) is communicated via task file movement and HTML comments, not via the messaging system.
+- The review agent writes only a `progress` message; the host sends the `completion` message after processing the verdict.
+- The review verdict is communicated via HTML comment markers (`<!-- reviewed: ... -->` or `<!-- review-rejection: ... -->`), read by the host after the agent exits.
 
 ## 8. Conflict Prevention
 `queue.DeferredOverlappingTasks(tasksDir)` prevents multiple backlog tasks from claiming the same files simultaneously.
