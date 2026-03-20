@@ -1733,3 +1733,73 @@ func TestIsTerminal(t *testing.T) {
 		t.Fatal("/dev/null should not be detected as a terminal")
 	}
 }
+
+func TestMoveReviewedTask_Success(t *testing.T) {
+	tasksDir := t.TempDir()
+	srcDir := filepath.Join(tasksDir, "ready-for-review")
+	dstDir := filepath.Join(tasksDir, "ready-to-merge")
+	msgDir := filepath.Join(tasksDir, "messages", "events")
+	for _, d := range []string{srcDir, dstDir, msgDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	taskFile := "my-task.md"
+	srcPath := filepath.Join(srcDir, taskFile)
+	os.WriteFile(srcPath, []byte("# My Task\n"), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/my-task",
+		Title:    "My Task",
+		TaskPath: srcPath,
+	}
+
+	moveReviewedTask(tasksDir, "agent1", task, "ready-to-merge", "approved", "review")
+
+	// Source should be removed
+	if _, err := os.Stat(srcPath); err == nil {
+		t.Fatal("source file should have been removed after move")
+	}
+	// Destination should exist
+	dstPath := filepath.Join(dstDir, taskFile)
+	if _, err := os.Stat(dstPath); err != nil {
+		t.Fatalf("destination file should exist: %v", err)
+	}
+}
+
+func TestMoveReviewedTask_DestinationExists(t *testing.T) {
+	tasksDir := t.TempDir()
+	srcDir := filepath.Join(tasksDir, "ready-for-review")
+	dstDir := filepath.Join(tasksDir, "backlog")
+	msgDir := filepath.Join(tasksDir, "messages", "events")
+	for _, d := range []string{srcDir, dstDir, msgDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	taskFile := "dup-task.md"
+	srcPath := filepath.Join(srcDir, taskFile)
+	os.WriteFile(srcPath, []byte("# Dup Task\n"), 0o644)
+
+	// Pre-create a file at the destination to simulate a race
+	dstPath := filepath.Join(dstDir, taskFile)
+	os.WriteFile(dstPath, []byte("# Existing\n"), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/dup-task",
+		Title:    "Dup Task",
+		TaskPath: srcPath,
+	}
+
+	moveReviewedTask(tasksDir, "agent1", task, "backlog", "rejected", "review")
+
+	// Source should still exist (move was skipped)
+	if _, err := os.Stat(srcPath); err != nil {
+		t.Fatalf("source file should still exist when destination already exists: %v", err)
+	}
+	// Destination should still have original content
+	data, _ := os.ReadFile(dstPath)
+	if string(data) != "# Existing\n" {
+		t.Fatalf("destination file should not have been overwritten, got: %s", string(data))
+	}
+}
