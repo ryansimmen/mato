@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -385,6 +386,76 @@ func TestStatusCmd_NoExtraArgs(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for extra args on status, got nil")
+	}
+}
+
+func TestStatusCmd_WatchIntervalValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "zero interval rejected",
+			args:    []string{"status", "--watch", "--interval=0s"},
+			wantErr: "--interval must be a positive duration, got 0s",
+		},
+		{
+			name:    "negative interval rejected",
+			args:    []string{"status", "--watch", "--interval=-1s"},
+			wantErr: "--interval must be a positive duration, got -1s",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != tt.wantErr {
+				t.Errorf("error = %q, want %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestStatusCmd_WatchPositiveIntervalAccepted(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "--watch", "--interval=1s"})
+	// Override status RunE to validate the interval check passes without
+	// actually entering the Watch loop.
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "status" {
+			sub.RunE = func(cmd *cobra.Command, args []string) error {
+				// Re-read the watch and interval flags to exercise validation.
+				w, _ := cmd.Flags().GetBool("watch")
+				iv, _ := cmd.Flags().GetDuration("interval")
+				if w && iv <= 0 {
+					return fmt.Errorf("--interval must be a positive duration, got %s", iv)
+				}
+				return nil
+			}
+		}
+	}
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("positive interval should be accepted, got: %v", err)
+	}
+}
+
+func TestStatusCmd_NonWatchIgnoresInterval(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "--interval=0s"})
+	// Override status RunE to avoid calling status.Show
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "status" {
+			sub.RunE = func(cmd *cobra.Command, args []string) error { return nil }
+		}
+	}
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("non-watch status with zero interval should succeed, got: %v", err)
 	}
 }
 

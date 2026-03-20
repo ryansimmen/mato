@@ -177,6 +177,9 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 			if watch {
+				if interval <= 0 {
+					return fmt.Errorf("--interval must be a positive duration, got %s", interval)
+				}
 				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 				defer stop()
 				return status.Watch(ctx, repo, statusTasksDir, interval)
