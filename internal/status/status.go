@@ -589,7 +589,7 @@ func formatDuration(d time.Duration) string {
 }
 
 var claimedAtRe = regexp.MustCompile(`claimed-at:\s*(\S+)`)
-var branchCommentRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
+var branchCommentRe = regexp.MustCompile(`<!-- branch:\s*(\S+)\s*-->`)
 
 // parseBranchComment extracts the branch name from a <!-- branch: ... --> comment.
 func parseBranchComment(path string) string {
