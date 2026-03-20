@@ -757,3 +757,100 @@ func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
 		t.Fatal("HasAvailableTasks(nil) should return true (task exists in backlog)")
 	}
 }
+
+func TestConcurrentSelectAndClaimTask(t *testing.T) {
+	_, tasksDir := setupTestRepo(t)
+	backlogDir := filepath.Join(tasksDir, "backlog")
+	inProgressDir := filepath.Join(tasksDir, "in-progress")
+
+	const numTasks = 3
+	for i := 0; i < numTasks; i++ {
+		name := fmt.Sprintf("claim-task-%02d.md", i)
+		writeFile(t, filepath.Join(backlogDir, name),
+			fmt.Sprintf("# Claim task %d\nDo something.\n", i))
+	}
+
+	if err := queue.WriteQueueManifest(tasksDir, nil); err != nil {
+		t.Fatalf("queue.WriteQueueManifest: %v", err)
+	}
+
+	const numGoroutines = 2
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	results := make([]*queue.ClaimedTask, numGoroutines)
+	errs := make([]error, numGoroutines)
+	var panics atomic.Int32
+
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			defer func() {
+				if recover() != nil {
+					panics.Add(1)
+				}
+			}()
+
+			<-start
+			ct, err := queue.SelectAndClaimTask(tasksDir, fmt.Sprintf("agent-%d", id), nil)
+			results[id] = ct
+			errs[id] = err
+		}(g)
+	}
+
+	close(start)
+	wg.Wait()
+
+	if panics.Load() != 0 {
+		t.Fatalf("expected no goroutine panics, got %d", panics.Load())
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d returned error: %v", i, err)
+		}
+	}
+
+	// Both goroutines should have claimed a task (3 tasks, 2 goroutines).
+	claimedNames := make(map[string]int)
+	for i, ct := range results {
+		if ct == nil {
+			t.Fatalf("goroutine %d got nil ClaimedTask, expected a claim", i)
+		}
+		claimedNames[ct.Filename]++
+	}
+
+	// No task should be claimed more than once.
+	for name, count := range claimedNames {
+		if count != 1 {
+			t.Errorf("task %s claimed by %d goroutines, want 1", name, count)
+		}
+	}
+	if len(claimedNames) != numGoroutines {
+		t.Fatalf("expected %d uniquely claimed tasks, got %d (%v)", numGoroutines, len(claimedNames), claimedNames)
+	}
+
+	// Verify claimed tasks are in in-progress/ with claimed-by headers.
+	for name := range claimedNames {
+		path := filepath.Join(inProgressDir, name)
+		mustExist(t, path)
+		contents := readFile(t, path)
+		if !strings.Contains(contents, "<!-- claimed-by:") {
+			t.Errorf("task %s in in-progress/ missing claimed-by header", name)
+		}
+		mustNotExist(t, filepath.Join(backlogDir, name))
+	}
+
+	// Exactly one task should remain in backlog.
+	remaining := markdownFileNames(t, backlogDir)
+	if len(remaining) != numTasks-numGoroutines {
+		t.Fatalf("expected %d tasks remaining in backlog, got %d (%v)",
+			numTasks-numGoroutines, len(remaining), remaining)
+	}
+
+	// In-progress should have exactly numGoroutines tasks.
+	inProgress := markdownFileNames(t, inProgressDir)
+	if len(inProgress) != numGoroutines {
+		t.Fatalf("expected %d tasks in in-progress, got %d (%v)",
+			numGoroutines, len(inProgress), inProgress)
+	}
+}
