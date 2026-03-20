@@ -205,6 +205,24 @@ func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string
 	return args
 }
 
+// validateTasksDir resolves tasksDir to an absolute path and verifies
+// that its parent directory exists. Returns the resolved absolute path.
+func validateTasksDir(tasksDir string) (string, error) {
+	abs, err := filepath.Abs(tasksDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve tasks directory to absolute path: %w", err)
+	}
+	parent := filepath.Dir(abs)
+	info, err := os.Stat(parent)
+	if err != nil {
+		return "", fmt.Errorf("tasks directory parent %s does not exist: %w", parent, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("tasks directory parent %s is not a directory", parent)
+	}
+	return abs, nil
+}
+
 func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -219,6 +237,10 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	tasksDir := tasksDirOverride
 	if tasksDir == "" {
 		tasksDir = filepath.Join(repoRoot, ".tasks")
+	}
+	tasksDir, err = validateTasksDir(tasksDir)
+	if err != nil {
+		return err
 	}
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
