@@ -199,7 +199,7 @@ func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string
 		"copilot", "-p", cfg.prompt, "--autopilot", "--allow-all",
 	)
 	if !hasModelArg(cfg.copilotArgs) {
-		args = append(args, "--model", "claude-opus-4.6")
+		args = append(args, "--model", defaultModel())
 	}
 	args = append(args, cfg.copilotArgs...)
 	return args
@@ -737,6 +737,16 @@ func agentWroteFailureRecord(taskPath, agentID string) bool {
 	}
 	// Look for "<!-- failure: <agentID> " — the agent's ON_FAILURE writes this pattern.
 	return strings.Contains(string(data), "<!-- failure: "+agentID+" ")
+}
+
+// defaultModel returns the Copilot model to use when --model is not
+// explicitly passed. It checks MATO_DEFAULT_MODEL first, then falls
+// back to the hardcoded default.
+func defaultModel() string {
+	if m := os.Getenv("MATO_DEFAULT_MODEL"); m != "" {
+		return m
+	}
+	return "claude-opus-4.6"
 }
 
 func hasModelArg(args []string) bool {

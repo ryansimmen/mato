@@ -129,6 +129,70 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	}
 }
 
+func TestDefaultModel(t *testing.T) {
+	t.Run("returns hardcoded default when env unset", func(t *testing.T) {
+		t.Setenv("MATO_DEFAULT_MODEL", "")
+		if got := defaultModel(); got != "claude-opus-4.6" {
+			t.Fatalf("defaultModel() = %q, want %q", got, "claude-opus-4.6")
+		}
+	})
+
+	t.Run("returns env var when set", func(t *testing.T) {
+		t.Setenv("MATO_DEFAULT_MODEL", "claude-sonnet-4.5")
+		if got := defaultModel(); got != "claude-sonnet-4.5" {
+			t.Fatalf("defaultModel() = %q, want %q", got, "claude-sonnet-4.5")
+		}
+	})
+}
+
+func TestBuildDockerArgs_ModelPriority(t *testing.T) {
+	base := dockerConfig{
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
+		prompt:  "do stuff",
+	}
+
+	findModelValue := func(args []string) string {
+		for i, a := range args {
+			if a == "--model" && i+1 < len(args) {
+				return args[i+1]
+			}
+		}
+		return ""
+	}
+
+	t.Run("hardcoded default when no env and no args", func(t *testing.T) {
+		t.Setenv("MATO_DEFAULT_MODEL", "")
+		cfg := base
+		args := buildDockerArgs(cfg, nil, nil)
+		if m := findModelValue(args); m != "claude-opus-4.6" {
+			t.Fatalf("expected hardcoded default, got %q", m)
+		}
+	})
+
+	t.Run("env var overrides hardcoded default", func(t *testing.T) {
+		t.Setenv("MATO_DEFAULT_MODEL", "custom-model")
+		cfg := base
+		args := buildDockerArgs(cfg, nil, nil)
+		if m := findModelValue(args); m != "custom-model" {
+			t.Fatalf("expected env var model, got %q", m)
+		}
+	})
+
+	t.Run("explicit --model arg overrides env var", func(t *testing.T) {
+		t.Setenv("MATO_DEFAULT_MODEL", "custom-model")
+		cfg := base
+		cfg.copilotArgs = []string{"--model", "explicit-model"}
+		args := buildDockerArgs(cfg, nil, nil)
+		// When --model is in copilotArgs, buildDockerArgs should NOT inject a default.
+		// The explicit model from copilotArgs appears in the final args.
+		if m := findModelValue(args); m != "explicit-model" {
+			t.Fatalf("expected explicit arg model, got %q", m)
+		}
+	})
+}
+
 func TestHasModelArg(t *testing.T) {
 	tests := []struct {
 		name string
