@@ -311,6 +311,54 @@ func TestRootCmd_Help(t *testing.T) {
 	}
 }
 
+func TestRootCmd_HelpAfterDoubleDashForwarded(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantExtra []string
+	}{
+		{
+			name:      "double dash then --help forwarded",
+			args:      []string{"--", "--help"},
+			wantExtra: []string{"--help"},
+		},
+		{
+			name:      "double dash then -h forwarded",
+			args:      []string{"--", "-h"},
+			wantExtra: []string{"-h"},
+		},
+		{
+			name:      "known flag then double dash then --help forwarded",
+			args:      []string{"--repo=/tmp/repo", "--", "--help"},
+			wantExtra: []string{"--help"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedArgs []string
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			cmd.RunE = func(cmd *cobra.Command, args []string) error {
+				_, _, _, _, copilotArgs, _ := extractKnownFlags(args)
+				capturedArgs = copilotArgs
+				return nil
+			}
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(capturedArgs) != len(tt.wantExtra) {
+				t.Fatalf("forwarded args = %v, want %v", capturedArgs, tt.wantExtra)
+			}
+			for i := range capturedArgs {
+				if capturedArgs[i] != tt.wantExtra[i] {
+					t.Errorf("forwarded args[%d] = %q, want %q", i, capturedArgs[i], tt.wantExtra[i])
+				}
+			}
+		})
+	}
+}
+
 func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 	var capturedArgs []string
 	cmd := newRootCmd()

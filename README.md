@@ -49,6 +49,10 @@ Useful flags:
 - `--tasks-dir <path>`: custom task queue location (defaults to `<repo>/.tasks`)
 - `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
 
+Arguments after a `--` separator are always forwarded to the Copilot CLI without
+interpretation — even `--help` and `-h` (e.g., `mato -- --help` forwards
+`--help` to Copilot instead of showing mato's own usage).
+
 ## Task Files
 
 Task files are markdown with optional YAML frontmatter. Lower `priority` values run first; if omitted, the default priority is `50`.
