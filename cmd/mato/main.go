@@ -18,7 +18,7 @@ import (
 // forwarded to the copilot CLI inside the Docker container. The root command
 // uses DisableFlagParsing so that unknown flags (like --model) are not rejected
 // by cobra and can be passed through.
-func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun bool, copilotArgs []string) {
+func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun bool, copilotArgs []string, err error) {
 	copilotArgs = make([]string, 0, len(args))
 	known := map[string]bool{"--repo": true, "--branch": true, "--tasks-dir": true}
 	for i := 0; i < len(args); i++ {
@@ -53,17 +53,24 @@ func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun boo
 		}
 		// --flag value form
 		if known[arg] {
-			if i+1 < len(args) {
-				i++
-				val := strings.TrimSpace(args[i])
-				switch arg {
-				case "--repo":
-					repo = val
-				case "--branch":
-					branch = val
-				case "--tasks-dir":
-					tasksDir = val
-				}
+			if i+1 >= len(args) {
+				err = fmt.Errorf("flag %s requires a value", arg)
+				return
+			}
+			next := args[i+1]
+			if strings.HasPrefix(next, "--") {
+				err = fmt.Errorf("flag %s requires a value, got flag %s", arg, next)
+				return
+			}
+			i++
+			val := strings.TrimSpace(next)
+			switch arg {
+			case "--repo":
+				repo = val
+			case "--branch":
+				branch = val
+			case "--tasks-dir":
+				tasksDir = val
 			}
 			continue
 		}
@@ -107,7 +114,10 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 					return cmd.Help()
 				}
 			}
-			repo, branch, tasksDir, dryRun, copilotArgs := extractKnownFlags(args)
+			repo, branch, tasksDir, dryRun, copilotArgs, err := extractKnownFlags(args)
+			if err != nil {
+				return err
+			}
 			resolved, err := resolveRepo(repo)
 			if err != nil {
 				return err

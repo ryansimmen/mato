@@ -138,11 +138,20 @@ func TestExtractKnownFlags(t *testing.T) {
 			args:      []string{"--model", "gpt-5"},
 			wantExtra: []string{"--model", "gpt-5"},
 		},
+		{
+			name:      "flag followed by valid non-flag value",
+			args:      []string{"--repo", "/tmp/foo", "--model", "gpt-5"},
+			wantRepo:  "/tmp/foo",
+			wantExtra: []string{"--model", "gpt-5"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, branch, tasks, dryRun, extra := extractKnownFlags(tt.args)
+			repo, branch, tasks, dryRun, extra, err := extractKnownFlags(tt.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if repo != tt.wantRepo {
 				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
 			}
@@ -162,6 +171,52 @@ func TestExtractKnownFlags(t *testing.T) {
 				if extra[i] != tt.wantExtra[i] {
 					t.Errorf("extra[%d] = %q, want %q", i, extra[i], tt.wantExtra[i])
 				}
+			}
+		})
+	}
+}
+
+func TestExtractKnownFlags_MissingValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "repo followed by another flag",
+			args:    []string{"--repo", "--model", "gpt-5"},
+			wantErr: "flag --repo requires a value, got flag --model",
+		},
+		{
+			name:    "branch followed by another flag",
+			args:    []string{"--branch", "--tasks-dir", ".tasks"},
+			wantErr: "flag --branch requires a value, got flag --tasks-dir",
+		},
+		{
+			name:    "tasks-dir at end of args",
+			args:    []string{"--tasks-dir"},
+			wantErr: "flag --tasks-dir requires a value",
+		},
+		{
+			name:    "repo at end of args",
+			args:    []string{"--repo"},
+			wantErr: "flag --repo requires a value",
+		},
+		{
+			name:    "branch at end of args",
+			args:    []string{"--branch"},
+			wantErr: "flag --branch requires a value",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, _, _, _, err := extractKnownFlags(tt.args)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != tt.wantErr {
+				t.Errorf("error = %q, want %q", err.Error(), tt.wantErr)
 			}
 		})
 	}
@@ -193,7 +248,7 @@ func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--repo=/tmp/repo", "--model", "gpt-5.2"})
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		_, _, _, _, copilotArgs := extractKnownFlags(args)
+		_, _, _, _, copilotArgs, _ := extractKnownFlags(args)
 		capturedArgs = copilotArgs
 		return nil
 	}
