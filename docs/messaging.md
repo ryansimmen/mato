@@ -92,20 +92,32 @@ Each key is a file path from a task's `affects:` metadata. Each value is a `File
 The host injects `MATO_FILE_CLAIMS` pointing to the file-claims path inside the container. Agents can read this file during `VERIFY_CLAIM` to detect potential conflicts with other active tasks and adjust their approach accordingly.
 
 ## Agent Checkpoints
+
+### Task Agent
+
 Messaging maps directly to the task-agent state machine. Each step emits a `progress` message for observability:
 - **Host (before agent start)**: write one `intent` via `messaging.WriteMessage(...)` after claiming the task
 - `VERIFY_CLAIM`: write one `progress`, then read recent `events/*.json` for coordination awareness. If `MATO_PREVIOUS_FAILURES` is set, the agent can review prior failure records to avoid repeating the same mistakes.
 - `WORK`: write one `progress`
 - `COMMIT`: write one `progress`
 - `ON_FAILURE`: no failure message; failure details go into the task file itself
-- **Host (after agent exits)**: if commits exist, write one `conflict-warning` and one `completion` after pushing the branch and moving the task to `ready-for-review/`
+- **Host (after agent exits)**: `postAgentPush` writes one `conflict-warning` and one `completion` after pushing the branch and moving the task to `ready-for-review/`
+
+### Review Agent
+
+The review agent has a simpler message flow than the task agent:
+- **Host (before review start)**: no `intent` message is sent for reviews
+- `VERIFY_REVIEW`: write one `progress`
+- **Host (after review exit)**: `postReviewAction` reads the review verdict from HTML comment markers in the task file (`<!-- reviewed: ... -->` or `<!-- review-rejection: ... -->`), moves the task accordingly, and writes one `completion` message — either `"Review approved, ready for merge"` or `"Review rejected"`
+
+The review verdict itself is not communicated via the messaging system. The review agent writes approval/rejection markers directly into the task file as HTML comments. The host then reads these markers and acts on them.
 
 This is another reason the channel is advisory: queue transitions and git operations still drive progress even if message I/O is unavailable.
 
 ## Guardrails
 The protocol is intentionally narrow:
-- maximum 6 messages per task: 1 `intent` + up to 3 `progress` + 1 `conflict-warning` + 1 `completion`
-- the agent sends at most 4 messages (the host sends `intent`, `conflict-warning`, and `completion`)
+- **Task agent**: maximum 6 messages per task: 1 `intent` + up to 3 `progress` + 1 `conflict-warning` + 1 `completion`. The agent sends at most 4 messages; the host sends `intent`, `conflict-warning`, and `completion` via `postAgentPush`.
+- **Review agent**: maximum 2 messages per review: 1 agent `progress` + 1 host `completion`. The agent sends at most 1 message; the host sends `completion` via `postReviewAction`. No `intent` or `conflict-warning` messages are sent for reviews.
 - message read/write failures must not block task work
 - no ad hoc or extra message types
 
