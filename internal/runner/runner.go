@@ -53,6 +53,19 @@ func parseAgentTimeout(envVal string) (time.Duration, error) {
 	return parsed, nil
 }
 
+// checkDocker verifies that Docker is installed and the daemon is running
+// by executing "docker info". This runs before any queue setup so that a
+// missing or stopped Docker installation fails fast with a clear message
+// instead of producing an opaque exec error deep in the polling loop.
+func checkDocker() error {
+	out, err := exec.Command("docker", "info").CombinedOutput()
+	if err != nil {
+		// Provide a clear, actionable message that identifies Docker as the problem.
+		return fmt.Errorf("docker is required but not available: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 type dockerConfig struct {
 	image, workdir, prompt                         string
 	copilotPath, gitPath, gitUploadPackPath         string
@@ -215,6 +228,10 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 	agentTimeout, err := parseAgentTimeout(os.Getenv("MATO_AGENT_TIMEOUT"))
 	if err != nil {
+		return err
+	}
+
+	if err := checkDocker(); err != nil {
 		return err
 	}
 
