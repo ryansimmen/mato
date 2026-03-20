@@ -37,6 +37,10 @@ var reviewBranchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
 // containers. Override with MATO_AGENT_TIMEOUT (Go duration string).
 const defaultAgentTimeout = 30 * time.Minute
 
+// gracefulShutdownDelay is the time to wait after sending SIGTERM to a
+// Docker container before escalating to SIGKILL.
+const gracefulShutdownDelay = 10 * time.Second
+
 // parseAgentTimeout parses a duration string for the agent timeout.
 // Returns defaultAgentTimeout if envVal is empty.
 func parseAgentTimeout(envVal string) (time.Duration, error) {
@@ -335,9 +339,24 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		isTTY:              isTerminal(os.Stdin),
 	}
 
+	// Create a context that is cancelled when SIGINT or SIGTERM is received.
+	// This context is passed to runOnce and runReview so that running Docker
+	// containers receive a graceful SIGTERM followed by SIGKILL after
+	// gracefulShutdownDelay.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
+
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	wasIdle := false
 	failedDirExcluded := make(map[string]struct{})
@@ -383,7 +402,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 				fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)
 			}
 
-			if err := runOnce(cfg, claimed); err != nil {
+			if err := runOnce(ctx, cfg, claimed); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
 			}
 
@@ -397,7 +416,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 				appendReviewFailure(reviewTask.TaskPath, agentID, "task branch "+reviewTask.Branch+" not found in host repo")
 			} else {
 				fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
-				if err := runReview(cfg, reviewTask, branch); err != nil {
+				if err := runReview(ctx, cfg, reviewTask, branch); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
 				}
 				postReviewAction(tasksDir, agentID, reviewTask)
@@ -422,7 +441,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		}
 
 		select {
-		case <-sigCh:
+		case <-ctx.Done():
 			fmt.Println("\nInterrupted. Exiting.")
 			return nil
 		case <-time.After(10 * time.Second):
@@ -430,7 +449,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	}
 }
 
-func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
+func runOnce(ctx context.Context, cfg dockerConfig, claimed *queue.ClaimedTask) error {
 	cloneDir, err := git.CreateClone(cfg.repoRoot)
 	if err != nil {
 		return fmt.Errorf("create clone: %w", err)
@@ -482,16 +501,23 @@ func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 
 	args := buildDockerArgs(cfg, extraEnvs, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
-	defer cancel()
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, cfg.timeout)
+	defer timeoutCancel()
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(timeoutCtx, "docker", args...)
+	cmd.Cancel = func() error {
+		// Gracefully stop the Docker container by sending SIGTERM.
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = gracefulShutdownDelay
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	agentErr := cmd.Run()
-	if ctx.Err() == context.DeadlineExceeded {
+	if timeoutCtx.Err() == context.DeadlineExceeded {
 		fmt.Fprintf(os.Stderr, "error: agent timed out after %v\n", cfg.timeout)
+	} else if ctx.Err() != nil {
+		fmt.Fprintf(os.Stderr, "agent interrupted by signal\n")
 	}
 
 	// Post-agent: if the task is still in in-progress/ and the agent made
@@ -853,7 +879,7 @@ func parseBranchFromTaskFile(path string) string {
 	return m[1]
 }
 
-func runReview(cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
+func runReview(ctx context.Context, cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
 	cfg.prompt = strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", cfg.workdir+"/.tasks")
 	cfg.prompt = strings.ReplaceAll(cfg.prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
 	cfg.prompt = strings.ReplaceAll(cfg.prompt, "MESSAGES_DIR_PLACEHOLDER", cfg.workdir+"/.tasks/messages")
@@ -883,16 +909,22 @@ func runReview(cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
 
 	args := buildDockerArgs(cfg, extraEnvs, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
-	defer cancel()
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, cfg.timeout)
+	defer timeoutCancel()
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(timeoutCtx, "docker", args...)
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = gracefulShutdownDelay
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	runErr := cmd.Run()
-	if ctx.Err() == context.DeadlineExceeded {
+	if timeoutCtx.Err() == context.DeadlineExceeded {
 		fmt.Fprintf(os.Stderr, "error: review agent timed out after %v\n", cfg.timeout)
+	} else if ctx.Err() != nil {
+		fmt.Fprintf(os.Stderr, "review agent interrupted by signal\n")
 	}
 	return runErr
 }

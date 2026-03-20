@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1829,5 +1830,104 @@ func TestCheckDocker_Available(t *testing.T) {
 
 	if err := checkDocker(); err != nil {
 		t.Fatalf("checkDocker should succeed when Docker is available: %v", err)
+	}
+}
+
+func TestGracefulShutdownDelay(t *testing.T) {
+	if gracefulShutdownDelay != 10*time.Second {
+		t.Fatalf("expected gracefulShutdownDelay to be 10s, got %v", gracefulShutdownDelay)
+	}
+}
+
+func TestSignalForwarding_ContextCancelSendsSIGTERM(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not available")
+	}
+
+	// Create a cancellable context to simulate SIGINT/SIGTERM.
+	ctx, cancel := context.WithCancel(context.Background())
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer timeoutCancel()
+
+	cmd := exec.CommandContext(timeoutCtx, "sleep", "60")
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = gracefulShutdownDelay
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start command: %v", err)
+	}
+
+	// Cancel the parent context (simulates receiving a signal).
+	cancel()
+
+	err := cmd.Wait()
+	if err == nil {
+		t.Fatal("expected error from cancelled command, got nil")
+	}
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", ctx.Err())
+	}
+}
+
+func TestSignalForwarding_TimeoutStillWorks(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not available")
+	}
+
+	// Verify that timeout still kills the command when using the
+	// two-phase signal forwarding setup.
+	ctx := context.Background()
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer timeoutCancel()
+
+	cmd := exec.CommandContext(timeoutCtx, "sleep", "60")
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = 2 * time.Second
+
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected error from timed-out command, got nil")
+	}
+	if timeoutCtx.Err() != context.DeadlineExceeded {
+		t.Fatalf("expected DeadlineExceeded, got %v", timeoutCtx.Err())
+	}
+}
+
+func TestSignalForwarding_ProcessExitsOnSIGTERM(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not available")
+	}
+
+	// Verify that the process exits promptly after SIGTERM via Cancel,
+	// well before the WaitDelay would escalate to SIGKILL.
+	ctx, cancel := context.WithCancel(context.Background())
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer timeoutCancel()
+
+	cmd := exec.CommandContext(timeoutCtx, "sleep", "60")
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = gracefulShutdownDelay
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+
+	// Cancel after a short delay to ensure the process is running.
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	start := time.Now()
+	_ = cmd.Wait()
+	elapsed := time.Since(start)
+
+	// sleep responds to SIGTERM immediately, so it should exit well
+	// before the 10s WaitDelay. Allow 5 seconds to be safe in CI.
+	if elapsed > 5*time.Second {
+		t.Fatalf("process took %v to exit after SIGTERM; expected prompt exit", elapsed)
 	}
 }
