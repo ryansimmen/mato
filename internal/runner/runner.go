@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
@@ -67,6 +68,18 @@ type dockerConfig struct {
 	repoRoot, cloneDir, tasksDir                   string
 	targetBranch                                   string
 	timeout                                        time.Duration
+	isTTY                                          bool
+}
+
+// isTerminal reports whether f is connected to a terminal (not just any
+// character device). Uses the TCGETS ioctl which succeeds only on real
+// terminal file descriptors.
+func isTerminal(f *os.File) bool {
+	// syscall.Termios is the Linux termios struct; TCGETS retrieves it and
+	// fails with ENOTTY on non-terminal fds (including /dev/null).
+	var t syscall.Termios
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&t)))
+	return errno == 0
 }
 
 func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string) []string {
@@ -75,8 +88,12 @@ func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string
 	goModCache := filepath.Join(cfg.homeDir, "go", "pkg", "mod")
 	goBuildCache := filepath.Join(cfg.homeDir, ".cache", "go-build")
 
+	runFlags := "-i"
+	if cfg.isTTY {
+		runFlags = "-it"
+	}
 	args := []string{
-		"run", "--rm", "-it",
+		"run", "--rm", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", cfg.cloneDir, cfg.workdir),
 		"-v", fmt.Sprintf("%s:%s/.tasks", cfg.tasksDir, cfg.workdir),
@@ -298,6 +315,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		tasksDir:            tasksDir,
 		targetBranch:       branch,
 		timeout:            agentTimeout,
+		isTTY:              isTerminal(os.Stdin),
 	}
 
 	sigCh := make(chan os.Signal, 1)
