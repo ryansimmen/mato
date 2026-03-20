@@ -138,7 +138,7 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 	// The branch marker is written AFTER the move so that a failed move
 	// does not leave the in-progress file with an incorrect marker.
 	if err := os.Link(claimed.TaskPath, readyPath); err != nil {
-		if errors.Is(err, os.ErrExist) {
+		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
 			return fmt.Errorf("move task to ready-for-review: destination already exists (race): %w", err)
 		}
 		return fmt.Errorf("move task to ready-for-review: %w", err)
@@ -195,7 +195,7 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	// overwriting an existing file at dst (TOCTOU race fix). os.Link fails
 	// with os.ErrExist if the destination already exists.
 	if err := os.Link(claimed.TaskPath, dst); err != nil {
-		if errors.Is(err, os.ErrExist) {
+		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
 			fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: destination already exists in backlog\n", claimed.Filename)
 		} else {
 			fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)

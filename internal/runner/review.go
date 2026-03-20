@@ -286,7 +286,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, dstDir, msgBody, logPrefix string) {
 	dst := filepath.Join(tasksDir, dstDir, task.Filename)
 	if err := os.Link(task.TaskPath, dst); err != nil {
-		if errors.Is(err, os.ErrExist) {
+		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
 			fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: destination already exists\n", task.Filename, dstDir)
 		} else {
 			fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, dstDir, err)
