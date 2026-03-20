@@ -252,7 +252,9 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	switch strings.ToLower(strings.TrimSpace(verdict.Verdict)) {
 	case "approve":
 		// Write approval marker to task file.
-		appendToFile(task.TaskPath, fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now))
+		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write approval marker: %v\n", err)
+		}
 		moveReviewedTask(tasksDir, agentID, task, "ready-to-merge",
 			"Review approved, ready for merge", "Review approved")
 
@@ -261,7 +263,9 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		if reason == "" {
 			reason = "no reason provided"
 		}
-		appendToFile(task.TaskPath, fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason))
+		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write rejection marker: %v\n", err)
+		}
 		moveReviewedTask(tasksDir, agentID, task, "backlog",
 			"Review rejected", "Review rejected")
 

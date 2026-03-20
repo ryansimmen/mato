@@ -1394,6 +1394,176 @@ func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 	}
 }
 
+func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-for-review", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "marker-fail.md"
+	taskContent := "<!-- claimed-by: agent1 -->\n# Marker Fail\n"
+	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+
+	// Set up a git repo with commits on a task branch.
+	cloneDir := t.TempDir()
+	remoteDir := t.TempDir()
+	gitRun := func(dir string, args ...string) {
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	gitRun(remoteDir, "git", "init", "--bare", "-b", "main")
+	gitRun(cloneDir, "git", "init", "-b", "main")
+	gitRun(cloneDir, "git", "config", "user.name", "test")
+	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "init")
+	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
+	gitRun(cloneDir, "git", "push", "origin", "main")
+	gitRun(cloneDir, "git", "checkout", "-b", "task/marker-fail")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "task work")
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/marker-fail",
+		Title:    "Marker Fail",
+		TaskPath: inProgressPath,
+	}
+	cfg := dockerConfig{
+		tasksDir:     tasksDir,
+		agentID:      "agent1",
+		targetBranch: "main",
+	}
+
+	// Inject appendToFileFn failure so the branch marker write fails
+	// after os.Link has already moved the file to ready-for-review/.
+	origAppend := appendToFileFn
+	t.Cleanup(func() { appendToFileFn = origAppend })
+	appendToFileFn = func(path, text string) error {
+		return fmt.Errorf("simulated disk full")
+	}
+
+	err := postAgentPush(cfg, claimed, cloneDir)
+
+	// Should return a fatal error mentioning the write failure.
+	if err == nil {
+		t.Fatal("expected error when branch marker write fails")
+	}
+	if !strings.Contains(err.Error(), "simulated disk full") {
+		t.Fatalf("error should mention the write failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rolled back to in-progress") {
+		t.Fatalf("error should mention rollback, got: %v", err)
+	}
+
+	// Task should be rolled back to in-progress/.
+	if _, statErr := os.Stat(inProgressPath); statErr != nil {
+		t.Fatalf("task should be back in in-progress/ after rollback: %v", statErr)
+	}
+
+	// Task should NOT remain in ready-for-review/.
+	readyPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	if _, statErr := os.Stat(readyPath); !os.IsNotExist(statErr) {
+		t.Fatal("task should not remain in ready-for-review/ after rollback")
+	}
+
+	// Rolled-back file should not contain a branch marker.
+	data, _ := os.ReadFile(inProgressPath)
+	if strings.Contains(string(data), "<!-- branch:") {
+		t.Fatal("rolled-back file should not contain branch marker")
+	}
+}
+
+func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-for-review", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "stranded.md"
+	taskContent := "<!-- claimed-by: agent1 -->\n# Stranded\n"
+	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+
+	// Set up git repo.
+	cloneDir := t.TempDir()
+	remoteDir := t.TempDir()
+	gitRun := func(dir string, args ...string) {
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	gitRun(remoteDir, "git", "init", "--bare", "-b", "main")
+	gitRun(cloneDir, "git", "init", "-b", "main")
+	gitRun(cloneDir, "git", "config", "user.name", "test")
+	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "init")
+	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
+	gitRun(cloneDir, "git", "push", "origin", "main")
+	gitRun(cloneDir, "git", "checkout", "-b", "task/stranded")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "task work")
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/stranded",
+		Title:    "Stranded",
+		TaskPath: inProgressPath,
+	}
+	cfg := dockerConfig{
+		tasksDir:     tasksDir,
+		agentID:      "agent1",
+		targetBranch: "main",
+	}
+
+	// Inject appendToFileFn failure AND sneak a file back into in-progress/
+	// so the rollback os.Link hits EEXIST.
+	origAppend := appendToFileFn
+	t.Cleanup(func() { appendToFileFn = origAppend })
+	appendToFileFn = func(path, text string) error {
+		// Re-create the in-progress file to simulate a race (another agent
+		// placed a file there), so rollback link will fail with EEXIST.
+		os.WriteFile(inProgressPath, []byte("<!-- claimed-by: other -->\n# Other\n"), 0o644)
+		return fmt.Errorf("simulated write error")
+	}
+
+	err := postAgentPush(cfg, claimed, cloneDir)
+
+	if err == nil {
+		t.Fatal("expected error when both marker write and rollback fail")
+	}
+	if !strings.Contains(err.Error(), "rollback failed") {
+		t.Fatalf("error should mention rollback failure, got: %v", err)
+	}
+
+	// The in-progress/ file should be the "other" agent's copy (not overwritten).
+	data, _ := os.ReadFile(inProgressPath)
+	if !strings.Contains(string(data), "Other") {
+		t.Fatal("in-progress/ file should be the racing agent's copy, not overwritten")
+	}
+
+	// The ready-for-review/ file should still exist (stranded, since rollback failed).
+	readyPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	if _, statErr := os.Stat(readyPath); statErr != nil {
+		t.Fatalf("task should remain in ready-for-review/ when rollback fails: %v", statErr)
+	}
+}
+
 func TestPostReviewAction_Approved(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
