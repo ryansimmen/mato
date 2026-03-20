@@ -1803,3 +1803,31 @@ func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 		t.Fatalf("destination file should not have been overwritten, got: %s", string(data))
 	}
 }
+
+func TestCheckDocker_NotInPath(t *testing.T) {
+	// Override PATH so "docker" cannot be found.
+	t.Setenv("PATH", t.TempDir())
+
+	err := checkDocker()
+	if err == nil {
+		t.Fatal("checkDocker should fail when docker is not in PATH")
+	}
+	if !strings.Contains(err.Error(), "docker is required but not available") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestCheckDocker_Available(t *testing.T) {
+	// Only run when Docker is actually available in the test environment.
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not available in test environment")
+	}
+	// Also skip if daemon is not running (e.g., CI without Docker).
+	if out, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
+		t.Skipf("docker daemon not running: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	if err := checkDocker(); err != nil {
+		t.Fatalf("checkDocker should succeed when Docker is available: %v", err)
+	}
+}
