@@ -780,5 +780,3 @@ func writeFileAtomically(path string, data []byte) error {
 	}
 	return nil
 }
-
-

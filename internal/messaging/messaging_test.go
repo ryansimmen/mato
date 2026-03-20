@@ -1527,12 +1527,12 @@ func TestReadAllCompletionDetails_PropagatesReadError(t *testing.T) {
 
 	// Write a valid completion detail first.
 	d := CompletionDetail{
-		TaskID:   "task-ok",
-		TaskFile: "task-ok.md",
-		Branch:   "task/ok",
+		TaskID:    "task-ok",
+		TaskFile:  "task-ok.md",
+		Branch:    "task/ok",
 		CommitSHA: "abc",
-		Title:    "OK",
-		MergedAt: time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC),
+		Title:     "OK",
+		MergedAt:  time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC),
 	}
 	if err := WriteCompletionDetail(tasksDir, d); err != nil {
 		t.Fatalf("WriteCompletionDetail: %v", err)
@@ -1561,12 +1561,12 @@ func TestReadAllCompletionDetails_SkipsDeletedFile(t *testing.T) {
 	}
 
 	d := CompletionDetail{
-		TaskID:   "task-a",
-		TaskFile: "task-a.md",
-		Branch:   "task/a",
+		TaskID:    "task-a",
+		TaskFile:  "task-a.md",
+		Branch:    "task/a",
 		CommitSHA: "aaa",
-		Title:    "Task A",
-		MergedAt: time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC),
+		Title:     "Task A",
+		MergedAt:  time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC),
 	}
 	if err := WriteCompletionDetail(tasksDir, d); err != nil {
 		t.Fatalf("WriteCompletionDetail: %v", err)
