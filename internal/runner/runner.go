@@ -1285,6 +1285,8 @@ func appendReviewFailure(taskPath, agentID, reason string) {
 		fmt.Fprintf(os.Stderr, "warning: could not write review-failure record: %v\n", closeErr)
 	}
 }
+
+// extractReviewRejections reads review-rejection comments from the task file,
 // joined by newlines. Returns "" if none found or file cannot be read.
 func extractReviewRejections(taskPath string) string {
 	data, err := os.ReadFile(taskPath)
