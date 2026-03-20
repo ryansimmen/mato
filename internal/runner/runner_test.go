@@ -1681,3 +1681,55 @@ func TestAppendReviewFailure(t *testing.T) {
 		t.Fatal("review-failure reason not included")
 	}
 }
+
+func TestBuildDockerArgs_TTYFlag(t *testing.T) {
+	base := dockerConfig{
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
+	}
+
+	t.Run("with TTY passes -it", func(t *testing.T) {
+		cfg := base
+		cfg.isTTY = true
+		args := buildDockerArgs(cfg, nil, nil)
+		if args[2] != "-it" {
+			t.Fatalf("expected -it flag when isTTY=true, got %q", args[2])
+		}
+	})
+
+	t.Run("without TTY passes -i", func(t *testing.T) {
+		cfg := base
+		cfg.isTTY = false
+		args := buildDockerArgs(cfg, nil, nil)
+		if args[2] != "-i" {
+			t.Fatalf("expected -i flag when isTTY=false, got %q", args[2])
+		}
+	})
+}
+
+func TestIsTerminal(t *testing.T) {
+	// os.Stdin in a test runner (go test) is typically not a terminal.
+	// A pipe or /dev/null is definitely not a terminal.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	if isTerminal(r) {
+		t.Fatal("pipe should not be detected as a terminal")
+	}
+
+	// /dev/null is also not a terminal.
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+
+	if isTerminal(devNull) {
+		t.Fatal("/dev/null should not be detected as a terminal")
+	}
+}

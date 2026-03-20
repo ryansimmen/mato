@@ -79,8 +79,10 @@ failure records from prior attempts.
 review rejection records from prior review attempts.
 
 ## Docker Configuration
-Each agent run uses `docker run --rm -it` with working directory `/workspace` and user
-mapping `--user <host-uid>:<host-gid>`, preserving host file ownership.
+Each agent run uses `docker run --rm` with either `-it` (when stdin is a terminal) or
+`-i` (when stdin is not a terminal, e.g. CI, cron, systemd). The working directory is
+`/workspace` and user mapping `--user <host-uid>:<host-gid>` preserves host file
+ownership.
 
 ### Bind mounts
 | Host path | Container path | Notes |
