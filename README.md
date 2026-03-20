@@ -121,6 +121,10 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 - waiting tasks with dependency progress
 - the last 5 coordination messages from `.tasks/messages/events/`
 
+Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag
+sets the refresh period (default `2s`). The interval must be a positive duration;
+zero or negative values are rejected with an error.
+
 ## Docker
 
 `mato` launches an `ubuntu:24.04` container by default (override with `MATO_DOCKER_IMAGE`). The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
