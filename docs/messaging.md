@@ -108,9 +108,9 @@ Messaging maps directly to the task-agent state machine. Each step emits a `prog
 The review agent has a simpler message flow than the task agent:
 - **Host (before review start)**: no `intent` message is sent for reviews
 - `VERIFY_REVIEW`: write one `progress`
-- **Host (after review exit)**: `postReviewAction` reads the review verdict from HTML comment markers in the task file (`<!-- reviewed: ... -->` or `<!-- review-rejection: ... -->`), moves the task accordingly, and writes one `completion` message — either `"Review approved, ready for merge"` or `"Review rejected"`
+- **Host (after review exit)**: `postReviewAction` reads the JSON verdict file at `.tasks/messages/verdict-<filename>.json`, writes the appropriate HTML comment marker to the task file, moves the task, and sends one `completion` message — either `"Review approved, ready for merge"` or `"Review rejected"`
 
-The review verdict itself is not communicated via the messaging system. The review agent writes approval/rejection markers directly into the task file as HTML comments. The host then reads these markers and acts on them.
+The review verdict is communicated via a JSON file (`{"verdict":"approve"}` or `{"verdict":"reject","reason":"..."}`) written by the review agent to the path specified in `MATO_REVIEW_VERDICT_PATH`. The host reads this file, writes the HTML comment markers for state tracking, and handles all file moves. If no verdict file exists (agent crashed), the host falls back to checking for HTML markers in the task file before recording a review-failure.
 
 This is another reason the channel is advisory: queue transitions and git operations still drive progress even if message I/O is unavailable.
 

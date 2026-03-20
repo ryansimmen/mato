@@ -1481,6 +1481,105 @@ func TestPostReviewAction_ErrorVerdict(t *testing.T) {
 	}
 }
 
+func TestPostReviewAction_UnknownVerdict(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "review-task.md"
+	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"maybe","reason":"unsure"}`), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/review-task",
+		Title:    "Review Task",
+		TaskPath: reviewPath,
+	}
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("unknown verdict task should stay in ready-for-review/")
+	}
+	data, _ := os.ReadFile(reviewPath)
+	if !strings.Contains(string(data), "<!-- review-failure:") {
+		t.Fatal("review-failure not written for unknown verdict")
+	}
+	if !strings.Contains(string(data), `unknown verdict: "maybe"`) {
+		t.Fatalf("review-failure should mention the unknown verdict, got:\n%s", string(data))
+	}
+}
+
+func TestPostReviewAction_MalformedJSON(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "review-task.md"
+	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{bad json`), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/review-task",
+		Title:    "Review Task",
+		TaskPath: reviewPath,
+	}
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("malformed JSON task should stay in ready-for-review/")
+	}
+	data, _ := os.ReadFile(reviewPath)
+	if !strings.Contains(string(data), "<!-- review-failure:") {
+		t.Fatal("review-failure not written for malformed JSON")
+	}
+	if !strings.Contains(string(data), "could not parse verdict file") {
+		t.Fatal("review-failure should mention parse error")
+	}
+}
+
+func TestPostReviewAction_EmptyVerdictFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "review-task.md"
+	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(""), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/review-task",
+		Title:    "Review Task",
+		TaskPath: reviewPath,
+	}
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("empty verdict file task should stay in ready-for-review/")
+	}
+	data, _ := os.ReadFile(reviewPath)
+	if !strings.Contains(string(data), "<!-- review-failure:") {
+		t.Fatal("review-failure not written for empty verdict file")
+	}
+}
+
 func TestReviewedReRegex(t *testing.T) {
 	tests := []struct {
 		name  string
