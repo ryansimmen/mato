@@ -1,325 +1,245 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
-func TestParseArgs(t *testing.T) {
+func TestResolveRepo(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		wantRepo string
+	}{
+		{"explicit path returned as-is", "/tmp/repo", "/tmp/repo"},
+		{"empty defaults to cwd", "", wd},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveRepo(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.wantRepo {
+				t.Errorf("resolveRepo(%q) = %q, want %q", tt.input, got, tt.wantRepo)
+			}
+		})
+	}
+}
+
+func TestResolveBranch(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"explicit branch", "develop", "develop"},
+		{"empty defaults to mato", "", "mato"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveBranch(tt.input)
+			if got != tt.want {
+				t.Errorf("resolveBranch(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractKnownFlags(t *testing.T) {
 	tests := []struct {
 		name       string
 		args       []string
 		wantRepo   string
 		wantBranch string
-		wantArgs   []string
-		wantErr    bool
+		wantTasks  string
+		wantDryRun bool
+		wantExtra  []string
 	}{
 		{
-			name:       "repo equals syntax",
-			args:       []string{"--repo=/tmp/repo"},
-			wantRepo:   "/tmp/repo",
-			wantBranch: "mato",
-			wantArgs:   []string{},
+			name:      "repo equals syntax",
+			args:      []string{"--repo=/tmp/repo"},
+			wantRepo:  "/tmp/repo",
+			wantExtra: []string{},
 		},
 		{
-			name:       "repo space syntax",
-			args:       []string{"--repo", "/tmp/repo"},
-			wantRepo:   "/tmp/repo",
-			wantBranch: "mato",
-			wantArgs:   []string{},
-		},
-		{
-			name:       "with passthrough args",
-			args:       []string{"--repo=/tmp/repo", "--", "--model", "gpt-5.2"},
-			wantRepo:   "/tmp/repo",
-			wantBranch: "mato",
-			wantArgs:   []string{"--model", "gpt-5.2"},
+			name:      "repo space syntax",
+			args:      []string{"--repo", "/tmp/repo"},
+			wantRepo:  "/tmp/repo",
+			wantExtra: []string{},
 		},
 		{
 			name:       "branch equals syntax",
-			args:       []string{"--repo=/tmp/repo", "--branch=develop"},
-			wantRepo:   "/tmp/repo",
+			args:       []string{"--branch=develop"},
 			wantBranch: "develop",
-			wantArgs:   []string{},
+			wantExtra:  []string{},
 		},
 		{
 			name:       "branch space syntax",
-			args:       []string{"--repo=/tmp/repo", "--branch", "develop"},
+			args:       []string{"--branch", "develop"},
+			wantBranch: "develop",
+			wantExtra:  []string{},
+		},
+		{
+			name:      "tasks-dir equals syntax",
+			args:      []string{"--tasks-dir=/custom/tasks"},
+			wantTasks: "/custom/tasks",
+			wantExtra: []string{},
+		},
+		{
+			name:      "tasks-dir space syntax",
+			args:      []string{"--tasks-dir", "/custom/tasks"},
+			wantTasks: "/custom/tasks",
+			wantExtra: []string{},
+		},
+		{
+			name:       "dry-run flag",
+			args:       []string{"--dry-run"},
+			wantDryRun: true,
+			wantExtra:  []string{},
+		},
+		{
+			name:       "all flags combined",
+			args:       []string{"--repo=/tmp/repo", "--branch=develop", "--tasks-dir=/tasks", "--dry-run"},
 			wantRepo:   "/tmp/repo",
 			wantBranch: "develop",
-			wantArgs:   []string{},
+			wantTasks:  "/tasks",
+			wantDryRun: true,
+			wantExtra:  []string{},
 		},
 		{
-			name:    "flag without value",
-			args:    []string{"--repo"},
-			wantErr: true,
+			name:      "unknown flags forwarded as copilot args",
+			args:      []string{"--repo=/tmp/repo", "--model", "gpt-5.2"},
+			wantRepo:  "/tmp/repo",
+			wantExtra: []string{"--model", "gpt-5.2"},
 		},
 		{
-			name:    "branch flag without value",
-			args:    []string{"--branch"},
-			wantErr: true,
+			name:      "double dash separator",
+			args:      []string{"--repo=/tmp/repo", "--", "--model", "gpt-5.2"},
+			wantRepo:  "/tmp/repo",
+			wantExtra: []string{"--model", "gpt-5.2"},
 		},
 		{
-			name:    "tasks-dir flag without value",
-			args:    []string{"--tasks-dir"},
-			wantErr: true,
+			name:      "no args",
+			args:      []string{},
+			wantExtra: []string{},
 		},
 		{
-			name:    "help flag",
-			args:    []string{"--help"},
-			wantErr: true,
-		},
-		{
-			name:    "short help flag",
-			args:    []string{"-h"},
-			wantErr: true,
-		},
-	}
-
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-
-	defaultTests := []struct {
-		name       string
-		args       []string
-		wantRepo   string
-		wantBranch string
-		wantArgs   []string
-	}{
-		{
-			name:       "no args defaults to cwd",
-			args:       []string{},
-			wantRepo:   wd,
-			wantBranch: "mato",
-			wantArgs:   []string{},
-		},
-		{
-			name:       "extra args without repo defaults to cwd",
-			args:       []string{"--model", "gpt-5"},
-			wantRepo:   wd,
-			wantBranch: "mato",
-			wantArgs:   []string{"--model", "gpt-5"},
+			name:      "only unknown args",
+			args:      []string{"--model", "gpt-5"},
+			wantExtra: []string{"--model", "gpt-5"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, branch, _, args, _, err := parseArgs(tt.args)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			repo, branch, tasks, dryRun, extra := extractKnownFlags(tt.args)
 			if repo != tt.wantRepo {
 				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
 			}
 			if branch != tt.wantBranch {
 				t.Errorf("branch = %q, want %q", branch, tt.wantBranch)
 			}
-			if len(args) != len(tt.wantArgs) {
-				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
+			if tasks != tt.wantTasks {
+				t.Errorf("tasksDir = %q, want %q", tasks, tt.wantTasks)
 			}
-			for i := range args {
-				if args[i] != tt.wantArgs[i] {
-					t.Errorf("args[%d] = %q, want %q", i, args[i], tt.wantArgs[i])
-				}
+			if dryRun != tt.wantDryRun {
+				t.Errorf("dryRun = %v, want %v", dryRun, tt.wantDryRun)
 			}
-		})
-	}
-
-	for _, tt := range defaultTests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo, branch, _, args, _, err := parseArgs(tt.args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			if len(extra) != len(tt.wantExtra) {
+				t.Fatalf("extra = %v, want %v", extra, tt.wantExtra)
 			}
-			if repo != tt.wantRepo {
-				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
-			}
-			if branch != tt.wantBranch {
-				t.Errorf("branch = %q, want %q", branch, tt.wantBranch)
-			}
-			if len(args) != len(tt.wantArgs) {
-				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
-			}
-			for i := range args {
-				if args[i] != tt.wantArgs[i] {
-					t.Errorf("args[%d] = %q, want %q", i, args[i], tt.wantArgs[i])
+			for i := range extra {
+				if extra[i] != tt.wantExtra[i] {
+					t.Errorf("extra[%d] = %q, want %q", i, extra[i], tt.wantExtra[i])
 				}
 			}
 		})
 	}
 }
 
-func TestParseArgs_DryRun(t *testing.T) {
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-
-	t.Run("dry-run flag sets boolean", func(t *testing.T) {
-		_, _, _, _, dryRun, err := parseArgs([]string{"--dry-run"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !dryRun {
-			t.Fatal("expected dryRun=true")
-		}
-	})
-
-	t.Run("dry-run with other flags", func(t *testing.T) {
-		repo, branch, _, _, dryRun, err := parseArgs([]string{"--repo=/tmp/repo", "--dry-run", "--branch=develop"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !dryRun {
-			t.Fatal("expected dryRun=true")
-		}
-		if repo != "/tmp/repo" {
-			t.Errorf("repo = %q, want %q", repo, "/tmp/repo")
-		}
-		if branch != "develop" {
-			t.Errorf("branch = %q, want %q", branch, "develop")
-		}
-	})
-
-	t.Run("no dry-run flag defaults to false", func(t *testing.T) {
-		_, _, _, _, dryRun, err := parseArgs([]string{"--repo=/tmp/repo"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if dryRun {
-			t.Fatal("expected dryRun=false")
-		}
-	})
-
-	_ = wd // used by other tests in this function
-}
-
-// TestStatusSubcommandArgs verifies argument parsing behavior specific to the
-// status subcommand: no extra positional args allowed, --repo/--tasks-dir accepted,
-// --branch silently accepted (but ignored by status), and --help/-h work.
-func TestStatusSubcommandArgs(t *testing.T) {
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-
+func TestRootCmd_Help(t *testing.T) {
 	tests := []struct {
-		name         string
-		args         []string // args after "status", as passed to parseArgs
-		wantRepo     string
-		wantTasksDir string
-		wantExtras   int // number of extra args; status rejects >0
-		wantErr      bool
+		name string
+		args []string
 	}{
-		// 1. mato status (no extra args) — success
-		{
-			name:     "no args succeeds",
-			args:     []string{},
-			wantRepo: wd,
-		},
-		// 2. mato status extra-arg — extras returned, status rejects
-		{
-			name:       "single extra positional arg",
-			args:       []string{"extra-arg"},
-			wantRepo:   wd,
-			wantExtras: 1,
-		},
-		{
-			name:       "multiple extra positional args",
-			args:       []string{"arg1", "arg2"},
-			wantRepo:   wd,
-			wantExtras: 2,
-		},
-		// 3. mato status --repo /path --tasks-dir /path — valid flags
-		{
-			name:         "repo and tasks-dir space syntax",
-			args:         []string{"--repo", "/tmp/repo", "--tasks-dir", "/tmp/tasks"},
-			wantRepo:     "/tmp/repo",
-			wantTasksDir: "/tmp/tasks",
-		},
-		{
-			name:         "repo and tasks-dir equals syntax",
-			args:         []string{"--repo=/tmp/repo", "--tasks-dir=/tmp/tasks"},
-			wantRepo:     "/tmp/repo",
-			wantTasksDir: "/tmp/tasks",
-		},
-		{
-			name:         "tasks-dir only",
-			args:         []string{"--tasks-dir", "/custom/tasks"},
-			wantRepo:     wd,
-			wantTasksDir: "/custom/tasks",
-		},
-		// 4. mato status --branch main — accepted but ignored by status
-		{
-			name:     "branch space syntax silently accepted",
-			args:     []string{"--branch", "main"},
-			wantRepo: wd,
-		},
-		{
-			name:     "branch equals syntax silently accepted",
-			args:     []string{"--branch=develop"},
-			wantRepo: wd,
-		},
-		{
-			name:         "branch with repo and tasks-dir",
-			args:         []string{"--repo=/tmp/repo", "--branch=main", "--tasks-dir=/tmp/tasks"},
-			wantRepo:     "/tmp/repo",
-			wantTasksDir: "/tmp/tasks",
-		},
-		// 5. --help / -h for status subcommand
-		{
-			name:    "help flag",
-			args:    []string{"--help"},
-			wantErr: true,
-		},
-		{
-			name:    "short help flag",
-			args:    []string{"-h"},
-			wantErr: true,
-		},
-		{
-			name:    "help after other flags",
-			args:    []string{"--repo=/tmp/repo", "--help"},
-			wantErr: true,
-		},
+		{"help flag", []string{"--help"}},
+		{"short help flag", []string{"-h"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, _, tasksDir, extras, _, err := parseArgs(tt.args)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if !errors.Is(err, errHelp) {
-					t.Errorf("expected errHelp, got %v", err)
-				}
-				return
-			}
-			if err != nil {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			// Help should not error
+			if err := cmd.Execute(); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if repo != tt.wantRepo {
-				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
+		})
+	}
+}
+
+func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
+	var capturedArgs []string
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo=/tmp/repo", "--model", "gpt-5.2"})
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		_, _, _, _, copilotArgs := extractKnownFlags(args)
+		capturedArgs = copilotArgs
+		return nil
+	}
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(capturedArgs) != 2 {
+		t.Fatalf("expected 2 forwarded args, got %v", capturedArgs)
+	}
+	if capturedArgs[0] != "--model" || capturedArgs[1] != "gpt-5.2" {
+		t.Errorf("forwarded args = %v, want [--model gpt-5.2]", capturedArgs)
+	}
+}
+
+func TestStatusCmd_NoExtraArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "extra-arg"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for extra args on status, got nil")
+	}
+}
+
+func TestStatusCmd_FlagParsing(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"status help", []string{"status", "--help"}},
+		{"status with repo", []string{"status", "--repo=/tmp/repo"}},
+		{"status with tasks-dir", []string{"status", "--tasks-dir=/tmp/tasks"}},
+		{"status with repo and tasks-dir", []string{"status", "--repo=/tmp/repo", "--tasks-dir=/tmp/tasks"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			// Override status RunE to avoid calling status.Show
+			for _, sub := range cmd.Commands() {
+				if sub.Name() == "status" {
+					sub.RunE = func(cmd *cobra.Command, args []string) error { return nil }
+				}
 			}
-			if tasksDir != tt.wantTasksDir {
-				t.Errorf("tasksDir = %q, want %q", tasksDir, tt.wantTasksDir)
-			}
-			if len(extras) != tt.wantExtras {
-				t.Errorf("extras count = %d, want %d (extras: %v)", len(extras), tt.wantExtras, extras)
-			}
-			// Status subcommand rejects any extra positional args
-			if tt.wantExtras > 0 && len(extras) == 0 {
-				t.Error("expected extras to be non-empty for status rejection")
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}

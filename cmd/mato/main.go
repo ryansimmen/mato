@@ -1,149 +1,173 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"time"
 
 	"mato/internal/runner"
 	"mato/internal/status"
+
+	"github.com/spf13/cobra"
 )
 
-var errHelp = errors.New("help requested")
-
-func usage() {
-	fmt.Fprintf(os.Stderr, `Usage:
-  mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [--dry-run] [copilot-args...]
-  mato status [--repo <path>] [--tasks-dir <path>]
-
-Runs autonomous Copilot agents against a task queue in Docker.
-
-Options:
-  --repo <path>       Path to the git repository (default: current directory)
-  --branch <name>     Target branch for merging (default: mato)
-  --tasks-dir <path>  Path to the tasks directory (default: <repo>/.tasks)
-  --dry-run           Validate queue setup without launching Docker containers
-  --help, -h          Show this help message
-
-Any other flags are forwarded to the copilot CLI inside the container.
-`)
-}
-
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == "status" {
-		repoRoot, _, tasksDir, extras, dryRun, err := parseArgs(os.Args[2:])
-		if err == errHelp {
-			fmt.Fprintf(os.Stderr, "Usage: mato status [--repo <path>] [--tasks-dir <path>]\n")
-			os.Exit(0)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
-			os.Exit(1)
-		}
-		if dryRun {
-			fmt.Fprintf(os.Stderr, "mato error: --dry-run is not supported with the status subcommand\n")
-			os.Exit(1)
-		}
-		if len(extras) > 0 {
-			fmt.Fprintf(os.Stderr, "mato error: unexpected status arguments: %s\n", strings.Join(extras, " "))
-			os.Exit(1)
-		}
-		if err := status.Show(repoRoot, tasksDir); err != nil {
-			fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
-	repoRoot, branch, tasksDir, copilotArgs, dryRun, err := parseArgs(os.Args[1:])
-	if err == errHelp {
-		usage()
-		os.Exit(0)
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
-		os.Exit(1)
-	}
-	if dryRun {
-		if err := runner.DryRun(repoRoot, branch, tasksDir); err != nil {
-			fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	if err := runner.Run(repoRoot, branch, tasksDir, copilotArgs); err != nil {
-		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func parseArgs(args []string) (string, string, string, []string, bool, error) {
-	var repoRoot string
-	var branch string
-	var tasksDir string
-	var dryRun bool
-	copilotArgs := make([]string, 0, len(args))
+// extractKnownFlags separates mato's own flags from arguments that should be
+// forwarded to the copilot CLI inside the Docker container. The root command
+// uses DisableFlagParsing so that unknown flags (like --model) are not rejected
+// by cobra and can be passed through.
+func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun bool, copilotArgs []string) {
+	copilotArgs = make([]string, 0, len(args))
+	known := map[string]bool{"--repo": true, "--branch": true, "--tasks-dir": true}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
 			copilotArgs = append(copilotArgs, args[i+1:]...)
 			break
 		}
-		if arg == "--help" || arg == "-h" {
-			return "", "", "", nil, false, errHelp
-		}
 		if arg == "--dry-run" {
 			dryRun = true
 			continue
 		}
-		if strings.HasPrefix(arg, "--repo=") {
-			repoRoot = strings.TrimSpace(strings.TrimPrefix(arg, "--repo="))
-			continue
-		}
-		if arg == "--repo" {
-			if i+1 >= len(args) {
-				return "", "", "", nil, false, errors.New("--repo requires a value")
+		// --flag=value form
+		handled := false
+		for flag := range known {
+			if strings.HasPrefix(arg, flag+"=") {
+				val := strings.TrimSpace(strings.TrimPrefix(arg, flag+"="))
+				switch flag {
+				case "--repo":
+					repo = val
+				case "--branch":
+					branch = val
+				case "--tasks-dir":
+					tasksDir = val
+				}
+				handled = true
+				break
 			}
-			i++
-			repoRoot = strings.TrimSpace(args[i])
+		}
+		if handled {
 			continue
 		}
-		if strings.HasPrefix(arg, "--branch=") {
-			branch = strings.TrimSpace(strings.TrimPrefix(arg, "--branch="))
-			continue
-		}
-		if arg == "--branch" {
-			if i+1 >= len(args) {
-				return "", "", "", nil, false, errors.New("--branch requires a value")
+		// --flag value form
+		if known[arg] {
+			if i+1 < len(args) {
+				i++
+				val := strings.TrimSpace(args[i])
+				switch arg {
+				case "--repo":
+					repo = val
+				case "--branch":
+					branch = val
+				case "--tasks-dir":
+					tasksDir = val
+				}
 			}
-			i++
-			branch = strings.TrimSpace(args[i])
-			continue
-		}
-		if strings.HasPrefix(arg, "--tasks-dir=") {
-			tasksDir = strings.TrimSpace(strings.TrimPrefix(arg, "--tasks-dir="))
-			continue
-		}
-		if arg == "--tasks-dir" {
-			if i+1 >= len(args) {
-				return "", "", "", nil, false, errors.New("--tasks-dir requires a value")
-			}
-			i++
-			tasksDir = strings.TrimSpace(args[i])
 			continue
 		}
 		copilotArgs = append(copilotArgs, arg)
 	}
-	if repoRoot == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return "", "", "", nil, false, fmt.Errorf("get working directory: %w", err)
-		}
-		repoRoot = wd
+	return
+}
+
+func resolveRepo(repo string) (string, error) {
+	if repo != "" {
+		return repo, nil
 	}
-	if branch == "" {
-		branch = "mato"
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("get working directory: %w", err)
 	}
-	return repoRoot, branch, tasksDir, copilotArgs, dryRun, nil
+	return wd, nil
+}
+
+func resolveBranch(b string) string {
+	if b != "" {
+		return b
+	}
+	return "mato"
+}
+
+func newRootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "mato [copilot-args...]",
+		Short: "Runs autonomous Copilot agents against a task queue in Docker",
+		Long: `Runs autonomous Copilot agents against a task queue in Docker.
+
+Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
+		DisableFlagParsing: true,
+		SilenceUsage:       true,
+		SilenceErrors:      true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, a := range args {
+				if a == "--help" || a == "-h" {
+					cmd.DisableFlagParsing = false
+					return cmd.Help()
+				}
+			}
+			repo, branch, tasksDir, dryRun, copilotArgs := extractKnownFlags(args)
+			resolved, err := resolveRepo(repo)
+			if err != nil {
+				return err
+			}
+			br := resolveBranch(branch)
+			if dryRun {
+				return runner.DryRun(resolved, br, tasksDir)
+			}
+			return runner.Run(resolved, br, tasksDir, copilotArgs)
+		},
+	}
+
+	// Flags are defined for help/documentation only; actual parsing is manual
+	// because DisableFlagParsing is true (required for copilot arg forwarding).
+	root.Flags().String("repo", "", "Path to the git repository (default: current directory)")
+	root.Flags().String("branch", "", "Target branch for merging (default: mato)")
+	root.Flags().String("tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
+	root.Flags().Bool("dry-run", false, "Validate queue setup without launching Docker containers")
+
+	root.AddCommand(newStatusCmd())
+	return root
+}
+
+func newStatusCmd() *cobra.Command {
+	var statusRepo string
+	var statusTasksDir string
+	var watch bool
+	var interval time.Duration
+
+	cmd := &cobra.Command{
+		Use:           "status",
+		Short:         "Show the current state of the task queue",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, err := resolveRepo(statusRepo)
+			if err != nil {
+				return err
+			}
+			if watch {
+				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+				defer stop()
+				return status.Watch(ctx, repo, statusTasksDir, interval)
+			}
+			return status.Show(repo, statusTasksDir)
+		},
+	}
+
+	cmd.Flags().StringVar(&statusRepo, "repo", "", "Path to the git repository (default: current directory)")
+	cmd.Flags().StringVar(&statusTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Continuously refresh the status display")
+	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "Refresh interval for watch mode")
+
+	return cmd
+}
+
+func main() {
+	if err := newRootCmd().Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+		os.Exit(1)
+	}
 }

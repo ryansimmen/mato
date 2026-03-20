@@ -14,6 +14,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/merge"
 	"mato/internal/queue"
+	"mato/internal/testutil"
 )
 
 // substitutePromptPlaceholders replaces the 3 prompt placeholders with real paths.
@@ -238,7 +239,7 @@ func quotedPath(path string) string {
 }
 
 func TestPromptVerifyClaim(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil)
 	if claimed != nil {
@@ -301,7 +302,7 @@ func TestPromptVerifyClaim(t *testing.T) {
 func TestPromptHostCreatesBranch(t *testing.T) {
 	// The host creates the task branch before the agent runs.
 	// Verify the agent can commit on the pre-created branch.
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-3  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
@@ -344,7 +345,7 @@ func TestPromptHostCreatesBranch(t *testing.T) {
 }
 
 func TestPromptCommitIncludesDescription(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
@@ -387,7 +388,7 @@ func TestPromptCommitIncludesDescription(t *testing.T) {
 
 func TestHostPushAndMarkReady(t *testing.T) {
 	// Simulate the host post-agent push: push branch, write marker, move to ready-for-review.
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-4  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
@@ -429,7 +430,7 @@ func TestHostPushAndMarkReady(t *testing.T) {
 
 func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
 	// Verify branch marker is written to the task file after the host pushes.
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-branch  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
@@ -464,7 +465,7 @@ func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
 func TestHostReplacesExistingRemoteBranch(t *testing.T) {
 	// When a task is retried, the host creates a fresh branch and force-pushes,
 	// replacing the stale branch from the prior attempt.
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-stale  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	// Simulate a prior attempt that left a stale branch on the host repo.
@@ -501,7 +502,7 @@ func TestHostReplacesExistingRemoteBranch(t *testing.T) {
 }
 
 func TestPromptOnFailure(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", strings.Join([]string{
 		"<!-- claimed-by: test-agent-5  claimed-at: 2026-01-01T00:00:00Z -->",
 		"# My Task",
@@ -544,7 +545,7 @@ func TestPromptOnFailure(t *testing.T) {
 func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
 	// Even with many prior failures, ON_FAILURE only writes the failure record.
 	// The host moves to backlog and handles retry budgets.
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "in-progress", "my-task.md", strings.Join([]string{
 		"<!-- claimed-by: test-agent-6  claimed-at: 2026-01-01T00:00:00Z -->",
 		"# My Task",
@@ -584,7 +585,7 @@ func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
 }
 
 func TestPromptTwoAgentsParallelClaim(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 	for _, name := range []string{"task-alpha.md", "task-beta.md", "task-gamma.md"} {
 		writeTask(t, tasksDir, "backlog", name, "# "+strings.TrimSuffix(name, ".md")+"\n")
 	}
@@ -622,7 +623,7 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 }
 
 func TestPromptFullLifecycleWithMerge(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "backlog", "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
 	writeFile(t, filepath.Join(tasksDir, ".queue"), "add-hello.md\n")
 

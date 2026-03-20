@@ -13,7 +13,7 @@ import (
 func setupClaimTestDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -1024,16 +1024,19 @@ func TestCollectActiveBranches(t *testing.T) {
 	// One without a branch comment.
 	writeTestFile(t, filepath.Join(dir, "in-progress", "c.md"), "# C (no branch)\n")
 
-	active := collectActiveBranches(dir)
+	// Tasks in ready-for-review and ready-to-merge should also be found.
+	writeTestFile(t, filepath.Join(dir, "ready-for-review", "d.md"), "<!-- branch: task/delta -->\n# D\n")
+	writeTestFile(t, filepath.Join(dir, "ready-to-merge", "e.md"), "<!-- branch: task/epsilon -->\n# E\n")
 
-	if _, ok := active["task/alpha"]; !ok {
-		t.Fatal("expected task/alpha in active branches")
+	active := CollectActiveBranches(dir)
+
+	for _, want := range []string{"task/alpha", "task/beta", "task/delta", "task/epsilon"} {
+		if _, ok := active[want]; !ok {
+			t.Errorf("expected %s in active branches", want)
+		}
 	}
-	if _, ok := active["task/beta"]; !ok {
-		t.Fatal("expected task/beta in active branches")
-	}
-	if len(active) != 2 {
-		t.Fatalf("expected 2 active branches, got %d", len(active))
+	if len(active) != 4 {
+		t.Fatalf("expected 4 active branches, got %d: %v", len(active), active)
 	}
 }
 

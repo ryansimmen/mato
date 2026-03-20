@@ -11,32 +11,8 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
+	"mato/internal/testutil"
 )
-
-func setupTestRepo(t *testing.T) string {
-	t.Helper()
-
-	dir := t.TempDir()
-	if _, err := git.Output(dir, "init"); err != nil {
-		t.Fatalf("git init: %v", err)
-	}
-	if _, err := git.Output(dir, "config", "user.email", "test@test.com"); err != nil {
-		t.Fatalf("git config user.email: %v", err)
-	}
-	if _, err := git.Output(dir, "config", "user.name", "Test"); err != nil {
-		t.Fatalf("git config user.name: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile README.md: %v", err)
-	}
-	if _, err := git.Output(dir, "add", "-A"); err != nil {
-		t.Fatalf("git add: %v", err)
-	}
-	if _, err := git.Output(dir, "commit", "-m", "initial"); err != nil {
-		t.Fatalf("git commit initial: %v", err)
-	}
-	return dir
-}
 
 func setupTasksDir(t *testing.T) string {
 	t.Helper()
@@ -174,7 +150,7 @@ func TestMoveTaskFile_DestinationExists(t *testing.T) {
 }
 
 func TestProcessQueueEmptyReadyToMergeReturnsZero(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -189,7 +165,7 @@ func TestProcessQueueEmptyReadyToMergeReturnsZero(t *testing.T) {
 }
 
 func TestProcessQueueMergesReadyTaskBranch(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -242,7 +218,7 @@ func TestProcessQueueMergesReadyTaskBranch(t *testing.T) {
 }
 
 func TestProcessQueue_CleansTaskBranchAfterSuccessfulMerge(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	originDir := filepath.Join(t.TempDir(), "origin.git")
 	if _, err := git.Output("", "init", "--bare", originDir); err != nil {
 		t.Fatalf("git init --bare origin: %v", err)
@@ -320,7 +296,7 @@ func TestProcessQueue_CleansTaskBranchAfterSuccessfulMerge(t *testing.T) {
 }
 
 func TestProcessQueue_UsesBranchFromTaskFile(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -383,7 +359,7 @@ func TestProcessQueue_UsesBranchFromTaskFile(t *testing.T) {
 }
 
 func TestProcessQueue_FallbackToDerivedBranch(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -425,7 +401,7 @@ func TestProcessQueue_FallbackToDerivedBranch(t *testing.T) {
 }
 
 func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -491,7 +467,7 @@ func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
 }
 
 func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	originDir := filepath.Join(t.TempDir(), "origin.git")
 	if _, err := git.Output("", "init", "--bare", originDir); err != nil {
 		t.Fatalf("git init --bare origin: %v", err)
@@ -603,7 +579,7 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 }
 
 func TestProcessQueue_RespectsMaxRetries(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -649,7 +625,7 @@ func TestProcessQueue_RespectsMaxRetries(t *testing.T) {
 }
 
 func TestProcessQueue_ZeroMaxRetries(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -690,7 +666,7 @@ func TestProcessQueue_ZeroMaxRetries(t *testing.T) {
 }
 
 func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -734,7 +710,7 @@ func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 }
 
 func TestProcessQueueMovesTaskToBacklogWhenPushFails(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -789,7 +765,7 @@ func TestProcessQueueMovesTaskToBacklogWhenPushFails(t *testing.T) {
 }
 
 func TestProcessQueue_PushFailureRespectsMaxRetries(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -855,7 +831,7 @@ func TestProcessQueue_PushFailureRespectsMaxRetries(t *testing.T) {
 }
 
 func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -958,7 +934,7 @@ func TestProcessQueue_DuplicateInCompletedIsRemoved(t *testing.T) {
 }
 
 func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -1036,7 +1012,7 @@ func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
 }
 
 func TestProcessQueue_MalformedTaskInReadyToMerge(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -1176,7 +1152,7 @@ func TestProcessQueue_NonSentinelErrorRespectsMaxRetries(t *testing.T) {
 // the next merge cycle detects the already-merged branch and completes the
 // bookkeeping without creating a duplicate commit.
 func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -1264,7 +1240,7 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 // markTaskMerged fails (e.g. read-only task file), the task still moves to
 // completed/ because we no longer skip moveTaskWithRetry.
 func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -1369,7 +1345,7 @@ func TestFormatSquashCommitMessage_OnlyAffects(t *testing.T) {
 }
 
 func TestProcessQueue_CommitIncludesTrailers(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -1422,7 +1398,7 @@ func TestProcessQueue_CommitIncludesTrailers(t *testing.T) {
 }
 
 func TestProcessQueue_CommitOmitsTrailersWhenEmpty(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -1474,7 +1450,7 @@ func TestProcessQueue_CommitOmitsTrailersWhenEmpty(t *testing.T) {
 }
 
 func TestProcessQueue_WritesCompletionDetail(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
@@ -1556,7 +1532,7 @@ func TestProcessQueue_WritesCompletionDetail(t *testing.T) {
 }
 
 func TestProcessQueue_CompletionDetailFilesChanged(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
