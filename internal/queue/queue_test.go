@@ -78,6 +78,79 @@ func TestSafeRename_DestinationExists(t *testing.T) {
 	if string(data) != "destination\n" {
 		t.Fatalf("destination contents changed: got %q", string(data))
 	}
+
+	// Source file should still exist (Link did not happen, so Remove was not called)
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("source file should still exist after failed safeRename: %v", err)
+	}
+}
+
+func TestSafeRename_SuccessRemovesSource(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+
+	if err := os.WriteFile(src, []byte("content\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	if err := safeRename(src, dst); err != nil {
+		t.Fatalf("safeRename: %v", err)
+	}
+
+	// Destination should have the content
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	if string(data) != "content\n" {
+		t.Fatalf("destination contents = %q, want %q", string(data), "content\n")
+	}
+
+	// Source should be removed
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("source file should be removed after successful safeRename, got err: %v", err)
+	}
+}
+
+func TestSafeRename_ConcurrentRace(t *testing.T) {
+	dir := t.TempDir()
+	const goroutines = 10
+
+	// Create source files for each goroutine
+	for i := 0; i < goroutines; i++ {
+		src := filepath.Join(dir, fmt.Sprintf("src-%d.md", i))
+		if err := os.WriteFile(src, []byte(fmt.Sprintf("content-%d\n", i)), 0o644); err != nil {
+			t.Fatalf("write source %d: %v", i, err)
+		}
+	}
+
+	// All goroutines race to rename their source to the same destination
+	dst := filepath.Join(dir, "dst.md")
+	var wg sync.WaitGroup
+	errs := make([]error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			src := filepath.Join(dir, fmt.Sprintf("src-%d.md", idx))
+			errs[idx] = safeRename(src, dst)
+		}(i)
+	}
+	wg.Wait()
+
+	// Exactly one goroutine should succeed
+	successCount := 0
+	for _, err := range errs {
+		if err == nil {
+			successCount++
+		} else if !strings.Contains(err.Error(), "destination already exists") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if successCount != 1 {
+		t.Fatalf("expected exactly 1 success, got %d", successCount)
+	}
 }
 
 func TestRecoverOrphanedTasks(t *testing.T) {
