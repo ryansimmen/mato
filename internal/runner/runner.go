@@ -571,7 +571,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			fmt.Fprintf(os.Stderr, "warning: could not claim task: %v\n", claimErr)
 			pollHadError = true
 		}
-		hasBacklogTasks := claimed != nil
+		claimedTask := claimed != nil
 		if claimed != nil {
 			messaging.WriteMessage(tasksDir, messaging.Message{
 				From:   agentID,
@@ -620,7 +620,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		}
 
 		hasReviewTasks := selectTaskForReview(tasksDir) != nil
-		isIdle := !hasBacklogTasks && !hasReviewTasks && !merge.HasReadyTasks(tasksDir)
+		isIdle := !claimedTask && !hasReviewTasks && !merge.HasReadyTasks(tasksDir)
 		if checkIdleTransition(isIdle, &wasIdle) {
 			fmt.Println("No tasks found in backlog, ready-for-review, or ready-to-merge. Waiting...")
 		}
