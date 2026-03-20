@@ -488,6 +488,15 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 		return nil // no commits; recoverStuckTask will handle recovery
 	}
 
+	// Pre-check: verify ready-for-review/ destination is clear before pushing.
+	// If a stale file exists (e.g., from a prior incomplete cycle), skip the
+	// push to avoid corrupting its metadata.
+	readyPath := filepath.Join(cfg.tasksDir, "ready-for-review", claimed.Filename)
+	if _, err := os.Stat(readyPath); err == nil {
+		fmt.Fprintf(os.Stderr, "warning: %s already exists in ready-for-review/; skipping push (task is likely already being reviewed)\n", claimed.Filename)
+		return fmt.Errorf("ready-for-review/%s already exists: skipping push to avoid overwriting", claimed.Filename)
+	}
+
 	// Push the task branch to the host repo.
 	if _, err := git.Output(cloneDir, "push", "--force-with-lease", "origin", claimed.Branch); err != nil {
 		return fmt.Errorf("push task branch %s: %w", claimed.Branch, err)
@@ -507,10 +516,17 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 		return fmt.Errorf("close task file after branch marker: %w", closeErr)
 	}
 
-	// Move task from in-progress/ to ready-for-review/.
-	readyPath := filepath.Join(cfg.tasksDir, "ready-for-review", claimed.Filename)
-	if err := os.Rename(claimed.TaskPath, readyPath); err != nil {
+	// Move task from in-progress/ to ready-for-review/ using os.Link +
+	// os.Remove instead of os.Rename to prevent silently overwriting a file
+	// that appeared at the destination after the pre-check (TOCTOU defense).
+	if err := os.Link(claimed.TaskPath, readyPath); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("move task to ready-for-review: destination already exists (race): %w", err)
+		}
 		return fmt.Errorf("move task to ready-for-review: %w", err)
+	}
+	if err := os.Remove(claimed.TaskPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not remove in-progress/%s after linking to ready-for-review: %v\n", claimed.Filename, err)
 	}
 
 	// Send conflict-warning with changed files.

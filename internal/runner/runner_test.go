@@ -1253,6 +1253,81 @@ func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 	}
 }
 
+func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"in-progress", "ready-for-review", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "example-task.md"
+	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
+
+	// Place a stale file at the ready-for-review/ destination.
+	staleContent := []byte("<!-- claimed-by: old-agent -->\n# Stale Task\n")
+	readyPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	os.WriteFile(readyPath, staleContent, 0o644)
+
+	// Set up a minimal git repo so postAgentPush can check for commits.
+	cloneDir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = cloneDir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	run("git", "init", "-b", "main")
+	run("git", "config", "user.name", "test")
+	run("git", "config", "user.email", "test@test.com")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+	// Create a second commit on a task branch so there are commits above main.
+	run("git", "checkout", "-b", "task/example-task")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "task work")
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/example-task",
+		Title:    "Example Task",
+		TaskPath: inProgressPath,
+	}
+	cfg := dockerConfig{
+		tasksDir:     tasksDir,
+		agentID:      "agent1",
+		targetBranch: "main",
+	}
+
+	err := postAgentPush(cfg, claimed, cloneDir)
+
+	// Should return an error indicating the destination exists.
+	if err == nil {
+		t.Fatal("expected error when ready-for-review/ destination already exists, got nil")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("error should mention destination already exists, got: %v", err)
+	}
+
+	// The stale file should not have been overwritten.
+	data, readErr := os.ReadFile(readyPath)
+	if readErr != nil {
+		t.Fatalf("stale file in ready-for-review/ was removed: %v", readErr)
+	}
+	if string(data) != string(staleContent) {
+		t.Fatalf("stale file was overwritten; got %q, want %q", string(data), string(staleContent))
+	}
+
+	// The in-progress/ file should still be there (no move occurred).
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("in-progress/ task file should still exist: %v", err)
+	}
+}
+
 func TestPostReviewAction_Approved(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
