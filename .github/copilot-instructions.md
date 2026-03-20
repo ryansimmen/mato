@@ -31,7 +31,6 @@ When asked to implement a change, follow this process:
 - **Integration tests** in `internal/integration/` — use `package integration_test`
 - **Prompt tests** execute actual bash commands from `task-instructions.md` in real git repos
 - **Race detector** — integration tests should pass with `go test -race`
-- **Minimal dependencies** — only external dep is `gopkg.in/yaml.v3`; everything else uses Go standard library. Do not add third-party packages without strong justification.
 - **Naming conventions** — task files: `kebab-case.md`, branches: `task/<sanitized-name>`, agent IDs: 8-char hex, queue manifest: `.queue`
 
 ## Error Handling & Logging
