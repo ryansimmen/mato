@@ -356,9 +356,16 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		}
 
 		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir); reviewTask != nil {
-			fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
-			if err := runReview(cfg, reviewTask, branch); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
+			// Verify the task branch exists before launching the review agent.
+			if _, err := git.Output(cfg.repoRoot, "rev-parse", "--verify", "refs/heads/"+reviewTask.Branch); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: task branch %s missing from host repo, recording review failure for %s\n", reviewTask.Branch, reviewTask.Filename)
+				appendReviewFailure(reviewTask.TaskPath, agentID, "task branch "+reviewTask.Branch+" not found in host repo")
+			} else {
+				fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
+				if err := runReview(cfg, reviewTask, branch); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
+				}
+				postReviewAction(tasksDir, agentID, reviewTask)
 			}
 			reviewCleanup()
 		}
@@ -467,7 +474,7 @@ func runOnce(cfg dockerConfig, claimed *queue.ClaimedTask) error {
 // If commits exist and the task is still in in-progress/, the host pushes the
 // branch, writes the branch marker, and moves the task to ready-for-review/.
 func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string) error {
-	// If the agent already moved the task (ON_FAILURE → backlog/), nothing to do.
+	// Task must still be in in-progress/ (agent no longer moves files).
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
 		return nil
 	}
@@ -538,13 +545,11 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 
 // recoverStuckTask checks whether a claimed task is still in in-progress/
 // after the agent container exits and post-agent push completes. If so, the
-// agent did not complete its lifecycle and the host could not push
-// (crash, OOM, SIGKILL, no commits, etc.), so the host moves the task back
-// to backlog/ with a failure record for a future retry attempt.
+// agent did not commit successfully (failure, crash, timeout, etc.), so the
+// host moves the task back to backlog/ with a failure record.
 func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
-		// Task was moved (to ready-for-review by post-agent push, or to backlog
-		// by agent ON_FAILURE); nothing to do.
+		// Task was moved (to ready-for-review by post-agent push); nothing to do.
 		return
 	}
 
@@ -564,21 +569,38 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 		fmt.Fprintf(os.Stderr, "warning: could not remove in-progress task %s after linking to backlog: %v\n", claimed.Filename, err)
 	}
 
-	f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not open task file to append failure record for %s: %v\n", claimed.Filename, err)
-	} else {
-		_, writeErr := fmt.Fprintf(f, "\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
-			agentID, time.Now().UTC().Format(time.RFC3339))
-		closeErr := f.Close()
-		if writeErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, writeErr)
-		} else if closeErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, closeErr)
+	// Only append a generic failure record if the agent did not already write
+	// one (via ON_FAILURE). This prevents double-counting retries.
+	if !agentWroteFailureRecord(dst, agentID) {
+		f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not open task file to append failure record for %s: %v\n", claimed.Filename, err)
+		} else {
+			_, writeErr := fmt.Fprintf(f, "\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
+				agentID, time.Now().UTC().Format(time.RFC3339))
+			closeErr := f.Close()
+			if writeErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, writeErr)
+			} else if closeErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, closeErr)
+			}
 		}
 	}
 
 	fmt.Printf("Recovered task %s after agent exit\n", claimed.Filename)
+}
+
+// agentWroteFailureRecord checks whether the task file already contains a
+// failure record written by the given agent. This prevents the host from
+// appending a duplicate generic failure record when the agent's ON_FAILURE
+// already recorded a specific one.
+func agentWroteFailureRecord(taskPath, agentID string) bool {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return false
+	}
+	// Look for "<!-- failure: <agentID> " — the agent's ON_FAILURE writes this pattern.
+	return strings.Contains(string(data), "<!-- failure: "+agentID+" ")
 }
 
 func hasModelArg(args []string) bool {
@@ -830,7 +852,83 @@ func runReview(cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
 	return runErr
 }
 
-// extractReviewRejections returns all review-rejection comment lines from a task file,
+// reviewedRe matches the approval marker written by the review agent.
+var reviewedRe = regexp.MustCompile(`<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+approved\s*-->`)
+
+// reviewRejectionRe matches the rejection marker written by the review agent.
+var reviewRejectionRe = regexp.MustCompile(`<!-- review-rejection:\s+\S+\s+at\s+\S+`)
+
+// postReviewAction reads the task file after the review agent exits and handles
+// the verdict. If the agent wrote an approval marker, the host moves the task
+// to ready-to-merge/. If a rejection marker, the host moves it to backlog/.
+// If neither, the host writes a review-failure record (agent crashed).
+func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
+	// Task must still be in ready-for-review/ (agent no longer moves files).
+	if _, err := os.Stat(task.TaskPath); err != nil {
+		return
+	}
+
+	data, err := os.ReadFile(task.TaskPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read review task %s: %v\n", task.Filename, err)
+		return
+	}
+	content := string(data)
+
+	if reviewedRe.MatchString(content) {
+		// Approved: move to ready-to-merge/.
+		dst := filepath.Join(tasksDir, "ready-to-merge", task.Filename)
+		if err := os.Rename(task.TaskPath, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move approved task %s to ready-to-merge: %v\n", task.Filename, err)
+			return
+		}
+		messaging.WriteMessage(tasksDir, messaging.Message{
+			From:   agentID,
+			Type:   "completion",
+			Task:   task.Filename,
+			Branch: task.Branch,
+			Body:   "Review approved, ready for merge",
+		})
+		fmt.Printf("Review approved: moved %s to ready-to-merge/\n", task.Filename)
+	} else if reviewRejectionRe.MatchString(content) {
+		// Rejected: move to backlog/.
+		dst := filepath.Join(tasksDir, "backlog", task.Filename)
+		if err := os.Rename(task.TaskPath, dst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move rejected task %s to backlog: %v\n", task.Filename, err)
+			return
+		}
+		messaging.WriteMessage(tasksDir, messaging.Message{
+			From:   agentID,
+			Type:   "completion",
+			Task:   task.Filename,
+			Branch: task.Branch,
+			Body:   "Review rejected",
+		})
+		fmt.Printf("Review rejected: moved %s to backlog/\n", task.Filename)
+	} else {
+		// No verdict marker: review agent crashed or failed to render verdict.
+		appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
+		fmt.Printf("Review incomplete: recorded review-failure for %s\n", task.Filename)
+	}
+}
+
+// appendReviewFailure writes a review-failure comment to the task file.
+// The task stays in ready-for-review/ for a future review attempt.
+func appendReviewFailure(taskPath, agentID, reason string) {
+	f, err := os.OpenFile(taskPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not open task file to append review-failure: %v\n", err)
+		return
+	}
+	_, writeErr := fmt.Fprintf(f, "\n<!-- review-failure: %s at %s step=REVIEW error=%s -->\n",
+		agentID, time.Now().UTC().Format(time.RFC3339), reason)
+	closeErr := f.Close()
+	if writeErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write review-failure record: %v\n", writeErr)
+	} else if closeErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write review-failure record: %v\n", closeErr)
+	}
+}
 // joined by newlines. Returns "" if none found or file cannot be read.
 func extractReviewRejections(taskPath string) string {
 	data, err := os.ReadFile(taskPath)

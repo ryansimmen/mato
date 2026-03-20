@@ -23,11 +23,12 @@ The host manages branch creation before you start and handles pushing the branch
 ## Non-Negotiable Invariants
 - Process exactly one task per run.
 - Never push to any branch. The host pushes the task branch after you exit.
-- Never delete unrelated files or revert someone else's work; change only files required by the task plus task-file moves and up to 3 message files.
+- Never move task files between directories. The host handles all file moves.
+- Never delete unrelated files or revert someone else's work; change only files required by the task.
 - Preserve the `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` comment patterns exactly.
 - Messaging is best-effort: if reading or writing messages fails, continue the task anyway.
 - Send at most 4 agent-written messages per task: up to 3 `progress` messages (one per state machine step) and up to 1 for `ON_FAILURE`. The `intent` message is sent by the host before the agent starts. Do NOT send messages for any other reason.
-- Do not stop midway. End only after a successful commit or after moving the task to `backlog/` via `ON_FAILURE`.
+- Do not stop midway. End only after a successful commit or after recording failure metadata via `ON_FAILURE`.
 ## Workflow State Machine
 Execute states in this exact order:
 `VERIFY_CLAIM → WORK → COMMIT`
@@ -167,9 +168,9 @@ The merge queue uses your commit message as the squash-merge message on the targ
 | Subject line is longer than 72 chars | Shorten it. Move detail into the body. |
 ---
 ## STATE: ON_FAILURE
-**Goal:** Record rich failure metadata, return the repo to a safe branch, and move the task back to the backlog for a future retry attempt.
+**Goal:** Record rich failure metadata in the task file. The host will move the task back to backlog and check the retry budget.
 Use this state for unrecoverable errors only, after bounded retries are exhausted.
-The host checks the retry budget before the next attempt, so the prompt does not need to count failures or decide between `backlog/` and `failed/`.
+Do not move the task file — the host handles all file moves.
 **Commands:**
 ```bash
 FAIL_STEP="${FAIL_STEP:-WORK}"  # Set this to the state name where failure occurred
@@ -178,14 +179,12 @@ FILES_CHANGED="$(git diff --name-only TARGET_BRANCH_PLACEHOLDER...HEAD 2>/dev/nu
 [ -n "$FILES_CHANGED" ] || FILES_CHANGED="$(git diff --name-only HEAD 2>/dev/null | paste -sd, -)"
 [ -n "$FILES_CHANGED" ] || FILES_CHANGED="none"
 echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} files_changed=${FILES_CHANGED} -->" >> "$TASK_PATH"
-git checkout TARGET_BRANCH_PLACEHOLDER 2>/dev/null || true
-mv "$TASK_PATH" "TASKS_DIR_PLACEHOLDER/backlog/$FILENAME"
 ```
 **Decision table:**
 | If | Then |
 | --- | --- |
 | Failure came from build/test exhaustion | Record `step=WORK` and the brief validation failure. |
 | Failure came from commit failure | Record `step=COMMIT` and the brief error. |
-| Task is moved back to `backlog/` | The host will check the retry budget before the next attempt. |
+| Failure record written | Exit. The host will move the task to backlog and check the retry budget. |
 ## Final Reminder
-Stay disciplined: one task, one branch, one commit sequence, at most 5 total messages (1 host intent + up to 4 agent-written), bounded retries. Never push — the host handles branch push and review transitions.
+Stay disciplined: one task, one branch, one commit sequence, at most 5 total messages (1 host intent + up to 4 agent-written), bounded retries. Never push and never move task files — the host handles branch push, file moves, and review transitions.
