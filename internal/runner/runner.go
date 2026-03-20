@@ -668,10 +668,12 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 }
 
 // removeDependencyContextFile removes the dependency context file for the
-// given task, if it exists. Errors are silently ignored.
+// given task, if it exists. Non-"not found" errors are logged to stderr.
 func removeDependencyContextFile(tasksDir string, filename string) {
 	p := filepath.Join(tasksDir, "messages", "dependency-context-"+filename+".json")
-	os.Remove(p)
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "warning: could not remove dependency context file %s: %v\n", p, err)
+	}
 }
 
 // configureReceiveDeny sets receive.denyCurrentBranch=updateInstead on the
