@@ -1085,3 +1085,112 @@ func TestWriteBranchComment(t *testing.T) {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestSelectAndClaimTask_DestinationExistsInProgress(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "dup.md"), "# Dup\nDo dup.\n")
+	// Pre-existing file in in-progress/ with same name.
+	writeTestFile(t, filepath.Join(dir, "in-progress", "dup.md"),
+		"<!-- claimed-by: other -->\n# Dup\nAlready claimed.\n")
+	writeTestFile(t, filepath.Join(dir, "backlog", "ok.md"), "# OK\nDo ok.\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "dup.md\nok.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-dup", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	// dup.md should be skipped (destination collision); ok.md should be claimed.
+	if task == nil {
+		t.Fatal("expected ok.md to be claimed, got nil")
+	}
+	if task.Filename != "ok.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "ok.md")
+	}
+
+	// The in-progress copy must not be overwritten.
+	data, _ := os.ReadFile(filepath.Join(dir, "in-progress", "dup.md"))
+	if !strings.Contains(string(data), "Already claimed") {
+		t.Fatal("in-progress/dup.md was overwritten by the claim move")
+	}
+
+	// The backlog copy of dup.md must still exist (source not removed).
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "dup.md")); err != nil {
+		t.Fatalf("backlog/dup.md should still exist after destination collision: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_DestinationExistsInFailed(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "old.md"), strings.Join([]string{
+		"# Old task",
+		"<!-- failure: one -->",
+		"<!-- failure: two -->",
+		"<!-- failure: three -->",
+		"",
+	}, "\n"))
+	// Pre-existing file in failed/ with same name.
+	writeTestFile(t, filepath.Join(dir, "failed", "old.md"), "# Old task (original)\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "old.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-fd", nil)
+	// Retry-exhausted move to failed/ fails (EEXIST), rollback succeeds,
+	// so FailedDirUnavailableError is returned.
+	if err == nil {
+		t.Fatal("expected error when move-to-failed destination exists")
+	}
+	if task != nil {
+		t.Fatalf("expected nil task, got %+v", task)
+	}
+	if !IsFailedDirUnavailable(err) {
+		t.Fatalf("expected FailedDirUnavailableError, got: %v", err)
+	}
+
+	// The failed/ copy must not be overwritten.
+	data, _ := os.ReadFile(filepath.Join(dir, "failed", "old.md"))
+	if !strings.Contains(string(data), "original") {
+		t.Fatal("failed/old.md was overwritten")
+	}
+
+	// Task should be rolled back to backlog.
+	if _, err := os.Stat(filepath.Join(dir, "backlog", "old.md")); err != nil {
+		t.Fatalf("old.md should be back in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "in-progress", "old.md")); !os.IsNotExist(err) {
+		t.Fatal("old.md should NOT be in in-progress after rollback")
+	}
+}
+
+func TestSelectAndClaimTask_RollbackDestinationExists(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	writeTestFile(t, filepath.Join(dir, "backlog", "race.md"), "# Race\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "race.md\n")
+
+	origPrepend := claimPrependFn
+	t.Cleanup(func() { claimPrependFn = origPrepend })
+
+	// Force prepend to fail, then sneak a file back into backlog to
+	// simulate a concurrent race so the rollback hits EEXIST.
+	claimPrependFn = func(path, agentID, claimedAt string) error {
+		writeTestFile(t, filepath.Join(dir, "backlog", "race.md"), "# Race (reappeared)\n")
+		return fmt.Errorf("simulated prepend failure")
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-race", nil)
+	// Rollback via safeRename fails because backlog/race.md reappeared,
+	// resulting in a hard error (task stranded in in-progress).
+	if err == nil {
+		t.Fatal("expected hard error when rollback destination exists")
+	}
+	if task != nil {
+		t.Fatalf("expected nil task, got %+v", task)
+	}
+	if !strings.Contains(err.Error(), "claim rollback failed") {
+		t.Fatalf("expected 'claim rollback failed' in error, got: %v", err)
+	}
+
+	// backlog/race.md should be the reappeared copy (not overwritten).
+	data, _ := os.ReadFile(filepath.Join(dir, "backlog", "race.md"))
+	if !strings.Contains(string(data), "reappeared") {
+		t.Fatal("backlog/race.md should contain the reappeared copy")
+	}
+}
