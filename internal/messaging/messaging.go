@@ -28,12 +28,12 @@ type Message struct {
 // CompletionDetail records metadata about a task that was successfully
 // merged, so downstream dependent tasks can see what changed.
 type CompletionDetail struct {
-	TaskID       string   `json:"task_id"`
-	TaskFile     string   `json:"task_file"`
-	Branch       string   `json:"branch"`
-	CommitSHA    string   `json:"commit_sha"`
-	FilesChanged []string `json:"files_changed"`
-	Title        string   `json:"title"`
+	TaskID       string    `json:"task_id"`
+	TaskFile     string    `json:"task_file"`
+	Branch       string    `json:"branch"`
+	CommitSHA    string    `json:"commit_sha"`
+	FilesChanged []string  `json:"files_changed"`
+	Title        string    `json:"title"`
 	MergedAt     time.Time `json:"merged_at"`
 }
 
