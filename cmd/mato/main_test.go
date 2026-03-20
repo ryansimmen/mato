@@ -144,6 +144,12 @@ func TestExtractKnownFlags(t *testing.T) {
 			wantRepo:  "/tmp/foo",
 			wantExtra: []string{"--model", "gpt-5"},
 		},
+		{
+			name:      "equals form accepts flag-like value",
+			args:      []string{"--repo=--model"},
+			wantRepo:  "--model",
+			wantExtra: []string{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -206,6 +212,21 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			name:    "branch at end of args",
 			args:    []string{"--branch"},
 			wantErr: "flag --branch requires a value",
+		},
+		{
+			name:    "repo equals empty value",
+			args:    []string{"--repo="},
+			wantErr: "flag --repo requires a value",
+		},
+		{
+			name:    "branch equals empty value",
+			args:    []string{"--branch="},
+			wantErr: "flag --branch requires a value",
+		},
+		{
+			name:    "tasks-dir equals empty value",
+			args:    []string{"--tasks-dir="},
+			wantErr: "flag --tasks-dir requires a value",
 		},
 	}
 

@@ -36,6 +36,10 @@ func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun boo
 		for flag := range known {
 			if strings.HasPrefix(arg, flag+"=") {
 				val := strings.TrimSpace(strings.TrimPrefix(arg, flag+"="))
+				if val == "" {
+					err = fmt.Errorf("flag %s requires a value", flag)
+					return
+				}
 				switch flag {
 				case "--repo":
 					repo = val
