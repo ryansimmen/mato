@@ -41,6 +41,35 @@ const defaultAgentTimeout = 30 * time.Minute
 // Docker container before escalating to SIGKILL.
 const gracefulShutdownDelay = 10 * time.Second
 
+const (
+	// basePollInterval is the default polling interval between loop iterations.
+	basePollInterval = 10 * time.Second
+
+	// maxPollInterval is the upper bound for exponential backoff.
+	maxPollInterval = 5 * time.Minute
+
+	// errBackoffThreshold is the number of consecutive poll errors before
+	// the loop enters backoff mode.
+	errBackoffThreshold = 5
+)
+
+// pollBackoff returns the poll interval given the number of consecutive errors.
+// Below errBackoffThreshold it returns basePollInterval. Above the threshold it
+// doubles the interval for each additional error, capped at maxPollInterval.
+func pollBackoff(consecutiveErrors int) time.Duration {
+	if consecutiveErrors < errBackoffThreshold {
+		return basePollInterval
+	}
+	d := basePollInterval
+	for i := 0; i < consecutiveErrors-errBackoffThreshold+1; i++ {
+		d *= 2
+		if d >= maxPollInterval {
+			return maxPollInterval
+		}
+	}
+	return d
+}
+
 // parseAgentTimeout parses a duration string for the agent timeout.
 // Returns defaultAgentTimeout if envVal is empty.
 func parseAgentTimeout(envVal string) (time.Duration, error) {
@@ -360,7 +389,10 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 	wasIdle := false
 	failedDirExcluded := make(map[string]struct{})
+	consecutiveErrors := 0
 	for {
+		pollHadError := false
+
 		queue.RecoverOrphanedTasks(tasksDir)
 		queue.CleanStaleLocks(tasksDir)
 		queue.CleanStaleReviewLocks(tasksDir)
@@ -376,6 +408,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		}
 		if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
+			pollHadError = true
 		}
 
 		claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred)
@@ -385,6 +418,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			fmt.Fprintf(os.Stderr, "warning: excluding retry-exhausted task %s from future polls (failed/ directory unavailable)\n", fdErr.TaskFilename)
 		} else if claimErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not claim task: %v\n", claimErr)
+			pollHadError = true
 		}
 		hasBacklogTasks := claimed != nil
 		if claimed != nil {
@@ -440,11 +474,23 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 			fmt.Println("No tasks found in backlog, ready-for-review, or ready-to-merge. Waiting...")
 		}
 
+		if pollHadError {
+			consecutiveErrors++
+			if consecutiveErrors == errBackoffThreshold {
+				fmt.Fprintf(os.Stderr, "warning: entering backoff mode after %d consecutive poll errors\n", consecutiveErrors)
+			}
+		} else {
+			if consecutiveErrors >= errBackoffThreshold {
+				fmt.Printf("Poll succeeded, exiting backoff mode (was at %d consecutive errors)\n", consecutiveErrors)
+			}
+			consecutiveErrors = 0
+		}
+
 		select {
 		case <-ctx.Done():
 			fmt.Println("\nInterrupted. Exiting.")
 			return nil
-		case <-time.After(10 * time.Second):
+		case <-time.After(pollBackoff(consecutiveErrors)):
 		}
 	}
 }

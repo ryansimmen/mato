@@ -1931,3 +1931,63 @@ func TestSignalForwarding_ProcessExitsOnSIGTERM(t *testing.T) {
 		t.Fatalf("process took %v to exit after SIGTERM; expected prompt exit", elapsed)
 	}
 }
+
+func TestPollBackoff_BelowThreshold(t *testing.T) {
+	for i := 0; i < errBackoffThreshold; i++ {
+		got := pollBackoff(i)
+		if got != basePollInterval {
+			t.Errorf("pollBackoff(%d) = %v, want %v", i, got, basePollInterval)
+		}
+	}
+}
+
+func TestPollBackoff_AtAndAboveThreshold(t *testing.T) {
+	// At threshold: 10s * 2^1 = 20s
+	got := pollBackoff(errBackoffThreshold)
+	want := basePollInterval * 2
+	if got != want {
+		t.Errorf("pollBackoff(%d) = %v, want %v", errBackoffThreshold, got, want)
+	}
+
+	// One above: 10s * 2^2 = 40s
+	got = pollBackoff(errBackoffThreshold + 1)
+	want = basePollInterval * 4
+	if got != want {
+		t.Errorf("pollBackoff(%d) = %v, want %v", errBackoffThreshold+1, got, want)
+	}
+
+	// Two above: 10s * 2^3 = 80s
+	got = pollBackoff(errBackoffThreshold + 2)
+	want = basePollInterval * 8
+	if got != want {
+		t.Errorf("pollBackoff(%d) = %v, want %v", errBackoffThreshold+2, got, want)
+	}
+}
+
+func TestPollBackoff_CapsAtMax(t *testing.T) {
+	got := pollBackoff(100)
+	if got != maxPollInterval {
+		t.Errorf("pollBackoff(100) = %v, want %v (max)", got, maxPollInterval)
+	}
+
+	// Just past the cap boundary: basePollInterval * 2^N >= maxPollInterval
+	// with base=10s and max=5m=300s, 10*2^5=320s > 300s, so threshold+4
+	got = pollBackoff(errBackoffThreshold + 4)
+	if got != maxPollInterval {
+		t.Errorf("pollBackoff(%d) = %v, want %v (max)", errBackoffThreshold+4, got, maxPollInterval)
+	}
+}
+
+func TestPollBackoff_ExponentialProgression(t *testing.T) {
+	prev := pollBackoff(errBackoffThreshold - 1) // base
+	for i := errBackoffThreshold; i < errBackoffThreshold+10; i++ {
+		cur := pollBackoff(i)
+		if cur < prev {
+			t.Errorf("pollBackoff(%d) = %v < pollBackoff(%d) = %v; expected non-decreasing", i, cur, i-1, prev)
+		}
+		if cur > maxPollInterval {
+			t.Errorf("pollBackoff(%d) = %v exceeds maxPollInterval %v", i, cur, maxPollInterval)
+		}
+		prev = cur
+	}
+}
