@@ -91,7 +91,7 @@ Expected comment patterns:
 
 What they mean:
 - `claimed-by` records which agent owns an in-progress task.
-- `branch:` records the pushed task branch name after a successful agent push; the merge queue reads this first and falls back to the filename-derived branch when absent.
+- `branch:` records the pushed task branch name after a successful agent push; the merge queue reads this first and falls back to the filename-derived branch when absent. Only complete markers with the closing `-->` are recognized; unterminated or malformed branch comments are ignored.
 - `failure:` records a failed task agent attempt; failure records are counted against the task's `max_retries` budget. Recovery and merge logic may also append `failure:` records (e.g. `mato-recovery` or `merge-queue`).
 - `review-failure:` records a review infrastructure failure (e.g. network blip during `git fetch`, diff timeout). These are tracked separately from task failure records and do **not** count against the task's `max_retries` budget. Only review-failure records are counted for the review retry budget.
 - `review-rejection:` records feedback from the review agent when rejecting a task. Format: `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->`. Review rejections do **not** count against `max_retries`. The feedback is passed to the implementing agent via the `MATO_REVIEW_FEEDBACK` environment variable on the next attempt.
