@@ -856,7 +856,8 @@ func runReview(cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
 var reviewedRe = regexp.MustCompile(`<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+approved\s*-->`)
 
 // reviewRejectionRe matches the rejection marker written by the review agent.
-var reviewRejectionRe = regexp.MustCompile(`<!-- review-rejection:\s+\S+\s+at\s+\S+`)
+// Requires the em-dash separator, a non-empty reason, and the closing -->.
+var reviewRejectionRe = regexp.MustCompile(`<!-- review-rejection:\s+\S+\s+at\s+\S+\s+—\s+.+\s*-->`)
 
 // postReviewAction reads the task file after the review agent exits and handles
 // the verdict. If the agent wrote an approval marker, the host moves the task
