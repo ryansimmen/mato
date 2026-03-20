@@ -75,9 +75,22 @@ func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 		}
 		if failures >= maxRetries {
 			dst := filepath.Join(failedDir, entry.Name())
-			if mvErr := os.Rename(path, dst); mvErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", entry.Name(), mvErr)
+			if err := os.MkdirAll(failedDir, 0o755); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", entry.Name(), err)
+				continue
+			}
+			// Use os.Link + os.Remove instead of os.Rename to prevent
+			// silently overwriting an existing file (TOCTOU race defense).
+			if linkErr := os.Link(path, dst); linkErr != nil {
+				if errors.Is(linkErr, os.ErrExist) || errors.Is(linkErr, syscall.EEXIST) {
+					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: destination already exists\n", entry.Name())
+				} else {
+					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", entry.Name(), linkErr)
+				}
 			} else {
+				if rmErr := os.Remove(path); rmErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not remove %s after linking to failed/: %v\n", entry.Name(), rmErr)
+				}
 				fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
 					entry.Name(), failures, maxRetries)
 			}
