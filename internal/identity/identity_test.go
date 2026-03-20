@@ -100,3 +100,98 @@ func TestIsAgentActive_NoLocksDir(t *testing.T) {
 		t.Fatal("expected false when .locks directory does not exist")
 	}
 }
+
+func TestIsAgentActive_LegacyPIDOnly(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Legacy format: PID only (no start time)
+	if err := os.WriteFile(filepath.Join(locksDir, "legacy.pid"), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !IsAgentActive(tasksDir, "legacy") {
+		t.Fatal("legacy PID-only lock file for live process should be active")
+	}
+
+	if err := os.WriteFile(filepath.Join(locksDir, "legacy-dead.pid"), []byte("2147483647"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if IsAgentActive(tasksDir, "legacy-dead") {
+		t.Fatal("legacy PID-only lock file for dead process should not be active")
+	}
+}
+
+func TestIsAgentActive_PIDReuseDetected(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("test requires /proc filesystem (Linux)")
+	}
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a lock with the current PID but a fabricated start time that
+	// does not match the actual process start time. This simulates PID reuse.
+	fakeIdentity := fmt.Sprintf("%d:99999999999", os.Getpid())
+	if err := os.WriteFile(filepath.Join(locksDir, "reused.pid"), []byte(fakeIdentity), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if IsAgentActive(tasksDir, "reused") {
+		t.Fatal("lock with mismatched start time should detect PID reuse and return false")
+	}
+}
+
+func TestIsAgentActive_CorruptedPIDFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locksDir, "corrupted.pid"), []byte("not-a-number"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if IsAgentActive(tasksDir, "corrupted") {
+		t.Fatal("corrupted pid file should not be considered active")
+	}
+}
+
+func TestIsAgentActive_NegativePID(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locksDir, "negative.pid"), []byte("-1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if IsAgentActive(tasksDir, "negative") {
+		t.Fatal("negative pid should not be considered active")
+	}
+}
+
+func TestIsAgentActive_EPERMTreatedAsAlive(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root user (PID 1 returns EPERM only for non-root)")
+	}
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// PID 1 (init/systemd) belongs to root; Signal(0) returns EPERM for non-root callers.
+	// Use legacy PID-only format since we can't read PID 1's start time as non-root.
+	if err := os.WriteFile(filepath.Join(locksDir, "other-user.pid"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !IsAgentActive(tasksDir, "other-user") {
+		t.Fatal("PID 1 should be considered active (EPERM means process exists)")
+	}
+}

@@ -15,6 +15,7 @@ import (
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
+	"mato/internal/identity"
 	"mato/internal/messaging"
 	"mato/internal/process"
 	"mato/internal/queue"
@@ -426,7 +427,7 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 			continue
 		}
 		agentID := strings.TrimSuffix(entry.Name(), ".pid")
-		if !queue.IsAgentActive(tasksDir, agentID) {
+		if !identity.IsAgentActive(tasksDir, agentID) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(tasksDir, ".locks", entry.Name()))
