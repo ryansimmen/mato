@@ -107,7 +107,7 @@ func TestParseArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, branch, _, args, err := parseArgs(tt.args)
+			repo, branch, _, args, _, err := parseArgs(tt.args)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -136,7 +136,7 @@ func TestParseArgs(t *testing.T) {
 
 	for _, tt := range defaultTests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, branch, _, args, err := parseArgs(tt.args)
+			repo, branch, _, args, _, err := parseArgs(tt.args)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -156,6 +156,51 @@ func TestParseArgs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseArgs_DryRun(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+
+	t.Run("dry-run flag sets boolean", func(t *testing.T) {
+		_, _, _, _, dryRun, err := parseArgs([]string{"--dry-run"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !dryRun {
+			t.Fatal("expected dryRun=true")
+		}
+	})
+
+	t.Run("dry-run with other flags", func(t *testing.T) {
+		repo, branch, _, _, dryRun, err := parseArgs([]string{"--repo=/tmp/repo", "--dry-run", "--branch=develop"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !dryRun {
+			t.Fatal("expected dryRun=true")
+		}
+		if repo != "/tmp/repo" {
+			t.Errorf("repo = %q, want %q", repo, "/tmp/repo")
+		}
+		if branch != "develop" {
+			t.Errorf("branch = %q, want %q", branch, "develop")
+		}
+	})
+
+	t.Run("no dry-run flag defaults to false", func(t *testing.T) {
+		_, _, _, _, dryRun, err := parseArgs([]string{"--repo=/tmp/repo"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if dryRun {
+			t.Fatal("expected dryRun=false")
+		}
+	})
+
+	_ = wd // used by other tests in this function
 }
 
 // TestStatusSubcommandArgs verifies argument parsing behavior specific to the
@@ -250,7 +295,7 @@ func TestStatusSubcommandArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, _, tasksDir, extras, err := parseArgs(tt.args)
+			repo, _, tasksDir, extras, _, err := parseArgs(tt.args)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")

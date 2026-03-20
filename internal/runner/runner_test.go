@@ -2113,3 +2113,185 @@ func TestValidateTasksDir(t *testing.T) {
 		}
 	})
 }
+
+func TestDryRun_BasicValidation(t *testing.T) {
+	// Create a git repo
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+	cmd = exec.Command("git", "-C", repoDir, "config", "user.email", "test@test.com")
+	cmd.Run()
+	cmd = exec.Command("git", "-C", repoDir, "config", "user.name", "Test")
+	cmd.Run()
+
+	tasksDir := filepath.Join(repoDir, ".tasks")
+	subdirs := []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"}
+	for _, sub := range subdirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Create a valid backlog task
+	taskContent := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n---\n# Task A\nDo something.\n"
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "task-a.md"), []byte(taskContent), 0o644)
+
+	err := DryRun(repoDir, "main", tasksDir)
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	// Verify the .queue manifest was written
+	manifest, err := os.ReadFile(filepath.Join(tasksDir, ".queue"))
+	if err != nil {
+		t.Fatalf("expected .queue manifest to exist: %v", err)
+	}
+	if !strings.Contains(string(manifest), "task-a.md") {
+		t.Fatalf(".queue should contain task-a.md, got: %s", manifest)
+	}
+}
+
+func TestDryRun_DetectsParseErrors(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Create a task with invalid frontmatter
+	badContent := "---\npriority: not-a-number\n---\n# Bad Task\n"
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "bad-task.md"), []byte(badContent), 0o644)
+
+	// DryRun should succeed (parse errors are reported, not fatal)
+	err := DryRun(repoDir, "main", tasksDir)
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+}
+
+func TestDryRun_DetectsOverlaps(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Create two tasks with overlapping affects
+	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n---\n# Task A\n"
+	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n---\n# Task B\n"
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "task-b.md"), []byte(taskB), 0o644)
+
+	err := DryRun(repoDir, "main", tasksDir)
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	// Verify manifest only contains the higher-priority (lower number) task
+	manifest, err := os.ReadFile(filepath.Join(tasksDir, ".queue"))
+	if err != nil {
+		t.Fatalf("expected .queue manifest: %v", err)
+	}
+	if !strings.Contains(string(manifest), "task-a.md") {
+		t.Fatalf(".queue should contain task-a.md, got: %s", manifest)
+	}
+	if strings.Contains(string(manifest), "task-b.md") {
+		t.Fatalf(".queue should NOT contain task-b.md (deferred), got: %s", manifest)
+	}
+}
+
+func TestDryRun_MissingDirectories(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".tasks")
+	os.MkdirAll(tasksDir, 0o755)
+	// Only create some subdirs, leaving others missing
+	os.MkdirAll(filepath.Join(tasksDir, "backlog"), 0o755)
+
+	err := DryRun(repoDir, "main", tasksDir)
+	if err == nil {
+		t.Fatal("DryRun should return error when directories are missing")
+	}
+	if !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("error should mention missing directories, got: %v", err)
+	}
+}
+
+func TestDryRun_PromotesDependencies(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Create a completed dependency
+	depContent := "---\nid: dep-task\npriority: 5\n---\n# Dep Task\n"
+	os.WriteFile(filepath.Join(tasksDir, "completed", "dep-task.md"), []byte(depContent), 0o644)
+
+	// Create a waiting task that depends on the completed task
+	waitingContent := "---\nid: child-task\npriority: 10\ndepends_on:\n  - dep-task\n---\n# Child Task\n"
+	os.WriteFile(filepath.Join(tasksDir, "waiting", "child-task.md"), []byte(waitingContent), 0o644)
+
+	err := DryRun(repoDir, "main", tasksDir)
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	// The waiting task should have been promoted to backlog
+	if _, statErr := os.Stat(filepath.Join(tasksDir, "backlog", "child-task.md")); statErr != nil {
+		t.Fatal("child-task.md should have been promoted to backlog/")
+	}
+	if _, statErr := os.Stat(filepath.Join(tasksDir, "waiting", "child-task.md")); statErr == nil {
+		t.Fatal("child-task.md should no longer be in waiting/")
+	}
+}
+
+func TestDryRun_NoDockerLaunched(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Add a backlog task — in normal run this would trigger Docker launch
+	taskContent := "---\nid: runnable\npriority: 1\n---\n# Runnable Task\n"
+	os.WriteFile(filepath.Join(tasksDir, "backlog", "runnable.md"), []byte(taskContent), 0o644)
+
+	// DryRun should complete without attempting to claim or launch Docker
+	err := DryRun(repoDir, "main", tasksDir)
+	if err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+
+	// The task should still be in backlog (not claimed/moved)
+	if _, statErr := os.Stat(filepath.Join(tasksDir, "backlog", "runnable.md")); statErr != nil {
+		t.Fatal("task should remain in backlog/ during dry-run")
+	}
+	if _, statErr := os.Stat(filepath.Join(tasksDir, "in-progress", "runnable.md")); statErr == nil {
+		t.Fatal("task should NOT be moved to in-progress/ during dry-run")
+	}
+}
