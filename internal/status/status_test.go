@@ -1,6 +1,7 @@
 package status
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -767,6 +768,40 @@ func containsSubstring(s, substr string) bool {
 	return false
 }
 
+func TestShowToBuffer(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed", ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Add a backlog task so output is meaningful.
+	if err := os.WriteFile(filepath.Join(tasksDir, "backlog", "demo.md"), []byte("---\nid: demo\npriority: 10\n---\n# Demo task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	output := buf.String()
+	if !contains(output, "Queue Overview") {
+		t.Errorf("ShowTo output should contain 'Queue Overview', got:\n%s", output)
+	}
+	if !contains(output, "runnable:") {
+		t.Errorf("ShowTo output should contain 'runnable:', got:\n%s", output)
+	}
+	if !contains(output, "Recent Messages") {
+		t.Errorf("ShowTo output should contain 'Recent Messages', got:\n%s", output)
+	}
+}
+
 func TestWatch(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
@@ -819,5 +854,16 @@ func TestWatch(t *testing.T) {
 	}
 	if !contains(output, "Ctrl+C") {
 		t.Errorf("Watch output should contain 'Ctrl+C' hint, got:\n%s", output)
+	}
+	// Verify atomic redraw: cursor-home (\033[H) and clear-to-end (\033[J)
+	// should be present, but full-screen clear (\033[2J) should NOT.
+	if contains(output, "\033[2J") {
+		t.Errorf("Watch output should NOT contain full-screen clear (\\033[2J)")
+	}
+	if !contains(output, "\033[H") {
+		t.Errorf("Watch output should contain cursor-home (\\033[H)")
+	}
+	if !contains(output, "\033[J") {
+		t.Errorf("Watch output should contain clear-to-end-of-screen (\\033[J)")
 	}
 }
