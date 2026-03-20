@@ -1336,13 +1336,11 @@ func TestPostReviewAction_Approved(t *testing.T) {
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
-	os.WriteFile(reviewPath, []byte(strings.Join([]string{
-		"<!-- claimed-by: task-agent -->",
-		"<!-- branch: task/review-task -->",
-		"# Review Task",
-		"",
-		"<!-- reviewed: review-agent at 2026-01-01T00:00:00Z — approved -->",
-	}, "\n")), 0o644)
+	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+
+	// Write a verdict file (the new approach).
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1360,6 +1358,15 @@ func TestPostReviewAction_Approved(t *testing.T) {
 	if _, err := os.Stat(reviewPath); err == nil {
 		t.Fatal("approved task still in ready-for-review/")
 	}
+	// Task file should have the approval marker written by the host.
+	data, _ := os.ReadFile(filepath.Join(tasksDir, "ready-to-merge", taskFile))
+	if !strings.Contains(string(data), "<!-- reviewed:") {
+		t.Fatal("approval marker not written to task file")
+	}
+	// Verdict file should be cleaned up.
+	if _, err := os.Stat(verdictPath); err == nil {
+		t.Fatal("verdict file should be cleaned up after processing")
+	}
 }
 
 func TestPostReviewAction_Rejected(t *testing.T) {
@@ -1370,13 +1377,11 @@ func TestPostReviewAction_Rejected(t *testing.T) {
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
-	os.WriteFile(reviewPath, []byte(strings.Join([]string{
-		"<!-- claimed-by: task-agent -->",
-		"<!-- branch: task/review-task -->",
-		"# Review Task",
-		"",
-		"<!-- review-rejection: review-agent at 2026-01-01T00:00:00Z — missing error wrapping -->",
-	}, "\n")), 0o644)
+	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+
+	// Write a rejection verdict file.
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"missing error wrapping in postAgentPush"}`), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1393,6 +1398,14 @@ func TestPostReviewAction_Rejected(t *testing.T) {
 	}
 	if _, err := os.Stat(reviewPath); err == nil {
 		t.Fatal("rejected task still in ready-for-review/")
+	}
+	// Task file should have the rejection marker with the reason.
+	data, _ := os.ReadFile(filepath.Join(tasksDir, "backlog", taskFile))
+	if !strings.Contains(string(data), "<!-- review-rejection:") {
+		t.Fatal("rejection marker not written to task file")
+	}
+	if !strings.Contains(string(data), "missing error wrapping") {
+		t.Fatal("rejection reason not included in marker")
 	}
 }
 
@@ -1425,6 +1438,46 @@ func TestPostReviewAction_NoVerdict(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "exited without rendering a verdict") {
 		t.Fatal("review-failure record missing expected reason")
+	}
+}
+
+func TestPostReviewAction_ErrorVerdict(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "review-task.md"
+	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+
+	// Write an error verdict file (review agent's ON_FAILURE).
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"error","reason":"DIFF: could not fetch branch"}`), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/review-task",
+		Title:    "Review Task",
+		TaskPath: reviewPath,
+	}
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	// Task should stay in ready-for-review/ with a review-failure record.
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("error verdict task should stay in ready-for-review/")
+	}
+	data, _ := os.ReadFile(reviewPath)
+	if !strings.Contains(string(data), "<!-- review-failure:") {
+		t.Fatal("review-failure record not written for error verdict")
+	}
+	if !strings.Contains(string(data), "could not fetch branch") {
+		t.Fatal("review-failure reason should include the error details")
+	}
+	// Verdict file should be cleaned up.
+	if _, err := os.Stat(verdictPath); err == nil {
+		t.Fatal("verdict file should be cleaned up after processing")
 	}
 }
 
