@@ -1991,3 +1991,61 @@ func TestPollBackoff_ExponentialProgression(t *testing.T) {
 		prev = cur
 	}
 }
+
+func TestValidateTasksDir(t *testing.T) {
+	t.Run("relative path resolved to absolute", func(t *testing.T) {
+		dir := t.TempDir()
+		rel := filepath.Join(dir, "subdir", ".tasks")
+		// Create the parent so validation passes.
+		os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
+
+		got, err := validateTasksDir(rel)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !filepath.IsAbs(got) {
+			t.Errorf("expected absolute path, got %q", got)
+		}
+	})
+
+	t.Run("nonexistent parent returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		bad := filepath.Join(dir, "no-such-parent", "deep", ".tasks")
+
+		_, err := validateTasksDir(bad)
+		if err == nil {
+			t.Fatal("expected error for nonexistent parent, got nil")
+		}
+		if !strings.Contains(err.Error(), "does not exist") {
+			t.Errorf("error should mention 'does not exist', got: %v", err)
+		}
+	})
+
+	t.Run("parent is a file returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		filePath := filepath.Join(dir, "not-a-dir")
+		os.WriteFile(filePath, []byte("x"), 0o644)
+		bad := filepath.Join(filePath, ".tasks")
+
+		_, err := validateTasksDir(bad)
+		if err == nil {
+			t.Fatal("expected error when parent is a file, got nil")
+		}
+		if !strings.Contains(err.Error(), "not a directory") {
+			t.Errorf("error should mention 'not a directory', got: %v", err)
+		}
+	})
+
+	t.Run("valid absolute path passes", func(t *testing.T) {
+		dir := t.TempDir()
+		tasksDir := filepath.Join(dir, ".tasks")
+
+		got, err := validateTasksDir(tasksDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != tasksDir {
+			t.Errorf("expected %q, got %q", tasksDir, got)
+		}
+	})
+}
