@@ -259,11 +259,12 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 1. `selectTaskForReview(tasksDir)` scans `ready-for-review/*.md` for the next task to review.
 2. The host verifies the task branch exists (`git rev-parse --verify`). If the branch is missing, the host writes a `<!-- review-failure: ... -->` record and skips the review.
 3. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts).
-4. The review agent diffs the task branch against the target branch, analyzes the changes, and writes a verdict marker to the task file.
-5. After the review agent exits, the host reads the verdict marker via `postReviewAction(...)`:
-   - **Approved**: host moves the task to `ready-to-merge/` and sends a completion message.
-   - **Rejected**: host moves the task back to `backlog/` and sends a completion message.
-   - **No verdict** (agent crashed): host writes a `<!-- review-failure: ... -->` record; the task stays in `ready-for-review/` for a future attempt.
+4. The review agent diffs the task branch against the target branch, analyzes the changes, and writes a JSON verdict file to `.tasks/messages/verdict-<filename>.json` with `{"verdict":"approve"}`, `{"verdict":"reject","reason":"..."}`, or `{"verdict":"error","reason":"..."}`.
+5. After the review agent exits, the host reads the verdict file via `postReviewAction(...)`:
+   - **Approved**: host writes `<!-- reviewed: ... -->` to the task file, moves it to `ready-to-merge/`, and sends a completion message.
+   - **Rejected**: host writes `<!-- review-rejection: ... -->` to the task file, moves it back to `backlog/`, and sends a completion message.
+   - **Error**: host writes a `<!-- review-failure: ... -->` record; the task stays in `ready-for-review/`.
+   - **No verdict file** (agent crashed): host falls back to checking for HTML markers in the task file, then writes a `<!-- review-failure: ... -->` record if none found.
 
 ### Key properties
 - Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` records are counted for the task's failure record budget.
@@ -271,7 +272,7 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 - On retry, the host injects previous review feedback via the `MATO_REVIEW_FEEDBACK` environment variable so the implementing agent can address the reviewer's concerns.
 - The review agent uses the embedded prompt `review-instructions.md`.
 - The review agent writes only a `progress` message; the host sends the `completion` message after processing the verdict.
-- The review verdict is communicated via HTML comment markers (`<!-- reviewed: ... -->` or `<!-- review-rejection: ... -->`), read by the host after the agent exits.
+- The review verdict is communicated via a JSON verdict file. The host writes the HTML comment markers to the task file for state tracking after reading the verdict.
 
 ## 8. Conflict Prevention
 `queue.DeferredOverlappingTasks(tasksDir)` prevents multiple backlog tasks from claiming the same files simultaneously.

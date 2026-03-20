@@ -64,6 +64,7 @@ Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also 
 | `MATO_PREVIOUS_FAILURES` | container | none | Injected when the task file contains previous `<!-- failure: ... -->` records. Contains newline-separated failure lines extracted by `extractFailureLines(...)`. Agents can read this during `VERIFY_CLAIM` to understand why earlier attempts failed and avoid repeating the same mistakes. |
 | `MATO_REVIEW_MODE` | container | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
 | `MATO_REVIEW_FEEDBACK` | container | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
+| `MATO_REVIEW_VERDICT_PATH` | container | none | Path to the JSON verdict file where the review agent writes its verdict (e.g. `/workspace/.tasks/messages/verdict-my-task.md.json`). Set per-run by the host when launching a review agent. The verdict structure is `{"verdict":"approve\|reject\|error","reason":"..."}`. Not set for task agents. |
 Only `MATO_DOCKER_IMAGE` and `MATO_AGENT_TIMEOUT` are intended as host-side configuration inputs. The other
 variables are injected by `mato` inside each container and are normally not set manually.
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
@@ -73,6 +74,7 @@ path (not inline JSON) to avoid shell ARG_MAX limits with many dependencies.
 `MATO_PREVIOUS_FAILURES` is conditionally injected only when the task file contains
 failure records from prior attempts.
 `MATO_REVIEW_MODE` is injected only inside review agent containers.
+`MATO_REVIEW_VERDICT_PATH` is injected only inside review agent containers.
 `MATO_REVIEW_FEEDBACK` is conditionally injected only when the task file contains
 review rejection records from prior review attempts.
 

@@ -502,23 +502,11 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 		return fmt.Errorf("push task branch %s: %w", claimed.Branch, err)
 	}
 
-	// Write branch marker to the task file.
-	f, err := os.OpenFile(claimed.TaskPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open task file for branch marker: %w", err)
-	}
-	_, writeErr := fmt.Fprintf(f, "\n<!-- branch: %s -->\n", claimed.Branch)
-	closeErr := f.Close()
-	if writeErr != nil {
-		return fmt.Errorf("write branch marker: %w", writeErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close task file after branch marker: %w", closeErr)
-	}
-
 	// Move task from in-progress/ to ready-for-review/ using os.Link +
 	// os.Remove instead of os.Rename to prevent silently overwriting a file
 	// that appeared at the destination after the pre-check (TOCTOU defense).
+	// The branch marker is written AFTER the move so that a failed move
+	// does not leave the in-progress file with an incorrect marker.
 	if err := os.Link(claimed.TaskPath, readyPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("move task to ready-for-review: destination already exists (race): %w", err)
@@ -528,6 +516,9 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 	if err := os.Remove(claimed.TaskPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not remove in-progress/%s after linking to ready-for-review: %v\n", claimed.Filename, err)
 	}
+
+	// Write branch marker to the moved file in ready-for-review/.
+	appendToFile(readyPath, fmt.Sprintf("\n<!-- branch: %s -->\n", claimed.Branch))
 
 	// Send conflict-warning with changed files.
 	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", cfg.targetBranch+"..HEAD")
