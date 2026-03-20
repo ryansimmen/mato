@@ -108,6 +108,43 @@ func TestExtractKnownFlags(t *testing.T) {
 			wantExtra:  []string{},
 		},
 		{
+			name:       "dry-run equals true",
+			args:       []string{"--dry-run=true"},
+			wantDryRun: true,
+			wantExtra:  []string{},
+		},
+		{
+			name:       "dry-run equals false",
+			args:       []string{"--dry-run=false"},
+			wantDryRun: false,
+			wantExtra:  []string{},
+		},
+		{
+			name:       "dry-run equals 1",
+			args:       []string{"--dry-run=1"},
+			wantDryRun: true,
+			wantExtra:  []string{},
+		},
+		{
+			name:       "dry-run equals 0",
+			args:       []string{"--dry-run=0"},
+			wantDryRun: false,
+			wantExtra:  []string{},
+		},
+		{
+			name:       "dry-run=true with forwarded flags",
+			args:       []string{"--dry-run=true", "--model", "gpt-5"},
+			wantDryRun: true,
+			wantExtra:  []string{"--model", "gpt-5"},
+		},
+		{
+			name:       "dry-run=false with other known flags",
+			args:       []string{"--repo=/tmp/repo", "--dry-run=false"},
+			wantRepo:   "/tmp/repo",
+			wantDryRun: false,
+			wantExtra:  []string{},
+		},
+		{
 			name:       "all flags combined",
 			args:       []string{"--repo=/tmp/repo", "--branch=develop", "--tasks-dir=/tasks", "--dry-run"},
 			wantRepo:   "/tmp/repo",
@@ -227,6 +264,16 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			name:    "tasks-dir equals empty value",
 			args:    []string{"--tasks-dir="},
 			wantErr: "flag --tasks-dir requires a value",
+		},
+		{
+			name:    "dry-run invalid boolean",
+			args:    []string{"--dry-run=maybe"},
+			wantErr: `invalid value "maybe" for flag --dry-run: must be a boolean`,
+		},
+		{
+			name:    "dry-run empty equals value",
+			args:    []string{"--dry-run="},
+			wantErr: `invalid value "" for flag --dry-run: must be a boolean`,
 		},
 	}
 

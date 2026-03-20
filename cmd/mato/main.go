@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,16 @@ func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun boo
 		}
 		if arg == "--dry-run" {
 			dryRun = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--dry-run=") {
+			val := strings.TrimPrefix(arg, "--dry-run=")
+			b, parseErr := strconv.ParseBool(val)
+			if parseErr != nil {
+				err = fmt.Errorf("invalid value %q for flag --dry-run: must be a boolean", val)
+				return
+			}
+			dryRun = b
 			continue
 		}
 		// --flag=value form

@@ -47,6 +47,7 @@ Useful flags:
 - `--repo <path>`: target repository (defaults to the current directory)
 - `--branch <name>`: merge target branch (defaults to `mato`)
 - `--tasks-dir <path>`: custom task queue location (defaults to `<repo>/.tasks`)
+- `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
 
 ## Task Files
 
