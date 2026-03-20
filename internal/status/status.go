@@ -1,6 +1,7 @@
 package status
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fatih/color"
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
@@ -69,36 +72,45 @@ func Show(repoRoot, tasksDir string) error {
 		runnable = 0
 	}
 
+	// Color helpers — automatically disabled when stdout is not a TTY
+	// (e.g. piped output, CI, or tests redirecting os.Stdout).
+	bold := color.New(color.Bold).SprintFunc()
+	green := color.New(color.FgGreen).SprintFunc()
+	red := color.New(color.FgRed).SprintFunc()
+	yellow := color.New(color.FgYellow).SprintFunc()
+	cyan := color.New(color.FgCyan).SprintFunc()
+	dim := color.New(color.Faint).SprintFunc()
+
 	// ── Queue Overview ──
-	fmt.Println("Queue Overview")
-	fmt.Println("──────────────")
-	fmt.Printf("  runnable:       %d\n", runnable)
-	fmt.Printf("  deferred:       %d  (conflict-blocked, in backlog)\n", len(deferred))
-	fmt.Printf("  waiting:        %d  (dependency-blocked)\n", counts["waiting"])
-	fmt.Printf("  in-progress:    %d\n", counts["in-progress"])
-	fmt.Printf("  ready-review:   %d\n", counts["ready-for-review"])
-	fmt.Printf("  ready-to-merge: %d\n", counts["ready-to-merge"])
-	fmt.Printf("  completed:      %d\n", counts["completed"])
-	fmt.Printf("  failed:         %d\n", counts["failed"])
+	fmt.Println(bold("Queue Overview"))
+	fmt.Println(bold("──────────────"))
+	fmt.Printf("  runnable:       %s\n", green(runnable))
+	fmt.Printf("  deferred:       %s  %s\n", yellow(len(deferred)), dim("(conflict-blocked, in backlog)"))
+	fmt.Printf("  waiting:        %s  %s\n", dim(counts["waiting"]), dim("(dependency-blocked)"))
+	fmt.Printf("  in-progress:    %s\n", yellow(counts["in-progress"]))
+	fmt.Printf("  ready-review:   %s\n", cyan(counts["ready-for-review"]))
+	fmt.Printf("  ready-to-merge: %s\n", cyan(counts["ready-to-merge"]))
+	fmt.Printf("  completed:      %s\n", green(counts["completed"]))
+	fmt.Printf("  failed:         %s\n", red(counts["failed"]))
 	if mergeLockActive {
-		fmt.Printf("  merge queue:    active\n")
+		fmt.Printf("  merge queue:    %s\n", yellow("active"))
 	} else {
-		fmt.Printf("  merge queue:    idle\n")
+		fmt.Printf("  merge queue:    %s\n", dim("idle"))
 	}
 
 	// ── Active Agents ──
 	presenceMap, _ := messaging.ReadAllPresence(tasksDir)
 	fmt.Println()
-	fmt.Println("Active Agents")
-	fmt.Println("─────────────")
+	fmt.Println(bold("Active Agents"))
+	fmt.Println(bold("─────────────"))
 	if len(agents) == 0 {
-		fmt.Println("  (none)")
+		fmt.Println(dim("  (none)"))
 	} else {
 		for _, agent := range agents {
 			if p, ok := presenceMap[agent.ID]; ok {
-				fmt.Printf("  %s (PID %d): %s on %s\n", agent.displayName(), agent.PID, p.Task, p.Branch)
+				fmt.Printf("  %s (PID %d): %s on %s\n", yellow(agent.displayName()), agent.PID, p.Task, cyan(p.Branch))
 			} else {
-				fmt.Printf("  %s (PID %d)\n", agent.displayName(), agent.PID)
+				fmt.Printf("  %s (PID %d)\n", yellow(agent.displayName()), agent.PID)
 			}
 		}
 	}
@@ -111,8 +123,8 @@ func Show(repoRoot, tasksDir string) error {
 		activeAgentIDs[a.ID] = struct{}{}
 	}
 	fmt.Println()
-	fmt.Println("Current Agent Progress")
-	fmt.Println("──────────────────────")
+	fmt.Println(bold("Current Agent Progress"))
+	fmt.Println(bold("──────────────────────"))
 	activeProgress := make([]string, 0)
 	for id := range progressByAgent {
 		if _, ok := activeAgentIDs[id]; ok {
@@ -121,7 +133,7 @@ func Show(repoRoot, tasksDir string) error {
 	}
 	sort.Strings(activeProgress)
 	if len(activeProgress) == 0 {
-		fmt.Println("  (none)")
+		fmt.Println(dim("  (none)"))
 	} else {
 		now := time.Now().UTC()
 		for _, id := range activeProgress {
@@ -131,15 +143,15 @@ func Show(repoRoot, tasksDir string) error {
 			if !strings.HasPrefix(displayID, "agent-") {
 				displayID = "agent-" + displayID
 			}
-			fmt.Printf("  %s: %s (%s) — %s ago\n", displayID, pm.Body, pm.Task, ago)
+			fmt.Printf("  %s: %s (%s) — %s ago\n", yellow(displayID), pm.Body, pm.Task, dim(ago))
 		}
 	}
 
 	// ── In-Progress ──
 	if len(inProgressTasks) > 0 {
 		fmt.Println()
-		fmt.Println("In-Progress Tasks")
-		fmt.Println("─────────────────")
+		fmt.Println(bold("In-Progress Tasks"))
+		fmt.Println(bold("─────────────────"))
 		now := time.Now().UTC()
 		for _, task := range inProgressTasks {
 			taskPath := filepath.Join(tasksDir, "in-progress", task.name)
@@ -155,7 +167,7 @@ func Show(repoRoot, tasksDir string) error {
 			}
 			failCount := countFailureRecords(taskPath)
 			if failCount > 0 {
-				parts = append(parts, fmt.Sprintf("%d/%d retries used", failCount, task.maxRetries))
+				parts = append(parts, fmt.Sprintf("%s/%d retries used", red(failCount), task.maxRetries))
 			}
 			taskID := task.id
 			if taskID == "" {
@@ -165,9 +177,9 @@ func Show(repoRoot, tasksDir string) error {
 				parts = append(parts, fmt.Sprintf("%d %s waiting", len(waiters), pluralize(len(waiters), "task", "tasks")))
 			}
 
-			label := task.name
+			label := yellow(task.name)
 			if task.title != "" {
-				label = fmt.Sprintf("%s — %s", task.name, task.title)
+				label = fmt.Sprintf("%s — %s", yellow(task.name), task.title)
 			}
 			if len(parts) > 0 {
 				fmt.Printf("  %s  (%s)\n", label, strings.Join(parts, ", "))
@@ -180,8 +192,8 @@ func Show(repoRoot, tasksDir string) error {
 	// ── Ready for Review ──
 	if len(readyForReviewTasks) > 0 {
 		fmt.Println()
-		fmt.Println("Ready for Review")
-		fmt.Println("────────────────")
+		fmt.Println(bold("Ready for Review"))
+		fmt.Println(bold("────────────────"))
 		for _, task := range readyForReviewTasks {
 			taskPath := filepath.Join(tasksDir, "ready-for-review", task.name)
 			branch := parseBranchComment(taskPath)
@@ -190,12 +202,12 @@ func Show(repoRoot, tasksDir string) error {
 				parts = append(parts, task.title)
 			}
 			if branch != "" {
-				parts = append(parts, "on "+branch)
+				parts = append(parts, "on "+cyan(branch))
 			}
 			if len(parts) > 0 {
-				fmt.Printf("  %s — %s\n", task.name, strings.Join(parts, " "))
+				fmt.Printf("  %s — %s\n", cyan(task.name), strings.Join(parts, " "))
 			} else {
-				fmt.Printf("  %s\n", task.name)
+				fmt.Printf("  %s\n", cyan(task.name))
 			}
 		}
 	}
@@ -203,23 +215,23 @@ func Show(repoRoot, tasksDir string) error {
 	// ── Ready to Merge ──
 	if len(readyToMergeTasks) > 0 {
 		fmt.Println()
-		fmt.Println("Ready to Merge")
-		fmt.Println("──────────────")
+		fmt.Println(bold("Ready to Merge"))
+		fmt.Println(bold("──────────────"))
 		for _, task := range readyToMergeTasks {
-			label := task.name
+			label := cyan(task.name)
 			if task.title != "" {
-				label = fmt.Sprintf("%s — %s", task.name, task.title)
+				label = fmt.Sprintf("%s — %s", cyan(task.name), task.title)
 			}
-			fmt.Printf("  %s  (priority %d)\n", label, task.priority)
+			fmt.Printf("  %s  %s\n", label, dim(fmt.Sprintf("(priority %d)", task.priority)))
 		}
 	}
 
 	// ── Dependency-Blocked ──
 	fmt.Println()
-	fmt.Println("Dependency-Blocked (waiting/)")
-	fmt.Println("─────────────────────────────")
+	fmt.Println(bold("Dependency-Blocked (waiting/)"))
+	fmt.Println(bold("─────────────────────────────"))
 	if len(waitingTasks) == 0 {
-		fmt.Println("  (none)")
+		fmt.Println(dim("  (none)"))
 	} else {
 		for _, task := range waitingTasks {
 			label := task.Name
@@ -233,10 +245,10 @@ func Show(repoRoot, tasksDir string) error {
 
 	// ── Conflict-Deferred ──
 	fmt.Println()
-	fmt.Println("Conflict-Deferred (backlog/, excluded from queue)")
-	fmt.Println("──────────────────────────────────────────────────")
+	fmt.Println(bold("Conflict-Deferred (backlog/, excluded from queue)"))
+	fmt.Println(bold("──────────────────────────────────────────────────"))
 	if len(deferred) == 0 {
-		fmt.Println("  (none)")
+		fmt.Println(dim("  (none)"))
 	} else {
 		deferredNames := make([]string, 0, len(deferred))
 		for name := range deferred {
@@ -245,7 +257,7 @@ func Show(repoRoot, tasksDir string) error {
 		sort.Strings(deferredNames)
 		for _, name := range deferredNames {
 			info := deferredDetail[name]
-			fmt.Printf("  %s\n", name)
+			fmt.Printf("  %s\n", yellow(name))
 			fmt.Printf("    blocked by: %s (%s/)\n", info.BlockedBy, info.BlockedByDir)
 			fmt.Printf("    overlapping: %s\n", strings.Join(info.OverlapFiles, ", "))
 		}
@@ -254,14 +266,14 @@ func Show(repoRoot, tasksDir string) error {
 	// ── Failed ──
 	if len(failedTasks) > 0 {
 		fmt.Println()
-		fmt.Println("Failed Tasks")
-		fmt.Println("────────────")
+		fmt.Println(bold("Failed Tasks"))
+		fmt.Println(bold("────────────"))
 		for _, task := range failedTasks {
 			taskPath := filepath.Join(tasksDir, "failed", task.name)
 			failCount := countFailureRecords(taskPath)
-			label := task.name
+			label := red(task.name)
 			if task.title != "" {
-				label = fmt.Sprintf("%s — %s", task.name, task.title)
+				label = fmt.Sprintf("%s — %s", red(task.name), task.title)
 			}
 			reason := lastFailureReason(taskPath)
 			info := fmt.Sprintf("%d/%d retries exhausted", failCount, task.maxRetries)
@@ -275,8 +287,8 @@ func Show(repoRoot, tasksDir string) error {
 	// ── Recent Completions ──
 	if len(completions) > 0 {
 		fmt.Println()
-		fmt.Println("Recent Completions")
-		fmt.Println("──────────────────")
+		fmt.Println(bold("Recent Completions"))
+		fmt.Println(bold("──────────────────"))
 		show := completions
 		if len(show) > 5 {
 			show = show[:5]
@@ -288,20 +300,20 @@ func Show(repoRoot, tasksDir string) error {
 			if len(shortSHA) > 7 {
 				shortSHA = shortSHA[:7]
 			}
-			label := c.TaskFile
+			label := green(c.TaskFile)
 			if c.Title != "" {
-				label = fmt.Sprintf("%s — %s", c.TaskFile, c.Title)
+				label = fmt.Sprintf("%s — %s", green(c.TaskFile), c.Title)
 			}
-			fmt.Printf("  %s  (merged %s ago, %d %s, %s)\n", label, ago, len(c.FilesChanged), pluralize(len(c.FilesChanged), "file", "files"), shortSHA)
+			fmt.Printf("  %s  %s\n", label, dim(fmt.Sprintf("(merged %s ago, %d %s, %s)", ago, len(c.FilesChanged), pluralize(len(c.FilesChanged), "file", "files"), shortSHA)))
 		}
 	}
 
 	// ── Recent Messages ──
 	fmt.Println()
-	fmt.Println("Recent Messages")
-	fmt.Println("───────────────")
+	fmt.Println(bold("Recent Messages"))
+	fmt.Println(bold("───────────────"))
 	if len(recentMessages) == 0 {
-		fmt.Println("  (none)")
+		fmt.Println(dim("  (none)"))
 	} else {
 		for i := len(recentMessages) - 1; i >= 0; i-- {
 			msg := recentMessages[i]
@@ -315,7 +327,7 @@ func Show(repoRoot, tasksDir string) error {
 			if !strings.HasPrefix(from, "agent-") {
 				from = "agent-" + from
 			}
-			fmt.Printf("  [%s] %s: %s\n", msg.SentAt.Local().Format("15:04:05"), from, line)
+			fmt.Printf("  %s %s: %s\n", dim("["+msg.SentAt.Local().Format("15:04:05")+"]"), yellow(from), line)
 		}
 	}
 
@@ -465,14 +477,16 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		title := frontmatter.ExtractTitle(entry.Name(), body)
 
 		deps := make([]string, 0, len(meta.DependsOn))
+		greenSym := color.New(color.FgGreen).SprintFunc()
+		redSym := color.New(color.FgRed).SprintFunc()
 		for _, dep := range meta.DependsOn {
 			status := stateByID[dep]
 			if status == "" {
 				status = "missing"
 			}
-			symbol := "✗"
+			symbol := redSym("✗")
 			if status == "completed" {
-				symbol = "✓"
+				symbol = greenSym("✓")
 			}
 			deps = append(deps, fmt.Sprintf("%s (%s %s)", dep, symbol, status))
 		}
@@ -654,4 +668,24 @@ func pluralize(n int, singular, plural string) string {
 		return singular
 	}
 	return plural
+}
+
+// Watch calls Show in a loop, clearing the terminal before each refresh.
+// It runs until the context is cancelled (e.g. via Ctrl+C signal).
+func Watch(ctx context.Context, repoRoot, tasksDir string, interval time.Duration) error {
+	dim := color.New(color.Faint).SprintFunc()
+	for {
+		// Move cursor to top-left and clear screen (ANSI escape).
+		fmt.Print("\033[H\033[2J")
+		if err := Show(repoRoot, tasksDir); err != nil {
+			return err
+		}
+		fmt.Printf("\n%s\n", dim(fmt.Sprintf("Refreshing every %s — press Ctrl+C to stop", interval)))
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(interval):
+		}
+	}
 }

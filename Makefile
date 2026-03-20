@@ -2,11 +2,11 @@
 
 -include .env
 
-.PHONY: all build clean fmt help install install-skill integration-test run test
+.PHONY: all build clean fmt help install install-skill integration-test lint run test vet
 
 BIN_DIR := bin
 
-all: fmt build test ## Run formatting, build, and tests
+all: fmt vet build test ## Run formatting, vetting, build, and tests
 
 build: ## Build mato binary
 	mkdir -p $(BIN_DIR)
@@ -29,8 +29,14 @@ run: ## Run agent in Docker (use COPILOT_ARGS to pass args to copilot, e.g. COPI
 	@if [ -z "$(REPO)" ]; then echo "REPO is required. Set REPO=<path> in .env or pass it on the command line."; exit 1; fi
 	go run ./cmd/mato --repo "$(REPO)" $(COPILOT_ARGS)
 
-test: ## Run tests
-	go test ./...
+test: ## Run tests with race detector
+	go test -race ./...
+
+vet: ## Run go vet
+	go vet ./...
+
+lint: ## Run golangci-lint
+	golangci-lint run ./...
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'

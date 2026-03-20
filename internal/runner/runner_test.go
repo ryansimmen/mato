@@ -16,6 +16,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/process"
 	"mato/internal/queue"
+	"mato/internal/taskfile"
 )
 
 func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
@@ -734,7 +735,7 @@ func TestParseBranchFromTaskFile_WithBranch(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
 	os.WriteFile(f, []byte("---\npriority: 5\n---\n# Task\n\n<!-- branch: task/foo-bar -->\n"), 0o644)
 
-	got := parseBranchFromTaskFile(f)
+	got := taskfile.ParseBranch(f)
 	if got != "task/foo-bar" {
 		t.Fatalf("got %q, want %q", got, "task/foo-bar")
 	}
@@ -744,14 +745,14 @@ func TestParseBranchFromTaskFile_WithoutBranch(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
 	os.WriteFile(f, []byte("---\npriority: 5\n---\n# Task\nNo branch.\n"), 0o644)
 
-	got := parseBranchFromTaskFile(f)
+	got := taskfile.ParseBranch(f)
 	if got != "" {
 		t.Fatalf("got %q, want empty string", got)
 	}
 }
 
 func TestParseBranchFromTaskFile_NonexistentFile(t *testing.T) {
-	got := parseBranchFromTaskFile(filepath.Join(t.TempDir(), "nonexistent.md"))
+	got := taskfile.ParseBranch(filepath.Join(t.TempDir(), "nonexistent.md"))
 	if got != "" {
 		t.Fatalf("got %q, want empty string", got)
 	}

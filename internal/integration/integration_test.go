@@ -14,35 +14,8 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/status"
+	"mato/internal/testutil"
 )
-
-func setupTestRepo(t *testing.T) (repoRoot string, tasksDir string) {
-	t.Helper()
-
-	dir := t.TempDir()
-	mustGitOutput(t, dir, "init")
-	mustGitOutput(t, dir, "config", "user.email", "test@test.com")
-	mustGitOutput(t, dir, "config", "user.name", "Test")
-	writeFile(t, filepath.Join(dir, "README.md"), "# Test\n")
-	mustGitOutput(t, dir, "add", "-A")
-	mustGitOutput(t, dir, "commit", "-m", "initial")
-	mustGitOutput(t, dir, "checkout", "-b", "mato")
-
-	tasksDir = filepath.Join(dir, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
-		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
-			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
-		}
-	}
-	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
-		t.Fatalf("os.MkdirAll(.locks): %v", err)
-	}
-	if err := messaging.Init(tasksDir); err != nil {
-		t.Fatalf("messaging.Init: %v", err)
-	}
-	mustGitOutput(t, dir, "config", "receive.denyCurrentBranch", "updateInstead")
-	return dir, tasksDir
-}
 
 func mustGitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -124,7 +97,7 @@ func createTaskBranch(t *testing.T, repoRoot, branch string, files map[string]st
 }
 
 func TestFullTaskLifecycleNoDeps(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	backlogTask := writeTask(t, tasksDir, "backlog", "add-hello.md", "# Add hello\nCreate hello.txt with \"hello world\"\n")
 
@@ -191,7 +164,7 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 }
 
 func TestDependencyChainPromotion(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, "waiting", "task-a.md", "---\nid: task-a\npriority: 1\n---\n# Task A\n")
 	writeTask(t, tasksDir, "waiting", "task-b.md", "---\nid: task-b\npriority: 2\ndepends_on: [task-a]\n---\n# Task B\n")
@@ -228,7 +201,7 @@ func TestDependencyChainPromotion(t *testing.T) {
 }
 
 func TestOverlapPrevention(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, "backlog", "high.md", "---\npriority: 5\naffects: [main.go]\n---\n# High\n")
 	writeTask(t, tasksDir, "backlog", "low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Low\n")
@@ -266,7 +239,7 @@ func TestOverlapPrevention(t *testing.T) {
 }
 
 func TestOrphanRecoveryAndRequeue(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	inProgressTask := writeTask(t, tasksDir, "in-progress", "recover-me.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Recover me\nTry again.\n")
 	writeFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
@@ -289,7 +262,7 @@ func TestOrphanRecoveryAndRequeue(t *testing.T) {
 }
 
 func TestMergeConflictHandling(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"README.md": "beta\n"}, "beta change")
@@ -316,7 +289,7 @@ func TestMergeConflictHandling(t *testing.T) {
 }
 
 func TestMessagingLifecycle(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
@@ -371,7 +344,7 @@ func TestMessagingLifecycle(t *testing.T) {
 }
 
 func TestStatusWithPopulatedQueue(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, "waiting", "waiting.md", "---\nid: waiting\ndepends_on: [done]\n---\n# Waiting\n")
 	writeTask(t, tasksDir, "backlog", "backlog.md", "# Backlog\n")

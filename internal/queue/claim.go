@@ -61,21 +61,29 @@ type ClaimedTask struct {
 	TaskPath string // host-side path in in-progress/
 }
 
-// collectActiveBranches scans in-progress/ for <!-- branch: ... --> comments
-// and returns a set of branch names currently in use.
-func collectActiveBranches(tasksDir string) map[string]struct{} {
+// CollectActiveBranches scans in-progress/, ready-for-review/, and
+// ready-to-merge/ for <!-- branch: ... --> comments and returns a set of
+// branch names currently in use. All three directories are checked because a
+// task's branch remains active until it is merged or failed.
+func CollectActiveBranches(tasksDir string) map[string]struct{} {
 	active := make(map[string]struct{})
-	inProgressDir := filepath.Join(tasksDir, "in-progress")
-	entries, err := os.ReadDir(inProgressDir)
-	if err != nil {
-		return active
+	dirs := []string{
+		filepath.Join(tasksDir, "in-progress"),
+		filepath.Join(tasksDir, "ready-for-review"),
+		filepath.Join(tasksDir, "ready-to-merge"),
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
 			continue
 		}
-		if b := readBranchFromFile(filepath.Join(inProgressDir, e.Name())); b != "" {
-			active[b] = struct{}{}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			if b := readBranchFromFile(filepath.Join(dir, e.Name())); b != "" {
+				active[b] = struct{}{}
+			}
 		}
 	}
 	return active
@@ -168,7 +176,7 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 	failedDir := filepath.Join(tasksDir, "failed")
 	backlogDir := filepath.Join(tasksDir, "backlog")
 
-	activeBranches := collectActiveBranches(tasksDir)
+	activeBranches := CollectActiveBranches(tasksDir)
 
 	for _, name := range candidates {
 		src := filepath.Join(backlogDir, name)

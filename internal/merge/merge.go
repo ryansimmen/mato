@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
-	"mato/internal/process"
 	"mato/internal/queue"
+	"mato/internal/taskfile"
 )
 
 type mergeQueueTask struct {
@@ -26,8 +26,6 @@ type mergeQueueTask struct {
 	id       string
 	affects  []string
 }
-
-var branchRe = regexp.MustCompile(`<!-- branch:\s*(\S+)`)
 
 var errTaskBranchNotPushed = errors.New("task branch not pushed by agent")
 var errSquashMergeConflict = errors.New("squash merge conflict")
@@ -68,12 +66,20 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 			continue
 		}
 
+		taskBranch := taskfile.ParseBranch(path)
+		if taskBranch == "" {
+			taskBranch = "task/" + frontmatter.SanitizeBranchName(entry.Name())
+			if _, taken := queue.CollectActiveBranches(tasksDir)[taskBranch]; taken {
+				taskBranch = taskBranch + "-" + frontmatter.BranchDisambiguator(entry.Name())
+			}
+		}
+
 		tasks = append(tasks, mergeQueueTask{
 			name:     entry.Name(),
 			path:     path,
 			title:    frontmatter.ExtractTitle(entry.Name(), body),
 			priority: meta.Priority,
-			branch:   parseBranchFromFile(path),
+			branch:   taskBranch,
 			id:       meta.ID,
 			affects:  meta.Affects,
 		})
@@ -358,18 +364,6 @@ func configureMergeCloneIdentity(repoRoot, cloneDir string) error {
 	return nil
 }
 
-func parseBranchFromFile(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	m := branchRe.FindStringSubmatch(string(data))
-	if len(m) < 2 {
-		return ""
-	}
-	return m[1]
-}
-
 func taskBranchName(task mergeQueueTask) string {
 	if task.branch != "" {
 		return task.branch
@@ -537,53 +531,5 @@ func moveTaskFile(src, dst string) error {
 // The lock file stores "PID:starttime" to detect PID reuse.
 func AcquireLock(tasksDir string) (func(), bool) {
 	locksDir := filepath.Join(tasksDir, ".locks")
-	if err := os.MkdirAll(locksDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: create merge locks dir: %v\n", err)
-		return nil, false
-	}
-
-	lockFile := filepath.Join(locksDir, "merge.lock")
-	identity := process.LockIdentity(os.Getpid())
-
-	for attempts := 0; attempts < 2; attempts++ {
-		f, err := os.OpenFile(lockFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err == nil {
-			if _, writeErr := f.WriteString(identity); writeErr != nil {
-				f.Close()
-				os.Remove(lockFile)
-				fmt.Fprintf(os.Stderr, "warning: write merge lock: %v\n", writeErr)
-				return nil, false
-			}
-			if closeErr := f.Close(); closeErr != nil {
-				os.Remove(lockFile)
-				fmt.Fprintf(os.Stderr, "warning: close merge lock: %v\n", closeErr)
-				return nil, false
-			}
-			return func() { os.Remove(lockFile) }, true
-		}
-		if !os.IsExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: create merge lock: %v\n", err)
-			return nil, false
-		}
-
-		data, readErr := os.ReadFile(lockFile)
-		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "warning: read merge lock: %v\n", readErr)
-			return nil, false
-		}
-
-		content := strings.TrimSpace(string(data))
-		if content == "" || process.IsLockHolderAlive(content) {
-			return nil, false
-		}
-		if removeErr := os.Remove(lockFile); removeErr != nil && !os.IsNotExist(removeErr) {
-			fmt.Fprintf(os.Stderr, "warning: remove stale merge lock: %v\n", removeErr)
-			return nil, false
-		}
-	}
-
-	return nil, false
+	return lockfile.Acquire(locksDir, "merge")
 }

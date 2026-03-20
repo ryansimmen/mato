@@ -1,6 +1,7 @@
 package status
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,39 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/process"
 	"mato/internal/queue"
+	"mato/internal/testutil"
 )
 
-func setupTestRepo(t *testing.T) string {
-	t.Helper()
-
-	dir := t.TempDir()
-	if _, err := git.Output(dir, "init"); err != nil {
-		t.Fatalf("git init: %v", err)
-	}
-	if _, err := git.Output(dir, "config", "user.email", "test@test.com"); err != nil {
-		t.Fatalf("git config user.email: %v", err)
-	}
-	if _, err := git.Output(dir, "config", "user.name", "Test"); err != nil {
-		t.Fatalf("git config user.name: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile README.md: %v", err)
-	}
-	if _, err := git.Output(dir, "add", "-A"); err != nil {
-		t.Fatalf("git add: %v", err)
-	}
-	if _, err := git.Output(dir, "commit", "-m", "initial"); err != nil {
-		t.Fatalf("git commit initial: %v", err)
-	}
-	return dir
-}
-
 func TestShowWithPopulatedTasksDir(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -194,7 +170,7 @@ func TestActiveAgentsLegacyPIDOnly(t *testing.T) {
 }
 
 func TestShowIncludesPresenceInfo(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -259,7 +235,7 @@ func TestShowIncludesPresenceInfo(t *testing.T) {
 }
 
 func TestShowIncludesProgressSection(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -355,7 +331,7 @@ func TestShowIncludesProgressSection(t *testing.T) {
 }
 
 func TestTimeInState(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -385,7 +361,7 @@ func TestTimeInState(t *testing.T) {
 }
 
 func TestRetryBudgetInProgress(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -410,7 +386,7 @@ func TestRetryBudgetInProgress(t *testing.T) {
 }
 
 func TestReverseDependencies(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -443,7 +419,7 @@ func TestReverseDependencies(t *testing.T) {
 }
 
 func TestRecentCompletions(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -485,7 +461,7 @@ func TestRecentCompletions(t *testing.T) {
 }
 
 func TestMergeLockActive(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -614,7 +590,7 @@ func captureShow(t *testing.T, repoRoot string) string {
 }
 
 func TestProgressFilteredToActiveAgents(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -665,7 +641,7 @@ func TestProgressFilteredToActiveAgents(t *testing.T) {
 }
 
 func TestRecentMessagesAgentPrefix(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -697,7 +673,7 @@ func TestRecentMessagesAgentPrefix(t *testing.T) {
 }
 
 func TestReadyForReviewSection(t *testing.T) {
-	repoRoot := setupTestRepo(t)
+	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed", ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
@@ -789,4 +765,59 @@ func containsSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestWatch(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed", ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Add a backlog task so Show() produces meaningful output.
+	if err := os.WriteFile(filepath.Join(tasksDir, "backlog", "sample.md"), []byte("---\ntitle: Sample Task\n---\nDo something.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Capture stdout.
+	originalStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = originalStdout }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Watch(ctx, repoRoot, tasksDir, 100*time.Millisecond)
+	}()
+
+	// Let Watch run for at least one refresh cycle.
+	time.Sleep(250 * time.Millisecond)
+	cancel()
+
+	watchErr := <-errCh
+	w.Close()
+	out, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("io.ReadAll: %v", readErr)
+	}
+	if watchErr != nil {
+		t.Fatalf("Watch returned error: %v", watchErr)
+	}
+
+	output := string(out)
+	if !contains(output, "backlog") {
+		t.Errorf("Watch output should contain queue overview with 'backlog', got:\n%s", output)
+	}
+	if !contains(output, "Ctrl+C") {
+		t.Errorf("Watch output should contain 'Ctrl+C' hint, got:\n%s", output)
+	}
 }

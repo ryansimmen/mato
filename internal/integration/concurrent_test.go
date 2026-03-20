@@ -16,6 +16,7 @@ import (
 	"mato/internal/merge"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/testutil"
 )
 
 func markdownFileNames(t *testing.T, dir string) []string {
@@ -37,7 +38,7 @@ func markdownFileNames(t *testing.T, dir string) []string {
 }
 
 func TestConcurrentTaskClaiming(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 	backlogDir := filepath.Join(tasksDir, "backlog")
 	inProgressDir := filepath.Join(tasksDir, "in-progress")
 
@@ -128,7 +129,7 @@ func TestConcurrentTaskClaiming(t *testing.T) {
 }
 
 func TestConcurrentReconcileReadyQueue(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 	waitingDir := filepath.Join(tasksDir, "waiting")
 	backlogDir := filepath.Join(tasksDir, "backlog")
 
@@ -183,7 +184,7 @@ func TestConcurrentReconcileReadyQueue(t *testing.T) {
 }
 
 func TestConcurrentMergeLock(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Acquire the lock — should succeed.
 	cleanup1, ok1 := merge.AcquireLock(tasksDir)
@@ -219,7 +220,7 @@ func TestConcurrentMergeLock(t *testing.T) {
 }
 
 func TestConcurrentMergeQueueProcessing(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"alpha.txt": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"beta.txt": "beta\n"}, "beta change")
@@ -245,7 +246,7 @@ func TestConcurrentMergeQueueProcessing(t *testing.T) {
 }
 
 func TestMergeConflictRecoveryAndRetry(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha content\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"README.md": "beta content\n"}, "beta change")
@@ -294,7 +295,7 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 }
 
 func TestConflictRequeueThenRaceToClaim(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha content\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/conflict-task", map[string]string{"README.md": "conflict content\n"}, "conflict change")
@@ -362,7 +363,7 @@ func TestConflictRequeueThenRaceToClaim(t *testing.T) {
 }
 
 func TestConcurrentMergeQueueTwoHosts(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"alpha.txt": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"beta.txt": "beta\n"}, "beta change")
@@ -429,17 +430,24 @@ func TestConcurrentMergeQueueTwoHosts(t *testing.T) {
 	}
 }
 
-// This test documents a known limitation: tasks with filenames that sanitize to the same
-// branch name will collide. A future fix should include task ID in branch names.
+// TestBranchNameCollisionTwoTasks verifies that tasks whose filenames sanitize
+// to the same branch name receive disambiguated branches. The first task claims
+// task/fix-bug; the second should receive task/fix-bug-<hash> so both can be
+// pushed without collision.
 func TestBranchNameCollisionTwoTasks(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	firstBacklog := writeTask(t, tasksDir, "backlog", "fix-bug.md", "# Fix bug\n")
-	secondBacklog := writeTask(t, tasksDir, "backlog", "fix_bug.md", "# Fix bug underscore\n")
+	// Place fix-bug.md directly in in-progress with a branch comment,
+	// simulating a task already claimed by agent 1.
+	writeTask(t, tasksDir, "in-progress", "fix-bug.md",
+		"<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"<!-- branch: task/fix-bug -->\n"+
+			"# Fix bug\n")
 
-	firstInProgress := filepath.Join(tasksDir, "in-progress", "fix-bug.md")
-	mustRename(t, firstBacklog, firstInProgress)
+	// Put fix_bug.md in backlog for agent 2 to claim.
+	writeTask(t, tasksDir, "backlog", "fix_bug.md", "# Fix bug underscore\n")
 
+	// Agent 1 pushes to task/fix-bug.
 	clone1, err := git.CreateClone(repoRoot)
 	if err != nil {
 		t.Fatalf("git.CreateClone agent 1: %v", err)
@@ -453,9 +461,22 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 	mustGitOutput(t, clone1, "commit", "-m", "agent 1 fix")
 	mustGitOutput(t, clone1, "push", "origin", "task/fix-bug")
 
-	secondInProgress := filepath.Join(tasksDir, "in-progress", "fix_bug.md")
-	mustRename(t, secondBacklog, secondInProgress)
+	// Agent 2 claims fix_bug.md; SelectAndClaimTask should disambiguate the branch.
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "agent-2", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("SelectAndClaimTask returned nil; expected fix_bug.md")
+	}
+	if claimed.Branch == "task/fix-bug" {
+		t.Fatal("second task received un-disambiguated branch task/fix-bug; expected suffix")
+	}
+	if !strings.HasPrefix(claimed.Branch, "task/fix-bug-") {
+		t.Fatalf("second task branch = %q, want prefix task/fix-bug-", claimed.Branch)
+	}
 
+	// Verify agent 2 can push to its disambiguated branch without collision.
 	clone2, err := git.CreateClone(repoRoot)
 	if err != nil {
 		t.Fatalf("git.CreateClone agent 2: %v", err)
@@ -463,20 +484,15 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 	defer git.RemoveClone(clone2)
 
 	configureCloneIdentity(t, clone2)
-	mustGitOutput(t, clone2, "checkout", "-b", "task/fix-bug", "mato")
+	mustGitOutput(t, clone2, "checkout", "-b", claimed.Branch, "mato")
 	writeFile(t, filepath.Join(clone2, "agent-two.txt"), "agent two\n")
 	mustGitOutput(t, clone2, "add", "-A")
 	mustGitOutput(t, clone2, "commit", "-m", "agent 2 fix")
-
-	if _, err := git.Output(clone2, "push", "origin", "task/fix-bug"); err == nil {
-		t.Fatal("agent 2 push unexpectedly succeeded; want non-fast-forward collision")
-	} else if !strings.Contains(err.Error(), "non-fast-forward") && !strings.Contains(err.Error(), "fetch first") && !strings.Contains(err.Error(), "rejected") {
-		t.Fatalf("agent 2 push error = %v, want non-fast-forward collision", err)
-	}
+	mustGitOutput(t, clone2, "push", "origin", claimed.Branch)
 }
 
 func TestOrphanRecoveryDuringConcurrentWork(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	cleanup, err := queue.RegisterAgent(tasksDir, "alive-agent")
 	if err != nil {
@@ -502,7 +518,7 @@ func TestOrphanRecoveryDuringConcurrentWork(t *testing.T) {
 }
 
 func TestConcurrentMessageWriting(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
 
 	wantByID := make(map[string]messaging.Message, 20)
@@ -606,7 +622,7 @@ func TestConcurrentMessageWriting(t *testing.T) {
 }
 
 func TestReadMessagesDuringCleanup(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 20; i++ {
@@ -668,7 +684,7 @@ func TestReadMessagesDuringCleanup(t *testing.T) {
 }
 
 func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	highPath := writeTask(t, tasksDir, "backlog", "task-high.md", "---\npriority: 5\naffects: [main.go]\n---\n# Task High\n")
 	writeTask(t, tasksDir, "backlog", "task-low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Task Low\n")
@@ -719,7 +735,7 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 }
 
 func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
-	repoRoot, tasksDir := setupTestRepo(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	_ = repoRoot
 
 	// Task A in in-progress with overlapping affects
@@ -759,7 +775,7 @@ func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
 }
 
 func TestConcurrentSelectAndClaimTask(t *testing.T) {
-	_, tasksDir := setupTestRepo(t)
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
 	backlogDir := filepath.Join(tasksDir, "backlog")
 	inProgressDir := filepath.Join(tasksDir, "in-progress")
 

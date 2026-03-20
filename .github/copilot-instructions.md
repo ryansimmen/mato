@@ -39,7 +39,7 @@ When asked to implement a change, follow this process:
 - **Sentinel errors**: Defined as unexported package-level `var` (e.g., `errTaskBranchNotPushed`), matched via `errors.Is`
 - **Non-fatal warnings**: `fmt.Fprintf(os.Stderr, "warning: ...\n")` and continue — never fatal for recoverable issues
 - **Progress output**: `fmt.Printf(...)` to stdout for user-facing info
-- **No logging library** — plain `fmt` only; no structured logging
+- **Logging**: plain `fmt` is the current approach; third-party packages are acceptable when they add clear value
 
 ## File I/O & Timestamps
 
