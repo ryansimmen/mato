@@ -341,6 +341,117 @@ func ReconcileReadyQueue(tasksDir string) int {
 	return promoted
 }
 
+// CountPromotableWaitingTasks is a read-only variant of ReconcileReadyQueue.
+// It returns the number of waiting tasks whose dependencies are satisfied and
+// would be promoted, without actually moving any files.
+func CountPromotableWaitingTasks(tasksDir string) int {
+	completedIDs := completedTaskIDs(tasksDir)
+	nonCompletedIDs := nonCompletedTaskIDs(tasksDir)
+
+	for id := range nonCompletedIDs {
+		if _, dup := completedIDs[id]; dup {
+			delete(completedIDs, id)
+		}
+	}
+
+	knownIDs := allKnownTaskIDs(tasksDir)
+	waitingDir := filepath.Join(tasksDir, "waiting")
+	entries, err := os.ReadDir(waitingDir)
+	if err != nil {
+		return 0
+	}
+
+	type waitingTask struct {
+		meta frontmatter.TaskMeta
+	}
+
+	waitingDeps := make(map[string][]string)
+	var tasks []waitingTask
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(waitingDir, e.Name())
+		meta, _, err := frontmatter.ParseTaskFile(path)
+		if err != nil {
+			continue
+		}
+		tasks = append(tasks, waitingTask{meta: meta})
+		waitingDeps[meta.ID] = meta.DependsOn
+	}
+
+	count := 0
+	for _, task := range tasks {
+		ready := true
+		for _, dep := range task.meta.DependsOn {
+			if dep == task.meta.ID {
+				ready = false
+				continue
+			}
+			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, task.meta.ID, waitingDeps, map[string]struct{}{}) {
+				ready = false
+				continue
+			}
+			if _, ok := completedIDs[dep]; ok {
+				continue
+			}
+			_ = knownIDs // suppress unused warning; matches ReconcileReadyQueue logic
+			ready = false
+		}
+		if !ready {
+			continue
+		}
+		if hasActiveOverlap(tasksDir, task.meta.Affects) {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// ComputeQueueManifest returns the queue manifest content as a string without
+// writing it to disk. This is the read-only equivalent of WriteQueueManifest.
+func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) string {
+	entries, err := os.ReadDir(filepath.Join(tasksDir, "backlog"))
+	if err != nil {
+		return ""
+	}
+
+	queueEntries := make([]queueEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		if exclude != nil {
+			if _, excluded := exclude[e.Name()]; excluded {
+				continue
+			}
+		}
+		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, "backlog", e.Name()))
+		if err != nil {
+			continue
+		}
+		queueEntries = append(queueEntries, queueEntry{name: e.Name(), priority: meta.Priority})
+	}
+
+	sort.Slice(queueEntries, func(i, j int) bool {
+		if queueEntries[i].priority != queueEntries[j].priority {
+			return queueEntries[i].priority < queueEntries[j].priority
+		}
+		return queueEntries[i].name < queueEntries[j].name
+	})
+
+	lines := make([]string, 0, len(queueEntries))
+	for _, entry := range queueEntries {
+		lines = append(lines, entry.name)
+	}
+	manifest := strings.Join(lines, "\n")
+	if manifest != "" {
+		manifest += "\n"
+	}
+	return manifest
+}
+
 func completedTaskIDs(tasksDir string) map[string]struct{} {
 	completedDir := filepath.Join(tasksDir, "completed")
 	entries, err := os.ReadDir(completedDir)
@@ -427,7 +538,7 @@ type backlogTask struct {
 // along with the files it declares in its affects: metadata.
 type ActiveTask struct {
 	Name    string
-	Dir     string   // "in-progress", "ready-for-review", or "ready-to-merge"
+	Dir     string // "in-progress", "ready-for-review", or "ready-to-merge"
 	Affects []string
 }
 
@@ -673,15 +784,12 @@ func safeRename(src, dst string) error {
 		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
 			return fmt.Errorf("destination already exists: %s", dst)
 		}
-		// Cross-device link or other unusual error: fall back to
-		// Stat-guarded Rename as a best-effort path.
+		// Cross-device link (EXDEV): the source and destination are on
+		// different filesystems. Falling back to Stat+Rename would
+		// reintroduce the same TOCTOU race this function exists to
+		// prevent, so we return an actionable error instead.
 		if errors.Is(err, syscall.EXDEV) {
-			if _, statErr := os.Stat(dst); statErr == nil {
-				return fmt.Errorf("destination already exists: %s", dst)
-			} else if !os.IsNotExist(statErr) {
-				return fmt.Errorf("stat destination %s: %w", dst, statErr)
-			}
-			return os.Rename(src, dst)
+			return fmt.Errorf("cannot atomically move %s to %s: cross-device link (source and destination must be on the same filesystem)", src, dst)
 		}
 		return fmt.Errorf("link %s to %s: %w", src, dst, err)
 	}

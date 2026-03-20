@@ -83,6 +83,23 @@ func gitignoreIsDirty(repoRoot string) bool {
 	return strings.TrimSpace(out) != ""
 }
 
+// stagedGitignoreBlob returns the blob hash of .gitignore in the index, or
+// "" if .gitignore is not staged. This is used to save/restore the index
+// state across EnsureGitignored so that pre-existing staged changes are
+// preserved.
+func stagedGitignoreBlob(repoRoot string) string {
+	out, err := Output(repoRoot, "ls-files", "--stage", "--", ".gitignore")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return ""
+	}
+	// Output format: "<mode> <hash> <stage>\t<file>"
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) >= 2 {
+		return fields[1]
+	}
+	return ""
+}
+
 // addPatternToContent ensures the given pattern line is present in content,
 // appending it if missing. Returns the (possibly updated) content.
 func addPatternToContent(content, pattern string) string {
@@ -100,9 +117,11 @@ func addPatternToContent(content, pattern string) string {
 // EnsureGitignored appends pattern to the repo's .gitignore if not already present.
 // Uses atomic write (temp file + rename) to prevent partial writes on crash.
 //
-// If .gitignore has pre-existing uncommitted changes, EnsureGitignored restores
-// the committed version before modifying, so the commit contains only the new
-// pattern. The pre-existing working-tree changes are restored afterwards.
+// If .gitignore has pre-existing uncommitted changes, EnsureGitignored saves
+// both the working-tree content and the staged index blob before restoring
+// the committed version. After committing only the new pattern, the defer
+// restores the original index state and working-tree content so that
+// pre-existing staged and unstaged changes are preserved.
 func EnsureGitignored(repoRoot, pattern string) (retErr error) {
 	gitignorePath := filepath.Join(repoRoot, ".gitignore")
 
@@ -110,6 +129,7 @@ func EnsureGitignored(repoRoot, pattern string) (retErr error) {
 	dirty := gitignoreIsDirty(repoRoot)
 
 	var savedContent []byte
+	var savedBlob string
 	if dirty {
 		// Save current working tree content so we can restore it after commit.
 		var err error
@@ -117,6 +137,9 @@ func EnsureGitignored(repoRoot, pattern string) (retErr error) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("read .gitignore: %w", err)
 		}
+		// Save the staged blob hash (if any) so we can restore index state.
+		savedBlob = stagedGitignoreBlob(repoRoot)
+
 		// Restore the committed version so our commit only includes our change.
 		if _, err := Output(repoRoot, "checkout", "HEAD", "--", ".gitignore"); err != nil {
 			// .gitignore may not exist in HEAD (e.g. newly staged file).
@@ -134,6 +157,18 @@ func EnsureGitignored(repoRoot, pattern string) (retErr error) {
 				// On success, restore working tree with our pattern merged in.
 				restored := addPatternToContent(string(savedContent), pattern)
 				os.WriteFile(gitignorePath, []byte(restored), 0o644)
+			}
+			// Restore the pre-existing index state for .gitignore. If there
+			// was a staged blob, re-stage that exact blob. If there was no
+			// staged version (only unstaged changes), reset the index entry
+			// to match the new HEAD.
+			if savedBlob != "" {
+				// Re-stage the previously-staged blob to restore the index.
+				Output(repoRoot, "update-index", "--cacheinfo", "100644,"+savedBlob+",.gitignore")
+			} else {
+				// No staged blob: reset index to HEAD so only unstaged
+				// changes remain (matching the pre-existing state).
+				Output(repoRoot, "reset", "HEAD", "--", ".gitignore")
 			}
 		}()
 	}

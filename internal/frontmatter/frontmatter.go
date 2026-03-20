@@ -1,6 +1,7 @@
 package frontmatter
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,14 +17,14 @@ var (
 )
 
 type TaskMeta struct {
-	ID                  string   `yaml:"id"`
-	Priority            int      `yaml:"priority"`
-	DependsOn           []string `yaml:"depends_on"`
-	Affects             []string `yaml:"affects"`
-	Tags                []string `yaml:"tags"`
+	ID        string   `yaml:"id"`
+	Priority  int      `yaml:"priority"`
+	DependsOn []string `yaml:"depends_on"`
+	Affects   []string `yaml:"affects"`
+	Tags      []string `yaml:"tags"`
 	// EstimatedComplexity is parsed for external consumers; not used internally.
 	EstimatedComplexity string `yaml:"estimated_complexity"`
-	MaxRetries          int      `yaml:"max_retries"`
+	MaxRetries          int    `yaml:"max_retries"`
 }
 
 func ParseTaskFile(path string) (TaskMeta, string, error) {
@@ -155,4 +156,12 @@ func filterEmpty(ss []string) []string {
 		return nil
 	}
 	return out
+}
+
+// BranchDisambiguator returns a short suffix derived from the SHA-256 hash of
+// the filename. The suffix is 6 hex characters, providing enough uniqueness to
+// avoid branch name collisions when multiple tasks sanitize to the same branch.
+func BranchDisambiguator(filename string) string {
+	h := sha256.Sum256([]byte(filename))
+	return fmt.Sprintf("%x", h[:3])
 }

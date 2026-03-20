@@ -948,3 +948,137 @@ func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 		t.Fatalf("expected warning about unreadable file in stderr, got: %s", stderrStr)
 	}
 }
+
+func TestSelectAndClaimTask_BranchCollisionAddsDisambiguator(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Create a task already in-progress with branch comment matching what
+	// the new task would get.
+	inProgressContent := "<!-- branch: task/add-feature -->\n<!-- claimed-by: agent-0  claimed-at: 2026-01-01T00:00:00Z -->\n# Add Feature\n"
+	writeTestFile(t, filepath.Join(dir, "in-progress", "add-feature.md"), inProgressContent)
+
+	// Create a new backlog task whose sanitized name also resolves to
+	// "task/add-feature" (spaces become dashes).
+	writeTestFile(t, filepath.Join(dir, "backlog", "add feature.md"), "# Add Feature (v2)\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "add feature.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-coll1", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task, got nil")
+	}
+
+	// The branch should have a disambiguation suffix since "task/add-feature"
+	// is already taken.
+	if task.Branch == "task/add-feature" {
+		t.Fatalf("Branch should have been disambiguated, got %q", task.Branch)
+	}
+	if !strings.HasPrefix(task.Branch, "task/add-feature-") {
+		t.Fatalf("Branch should start with task/add-feature-, got %q", task.Branch)
+	}
+	// Suffix should be 6 hex chars.
+	suffix := strings.TrimPrefix(task.Branch, "task/add-feature-")
+	if len(suffix) != 6 {
+		t.Fatalf("disambiguation suffix should be 6 chars, got %q", suffix)
+	}
+
+	// The branch comment should be written to the in-progress file.
+	data, err := os.ReadFile(task.TaskPath)
+	if err != nil {
+		t.Fatalf("read claimed task: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- branch: "+task.Branch+" -->") {
+		t.Fatalf("branch comment not found in claimed task:\n%s", string(data))
+	}
+}
+
+func TestSelectAndClaimTask_NoBranchCollision_NormalBranch(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	writeTestFile(t, filepath.Join(dir, "backlog", "unique-task.md"), "# Unique Task\n")
+	writeTestFile(t, filepath.Join(dir, ".queue"), "unique-task.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-nocoll", nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task, got nil")
+	}
+
+	// No collision, so branch should be the normal sanitized name.
+	if task.Branch != "task/unique-task" {
+		t.Fatalf("Branch = %q, want %q", task.Branch, "task/unique-task")
+	}
+}
+
+func TestCollectActiveBranches(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Write two in-progress tasks with branch comments.
+	writeTestFile(t, filepath.Join(dir, "in-progress", "a.md"), "<!-- branch: task/alpha -->\n# A\n")
+	writeTestFile(t, filepath.Join(dir, "in-progress", "b.md"), "<!-- branch: task/beta -->\n# B\n")
+
+	// One without a branch comment.
+	writeTestFile(t, filepath.Join(dir, "in-progress", "c.md"), "# C (no branch)\n")
+
+	active := collectActiveBranches(dir)
+
+	if _, ok := active["task/alpha"]; !ok {
+		t.Fatal("expected task/alpha in active branches")
+	}
+	if _, ok := active["task/beta"]; !ok {
+		t.Fatal("expected task/beta in active branches")
+	}
+	if len(active) != 2 {
+		t.Fatalf("expected 2 active branches, got %d", len(active))
+	}
+}
+
+func TestReadBranchFromFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// File with branch comment.
+	withBranch := filepath.Join(dir, "with.md")
+	writeTestFile(t, withBranch, "<!-- branch: task/my-branch -->\n<!-- claimed-by: agent -->\n# Title\n")
+	if b := readBranchFromFile(withBranch); b != "task/my-branch" {
+		t.Fatalf("readBranchFromFile = %q, want %q", b, "task/my-branch")
+	}
+
+	// File without branch comment.
+	without := filepath.Join(dir, "without.md")
+	writeTestFile(t, without, "<!-- claimed-by: agent -->\n# Title\n")
+	if b := readBranchFromFile(without); b != "" {
+		t.Fatalf("readBranchFromFile = %q, want empty", b)
+	}
+
+	// Nonexistent file.
+	if b := readBranchFromFile(filepath.Join(dir, "missing.md")); b != "" {
+		t.Fatalf("readBranchFromFile on missing file = %q, want empty", b)
+	}
+}
+
+func TestWriteBranchComment(t *testing.T) {
+	dir := t.TempDir()
+	taskPath := filepath.Join(dir, "task.md")
+	original := "<!-- claimed-by: agent-1 -->\n# My Task\nDo it.\n"
+	writeTestFile(t, taskPath, original)
+
+	if err := writeBranchComment(taskPath, "task/my-task"); err != nil {
+		t.Fatalf("writeBranchComment: %v", err)
+	}
+
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+
+	got := string(data)
+	// The branch comment should be inserted after the claimed-by line.
+	want := "<!-- claimed-by: agent-1 -->\n<!-- branch: task/my-task -->\n# My Task\nDo it.\n"
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
