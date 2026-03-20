@@ -90,8 +90,14 @@ func parseAgentTimeout(envVal string) (time.Duration, error) {
 // by executing "docker info". This runs before any queue setup so that a
 // missing or stopped Docker installation fails fast with a clear message
 // instead of producing an opaque exec error deep in the polling loop.
+// Uses a 10-second timeout to prevent hanging if the daemon is stuck.
 func checkDocker() error {
-	out, err := exec.Command("docker", "info").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "info").CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("docker is required but not available: timed out after 10s waiting for docker daemon to respond")
+	}
 	if err != nil {
 		// Provide a clear, actionable message that identifies Docker as the problem.
 		return fmt.Errorf("docker is required but not available: %w\n%s", err, strings.TrimSpace(string(out)))
@@ -100,21 +106,21 @@ func checkDocker() error {
 }
 
 type dockerConfig struct {
-	image, workdir, prompt                         string
-	copilotPath, gitPath, gitUploadPackPath         string
-	gitReceivePackPath, ghPath, goRoot              string
-	gitName, gitEmail, homeDir, ghConfigDir         string
-	hasGhConfig                                    bool
-	gitTemplatesDir                                string
-	hasGitTemplates                                bool
-	systemCertsDir                                 string
-	hasSystemCerts                                 bool
-	agentID                                        string
-	copilotArgs                                    []string
-	repoRoot, cloneDir, tasksDir                   string
-	targetBranch                                   string
-	timeout                                        time.Duration
-	isTTY                                          bool
+	image, workdir, prompt                  string
+	copilotPath, gitPath, gitUploadPackPath string
+	gitReceivePackPath, ghPath, goRoot      string
+	gitName, gitEmail, homeDir, ghConfigDir string
+	hasGhConfig                             bool
+	gitTemplatesDir                         string
+	hasGitTemplates                         bool
+	systemCertsDir                          string
+	hasSystemCerts                          bool
+	agentID                                 string
+	copilotArgs                             []string
+	repoRoot, cloneDir, tasksDir            string
+	targetBranch                            string
+	timeout                                 time.Duration
+	isTTY                                   bool
 }
 
 // isTerminal reports whether f is connected to a terminal (not just any
@@ -139,7 +145,7 @@ func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string
 		runFlags = "-it"
 	}
 	args := []string{
-		"run", "--rm", runFlags,
+		"run", "--rm", "--init", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", cfg.cloneDir, cfg.workdir),
 		"-v", fmt.Sprintf("%s:%s/.tasks", cfg.tasksDir, cfg.workdir),
@@ -285,11 +291,11 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 		fmt.Printf("  All %d task file(s) parsed successfully\n", totalTasks)
 	}
 
-	// Run dependency reconciliation
+	// Run dependency reconciliation (read-only: report what would be promoted)
 	fmt.Println("\n=== Dependency Resolution ===")
-	promoted := queue.ReconcileReadyQueue(tasksDir)
-	if promoted > 0 {
-		fmt.Printf("  Promoted %d task(s) from waiting/ to backlog/\n", promoted)
+	promotable := queue.CountPromotableWaitingTasks(tasksDir)
+	if promotable > 0 {
+		fmt.Printf("  %d task(s) in waiting/ would be promoted to backlog/\n", promotable)
 	} else {
 		fmt.Println("  No waiting tasks ready for promotion")
 	}
@@ -313,20 +319,17 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 		fmt.Println("  No affects conflicts detected")
 	}
 
-	// Write and display queue manifest
+	// Compute and display queue manifest (read-only: no file written)
 	fmt.Println("\n=== Queue Manifest ===")
 	deferredSimple := make(map[string]struct{}, len(detailed))
 	for name := range detailed {
 		deferredSimple[name] = struct{}{}
 	}
-	if writeErr := queue.WriteQueueManifest(tasksDir, deferredSimple); writeErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", writeErr)
-	}
-	manifest, readErr := os.ReadFile(filepath.Join(tasksDir, ".queue"))
-	if readErr != nil || len(strings.TrimSpace(string(manifest))) == 0 {
+	manifest := queue.ComputeQueueManifest(tasksDir, deferredSimple)
+	if len(strings.TrimSpace(manifest)) == 0 {
 		fmt.Println("  (queue is empty)")
 	} else {
-		for i, line := range strings.Split(strings.TrimSpace(string(manifest)), "\n") {
+		for i, line := range strings.Split(strings.TrimSpace(manifest), "\n") {
 			fmt.Printf("  %d. %s\n", i+1, line)
 		}
 	}
@@ -348,7 +351,7 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 		fmt.Printf("  %-20s %d\n", "deferred", len(detailed))
 	}
 
-	fmt.Println("\nDry run complete. No Docker containers were launched.")
+	fmt.Println("\nDry run complete (read-only). No files were modified and no Docker containers were launched.")
 	return nil
 }
 
@@ -371,6 +374,11 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	if err != nil {
 		return err
 	}
+
+	if err := checkDocker(); err != nil {
+		return err
+	}
+
 	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			return fmt.Errorf("create .tasks subdirectory %s: %w", sub, err)
@@ -412,10 +420,6 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 	agentTimeout, err := parseAgentTimeout(os.Getenv("MATO_AGENT_TIMEOUT"))
 	if err != nil {
-		return err
-	}
-
-	if err := checkDocker(); err != nil {
 		return err
 	}
 
@@ -513,7 +517,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		agentID:            agentID,
 		copilotArgs:        copilotArgs,
 		repoRoot:           repoRoot,
-		tasksDir:            tasksDir,
+		tasksDir:           tasksDir,
 		targetBranch:       branch,
 		timeout:            agentTimeout,
 		isTTY:              isTerminal(os.Stdin),

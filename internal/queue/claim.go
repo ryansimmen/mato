@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"mato/internal/frontmatter"
 )
+
+// branchCommentRe matches the HTML comment that records the branch name
+// assigned to an in-progress task: <!-- branch: task/foo-bar -->
+var branchCommentRe = regexp.MustCompile(`^<!--\s*branch:\s*(\S+)\s*-->$`)
 
 // errFailedDirUnavailable is the sentinel wrapped by FailedDirUnavailableError.
 var errFailedDirUnavailable = errors.New("failed directory unavailable for retry-exhausted task")
@@ -56,6 +61,99 @@ type ClaimedTask struct {
 	TaskPath string // host-side path in in-progress/
 }
 
+// collectActiveBranches scans in-progress/ for <!-- branch: ... --> comments
+// and returns a set of branch names currently in use.
+func collectActiveBranches(tasksDir string) map[string]struct{} {
+	active := make(map[string]struct{})
+	inProgressDir := filepath.Join(tasksDir, "in-progress")
+	entries, err := os.ReadDir(inProgressDir)
+	if err != nil {
+		return active
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		if b := readBranchFromFile(filepath.Join(inProgressDir, e.Name())); b != "" {
+			active[b] = struct{}{}
+		}
+	}
+	return active
+}
+
+// readBranchFromFile extracts the branch name from a <!-- branch: ... -->
+// comment in a task file. Returns "" if no such comment is found.
+func readBranchFromFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if m := branchCommentRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// writeBranchComment inserts a <!-- branch: ... --> HTML comment immediately
+// after the first <!-- claimed-by: ... --> line in the task file. If no
+// claimed-by line is found, it prepends the comment at the top.
+func writeBranchComment(taskPath, branch string) error {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return fmt.Errorf("read task file for branch comment: %w", err)
+	}
+	comment := fmt.Sprintf("<!-- branch: %s -->", branch)
+	lines := strings.Split(string(data), "\n")
+
+	// Find the first claimed-by line and insert after it.
+	inserted := false
+	var result []string
+	for _, line := range lines {
+		result = append(result, line)
+		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "<!-- claimed-by:") {
+			result = append(result, comment)
+			inserted = true
+		}
+	}
+	if !inserted {
+		// No claimed-by found; prepend.
+		result = append([]string{comment}, result...)
+	}
+
+	content := []byte(strings.Join(result, "\n"))
+
+	dir := filepath.Dir(taskPath)
+	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(taskPath)+".branch-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for branch comment: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	cleanup := func() {
+		tmpFile.Close()
+		os.Remove(tmpName)
+	}
+
+	if err := tmpFile.Chmod(0o644); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod temp file for branch comment: %w", err)
+	}
+	if _, err := tmpFile.Write(content); err != nil {
+		cleanup()
+		return fmt.Errorf("write temp file for branch comment: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp file for branch comment: %w", err)
+	}
+	if err := os.Rename(tmpName, taskPath); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp file for branch comment: %w", err)
+	}
+	return nil
+}
+
 // SelectAndClaimTask picks the highest-priority available task, atomically
 // moves it to in-progress/, stamps the claimed-by header, and checks the
 // retry budget. Tasks whose retry budget is exhausted are moved directly to
@@ -69,6 +167,8 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 	inProgressDir := filepath.Join(tasksDir, "in-progress")
 	failedDir := filepath.Join(tasksDir, "failed")
 	backlogDir := filepath.Join(tasksDir, "backlog")
+
+	activeBranches := collectActiveBranches(tasksDir)
 
 	for _, name := range candidates {
 		src := filepath.Join(backlogDir, name)
@@ -127,7 +227,14 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		}
 
 		branch := "task/" + frontmatter.SanitizeBranchName(name)
+		if _, taken := activeBranches[branch]; taken {
+			branch = branch + "-" + frontmatter.BranchDisambiguator(name)
+		}
 		title := frontmatter.ExtractTitle(name, body)
+
+		if err := writeBranchComment(dst, branch); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write branch comment for %s: %v\n", name, err)
+		}
 
 		return &ClaimedTask{
 			Filename: name,

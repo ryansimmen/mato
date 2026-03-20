@@ -551,3 +551,32 @@ func TestExtractTitle(t *testing.T) {
 		})
 	}
 }
+
+func TestBranchDisambiguator(t *testing.T) {
+	// Deterministic: same input always produces the same suffix.
+	s1 := BranchDisambiguator("add-feature.md")
+	s2 := BranchDisambiguator("add-feature.md")
+	if s1 != s2 {
+		t.Fatalf("BranchDisambiguator not deterministic: %q vs %q", s1, s2)
+	}
+
+	// Length is always 6 hex characters.
+	if len(s1) != 6 {
+		t.Fatalf("expected 6-char suffix, got %q (len=%d)", s1, len(s1))
+	}
+
+	// Different inputs produce different suffixes (with overwhelming probability).
+	s3 := BranchDisambiguator("fix-bug.md")
+	if s1 == s3 {
+		t.Fatalf("expected different suffixes for different filenames, both got %q", s1)
+	}
+
+	// Filenames that sanitize to the same branch should still produce
+	// different disambiguators.
+	sA := BranchDisambiguator("fix the bug (urgent).md")
+	sB := BranchDisambiguator("fix-the-bug-urgent.md")
+	if sA == sB {
+		t.Fatalf("expected different disambiguators for %q and %q, both got %q",
+			"fix the bug (urgent).md", "fix-the-bug-urgent.md", sA)
+	}
+}

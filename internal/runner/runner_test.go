@@ -395,9 +395,9 @@ func TestConfigureReceiveDeny_Failure(t *testing.T) {
 
 func TestCheckIdleTransition(t *testing.T) {
 	tests := []struct {
-		name        string
-		sequence    []bool // sequence of isIdle values per iteration
-		wantPrints  []bool // expected shouldPrint results per iteration
+		name       string
+		sequence   []bool // sequence of isIdle values per iteration
+		wantPrints []bool // expected shouldPrint results per iteration
 	}{
 		{
 			name:       "prints once on entering idle",
@@ -1758,8 +1758,8 @@ func TestBuildDockerArgs_TTYFlag(t *testing.T) {
 		cfg := base
 		cfg.isTTY = true
 		args := buildDockerArgs(cfg, nil, nil)
-		if args[2] != "-it" {
-			t.Fatalf("expected -it flag when isTTY=true, got %q", args[2])
+		if args[3] != "-it" {
+			t.Fatalf("expected -it flag when isTTY=true, got %q", args[3])
 		}
 	})
 
@@ -1767,10 +1767,22 @@ func TestBuildDockerArgs_TTYFlag(t *testing.T) {
 		cfg := base
 		cfg.isTTY = false
 		args := buildDockerArgs(cfg, nil, nil)
-		if args[2] != "-i" {
-			t.Fatalf("expected -i flag when isTTY=false, got %q", args[2])
+		if args[3] != "-i" {
+			t.Fatalf("expected -i flag when isTTY=false, got %q", args[3])
 		}
 	})
+}
+
+func TestBuildDockerArgs_InitFlag(t *testing.T) {
+	cfg := dockerConfig{
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
+	}
+	args := buildDockerArgs(cfg, nil, nil)
+	if args[2] != "--init" {
+		t.Fatalf("expected --init at args[2], got %q", args[2])
+	}
 }
 
 func TestIsTerminal(t *testing.T) {
@@ -2141,13 +2153,9 @@ func TestDryRun_BasicValidation(t *testing.T) {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
 
-	// Verify the .queue manifest was written
-	manifest, err := os.ReadFile(filepath.Join(tasksDir, ".queue"))
-	if err != nil {
-		t.Fatalf("expected .queue manifest to exist: %v", err)
-	}
-	if !strings.Contains(string(manifest), "task-a.md") {
-		t.Fatalf(".queue should contain task-a.md, got: %s", manifest)
+	// DryRun is read-only: .queue manifest should NOT be written.
+	if _, statErr := os.Stat(filepath.Join(tasksDir, ".queue")); statErr == nil {
+		t.Fatal(".queue manifest should NOT be written during dry-run")
 	}
 }
 
@@ -2197,16 +2205,9 @@ func TestDryRun_DetectsOverlaps(t *testing.T) {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
 
-	// Verify manifest only contains the higher-priority (lower number) task
-	manifest, err := os.ReadFile(filepath.Join(tasksDir, ".queue"))
-	if err != nil {
-		t.Fatalf("expected .queue manifest: %v", err)
-	}
-	if !strings.Contains(string(manifest), "task-a.md") {
-		t.Fatalf(".queue should contain task-a.md, got: %s", manifest)
-	}
-	if strings.Contains(string(manifest), "task-b.md") {
-		t.Fatalf(".queue should NOT contain task-b.md (deferred), got: %s", manifest)
+	// DryRun is read-only: no .queue manifest should be written.
+	if _, statErr := os.Stat(filepath.Join(tasksDir, ".queue")); statErr == nil {
+		t.Fatal(".queue manifest should NOT be written during dry-run")
 	}
 }
 
@@ -2231,7 +2232,7 @@ func TestDryRun_MissingDirectories(t *testing.T) {
 	}
 }
 
-func TestDryRun_PromotesDependencies(t *testing.T) {
+func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 	repoDir := t.TempDir()
 	cmd := exec.Command("git", "init", repoDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -2256,12 +2257,12 @@ func TestDryRun_PromotesDependencies(t *testing.T) {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
 
-	// The waiting task should have been promoted to backlog
-	if _, statErr := os.Stat(filepath.Join(tasksDir, "backlog", "child-task.md")); statErr != nil {
-		t.Fatal("child-task.md should have been promoted to backlog/")
+	// DryRun is read-only: the waiting task should NOT be moved.
+	if _, statErr := os.Stat(filepath.Join(tasksDir, "waiting", "child-task.md")); statErr != nil {
+		t.Fatal("child-task.md should still be in waiting/ (dry-run is read-only)")
 	}
-	if _, statErr := os.Stat(filepath.Join(tasksDir, "waiting", "child-task.md")); statErr == nil {
-		t.Fatal("child-task.md should no longer be in waiting/")
+	if _, statErr := os.Stat(filepath.Join(tasksDir, "backlog", "child-task.md")); statErr == nil {
+		t.Fatal("child-task.md should NOT have been promoted to backlog/ during dry-run")
 	}
 }
 

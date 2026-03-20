@@ -586,3 +586,50 @@ func TestEnsureGitignored_Idempotent(t *testing.T) {
 		t.Errorf("expected exactly 1 gitignore commit, got %d in:\n%s", count, out)
 	}
 }
+
+func TestEnsureGitignored_PreservesStagedIndexState(t *testing.T) {
+	_, repo := initBareAndClone(t)
+
+	// Create and commit an initial .gitignore.
+	gitignorePath := filepath.Join(repo, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("*.log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", repo, "add", ".gitignore")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", repo, "commit", "-m", "initial gitignore")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// Stage a change to .gitignore (add *.tmp).
+	if err := os.WriteFile(gitignorePath, []byte("*.log\n*.tmp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", repo, "add", ".gitignore")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add staged: %v\n%s", err, out)
+	}
+
+	// Record the staged blob hash before calling EnsureGitignored.
+	blobBefore := stagedGitignoreBlob(repo)
+	if blobBefore == "" {
+		t.Fatal("expected staged blob hash before EnsureGitignored")
+	}
+
+	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
+		t.Fatalf("EnsureGitignored: %v", err)
+	}
+
+	// Verify the index still has the pre-existing staged changes.
+	// "git diff --cached" should show *.tmp as a staged change.
+	cachedDiff, err := Output(repo, "diff", "--cached", "--", ".gitignore")
+	if err != nil {
+		t.Fatalf("git diff --cached: %v", err)
+	}
+	if !strings.Contains(cachedDiff, "*.tmp") {
+		t.Errorf("expected staged diff to contain *.tmp, got:\n%s", cachedDiff)
+	}
+}

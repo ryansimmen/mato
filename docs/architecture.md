@@ -133,7 +133,7 @@ The final command is:
 ```text
 copilot -p <embedded task prompt> --autopilot --allow-all [copilotArgs...]
 ```
-If forwarded arguments do not already contain `--model`, `runOnce(...)` appends `--model claude-opus-4.6`.
+If forwarded arguments do not already contain `--model`, `runOnce(...)` appends `--model` with the value from `MATO_DEFAULT_MODEL` (or `claude-opus-4.6` if unset).
 ### Host-side task claiming
 Before launching a Docker container, the host calls `queue.SelectAndClaimTask(tasksDir, agentID, deferred)` which:
 1. Reads `.tasks/.queue` if present, otherwise lists `backlog/*.md` alphabetically.

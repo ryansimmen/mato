@@ -32,13 +32,17 @@ Any other flags are forwarded to the copilot CLI inside the container.
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "status" {
-		repoRoot, _, tasksDir, extras, _, err := parseArgs(os.Args[2:])
+		repoRoot, _, tasksDir, extras, dryRun, err := parseArgs(os.Args[2:])
 		if err == errHelp {
 			fmt.Fprintf(os.Stderr, "Usage: mato status [--repo <path>] [--tasks-dir <path>]\n")
 			os.Exit(0)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+			os.Exit(1)
+		}
+		if dryRun {
+			fmt.Fprintf(os.Stderr, "mato error: --dry-run is not supported with the status subcommand\n")
 			os.Exit(1)
 		}
 		if len(extras) > 0 {
