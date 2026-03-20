@@ -1,0 +1,135 @@
+package taskfile
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func writeTempFile(t *testing.T, content string) string {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "task.md")
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func TestParseBranch_ValidComment(t *testing.T) {
+	f := writeTempFile(t, "<!-- branch: task/foo-bar -->\n# My Task\n")
+	got := ParseBranch(f)
+	if got != "task/foo-bar" {
+		t.Fatalf("got %q, want %q", got, "task/foo-bar")
+	}
+}
+
+func TestParseBranch_WithFrontmatterAndMetadata(t *testing.T) {
+	content := `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
+<!-- branch: task/full-example -->
+---
+id: full-example
+priority: 10
+affects:
+  - internal/foo/foo.go
+tags: [testing]
+estimated_complexity: simple
+---
+# Full Example Task
+
+Some description here.
+`
+	f := writeTempFile(t, content)
+	got := ParseBranch(f)
+	if got != "task/full-example" {
+		t.Fatalf("got %q, want %q", got, "task/full-example")
+	}
+}
+
+func TestParseBranch_ExtraWhitespace(t *testing.T) {
+	f := writeTempFile(t, "<!-- branch:   task/spaces   -->\n")
+	got := ParseBranch(f)
+	if got != "task/spaces" {
+		t.Fatalf("got %q, want %q", got, "task/spaces")
+	}
+}
+
+func TestParseBranch_NoWhitespace(t *testing.T) {
+	f := writeTempFile(t, "<!-- branch:task/nospace -->\n")
+	got := ParseBranch(f)
+	if got != "task/nospace" {
+		t.Fatalf("got %q, want %q", got, "task/nospace")
+	}
+}
+
+func TestParseBranch_WithoutClosingArrow(t *testing.T) {
+	// The regex does not require closing -->, so the branch should still parse.
+	f := writeTempFile(t, "<!-- branch: task/no-close\n")
+	got := ParseBranch(f)
+	if got != "task/no-close" {
+		t.Fatalf("got %q, want %q", got, "task/no-close")
+	}
+}
+
+func TestParseBranch_EmptyFile(t *testing.T) {
+	f := writeTempFile(t, "")
+	got := ParseBranch(f)
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+func TestParseBranch_NoBranchComment(t *testing.T) {
+	f := writeTempFile(t, "---\npriority: 5\n---\n# Task\nNo branch here.\n")
+	got := ParseBranch(f)
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+func TestParseBranch_NonexistentFile(t *testing.T) {
+	got := ParseBranch(filepath.Join(t.TempDir(), "nonexistent.md"))
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+func TestParseBranch_MultipleBranchComments(t *testing.T) {
+	content := "<!-- branch: task/first -->\n<!-- branch: task/second -->\n"
+	f := writeTempFile(t, content)
+	got := ParseBranch(f)
+	if got != "task/first" {
+		t.Fatalf("got %q, want %q (first match)", got, "task/first")
+	}
+}
+
+func TestParseBranch_BranchInMiddleOfContent(t *testing.T) {
+	content := `# My Task
+
+Some description.
+
+<!-- branch: task/mid-content -->
+
+More content after the branch comment.
+`
+	f := writeTempFile(t, content)
+	got := ParseBranch(f)
+	if got != "task/mid-content" {
+		t.Fatalf("got %q, want %q", got, "task/mid-content")
+	}
+}
+
+func TestParseBranch_OnlyFrontmatter(t *testing.T) {
+	f := writeTempFile(t, "---\npriority: 5\n---\n")
+	got := ParseBranch(f)
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+func TestParseBranch_BranchWithSlashes(t *testing.T) {
+	f := writeTempFile(t, "<!-- branch: task/deep/nested/branch -->\n")
+	got := ParseBranch(f)
+	if got != "task/deep/nested/branch" {
+		t.Fatalf("got %q, want %q", got, "task/deep/nested/branch")
+	}
+}
