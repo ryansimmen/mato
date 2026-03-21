@@ -1,22 +1,14 @@
 package taskfile
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
+
+	"mato/internal/testutil"
 )
 
-func writeTempFile(t *testing.T, content string) string {
-	t.Helper()
-	f := filepath.Join(t.TempDir(), "task.md")
-	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return f
-}
-
 func TestParseBranch_ValidComment(t *testing.T) {
-	f := writeTempFile(t, "<!-- branch: task/foo-bar -->\n# My Task\n")
+	f := testutil.WriteTempFile(t, "<!-- branch: task/foo-bar -->\n# My Task\n")
 	got := ParseBranch(f)
 	if got != "task/foo-bar" {
 		t.Fatalf("got %q, want %q", got, "task/foo-bar")
@@ -38,7 +30,7 @@ estimated_complexity: simple
 
 Some description here.
 `
-	f := writeTempFile(t, content)
+	f := testutil.WriteTempFile(t, content)
 	got := ParseBranch(f)
 	if got != "task/full-example" {
 		t.Fatalf("got %q, want %q", got, "task/full-example")
@@ -46,7 +38,7 @@ Some description here.
 }
 
 func TestParseBranch_ExtraWhitespace(t *testing.T) {
-	f := writeTempFile(t, "<!-- branch:   task/spaces   -->\n")
+	f := testutil.WriteTempFile(t, "<!-- branch:   task/spaces   -->\n")
 	got := ParseBranch(f)
 	if got != "task/spaces" {
 		t.Fatalf("got %q, want %q", got, "task/spaces")
@@ -54,7 +46,7 @@ func TestParseBranch_ExtraWhitespace(t *testing.T) {
 }
 
 func TestParseBranch_NoWhitespace(t *testing.T) {
-	f := writeTempFile(t, "<!-- branch:task/nospace -->\n")
+	f := testutil.WriteTempFile(t, "<!-- branch:task/nospace -->\n")
 	got := ParseBranch(f)
 	if got != "task/nospace" {
 		t.Fatalf("got %q, want %q", got, "task/nospace")
@@ -64,7 +56,7 @@ func TestParseBranch_NoWhitespace(t *testing.T) {
 func TestParseBranch_WithoutClosingArrow(t *testing.T) {
 	// An unterminated branch comment must be ignored; callers fall back to
 	// filename-derived branch naming.
-	f := writeTempFile(t, "<!-- branch: task/no-close\n")
+	f := testutil.WriteTempFile(t, "<!-- branch: task/no-close\n")
 	got := ParseBranch(f)
 	if got != "" {
 		t.Fatalf("got %q, want empty string for unterminated marker", got)
@@ -72,7 +64,7 @@ func TestParseBranch_WithoutClosingArrow(t *testing.T) {
 }
 
 func TestParseBranch_EmptyFile(t *testing.T) {
-	f := writeTempFile(t, "")
+	f := testutil.WriteTempFile(t, "")
 	got := ParseBranch(f)
 	if got != "" {
 		t.Fatalf("got %q, want empty string", got)
@@ -80,7 +72,7 @@ func TestParseBranch_EmptyFile(t *testing.T) {
 }
 
 func TestParseBranch_NoBranchComment(t *testing.T) {
-	f := writeTempFile(t, "---\npriority: 5\n---\n# Task\nNo branch here.\n")
+	f := testutil.WriteTempFile(t, "---\npriority: 5\n---\n# Task\nNo branch here.\n")
 	got := ParseBranch(f)
 	if got != "" {
 		t.Fatalf("got %q, want empty string", got)
@@ -96,7 +88,7 @@ func TestParseBranch_NonexistentFile(t *testing.T) {
 
 func TestParseBranch_MultipleBranchComments(t *testing.T) {
 	content := "<!-- branch: task/first -->\n<!-- branch: task/second -->\n"
-	f := writeTempFile(t, content)
+	f := testutil.WriteTempFile(t, content)
 	got := ParseBranch(f)
 	if got != "task/first" {
 		t.Fatalf("got %q, want %q (first match)", got, "task/first")
@@ -112,7 +104,7 @@ Some description.
 
 More content after the branch comment.
 `
-	f := writeTempFile(t, content)
+	f := testutil.WriteTempFile(t, content)
 	got := ParseBranch(f)
 	if got != "task/mid-content" {
 		t.Fatalf("got %q, want %q", got, "task/mid-content")
@@ -120,7 +112,7 @@ More content after the branch comment.
 }
 
 func TestParseBranch_OnlyFrontmatter(t *testing.T) {
-	f := writeTempFile(t, "---\npriority: 5\n---\n")
+	f := testutil.WriteTempFile(t, "---\npriority: 5\n---\n")
 	got := ParseBranch(f)
 	if got != "" {
 		t.Fatalf("got %q, want empty string", got)
@@ -128,7 +120,7 @@ func TestParseBranch_OnlyFrontmatter(t *testing.T) {
 }
 
 func TestParseBranch_BranchWithSlashes(t *testing.T) {
-	f := writeTempFile(t, "<!-- branch: task/deep/nested/branch -->\n")
+	f := testutil.WriteTempFile(t, "<!-- branch: task/deep/nested/branch -->\n")
 	got := ParseBranch(f)
 	if got != "task/deep/nested/branch" {
 		t.Fatalf("got %q, want %q", got, "task/deep/nested/branch")
@@ -149,7 +141,7 @@ func TestParseBranch_CorruptMarkers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := writeTempFile(t, tt.content)
+			f := testutil.WriteTempFile(t, tt.content)
 			got := ParseBranch(f)
 			if got != "" {
 				t.Fatalf("got %q, want empty string for corrupt marker", got)
