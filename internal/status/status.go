@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"mato/internal/identity"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/taskfile"
 )
 
 // Show writes the status dashboard to os.Stdout.
@@ -289,20 +289,14 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%d min", int(d.Minutes()))
 }
 
-var claimedAtRe = regexp.MustCompile(`claimed-at:\s*(\S+)`)
-var branchCommentRe = regexp.MustCompile(`<!-- branch:\s*(\S+)\s*-->`)
-
 // parseBranchComment extracts the branch name from a <!-- branch: ... --> comment.
 func parseBranchComment(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	m := branchCommentRe.FindStringSubmatch(string(data))
-	if len(m) < 2 {
-		return ""
-	}
-	return m[1]
+	branch, _ := taskfile.ParseBranchComment(data)
+	return branch
 }
 
 // parseClaimedAt extracts the claimed-at timestamp from a task file's HTML comment.
@@ -311,18 +305,12 @@ func parseClaimedAt(path string) time.Time {
 	if err != nil {
 		return time.Time{}
 	}
-	m := claimedAtRe.FindStringSubmatch(string(data))
-	if len(m) < 2 {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, m[1])
-	if err != nil {
+	t, ok := taskfile.ParseClaimedAt(data)
+	if !ok {
 		return time.Time{}
 	}
 	return t
 }
-
-var failureLineRe = regexp.MustCompile(`<!-- failure:.*?—\s*(.+?)\s*-->`)
 
 // lastFailureReason extracts the reason from the last <!-- failure: ... --> comment.
 func lastFailureReason(path string) string {
@@ -330,11 +318,7 @@ func lastFailureReason(path string) string {
 	if err != nil {
 		return ""
 	}
-	matches := failureLineRe.FindAllStringSubmatch(string(data), -1)
-	if len(matches) == 0 {
-		return ""
-	}
-	return matches[len(matches)-1][1]
+	return taskfile.LastFailureReason(data)
 }
 
 // reverseDependencies scans waiting/ tasks and returns a map from dependency ID

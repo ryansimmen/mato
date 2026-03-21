@@ -15,6 +15,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/taskfile"
 )
 
 func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.ClaimedTask) error {
@@ -236,8 +237,7 @@ func agentWroteFailureRecord(taskPath, agentID string) bool {
 	if err != nil {
 		return false
 	}
-	// Look for "<!-- failure: <agentID> " — the agent's ON_FAILURE writes this pattern.
-	return strings.Contains(string(data), "<!-- failure: "+agentID+" ")
+	return taskfile.ContainsFailureFrom(data, agentID)
 }
 
 // writeDependencyContextFile collects completion details for all resolved
@@ -293,11 +293,5 @@ func extractFailureLines(taskPath string) string {
 	if err != nil {
 		return ""
 	}
-	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "<!-- failure:") {
-			lines = append(lines, strings.TrimSpace(line))
-		}
-	}
-	return strings.Join(lines, "\n")
+	return taskfile.ExtractFailureLines(data)
 }

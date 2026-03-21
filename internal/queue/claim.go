@@ -5,17 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
+	"mato/internal/taskfile"
 )
-
-// branchCommentRe matches the HTML comment that records the branch name
-// assigned to an in-progress task: <!-- branch: task/foo-bar -->
-var branchCommentRe = regexp.MustCompile(`^<!--\s*branch:\s*(\S+)\s*-->$`)
 
 // errFailedDirUnavailable is the sentinel wrapped by FailedDirUnavailableError.
 var errFailedDirUnavailable = errors.New("failed directory unavailable for retry-exhausted task")
@@ -94,12 +90,8 @@ func readBranchFromFile(path string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if m := branchCommentRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-			return m[1]
-		}
-	}
-	return ""
+	branch, _ := taskfile.ParseBranchComment(data)
+	return branch
 }
 
 // writeBranchComment inserts a <!-- branch: ... --> HTML comment immediately
@@ -110,7 +102,11 @@ func writeBranchComment(taskPath, branch string) error {
 	if err != nil {
 		return fmt.Errorf("read task file for branch comment: %w", err)
 	}
-	comment := fmt.Sprintf("<!-- branch: %s -->", branch)
+	var comment strings.Builder
+	if err := taskfile.WriteBranchComment(&comment, branch); err != nil {
+		return fmt.Errorf("format branch comment: %w", err)
+	}
+	commentStr := comment.String()
 	lines := strings.Split(string(data), "\n")
 
 	// Find the first claimed-by line and insert after it.
@@ -119,13 +115,13 @@ func writeBranchComment(taskPath, branch string) error {
 	for _, line := range lines {
 		result = append(result, line)
 		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "<!-- claimed-by:") {
-			result = append(result, comment)
+			result = append(result, commentStr)
 			inserted = true
 		}
 	}
 	if !inserted {
 		// No claimed-by found; prepend.
-		result = append([]string{comment}, result...)
+		result = append([]string{commentStr}, result...)
 	}
 
 	content := []byte(strings.Join(result, "\n"))
@@ -295,8 +291,12 @@ func prependClaimedBy(taskPath, agentID, claimedAt string) error {
 	if err != nil {
 		return fmt.Errorf("read task file for claimed-by header: %w", err)
 	}
-	header := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: %s -->\n", agentID, claimedAt)
-	content := append([]byte(header), existing...)
+	var header strings.Builder
+	if err := taskfile.WriteClaimedByComment(&header, agentID, claimedAt); err != nil {
+		return fmt.Errorf("format claimed-by header: %w", err)
+	}
+	header.WriteString("\n")
+	content := append([]byte(header.String()), existing...)
 
 	if err := atomicwrite.WriteFile(taskPath, content); err != nil {
 		return fmt.Errorf("write claimed-by header: %w", err)
@@ -314,14 +314,7 @@ func CountFailureLines(taskPath string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("count failure lines: %w", err)
 	}
-	count := 0
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "<!-- failure:") && !strings.HasPrefix(trimmed, "<!-- review-failure:") {
-			count++
-		}
-	}
-	return count, nil
+	return taskfile.CountFailureMarkers(data), nil
 }
 
 // CountReviewFailureLines counts the number of <!-- review-failure: ... -->
@@ -334,11 +327,5 @@ func CountReviewFailureLines(taskPath string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("count review failure lines: %w", err)
 	}
-	count := 0
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "<!-- review-failure:") {
-			count++
-		}
-	}
-	return count, nil
+	return taskfile.CountReviewFailureMarkers(data), nil
 }
