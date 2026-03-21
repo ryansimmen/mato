@@ -138,6 +138,20 @@ func TestPromptNoPushInstructions(t *testing.T) {
 	}
 }
 
+func TestPromptFileClaimsMentionDirectoryPrefixes(t *testing.T) {
+	data, err := os.ReadFile(taskInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(task instructions): %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "directory prefixes ending with `/`") {
+		t.Fatal("task instructions should explain that file claims may include directory prefixes")
+	}
+	if !strings.Contains(text, "falls under a claimed directory prefix") {
+		t.Fatal("task instructions should explain how directory-prefix claims affect planned edits")
+	}
+}
+
 func createPromptClone(t *testing.T, repoRoot, tasksDir string) string {
 	t.Helper()
 

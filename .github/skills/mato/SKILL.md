@@ -69,7 +69,7 @@ closing the database connection, leaking connections under load.
 | `id` | string | filename without `.md` | Stable task identifier. |
 | `priority` | int | `50` | Lower = higher priority. **1-10** critical, **11-30** important, **31-50** normal, **51+** low. |
 | `depends_on` | string[] | `[]` | IDs of tasks that must complete first. Use when fixing issue B requires issue A to land first (e.g., both touch the same function, or B builds on A's new API). |
-| `affects` | string[] | `[]` | File paths this task is expected to touch. **Always populate this** with the specific files that need changing. Used to prevent conflicting concurrent work when a task scheduler runs multiple agents in parallel. |
+| `affects` | string[] | `[]` | File paths this task is expected to touch. **Always populate this** with the specific files that need changing. Used to prevent conflicting concurrent work when a task scheduler runs multiple agents in parallel. An entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). |
 | `tags` | string[] | `[]` | Free-form labels for categorization. |
 | `estimated_complexity` | string | — | `simple`, `medium`, or `complex`. |
 | `max_retries` | int | `3` | Max allowed failures before the task is moved to `failed/`. Only relevant when using mato as the task scheduler; can be omitted otherwise. |

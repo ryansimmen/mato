@@ -567,3 +567,57 @@ func TestEnsureIndex_NilDoesNotWriteStderr(t *testing.T) {
 		t.Fatal("ensureIndex(nil) returned nil")
 	}
 }
+
+func TestHasActiveOverlap_PrefixMatch(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// Active task with a directory prefix.
+	writeTask(t, tasksDir, DirInProgress, "refactor-client.md",
+		"---\naffects:\n  - pkg/client/\n---\n# Refactor\n")
+	// Active task with an exact file.
+	writeTask(t, tasksDir, DirInProgress, "fix-merge.md",
+		"---\naffects:\n  - internal/merge/merge.go\n---\n# Fix\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"exact match", []string{"internal/merge/merge.go"}, true},
+		{"file under active prefix", []string{"pkg/client/http.go"}, true},
+		{"nested file under active prefix", []string{"pkg/client/retry/backoff.go"}, true},
+		{"prefix that contains active prefix", []string{"pkg/"}, true},
+		{"non-overlapping file", []string{"docs/readme.md"}, false},
+		{"non-overlapping prefix", []string{"cmd/"}, false},
+		{"empty affects", []string{}, false},
+		{"nil affects", nil, false},
+		{"prefix matching active exact file", []string{"internal/merge/"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := idx.HasActiveOverlap(tt.affects)
+			if got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildIndex_ActiveAffectsPrefixesDeduplicated(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	writeTask(t, tasksDir, DirInProgress, "task-a.md",
+		"---\naffects:\n  - pkg/client/\n---\n# A\n")
+	writeTask(t, tasksDir, DirReadyReview, "task-b.md",
+		"---\naffects:\n  - pkg/client/\n  - internal/server/\n---\n# B\n")
+
+	idx := BuildIndex(tasksDir)
+	want := []string{"internal/server/", "pkg/client/"}
+	got := append([]string(nil), idx.activeAffectsPrefixes...)
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("activeAffectsPrefixes = %v, want %v", got, want)
+	}
+}
