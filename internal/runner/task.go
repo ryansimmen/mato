@@ -120,8 +120,7 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 	// Pre-check: verify ready-for-review/ destination is clear before pushing.
 	// If a stale file exists (e.g., from a prior incomplete cycle), skip the
 	// push to avoid corrupting its metadata.
-	readyPath := filepath.Join(cfg.tasksDir, queue.DirReadyReview, claimed.Filename)
-	if _, err := os.Stat(readyPath); err == nil {
+	if _, err := os.Stat(filepath.Join(cfg.tasksDir, queue.DirReadyReview, claimed.Filename)); err == nil {
 		fmt.Fprintf(os.Stderr, "warning: %s already exists in ready-for-review/; skipping push (task is likely already being reviewed)\n", claimed.Filename)
 		return fmt.Errorf("ready-for-review/%s already exists: skipping push to avoid overwriting", claimed.Filename)
 	}
@@ -131,25 +130,9 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 		return fmt.Errorf("push task branch %s: %w", claimed.Branch, err)
 	}
 
-	// Move task from in-progress/ to ready-for-review/ using AtomicMove
-	// (os.Link + os.Remove) to prevent silently overwriting a file that
-	// appeared at the destination after the pre-check (TOCTOU defense).
-	// The branch marker is written AFTER the move so that a failed move
-	// does not leave the in-progress file with an incorrect marker.
-	if err := queue.AtomicMove(claimed.TaskPath, readyPath); err != nil {
-		return fmt.Errorf("move task to ready-for-review: %w", err)
-	}
-
-	// Write branch marker to the moved file in ready-for-review/.
-	if err := appendToFileFn(readyPath, fmt.Sprintf("\n<!-- branch: %s -->\n", claimed.Branch)); err != nil {
-		// Roll back: move file from ready-for-review/ back to in-progress/.
-		if rollbackErr := queue.AtomicMove(readyPath, claimed.TaskPath); rollbackErr != nil {
-			// Rollback failed — task is stranded in ready-for-review without
-			// branch metadata. Log and return the original error.
-			fmt.Fprintf(os.Stderr, "error: branch marker write failed and rollback to in-progress/ also failed: %v\n", rollbackErr)
-			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", readyPath, err, rollbackErr)
-		}
-		return fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", readyPath, err)
+	// Move task to ready-for-review/ and write branch marker.
+	if err := moveTaskToReviewWithMarker(cfg.tasksDir, claimed, claimed.Branch); err != nil {
+		return err
 	}
 
 	// Send conflict-warning with changed files.
@@ -179,6 +162,31 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 		Body:   "Task complete, ready for review",
 	})
 	fmt.Printf("Pushed %s and moved %s to ready-for-review/\n", claimed.Branch, claimed.Filename)
+	return nil
+}
+
+// moveTaskToReviewWithMarker atomically moves a task from in-progress/ to
+// ready-for-review/ and writes the branch marker. If the marker write fails,
+// the move is rolled back by moving the file back to in-progress/.
+func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, branch string) error {
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, claimed.Filename)
+
+	// AtomicMove uses os.Link + os.Remove to prevent silently overwriting a
+	// file that appeared at the destination after the pre-check (TOCTOU defense).
+	if err := queue.AtomicMove(claimed.TaskPath, readyPath); err != nil {
+		return fmt.Errorf("move task to ready-for-review: %w", err)
+	}
+
+	// Write branch marker AFTER the move so that a failed move does not
+	// leave the in-progress file with an incorrect marker.
+	if err := appendToFileFn(readyPath, fmt.Sprintf("\n<!-- branch: %s -->\n", branch)); err != nil {
+		// Roll back: move file from ready-for-review/ back to in-progress/.
+		if rollbackErr := queue.AtomicMove(readyPath, claimed.TaskPath); rollbackErr != nil {
+			fmt.Fprintf(os.Stderr, "error: branch marker write failed and rollback to in-progress/ also failed: %v\n", rollbackErr)
+			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", readyPath, err, rollbackErr)
+		}
+		return fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", readyPath, err)
+	}
 	return nil
 }
 
