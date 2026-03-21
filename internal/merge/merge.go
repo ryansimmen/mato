@@ -47,7 +47,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		return 0
 	}
 
-	activeBranches := queue.CollectActiveBranches(tasksDir)
+	activeBranches := queue.CollectActiveBranches(tasksDir, nil)
 
 	tasks := make([]mergeQueueTask, 0, len(names))
 	for _, name := range names {

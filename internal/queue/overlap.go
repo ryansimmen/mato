@@ -1,13 +1,7 @@
 package queue
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
-
-	"mato/internal/frontmatter"
-	"mato/internal/taskfile"
 )
 
 type backlogTask struct {
@@ -16,36 +10,6 @@ type backlogTask struct {
 	path     string
 	priority int
 	affects  []string
-}
-
-func hasActiveOverlap(tasksDir string, affects []string) bool {
-	if len(affects) == 0 {
-		return false
-	}
-	// Only check in-progress, ready-for-review, and ready-to-merge — these represent
-	// tasks that are actively being worked on, under review, or awaiting merge.
-	// We intentionally exclude backlog/
-	// because DeferredOverlappingTasks handles backlog-vs-backlog conflicts with
-	// proper priority ordering. Including backlog here would cause priority
-	// inversion: a high-priority waiting task would be blocked by a lower-priority
-	// backlog task that hasn't even been claimed yet.
-	for _, dir := range []string{DirInProgress, DirReadyReview, DirReadyMerge} {
-		dirPath := filepath.Join(tasksDir, dir)
-		names, err := ListTaskFiles(dirPath)
-		if err != nil {
-			continue
-		}
-		for _, name := range names {
-			meta, _, err := frontmatter.ParseTaskFile(filepath.Join(dirPath, name))
-			if err != nil {
-				continue
-			}
-			if len(overlappingAffects(affects, meta.Affects)) > 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // DeferralInfo describes why a task was excluded from the runnable queue.
@@ -59,8 +23,10 @@ type DeferralInfo struct {
 // be excluded from the queue because they conflict with higher-priority backlog
 // tasks or active tasks in in-progress/ready-for-review/ready-to-merge. Tasks remain in backlog/
 // (no file movement) to avoid churn between waiting/ and backlog/.
-func DeferredOverlappingTasks(tasksDir string) map[string]struct{} {
-	detailed := DeferredOverlappingTasksDetailed(tasksDir)
+//
+// When idx is nil, a temporary index is built internally.
+func DeferredOverlappingTasks(tasksDir string, idx *PollIndex) map[string]struct{} {
+	detailed := DeferredOverlappingTasksDetailed(tasksDir, idx)
 	simple := make(map[string]struct{}, len(detailed))
 	for name := range detailed {
 		simple[name] = struct{}{}
@@ -69,27 +35,22 @@ func DeferredOverlappingTasks(tasksDir string) map[string]struct{} {
 }
 
 // DeferredOverlappingTasksDetailed returns deferred tasks with the reason for deferral.
-func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
-	deferred := make(map[string]DeferralInfo)
-	backlogDir := filepath.Join(tasksDir, DirBacklog)
-	names, err := ListTaskFiles(backlogDir)
-	if err != nil {
-		return deferred
-	}
+//
+// When idx is nil, a temporary index is built internally.
+func DeferredOverlappingTasksDetailed(tasksDir string, idx *PollIndex) map[string]DeferralInfo {
+	idx = ensureIndex(tasksDir, idx)
 
-	tasks := make([]backlogTask, 0, len(names))
-	for _, name := range names {
-		path := filepath.Join(backlogDir, name)
-		meta, _, err := frontmatter.ParseTaskFile(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for overlap detection: %v\n", name, err)
-			continue
-		}
+	deferred := make(map[string]DeferralInfo)
+
+	// Build sorted backlog tasks from the index.
+	backlogSnaps := idx.TasksByState(DirBacklog)
+	tasks := make([]backlogTask, 0, len(backlogSnaps))
+	for _, snap := range backlogSnaps {
 		tasks = append(tasks, backlogTask{
-			name:     name,
-			path:     path,
-			priority: meta.Priority,
-			affects:  meta.Affects,
+			name:     snap.Filename,
+			path:     snap.Path,
+			priority: snap.Meta.Priority,
+			affects:  snap.Meta.Affects,
 		})
 	}
 
@@ -100,7 +61,8 @@ func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
 		return tasks[i].name < tasks[j].name
 	})
 
-	active := taskfile.CollectActiveAffects(tasksDir)
+	// Use index-derived active affects instead of rescanning filesystem.
+	active := idx.ActiveAffects()
 	kept := make([]backlogTask, 0, len(tasks)+len(active))
 	for _, at := range active {
 		kept = append(kept, backlogTask{
