@@ -8,8 +8,33 @@ import (
 	"testing"
 
 	"mato/internal/git"
-	"mato/internal/messaging"
 )
+
+// WriteFile creates a file at path with the given content, creating parent dirs.
+func WriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// WriteTempFile creates a temp file with the given content and returns its path.
+func WriteTempFile(t *testing.T, content string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "*.md")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		t.Fatalf("write temp file: %v", err)
+	}
+	f.Close()
+	return f.Name()
+}
 
 // SetupRepo creates a temporary git repository with one initial commit
 // containing a README.md file. It returns the repo root directory.
@@ -59,8 +84,12 @@ func SetupRepoWithTasks(t *testing.T) (string, string) {
 	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
 		t.Fatalf("os.MkdirAll(.locks): %v", err)
 	}
-	if err := messaging.Init(tasksDir); err != nil {
-		t.Fatalf("messaging.Init: %v", err)
+	// Initialise messaging directories inline to avoid an import cycle
+	// (messaging → taskfile, and taskfile tests import testutil).
+	for _, sub := range []string{"messages/events", "messages/presence", "messages/completions"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if _, err := git.Output(dir, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
 		t.Fatalf("git config receive.denyCurrentBranch: %v", err)

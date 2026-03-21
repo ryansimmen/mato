@@ -248,7 +248,7 @@ func TestPromptVerifyClaim(t *testing.T) {
 
 	writeTask(t, tasksDir, "backlog", "task-alpha.md", "# Task Alpha\nDo alpha.\n")
 	writeTask(t, tasksDir, "backlog", "task-beta.md", "# Task Beta\nDo beta.\n")
-	writeFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\n")
+	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\n")
 
 	claimed, err = queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil)
 	if err != nil {
@@ -393,7 +393,7 @@ func TestHostPushAndMarkReady(t *testing.T) {
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
-	writeFile(t, filepath.Join(cloneDir, "hello.txt"), "hello world\n")
+	testutil.WriteFile(t, filepath.Join(cloneDir, "hello.txt"), "hello world\n")
 	mustGitOutput(t, cloneDir, "add", "hello.txt")
 	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
 
@@ -435,7 +435,7 @@ func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
-	writeFile(t, filepath.Join(cloneDir, "branch.txt"), "branch metadata\n")
+	testutil.WriteFile(t, filepath.Join(cloneDir, "branch.txt"), "branch metadata\n")
 	mustGitOutput(t, cloneDir, "add", "branch.txt")
 	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
 
@@ -470,11 +470,11 @@ func TestHostReplacesExistingRemoteBranch(t *testing.T) {
 
 	// Simulate a prior attempt that left a stale branch on the host repo.
 	mustGitOutput(t, repoRoot, "checkout", "-b", "task/my-task", "mato")
-	writeFile(t, filepath.Join(repoRoot, "stale.txt"), "stale branch\n")
+	testutil.WriteFile(t, filepath.Join(repoRoot, "stale.txt"), "stale branch\n")
 	mustGitOutput(t, repoRoot, "add", "stale.txt")
 	mustGitOutput(t, repoRoot, "commit", "-m", "stale branch work")
 	mustGitOutput(t, repoRoot, "checkout", "mato")
-	writeFile(t, filepath.Join(repoRoot, "base.txt"), "advanced target\n")
+	testutil.WriteFile(t, filepath.Join(repoRoot, "base.txt"), "advanced target\n")
 	mustGitOutput(t, repoRoot, "add", "base.txt")
 	mustGitOutput(t, repoRoot, "commit", "-m", "advance mato")
 
@@ -483,7 +483,7 @@ func TestHostReplacesExistingRemoteBranch(t *testing.T) {
 	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
 
 	// Agent makes changes and commits on the fresh branch.
-	writeFile(t, filepath.Join(cloneDir, "fresh.txt"), "fresh branch\n")
+	testutil.WriteFile(t, filepath.Join(cloneDir, "fresh.txt"), "fresh branch\n")
 	mustGitOutput(t, cloneDir, "add", "fresh.txt")
 	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
 
@@ -589,7 +589,7 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 	for _, name := range []string{"task-alpha.md", "task-beta.md", "task-gamma.md"} {
 		writeTask(t, tasksDir, "backlog", name, "# "+strings.TrimSuffix(name, ".md")+"\n")
 	}
-	writeFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\ntask-gamma.md\n")
+	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\ntask-gamma.md\n")
 
 	// Both agents claim via Go; each gets a different task.
 	claimedA, err := queue.SelectAndClaimTask(tasksDir, "agent-a", nil)
@@ -625,7 +625,7 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, "backlog", "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
-	writeFile(t, filepath.Join(tasksDir, ".queue"), "add-hello.md\n")
+	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "add-hello.md\n")
 
 	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-8", nil)
 	if err != nil {

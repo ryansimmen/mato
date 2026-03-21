@@ -43,7 +43,7 @@ func TestConcurrentTaskClaiming(t *testing.T) {
 	inProgressDir := filepath.Join(tasksDir, "in-progress")
 
 	for i := 0; i < 10; i++ {
-		writeFile(t, filepath.Join(backlogDir, fmt.Sprintf("task-%02d.md", i)), fmt.Sprintf("# Task %d\nDo something.\n", i))
+		testutil.WriteFile(t, filepath.Join(backlogDir, fmt.Sprintf("task-%02d.md", i)), fmt.Sprintf("# Task %d\nDo something.\n", i))
 	}
 
 	var wg sync.WaitGroup
@@ -134,7 +134,7 @@ func TestConcurrentReconcileReadyQueue(t *testing.T) {
 	backlogDir := filepath.Join(tasksDir, "backlog")
 
 	for i := 0; i < 5; i++ {
-		writeFile(t, filepath.Join(waitingDir, fmt.Sprintf("task-%02d.md", i)), fmt.Sprintf("# Task %d\nReady now.\n", i))
+		testutil.WriteFile(t, filepath.Join(waitingDir, fmt.Sprintf("task-%02d.md", i)), fmt.Sprintf("# Task %d\nReady now.\n", i))
 	}
 
 	var wg sync.WaitGroup
@@ -275,7 +275,7 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 	configureCloneIdentity(t, redoClone)
 	mustGitOutput(t, redoClone, "fetch", "origin")
 	mustGitOutput(t, redoClone, "checkout", "-B", "task/beta", "origin/mato")
-	writeFile(t, filepath.Join(redoClone, "README.md"), "alpha content\nbeta content\n")
+	testutil.WriteFile(t, filepath.Join(redoClone, "README.md"), "alpha content\nbeta content\n")
 	mustGitOutput(t, redoClone, "add", "README.md")
 	mustGitOutput(t, redoClone, "commit", "-m", "redo beta")
 	mustGitOutput(t, redoClone, "push", "--force", "origin", "task/beta")
@@ -456,7 +456,7 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 
 	configureCloneIdentity(t, clone1)
 	mustGitOutput(t, clone1, "checkout", "-b", "task/fix-bug", "mato")
-	writeFile(t, filepath.Join(clone1, "agent-one.txt"), "agent one\n")
+	testutil.WriteFile(t, filepath.Join(clone1, "agent-one.txt"), "agent one\n")
 	mustGitOutput(t, clone1, "add", "-A")
 	mustGitOutput(t, clone1, "commit", "-m", "agent 1 fix")
 	mustGitOutput(t, clone1, "push", "origin", "task/fix-bug")
@@ -485,7 +485,7 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 
 	configureCloneIdentity(t, clone2)
 	mustGitOutput(t, clone2, "checkout", "-b", claimed.Branch, "mato")
-	writeFile(t, filepath.Join(clone2, "agent-two.txt"), "agent two\n")
+	testutil.WriteFile(t, filepath.Join(clone2, "agent-two.txt"), "agent two\n")
 	mustGitOutput(t, clone2, "add", "-A")
 	mustGitOutput(t, clone2, "commit", "-m", "agent 2 fix")
 	mustGitOutput(t, clone2, "push", "origin", claimed.Branch)
@@ -502,7 +502,7 @@ func TestOrphanRecoveryDuringConcurrentWork(t *testing.T) {
 
 	aliveTask := writeTask(t, tasksDir, "in-progress", "alive-task.md", "<!-- claimed-by: alive-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Alive\nStill running.\n")
 	deadTask := writeTask(t, tasksDir, "in-progress", "dead-task.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Dead\nNeeds recovery.\n")
-	writeFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
+	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
 
 	queue.RecoverOrphanedTasks(tasksDir)
 
@@ -739,11 +739,11 @@ func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
 	_ = repoRoot
 
 	// Task A in in-progress with overlapping affects
-	writeFile(t, filepath.Join(tasksDir, "in-progress", "active.md"),
+	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "active.md"),
 		"---\nid: active\npriority: 1\naffects: [main.go]\n---\n# Active task\n")
 
 	// Task B in backlog with same affects — should be deferred
-	writeFile(t, filepath.Join(tasksDir, "backlog", "blocked.md"),
+	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "blocked.md"),
 		"---\nid: blocked\npriority: 10\naffects: [main.go]\n---\n# Blocked task\n")
 
 	// Compute deferred set
@@ -782,7 +782,7 @@ func TestConcurrentSelectAndClaimTask(t *testing.T) {
 	const numTasks = 3
 	for i := 0; i < numTasks; i++ {
 		name := fmt.Sprintf("claim-task-%02d.md", i)
-		writeFile(t, filepath.Join(backlogDir, name),
+		testutil.WriteFile(t, filepath.Join(backlogDir, name),
 			fmt.Sprintf("# Claim task %d\nDo something.\n", i))
 	}
 

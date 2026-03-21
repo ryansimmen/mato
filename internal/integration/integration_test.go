@@ -33,13 +33,6 @@ func configureCloneIdentity(t *testing.T, cloneDir string) {
 	mustGitOutput(t, cloneDir, "config", "user.name", "Test")
 }
 
-func writeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("os.WriteFile(%s): %v", path, err)
-	}
-}
-
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -73,7 +66,7 @@ func mustNotExist(t *testing.T, path string) {
 func writeTask(t *testing.T, tasksDir, queueDir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(tasksDir, queueDir, name)
-	writeFile(t, path, content)
+	testutil.WriteFile(t, path, content)
 	return path
 }
 
@@ -89,7 +82,7 @@ func createTaskBranch(t *testing.T, repoRoot, branch string, files map[string]st
 	configureCloneIdentity(t, cloneDir)
 	mustGitOutput(t, cloneDir, "checkout", "-b", branch, "mato")
 	for name, content := range files {
-		writeFile(t, filepath.Join(cloneDir, name), content)
+		testutil.WriteFile(t, filepath.Join(cloneDir, name), content)
 	}
 	mustGitOutput(t, cloneDir, "add", "-A")
 	mustGitOutput(t, cloneDir, "commit", "-m", message)
@@ -138,7 +131,7 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 
 	configureCloneIdentity(t, cloneDir)
 	mustGitOutput(t, cloneDir, "checkout", "-b", "task/add-hello", "mato")
-	writeFile(t, filepath.Join(cloneDir, "hello.txt"), "hello world\n")
+	testutil.WriteFile(t, filepath.Join(cloneDir, "hello.txt"), "hello world\n")
 	mustGitOutput(t, cloneDir, "add", "-A")
 	mustGitOutput(t, cloneDir, "commit", "-m", "add hello")
 	mustGitOutput(t, cloneDir, "push", "origin", "task/add-hello")
@@ -242,7 +235,7 @@ func TestOrphanRecoveryAndRequeue(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	inProgressTask := writeTask(t, tasksDir, "in-progress", "recover-me.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Recover me\nTry again.\n")
-	writeFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
+	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
 
 	queue.RecoverOrphanedTasks(tasksDir)
 
@@ -366,7 +359,7 @@ func TestStatusWithPopulatedQueue(t *testing.T) {
 		}
 	}
 
-	writeFile(t, filepath.Join(tasksDir, ".locks", "status-agent.pid"), fmt.Sprintf("%d", os.Getpid()))
+	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "status-agent.pid"), fmt.Sprintf("%d", os.Getpid()))
 
 	if err := status.Show(repoRoot, ""); err != nil {
 		t.Fatalf("status.Show: %v", err)
