@@ -46,7 +46,7 @@ const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 // compatibility, and performs a squash merge.
 // Returns the number of tasks successfully merged.
 func ProcessQueue(repoRoot, tasksDir, branch string) int {
-	readyDir := filepath.Join(tasksDir, "ready-to-merge")
+	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
 	entries, err := os.ReadDir(readyDir)
 	if err != nil {
 		return 0
@@ -64,7 +64,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse ready-to-merge task %s: %v\n", entry.Name(), err)
-			if failureErr := failMergeTask(path, filepath.Join(tasksDir, "backlog", entry.Name()), fmt.Sprintf("parse task file: %v", err)); failureErr != nil {
+			if failureErr := failMergeTask(path, filepath.Join(tasksDir, queue.DirBacklog, entry.Name()), fmt.Sprintf("parse task file: %v", err)); failureErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not requeue task %s: %v\n", entry.Name(), failureErr)
 			}
 			continue
@@ -98,7 +98,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 
 	merged := 0
 	for _, task := range tasks {
-		completedPath := filepath.Join(tasksDir, "completed", task.name)
+		completedPath := filepath.Join(tasksDir, queue.DirCompleted, task.name)
 		if taskHasMergeSuccessRecord(task.path) {
 			if err := moveTaskWithRetry(task.path, completedPath); err != nil {
 				// If the destination already exists, the task was already
@@ -164,7 +164,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 }
 
 func HasReadyTasks(tasksDir string) bool {
-	entries, err := os.ReadDir(filepath.Join(tasksDir, "ready-to-merge"))
+	entries, err := os.ReadDir(filepath.Join(tasksDir, queue.DirReadyMerge))
 	if err != nil {
 		return false
 	}
@@ -386,9 +386,9 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 }
 
 func mergeFailureDestination(tasksDir, taskPath, taskName string) string {
-	dir := "backlog"
+	dir := queue.DirBacklog
 	if shouldFailTask(taskPath) {
-		dir = "failed"
+		dir = queue.DirFailed
 	}
 	return filepath.Join(tasksDir, dir, taskName)
 }

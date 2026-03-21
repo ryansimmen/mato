@@ -49,7 +49,7 @@ func runOnce(ctx context.Context, cfg dockerConfig, claimed *queue.ClaimedTask) 
 			"MATO_TASK_FILE="+claimed.Filename,
 			"MATO_TASK_BRANCH="+claimed.Branch,
 			"MATO_TASK_TITLE="+claimed.Title,
-			fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/in-progress/%s", cfg.workdir, claimed.Filename),
+			fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/%s/%s", cfg.workdir, queue.DirInProgress, claimed.Filename),
 			fmt.Sprintf("MATO_FILE_CLAIMS=%s/.tasks/messages/file-claims.json", cfg.workdir),
 		)
 		if depCtxPath := writeDependencyContextFile(cfg.tasksDir, claimed); depCtxPath != "" {
@@ -121,7 +121,7 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 	// Pre-check: verify ready-for-review/ destination is clear before pushing.
 	// If a stale file exists (e.g., from a prior incomplete cycle), skip the
 	// push to avoid corrupting its metadata.
-	readyPath := filepath.Join(cfg.tasksDir, "ready-for-review", claimed.Filename)
+	readyPath := filepath.Join(cfg.tasksDir, queue.DirReadyReview, claimed.Filename)
 	if _, err := os.Stat(readyPath); err == nil {
 		fmt.Fprintf(os.Stderr, "warning: %s already exists in ready-for-review/; skipping push (task is likely already being reviewed)\n", claimed.Filename)
 		return fmt.Errorf("ready-for-review/%s already exists: skipping push to avoid overwriting", claimed.Filename)
@@ -200,7 +200,7 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 		return
 	}
 
-	dst := filepath.Join(tasksDir, "backlog", claimed.Filename)
+	dst := filepath.Join(tasksDir, queue.DirBacklog, claimed.Filename)
 	// Use os.Link + os.Remove instead of os.Rename to atomically prevent
 	// overwriting an existing file at dst (TOCTOU race fix). os.Link fails
 	// with os.ErrExist if the destination already exists.

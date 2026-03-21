@@ -6,6 +6,7 @@ import (
 	"sort"
 	"testing"
 
+	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
@@ -13,7 +14,7 @@ func TestCollectActiveAffects_MultipleDirs(t *testing.T) {
 	tasksDir := t.TempDir()
 
 	// in-progress task with affects
-	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "task-a.md"), `---
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"), `---
 id: task-a
 affects:
   - internal/foo.go
@@ -23,7 +24,7 @@ affects:
 `)
 
 	// ready-for-review task with affects
-	testutil.WriteFile(t, filepath.Join(tasksDir, "ready-for-review", "task-b.md"), `---
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirReadyReview, "task-b.md"), `---
 id: task-b
 affects:
   - cmd/main.go
@@ -32,7 +33,7 @@ affects:
 `)
 
 	// ready-to-merge task with affects
-	testutil.WriteFile(t, filepath.Join(tasksDir, "ready-to-merge", "task-c.md"), `---
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirReadyMerge, "task-c.md"), `---
 id: task-c
 affects:
   - docs/readme.md
@@ -53,9 +54,9 @@ affects:
 		dir     string
 		affects []string
 	}{
-		{"task-a.md", "in-progress", []string{"internal/foo.go", "internal/bar.go"}},
-		{"task-b.md", "ready-for-review", []string{"cmd/main.go"}},
-		{"task-c.md", "ready-to-merge", []string{"docs/readme.md"}},
+		{"task-a.md", queue.DirInProgress, []string{"internal/foo.go", "internal/bar.go"}},
+		{"task-b.md", queue.DirReadyReview, []string{"cmd/main.go"}},
+		{"task-c.md", queue.DirReadyMerge, []string{"docs/readme.md"}},
 	}
 
 	for i, tc := range cases {
@@ -89,7 +90,7 @@ func TestCollectActiveAffects_NoAffectsField(t *testing.T) {
 	tasksDir := t.TempDir()
 
 	// Task with no affects field
-	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "no-affects.md"), `---
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirInProgress, "no-affects.md"), `---
 id: no-affects
 priority: 10
 ---
@@ -97,7 +98,7 @@ priority: 10
 `)
 
 	// Task with empty affects
-	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "empty-affects.md"), `---
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirInProgress, "empty-affects.md"), `---
 id: empty-affects
 affects: []
 ---
@@ -112,7 +113,7 @@ affects: []
 
 func TestCollectActiveAffects_SkipsNonMarkdown(t *testing.T) {
 	tasksDir := t.TempDir()
-	dir := filepath.Join(tasksDir, "in-progress")
+	dir := filepath.Join(tasksDir, queue.DirInProgress)
 
 	// A non-markdown file should be ignored
 	testutil.WriteFile(t, filepath.Join(dir, "notes.txt"), "not a task file")
@@ -144,7 +145,7 @@ func TestCollectActiveAffects_WithHTMLComments(t *testing.T) {
 	tasksDir := t.TempDir()
 
 	// Task file with HTML comment metadata (like claimed-by, branch)
-	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "commented.md"), `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirInProgress, "commented.md"), `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
 <!-- branch: task/commented -->
 ---
 id: commented
@@ -167,14 +168,14 @@ func TestCollectActiveAffects_IgnoresOtherDirs(t *testing.T) {
 	tasksDir := t.TempDir()
 
 	// Tasks in backlog/ and completed/ should NOT be collected
-	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "backlog-task.md"), `---
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "backlog-task.md"), `---
 id: backlog-task
 affects:
   - internal/backlog.go
 ---
 # Backlog Task
 `)
-	testutil.WriteFile(t, filepath.Join(tasksDir, "completed", "done-task.md"), `---
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirCompleted, "done-task.md"), `---
 id: done-task
 affects:
   - internal/done.go

@@ -246,8 +246,8 @@ func TestPromptVerifyClaim(t *testing.T) {
 		t.Fatalf("expected no task (backlog empty), got %+v", claimed)
 	}
 
-	writeTask(t, tasksDir, "backlog", "task-alpha.md", "# Task Alpha\nDo alpha.\n")
-	writeTask(t, tasksDir, "backlog", "task-beta.md", "# Task Beta\nDo beta.\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "task-alpha.md", "# Task Alpha\nDo alpha.\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "task-beta.md", "# Task Beta\nDo beta.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\n")
 
 	claimed, err = queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil)
@@ -275,17 +275,17 @@ func TestPromptVerifyClaim(t *testing.T) {
 		"MATO_TASK_FILE=" + claimed.Filename,
 		"MATO_TASK_BRANCH=" + claimed.Branch,
 		"MATO_TASK_TITLE=" + claimed.Title,
-		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, "in-progress", claimed.Filename),
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirInProgress, claimed.Filename),
 	}
 	out, err := runBash(t, cloneDir, env, script)
 	if err != nil {
 		t.Fatalf("runBash verify claim: %v\noutput:\n%s", err, out)
 	}
 
-	alphaInProgress := filepath.Join(tasksDir, "in-progress", "task-alpha.md")
+	alphaInProgress := filepath.Join(tasksDir, queue.DirInProgress, "task-alpha.md")
 	mustExist(t, alphaInProgress)
-	mustNotExist(t, filepath.Join(tasksDir, "backlog", "task-alpha.md"))
-	mustExist(t, filepath.Join(tasksDir, "backlog", "task-beta.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-alpha.md"))
+	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-beta.md"))
 
 	contents := readFile(t, alphaInProgress)
 	if !strings.HasPrefix(contents, "<!-- claimed-by: test-agent-1  claimed-at: ") {
@@ -303,7 +303,7 @@ func TestPromptHostCreatesBranch(t *testing.T) {
 	// The host creates the task branch before the agent runs.
 	// Verify the agent can commit on the pre-created branch.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-3  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", "<!-- claimed-by: test-agent-3  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 
@@ -314,7 +314,7 @@ func TestPromptHostCreatesBranch(t *testing.T) {
 		promptPreamble(t),
 		`BRANCH="task/my-task"`,
 		`FILENAME="my-task.md"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", queue.DirInProgress, "my-task.md")),
 		`TASK_TITLE="My Task"`,
 		`echo "hello world" > hello.txt`,
 		promptStateBlock(t, "COMMIT"),
@@ -346,7 +346,7 @@ func TestPromptHostCreatesBranch(t *testing.T) {
 
 func TestPromptCommitIncludesDescription(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", "<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	// Host creates the task branch
@@ -356,7 +356,7 @@ func TestPromptCommitIncludesDescription(t *testing.T) {
 		promptPreamble(t),
 		`BRANCH="task/my-task"`,
 		`FILENAME="my-task.md"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", queue.DirInProgress, "my-task.md")),
 		`TASK_TITLE="My Task"`,
 		`echo "aaa" > a.txt`,
 		`echo "bbb" > b.txt`,
@@ -389,7 +389,7 @@ func TestPromptCommitIncludesDescription(t *testing.T) {
 func TestHostPushAndMarkReady(t *testing.T) {
 	// Simulate the host post-agent push: push branch, write marker, move to ready-for-review.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-4  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", "<!-- claimed-by: test-agent-4  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
@@ -404,7 +404,7 @@ func TestHostPushAndMarkReady(t *testing.T) {
 	mustGitOutput(t, repoRoot, "rev-parse", "--verify", "refs/heads/task/my-task")
 
 	// Host writes branch marker
-	f, err := os.OpenFile(filepath.Join(tasksDir, "in-progress", "my-task.md"), os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(tasksDir, queue.DirInProgress, "my-task.md"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatalf("open task file: %v", err)
 	}
@@ -413,16 +413,16 @@ func TestHostPushAndMarkReady(t *testing.T) {
 
 	// Host moves to ready-for-review
 	if err := os.Rename(
-		filepath.Join(tasksDir, "in-progress", "my-task.md"),
-		filepath.Join(tasksDir, "ready-for-review", "my-task.md"),
+		filepath.Join(tasksDir, queue.DirInProgress, "my-task.md"),
+		filepath.Join(tasksDir, queue.DirReadyReview, "my-task.md"),
 	); err != nil {
 		t.Fatalf("move to ready-for-review: %v", err)
 	}
 
-	mustExist(t, filepath.Join(tasksDir, "ready-for-review", "my-task.md"))
-	mustNotExist(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
+	mustExist(t, filepath.Join(tasksDir, queue.DirReadyReview, "my-task.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirInProgress, "my-task.md"))
 
-	contents := readFile(t, filepath.Join(tasksDir, "ready-for-review", "my-task.md"))
+	contents := readFile(t, filepath.Join(tasksDir, queue.DirReadyReview, "my-task.md"))
 	if !strings.Contains(contents, "<!-- branch: task/my-task -->") {
 		t.Fatalf("ready task missing branch metadata: %s", contents)
 	}
@@ -431,7 +431,7 @@ func TestHostPushAndMarkReady(t *testing.T) {
 func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
 	// Verify branch marker is written to the task file after the host pushes.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-branch  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", "<!-- claimed-by: test-agent-branch  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
 	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
@@ -443,20 +443,20 @@ func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
 	mustGitOutput(t, cloneDir, "push", "--force-with-lease", "origin", "task/my-task")
 
 	// Before marker: no branch comment
-	contents := readFile(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
+	contents := readFile(t, filepath.Join(tasksDir, queue.DirInProgress, "my-task.md"))
 	if strings.Contains(contents, "<!-- branch:") {
 		t.Fatalf("branch marker should not exist before host writes it: %s", contents)
 	}
 
 	// Host writes marker
-	f, err := os.OpenFile(filepath.Join(tasksDir, "in-progress", "my-task.md"), os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(tasksDir, queue.DirInProgress, "my-task.md"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatalf("open task file: %v", err)
 	}
 	fmt.Fprintf(f, "\n<!-- branch: task/my-task -->\n")
 	f.Close()
 
-	contents = readFile(t, filepath.Join(tasksDir, "in-progress", "my-task.md"))
+	contents = readFile(t, filepath.Join(tasksDir, queue.DirInProgress, "my-task.md"))
 	if !strings.Contains(contents, "<!-- branch: task/my-task -->") {
 		t.Fatalf("task file missing branch metadata after host write: %s", contents)
 	}
@@ -466,7 +466,7 @@ func TestHostReplacesExistingRemoteBranch(t *testing.T) {
 	// When a task is retried, the host creates a fresh branch and force-pushes,
 	// replacing the stale branch from the prior attempt.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, "in-progress", "my-task.md", "<!-- claimed-by: test-agent-stale  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", "<!-- claimed-by: test-agent-stale  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
 	// Simulate a prior attempt that left a stale branch on the host repo.
 	mustGitOutput(t, repoRoot, "checkout", "-b", "task/my-task", "mato")
@@ -503,7 +503,7 @@ func TestHostReplacesExistingRemoteBranch(t *testing.T) {
 
 func TestPromptOnFailure(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, "in-progress", "my-task.md", strings.Join([]string{
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", strings.Join([]string{
 		"<!-- claimed-by: test-agent-5  claimed-at: 2026-01-01T00:00:00Z -->",
 		"# My Task",
 		"<!-- failure: prior -->",
@@ -516,7 +516,7 @@ func TestPromptOnFailure(t *testing.T) {
 	script := strings.Join([]string{
 		promptPreamble(t),
 		`FILENAME="my-task.md"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", queue.DirInProgress, "my-task.md")),
 		`FAIL_STEP="WORK"`,
 		`FAIL_REASON="test failure"`,
 		promptStateBlock(t, "ON_FAILURE"),
@@ -530,7 +530,7 @@ func TestPromptOnFailure(t *testing.T) {
 
 	// ON_FAILURE writes the failure record but does NOT move the file.
 	// The host handles the move to backlog/ via recoverStuckTask.
-	inProgressTask := filepath.Join(tasksDir, "in-progress", "my-task.md")
+	inProgressTask := filepath.Join(tasksDir, queue.DirInProgress, "my-task.md")
 	mustExist(t, inProgressTask)
 
 	contents := readFile(t, inProgressTask)
@@ -546,7 +546,7 @@ func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
 	// Even with many prior failures, ON_FAILURE only writes the failure record.
 	// The host moves to backlog and handles retry budgets.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, "in-progress", "my-task.md", strings.Join([]string{
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", strings.Join([]string{
 		"<!-- claimed-by: test-agent-6  claimed-at: 2026-01-01T00:00:00Z -->",
 		"# My Task",
 		"<!-- failure: one -->",
@@ -560,7 +560,7 @@ func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
 	script := strings.Join([]string{
 		promptPreamble(t),
 		`FILENAME="my-task.md"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", "in-progress", "my-task.md")),
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", queue.DirInProgress, "my-task.md")),
 		`FAIL_STEP="WORK"`,
 		`FAIL_REASON="test failure"`,
 		promptStateBlock(t, "ON_FAILURE"),
@@ -573,10 +573,10 @@ func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
 	}
 
 	// Task stays in in-progress/, NOT moved to backlog/ — host handles that.
-	inProgressTask := filepath.Join(tasksDir, "in-progress", "my-task.md")
+	inProgressTask := filepath.Join(tasksDir, queue.DirInProgress, "my-task.md")
 	mustExist(t, inProgressTask)
-	mustNotExist(t, filepath.Join(tasksDir, "backlog", "my-task.md"))
-	mustNotExist(t, filepath.Join(tasksDir, "failed", "my-task.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "my-task.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirFailed, "my-task.md"))
 
 	contents := readFile(t, inProgressTask)
 	if got := countFailureRecords(contents); got != 3 {
@@ -587,7 +587,7 @@ func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
 func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 	for _, name := range []string{"task-alpha.md", "task-beta.md", "task-gamma.md"} {
-		writeTask(t, tasksDir, "backlog", name, "# "+strings.TrimSuffix(name, ".md")+"\n")
+		writeTask(t, tasksDir, queue.DirBacklog, name, "# "+strings.TrimSuffix(name, ".md")+"\n")
 	}
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\ntask-gamma.md\n")
 
@@ -612,11 +612,11 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 		t.Fatalf("both agents claimed the same task: %s", claimedA.Filename)
 	}
 
-	inProgress := markdownFileNames(t, filepath.Join(tasksDir, "in-progress"))
+	inProgress := markdownFileNames(t, filepath.Join(tasksDir, queue.DirInProgress))
 	if len(inProgress) != 2 {
 		t.Fatalf("in-progress tasks = %v, want 2 claimed tasks", inProgress)
 	}
-	backlog := markdownFileNames(t, filepath.Join(tasksDir, "backlog"))
+	backlog := markdownFileNames(t, filepath.Join(tasksDir, queue.DirBacklog))
 	if len(backlog) != 1 {
 		t.Fatalf("backlog tasks = %v, want 1 unclaimed task", backlog)
 	}
@@ -624,7 +624,7 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 
 func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, "backlog", "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "add-hello.md\n")
 
 	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-8", nil)
@@ -655,7 +655,7 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 		"MATO_TASK_FILE=" + claimed.Filename,
 		"MATO_TASK_BRANCH=" + claimed.Branch,
 		"MATO_TASK_TITLE=" + claimed.Title,
-		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, "in-progress", claimed.Filename),
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirInProgress, claimed.Filename),
 	}
 	out, err := runBash(t, cloneDir, env, script)
 	if err != nil {
@@ -665,7 +665,7 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	// Host post-agent: push branch, write marker, move to ready-for-review.
 	mustGitOutput(t, cloneDir, "push", "--force-with-lease", "origin", claimed.Branch)
 
-	taskFile := filepath.Join(tasksDir, "in-progress", "add-hello.md")
+	taskFile := filepath.Join(tasksDir, queue.DirInProgress, "add-hello.md")
 	f, fErr := os.OpenFile(taskFile, os.O_APPEND|os.O_WRONLY, 0o644)
 	if fErr != nil {
 		t.Fatalf("open task file: %v", fErr)
@@ -673,16 +673,16 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	fmt.Fprintf(f, "\n<!-- branch: %s -->\n", claimed.Branch)
 	f.Close()
 
-	readyTask := filepath.Join(tasksDir, "ready-for-review", "add-hello.md")
+	readyTask := filepath.Join(tasksDir, queue.DirReadyReview, "add-hello.md")
 	if err := os.Rename(taskFile, readyTask); err != nil {
 		t.Fatalf("move to ready-for-review: %v", err)
 	}
 
 	mustExist(t, readyTask)
-	mustNotExist(t, filepath.Join(tasksDir, "backlog", "add-hello.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "add-hello.md"))
 
 	// Simulate review approval: move task from ready-for-review/ to ready-to-merge/
-	mergeTask := filepath.Join(tasksDir, "ready-to-merge", "add-hello.md")
+	mergeTask := filepath.Join(tasksDir, queue.DirReadyMerge, "add-hello.md")
 	if err := os.Rename(readyTask, mergeTask); err != nil {
 		t.Fatalf("move to ready-to-merge: %v", err)
 	}
@@ -691,7 +691,7 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 
-	mustExist(t, filepath.Join(tasksDir, "completed", "add-hello.md"))
+	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "add-hello.md"))
 	mustNotExist(t, mergeTask)
 	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "mato:hello.txt")); got != "hello world" {
 		t.Fatalf("hello.txt on mato = %q, want %q", got, "hello world")

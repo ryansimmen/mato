@@ -85,7 +85,7 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 		return err
 	}
 
-	subdirs := []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"}
+	subdirs := queue.AllDirs
 
 	// Verify directory structure
 	missingDirs := 0
@@ -216,7 +216,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		return err
 	}
 
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+	for _, sub := range queue.AllDirs {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			return fmt.Errorf("create .tasks subdirectory %s: %w", sub, err)
 		}

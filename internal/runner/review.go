@@ -39,13 +39,13 @@ type reviewVerdict struct {
 // sorted by priority (ascending) then filename. Tasks whose review retry
 // budget is exhausted are moved to failed/ and excluded from the result.
 func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	entries, err := os.ReadDir(reviewDir)
 	if err != nil {
 		return nil
 	}
 
-	failedDir := filepath.Join(tasksDir, "failed")
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 
 	type candidate struct {
 		task     *queue.ClaimedTask
@@ -178,7 +178,7 @@ func runReview(ctx context.Context, cfg dockerConfig, task *queue.ClaimedTask, b
 		"MATO_TASK_FILE=" + task.Filename,
 		"MATO_TASK_BRANCH=" + task.Branch,
 		"MATO_TASK_TITLE=" + task.Title,
-		fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/ready-for-review/%s", cfg.workdir, task.Filename),
+		fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/%s/%s", cfg.workdir, queue.DirReadyReview, task.Filename),
 		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/.tasks/messages/verdict-%s.json", cfg.workdir, task.Filename),
 	}
 
@@ -225,12 +225,12 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		if readErr == nil {
 			content := string(taskData)
 			if reviewedRe.MatchString(content) {
-				moveReviewedTask(tasksDir, agentID, task, "ready-to-merge",
+				moveReviewedTask(tasksDir, agentID, task, queue.DirReadyMerge,
 					"Review approved, ready for merge", "Review approved")
 				return
 			}
 			if reviewRejectionRe.MatchString(content) {
-				moveReviewedTask(tasksDir, agentID, task, "backlog",
+				moveReviewedTask(tasksDir, agentID, task, queue.DirBacklog,
 					"Review rejected", "Review rejected")
 				return
 			}
@@ -255,7 +255,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now)); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write approval marker: %v\n", err)
 		}
-		moveReviewedTask(tasksDir, agentID, task, "ready-to-merge",
+		moveReviewedTask(tasksDir, agentID, task, queue.DirReadyMerge,
 			"Review approved, ready for merge", "Review approved")
 
 	case "reject":
@@ -266,7 +266,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason)); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write rejection marker: %v\n", err)
 		}
-		moveReviewedTask(tasksDir, agentID, task, "backlog",
+		moveReviewedTask(tasksDir, agentID, task, queue.DirBacklog,
 			"Review rejected", "Review rejected")
 
 	case "error":

@@ -40,7 +40,7 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 	}
 
 	// Collect all data before printing.
-	queueDirs := []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"}
+	queueDirs := queue.AllDirs
 	counts := make(map[string]int, len(queueDirs))
 	for _, dir := range queueDirs {
 		counts[dir] = countMarkdownFiles(filepath.Join(tasksDir, dir))
@@ -59,10 +59,10 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 	for name := range deferredDetail {
 		deferred[name] = struct{}{}
 	}
-	inProgressTasks := listTasksInDir(tasksDir, "in-progress")
-	readyForReviewTasks := listTasksInDir(tasksDir, "ready-for-review")
-	readyToMergeTasks := listTasksInDir(tasksDir, "ready-to-merge")
-	failedTasks := listTasksInDir(tasksDir, "failed")
+	inProgressTasks := listTasksInDir(tasksDir, queue.DirInProgress)
+	readyForReviewTasks := listTasksInDir(tasksDir, queue.DirReadyReview)
+	readyToMergeTasks := listTasksInDir(tasksDir, queue.DirReadyMerge)
+	failedTasks := listTasksInDir(tasksDir, queue.DirFailed)
 	reverseDeps := reverseDependencies(tasksDir)
 	completions, _ := messaging.ReadAllCompletionDetails(tasksDir)
 	mergeLockActive := isMergeLockActive(tasksDir)
@@ -76,7 +76,7 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 		recentMessages = recentMessages[len(recentMessages)-5:]
 	}
 
-	runnable := counts["backlog"] - len(deferred)
+	runnable := counts[queue.DirBacklog] - len(deferred)
 	if runnable < 0 {
 		runnable = 0
 	}
@@ -95,12 +95,12 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 	fmt.Fprintln(w, bold("──────────────"))
 	fmt.Fprintf(w, "  runnable:       %s\n", green(runnable))
 	fmt.Fprintf(w, "  deferred:       %s  %s\n", yellow(len(deferred)), dim("(conflict-blocked, in backlog)"))
-	fmt.Fprintf(w, "  waiting:        %s  %s\n", dim(counts["waiting"]), dim("(dependency-blocked)"))
-	fmt.Fprintf(w, "  in-progress:    %s\n", yellow(counts["in-progress"]))
-	fmt.Fprintf(w, "  ready-review:   %s\n", cyan(counts["ready-for-review"]))
-	fmt.Fprintf(w, "  ready-to-merge: %s\n", cyan(counts["ready-to-merge"]))
-	fmt.Fprintf(w, "  completed:      %s\n", green(counts["completed"]))
-	fmt.Fprintf(w, "  failed:         %s\n", red(counts["failed"]))
+	fmt.Fprintf(w, "  waiting:        %s  %s\n", dim(counts[queue.DirWaiting]), dim("(dependency-blocked)"))
+	fmt.Fprintf(w, "  in-progress:    %s\n", yellow(counts[queue.DirInProgress]))
+	fmt.Fprintf(w, "  ready-review:   %s\n", cyan(counts[queue.DirReadyReview]))
+	fmt.Fprintf(w, "  ready-to-merge: %s\n", cyan(counts[queue.DirReadyMerge]))
+	fmt.Fprintf(w, "  completed:      %s\n", green(counts[queue.DirCompleted]))
+	fmt.Fprintf(w, "  failed:         %s\n", red(counts[queue.DirFailed]))
 	if mergeLockActive {
 		fmt.Fprintf(w, "  merge queue:    %s\n", yellow("active"))
 	} else {
@@ -163,7 +163,7 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 		fmt.Fprintln(w, bold("─────────────────"))
 		now := time.Now().UTC()
 		for _, task := range inProgressTasks {
-			taskPath := filepath.Join(tasksDir, "in-progress", task.name)
+			taskPath := filepath.Join(tasksDir, queue.DirInProgress, task.name)
 			claimedBy := queue.ParseClaimedBy(taskPath)
 
 			// Build info parts: title, agent, time-in-state, retry budget, reverse deps.
@@ -204,7 +204,7 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 		fmt.Fprintln(w, bold("Ready for Review"))
 		fmt.Fprintln(w, bold("────────────────"))
 		for _, task := range readyForReviewTasks {
-			taskPath := filepath.Join(tasksDir, "ready-for-review", task.name)
+			taskPath := filepath.Join(tasksDir, queue.DirReadyReview, task.name)
 			branch := parseBranchComment(taskPath)
 			var parts []string
 			if task.title != "" {
@@ -278,7 +278,7 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 		fmt.Fprintln(w, bold("Failed Tasks"))
 		fmt.Fprintln(w, bold("────────────"))
 		for _, task := range failedTasks {
-			taskPath := filepath.Join(tasksDir, "failed", task.name)
+			taskPath := filepath.Join(tasksDir, queue.DirFailed, task.name)
 			failCount := countFailureRecords(taskPath)
 			label := red(task.name)
 			if task.title != "" {
@@ -464,7 +464,7 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		return nil, err
 	}
 
-	entries, err := os.ReadDir(filepath.Join(tasksDir, "waiting"))
+	entries, err := os.ReadDir(filepath.Join(tasksDir, queue.DirWaiting))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -477,7 +477,7 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		path := filepath.Join(tasksDir, "waiting", entry.Name())
+		path := filepath.Join(tasksDir, queue.DirWaiting, entry.Name())
 		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse %s: %v\n", path, err)
@@ -494,7 +494,7 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 				status = "missing"
 			}
 			symbol := redSym("✗")
-			if status == "completed" {
+			if status == queue.DirCompleted {
 				symbol = greenSym("✓")
 			}
 			deps = append(deps, fmt.Sprintf("%s (%s %s)", dep, symbol, status))
@@ -525,13 +525,13 @@ func taskStatesByID(tasksDir string) (map[string]string, error) {
 		Dir   string
 		State string
 	}{
-		{Dir: "waiting", State: "waiting"},
-		{Dir: "backlog", State: "backlog"},
-		{Dir: "in-progress", State: "in-progress"},
-		{Dir: "ready-for-review", State: "ready-for-review"},
-		{Dir: "ready-to-merge", State: "ready-to-merge"},
-		{Dir: "completed", State: "completed"},
-		{Dir: "failed", State: "failed"},
+		{Dir: queue.DirWaiting, State: queue.DirWaiting},
+		{Dir: queue.DirBacklog, State: queue.DirBacklog},
+		{Dir: queue.DirInProgress, State: queue.DirInProgress},
+		{Dir: queue.DirReadyReview, State: queue.DirReadyReview},
+		{Dir: queue.DirReadyMerge, State: queue.DirReadyMerge},
+		{Dir: queue.DirCompleted, State: queue.DirCompleted},
+		{Dir: queue.DirFailed, State: queue.DirFailed},
 	}
 
 	states := make(map[string]string)
@@ -639,7 +639,7 @@ func lastFailureReason(path string) string {
 // reverseDependencies scans waiting/ tasks and returns a map from dependency ID
 // to the list of task filenames that depend on it.
 func reverseDependencies(tasksDir string) map[string][]string {
-	entries, err := os.ReadDir(filepath.Join(tasksDir, "waiting"))
+	entries, err := os.ReadDir(filepath.Join(tasksDir, queue.DirWaiting))
 	if err != nil {
 		return nil
 	}
@@ -648,7 +648,7 @@ func reverseDependencies(tasksDir string) map[string][]string {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, "waiting", entry.Name()))
+		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, queue.DirWaiting, entry.Name()))
 		if err != nil {
 			continue
 		}

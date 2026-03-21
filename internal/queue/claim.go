@@ -69,9 +69,9 @@ type ClaimedTask struct {
 func CollectActiveBranches(tasksDir string) map[string]struct{} {
 	active := make(map[string]struct{})
 	dirs := []string{
-		filepath.Join(tasksDir, "in-progress"),
-		filepath.Join(tasksDir, "ready-for-review"),
-		filepath.Join(tasksDir, "ready-to-merge"),
+		filepath.Join(tasksDir, DirInProgress),
+		filepath.Join(tasksDir, DirReadyReview),
+		filepath.Join(tasksDir, DirReadyMerge),
 	}
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -149,9 +149,9 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		return nil, err
 	}
 
-	inProgressDir := filepath.Join(tasksDir, "in-progress")
-	failedDir := filepath.Join(tasksDir, "failed")
-	backlogDir := filepath.Join(tasksDir, "backlog")
+	inProgressDir := filepath.Join(tasksDir, DirInProgress)
+	failedDir := filepath.Join(tasksDir, DirFailed)
+	backlogDir := filepath.Join(tasksDir, DirBacklog)
 
 	activeBranches := CollectActiveBranches(tasksDir)
 
@@ -237,7 +237,7 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 // It reads .queue if present, otherwise lists backlog/ alphabetically.
 func selectCandidates(tasksDir string, deferred map[string]struct{}) ([]string, error) {
 	queueFile := filepath.Join(tasksDir, ".queue")
-	backlogDir := filepath.Join(tasksDir, "backlog")
+	backlogDir := filepath.Join(tasksDir, DirBacklog)
 
 	var candidates []string
 

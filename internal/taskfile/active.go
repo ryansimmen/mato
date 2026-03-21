@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"mato/internal/frontmatter"
+	"mato/internal/queue"
 )
 
 // ActiveTask describes a task currently being worked on or awaiting merge,
@@ -20,7 +21,7 @@ type ActiveTask struct {
 // ready-to-merge/ that have non-empty affects: metadata.
 func CollectActiveAffects(tasksDir string) []ActiveTask {
 	var active []ActiveTask
-	for _, dir := range []string{"in-progress", "ready-for-review", "ready-to-merge"} {
+	for _, dir := range []string{queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge} {
 		dirPath := filepath.Join(tasksDir, dir)
 		entries, err := os.ReadDir(dirPath)
 		if err != nil {
