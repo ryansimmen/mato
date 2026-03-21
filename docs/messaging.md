@@ -73,23 +73,24 @@ The host writes a file-claims index to `.tasks/messages/file-claims.json` before
 The host calls `messaging.BuildAndWriteFileClaims(tasksDir, excludeTask)` immediately after claiming a task, before launching the agent container. The just-claimed task is excluded so the agent does not see its own `affects:` entries as conflicts.
 
 ### What it contains
-The file is a JSON object mapping file paths to claim records:
+The file is a JSON object mapping active `affects:` entries to claim records:
 
 ```json
 {
-  "pkg/client/http.go": {"task": "add-http-retries.md", "status": "in-progress"},
+  "pkg/client/": {"task": "add-http-retries.md", "status": "in-progress"},
+  "pkg/client/http.go": {"task": "tighten-http-timeouts.md", "status": "ready-for-review"},
   "internal/auth/auth.go": {"task": "fix-auth-bug.md", "status": "ready-for-review"},
   "cmd/server/main.go": {"task": "refactor-server.md", "status": "ready-to-merge"}
 }
 ```
 
-Each key is a file path from a task's `affects:` metadata. Each value is a `FileClaim` with the task filename and its current queue status (`in-progress`, `ready-for-review`, or `ready-to-merge`).
+Each key is a literal entry from a task's `affects:` metadata. Most keys are file paths; keys ending with `/` are directory-prefix claims and apply to any file underneath that path. Each value is a `FileClaim` with the task filename and its current queue status (`in-progress`, `ready-for-review`, or `ready-to-merge`).
 
 ### How it is built
-`BuildAndWriteFileClaims` scans tasks in `in-progress/`, `ready-for-review/`, and `ready-to-merge/` via `taskfile.CollectActiveAffects(...)`, then builds a map of file path → claim. First writer wins: if multiple tasks claim the same file, only the first is recorded.
+`BuildAndWriteFileClaims` scans tasks in `in-progress/`, `ready-for-review/`, and `ready-to-merge/` via `taskfile.CollectActiveAffects(...)`, then builds a map of affects entry → claim. Directory-prefix entries are preserved as-is. First writer wins: if multiple tasks claim the same literal entry, only the first is recorded.
 
 ### How agents use it
-The host injects `MATO_FILE_CLAIMS` pointing to the file-claims path inside the container. Agents can read this file during `VERIFY_CLAIM` to detect potential conflicts with other active tasks and adjust their approach accordingly.
+The host injects `MATO_FILE_CLAIMS` pointing to the file-claims path inside the container. Agents can read this file during `VERIFY_CLAIM` to detect potential conflicts with other active tasks and adjust their approach accordingly. When a key ends with `/`, agents should treat it as a claim on every file under that directory.
 
 ## Agent Checkpoints
 

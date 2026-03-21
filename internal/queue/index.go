@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"mato/internal/frontmatter"
 	"mato/internal/taskfile"
@@ -61,6 +62,12 @@ type PollIndex struct {
 	// (in active dirs) that declare it.
 	activeAffects map[string][]string
 
+	// activeAffectsPrefixes holds affects entries from active dirs that
+	// end with "/" (directory prefixes). Stored separately so
+	// HasActiveOverlap can check prefix relationships without scanning
+	// the full activeAffects map on every call.
+	activeAffectsPrefixes []string
+
 	// activeBranches is the set of branch names in active directories
 	// (in-progress, ready-for-review, ready-to-merge).
 	activeBranches map[string]struct{}
@@ -88,6 +95,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 		activeAffects:   make(map[string][]string),
 		activeBranches:  make(map[string]struct{}),
 	}
+	activeAffectsPrefixSet := make(map[string]struct{})
 
 	isActive := make(map[string]bool, len(activeDirs))
 	for _, d := range activeDirs {
@@ -172,6 +180,13 @@ func BuildIndex(tasksDir string) *PollIndex {
 				}
 				for _, af := range meta.Affects {
 					idx.activeAffects[af] = append(idx.activeAffects[af], name)
+					if isDirPrefix(af) {
+						if _, ok := activeAffectsPrefixSet[af]; ok {
+							continue
+						}
+						activeAffectsPrefixSet[af] = struct{}{}
+						idx.activeAffectsPrefixes = append(idx.activeAffectsPrefixes, af)
+					}
 				}
 			}
 		}
@@ -219,14 +234,36 @@ func (idx *PollIndex) AllIDs() map[string]struct{} {
 
 // HasActiveOverlap reports whether any task in the active directories
 // (in-progress, ready-for-review, ready-to-merge) declares an affects path
-// that overlaps with the given list.
+// that overlaps with the given list. An entry ending with "/" is treated as
+// a directory prefix that matches any path underneath it.
 func (idx *PollIndex) HasActiveOverlap(affects []string) bool {
 	if idx == nil || len(affects) == 0 {
 		return false
 	}
 	for _, af := range affects {
+		// Exact match (fast path).
 		if len(idx.activeAffects[af]) > 0 {
 			return true
+		}
+		// If af is a prefix, check if any active key or active prefix
+		// falls under it.
+		if isDirPrefix(af) {
+			for key := range idx.activeAffects {
+				if strings.HasPrefix(key, af) {
+					return true
+				}
+			}
+			for _, activePrefix := range idx.activeAffectsPrefixes {
+				if strings.HasPrefix(activePrefix, af) {
+					return true
+				}
+			}
+		}
+		// Check if af falls under any active prefix entry.
+		for _, prefix := range idx.activeAffectsPrefixes {
+			if strings.HasPrefix(af, prefix) {
+				return true
+			}
 		}
 	}
 	return false

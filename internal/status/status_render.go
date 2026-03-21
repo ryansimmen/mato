@@ -202,7 +202,7 @@ func renderConflictDeferred(w io.Writer, c colorSet, data statusData) {
 		info := data.deferredDetail[name]
 		fmt.Fprintf(w, "  %s\n", c.yellow(name))
 		fmt.Fprintf(w, "    blocked by: %s (%s/)\n", info.BlockedBy, info.BlockedByDir)
-		fmt.Fprintf(w, "    overlapping: %s\n", strings.Join(info.OverlapFiles, ", "))
+		fmt.Fprintf(w, "    conflicting affects: %s\n", strings.Join(info.ConflictingAffects, ", "))
 	}
 }
 

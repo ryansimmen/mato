@@ -288,12 +288,14 @@ Algorithm:
 5. For each backlog task, compare its `affects` list with every kept task.
 6. If there is overlap, add the task to the deferred exclusion set (it stays in `backlog/` but is excluded from `.queue` — agents won't see it).
 7. The exclusion set is passed to `WriteQueueManifest` and `SelectAndClaimTask`.
-`overlappingAffects(a, b)` (in `overlap.go`) is an exact intersection test:
+`overlappingAffects(a, b)` (in `overlap.go`) detects conflicts between two affects lists:
 - no overlap if either list is empty
-- values must match by exact string equality
+- exact strings are compared literally
+- an entry ending with `/` is treated as a directory prefix: it matches any entry that starts with that prefix (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Two prefix entries conflict if one contains the other.
+- when no prefix entries are present, a fast-path map lookup is used (O(n+m)); otherwise pairwise comparison is applied
 - duplicates are removed from the overlap report
 - the overlap list is sorted before logging
-Important consequence: `affects` is metadata, not a live diff. `mato` does not interpret it as globs or path prefixes.
+Important consequence: `affects` is metadata, not a live diff. `mato` does not interpret it as globs.
 ## 9. Code Structure
 
 The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypoint, `internal/` for library packages.
@@ -380,7 +382,7 @@ The host acts as a knowledge broker between agents, following an agent → host 
 
 Concrete examples:
 - **Failure context**: When an agent fails, it appends a `<!-- failure: ... -->` comment to the task file. On the next attempt, the host reads these lines via `extractFailureLines(...)` and injects them as `MATO_PREVIOUS_FAILURES`, so the new agent can learn from prior mistakes without parsing the task file itself.
-- **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
+- **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Entries are stored as the literal `affects:` keys, including directory prefixes ending with `/`. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
 - **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records, writes them to a file, and injects the file path as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
 - **Review feedback**: When the review agent rejects a task, it appends `<!-- review-rejection: ... -->` to the task file. On the next attempt, the host reads these lines and injects them as `MATO_REVIEW_FEEDBACK`, so the implementing agent can address the reviewer's concerns.
 

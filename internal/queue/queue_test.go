@@ -1044,6 +1044,65 @@ func TestDeferredOverlappingTasks_NoAffects(t *testing.T) {
 	}
 }
 
+func TestDeferredOverlappingTasks_PrefixMatch(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirWaiting, DirBacklog, DirInProgress} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// High-priority task claims a directory prefix.
+	if err := os.WriteFile(filepath.Join(tasksDir, DirBacklog, "refactor-client.md"),
+		[]byte("---\npriority: 5\naffects: [pkg/client/]\n---\nRefactor client package\n"), 0o644); err != nil {
+		t.Fatalf("write refactor-client.md: %v", err)
+	}
+	// Low-priority task claims a specific file under that directory.
+	if err := os.WriteFile(filepath.Join(tasksDir, DirBacklog, "fix-http.md"),
+		[]byte("---\npriority: 20\naffects: [pkg/client/http.go]\n---\nFix HTTP bug\n"), 0o644); err != nil {
+		t.Fatalf("write fix-http.md: %v", err)
+	}
+	// Independent task with no overlap.
+	if err := os.WriteFile(filepath.Join(tasksDir, DirBacklog, "update-docs.md"),
+		[]byte("---\npriority: 30\naffects: [docs/guide.md]\n---\nUpdate docs\n"), 0o644); err != nil {
+		t.Fatalf("write update-docs.md: %v", err)
+	}
+
+	deferred := DeferredOverlappingTasks(tasksDir, nil)
+
+	if len(deferred) != 1 {
+		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
+	}
+	if _, ok := deferred["fix-http.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "fix-http.md", deferred)
+	}
+}
+
+func TestDeferredOverlappingTasks_PrefixMatchInProgress(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirWaiting, DirBacklog, DirInProgress} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// In-progress task claims a directory prefix.
+	if err := os.WriteFile(filepath.Join(tasksDir, DirInProgress, "active-task.md"),
+		[]byte("---\naffects: [internal/queue/]\n---\nActive work\n"), 0o644); err != nil {
+		t.Fatalf("write active-task.md: %v", err)
+	}
+	// Backlog task claims a specific file under that prefix.
+	if err := os.WriteFile(filepath.Join(tasksDir, DirBacklog, "queue-fix.md"),
+		[]byte("---\naffects: [internal/queue/overlap.go]\n---\nFix overlap\n"), 0o644); err != nil {
+		t.Fatalf("write queue-fix.md: %v", err)
+	}
+
+	deferred := DeferredOverlappingTasks(tasksDir, nil)
+
+	if len(deferred) != 1 {
+		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
+	}
+	if _, ok := deferred["queue-fix.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %#v", "queue-fix.md", deferred)
+	}
+}
+
 func TestQueueOps_SpecialCharacterFilenames(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {

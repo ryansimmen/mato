@@ -2,6 +2,7 @@ package queue
 
 import (
 	"sort"
+	"strings"
 )
 
 type backlogTask struct {
@@ -14,9 +15,9 @@ type backlogTask struct {
 
 // DeferralInfo describes why a task was excluded from the runnable queue.
 type DeferralInfo struct {
-	BlockedBy    string   // name of the conflicting task
-	BlockedByDir string   // directory of the conflicting task (e.g., "in-progress", "backlog")
-	OverlapFiles []string // files both tasks claim in affects
+	BlockedBy          string   // name of the conflicting task
+	BlockedByDir       string   // directory of the conflicting task (e.g., "in-progress", "backlog")
+	ConflictingAffects []string // affects entries from either task that overlap
 }
 
 // DeferredOverlappingTasks returns the set of backlog task filenames that should
@@ -81,9 +82,9 @@ func DeferredOverlappingTasksDetailed(tasksDir string, idx *PollIndex) map[strin
 					blockedByDir = DirBacklog
 				}
 				deferred[task.name] = DeferralInfo{
-					BlockedBy:    other.name,
-					BlockedByDir: blockedByDir,
-					OverlapFiles: overlap,
+					BlockedBy:          other.name,
+					BlockedByDir:       blockedByDir,
+					ConflictingAffects: overlap,
 				}
 				isDef = true
 				break
@@ -98,30 +99,98 @@ func DeferredOverlappingTasksDetailed(tasksDir string, idx *PollIndex) map[strin
 	return deferred
 }
 
+// affectsMatch reports whether two affects entries conflict. An entry ending
+// with "/" is treated as a directory prefix that matches any path underneath
+// it. Two prefix entries conflict if one contains the other.
+func affectsMatch(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if strings.HasSuffix(a, "/") && strings.HasPrefix(b, a) {
+		return true
+	}
+	if strings.HasSuffix(b, "/") && strings.HasPrefix(a, b) {
+		return true
+	}
+	return false
+}
+
+// isDirPrefix reports whether s is a directory-prefix affects entry.
+func isDirPrefix(s string) bool {
+	return strings.HasSuffix(s, "/")
+}
+
 func overlappingAffects(a, b []string) []string {
 	if len(a) == 0 || len(b) == 0 {
 		return nil
 	}
 
-	seen := make(map[string]struct{}, len(a))
+	// Filter empty strings and detect whether either list has prefix entries.
+	aClean := make([]string, 0, len(a))
+	hasPrefixA := false
 	for _, item := range a {
 		if item == "" {
 			continue
 		}
-		seen[item] = struct{}{}
+		aClean = append(aClean, item)
+		if isDirPrefix(item) {
+			hasPrefixA = true
+		}
+	}
+	bClean := make([]string, 0, len(b))
+	hasPrefixB := false
+	for _, item := range b {
+		if item == "" {
+			continue
+		}
+		bClean = append(bClean, item)
+		if isDirPrefix(item) {
+			hasPrefixB = true
+		}
 	}
 
+	if len(aClean) == 0 || len(bClean) == 0 {
+		return nil
+	}
+
+	// Fast path: no prefix entries, use exact-match map lookup.
+	if !hasPrefixA && !hasPrefixB {
+		seen := make(map[string]struct{}, len(aClean))
+		for _, item := range aClean {
+			seen[item] = struct{}{}
+		}
+		overlap := make([]string, 0)
+		added := make(map[string]struct{})
+		for _, item := range bClean {
+			if _, ok := seen[item]; !ok {
+				continue
+			}
+			if _, ok := added[item]; ok {
+				continue
+			}
+			added[item] = struct{}{}
+			overlap = append(overlap, item)
+		}
+		sort.Strings(overlap)
+		return overlap
+	}
+
+	// Slow path: at least one side has prefix entries, do pairwise comparison.
 	overlap := make([]string, 0)
 	added := make(map[string]struct{})
-	for _, item := range b {
-		if _, ok := seen[item]; !ok {
-			continue
+	for _, ai := range aClean {
+		for _, bi := range bClean {
+			if affectsMatch(ai, bi) {
+				if _, ok := added[ai]; !ok {
+					added[ai] = struct{}{}
+					overlap = append(overlap, ai)
+				}
+				if _, ok := added[bi]; !ok {
+					added[bi] = struct{}{}
+					overlap = append(overlap, bi)
+				}
+			}
 		}
-		if _, ok := added[item]; ok {
-			continue
-		}
-		added[item] = struct{}{}
-		overlap = append(overlap, item)
 	}
 	sort.Strings(overlap)
 	return overlap

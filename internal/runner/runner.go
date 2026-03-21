@@ -144,8 +144,8 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 		sort.Strings(names)
 		for _, name := range names {
 			info := detailed[name]
-			fmt.Printf("  DEFERRED %s (blocked by %s in %s/, overlap: %v)\n",
-				name, info.BlockedBy, info.BlockedByDir, info.OverlapFiles)
+			fmt.Printf("  DEFERRED %s (blocked by %s in %s/, conflicting affects: %v)\n",
+				name, info.BlockedBy, info.BlockedByDir, info.ConflictingAffects)
 		}
 	} else {
 		fmt.Println("  No affects conflicts detected")
