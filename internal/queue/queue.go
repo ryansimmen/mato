@@ -14,7 +14,6 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
-	"mato/internal/process"
 	"mato/internal/taskfile"
 )
 
@@ -51,15 +50,7 @@ func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
 // is unavailable (non-Linux). Returns a cleanup function.
 func RegisterAgent(tasksDir, agentID string) (func(), error) {
 	locksDir := filepath.Join(tasksDir, ".locks")
-	if err := os.MkdirAll(locksDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create locks dir %s: %w", locksDir, err)
-	}
-	lockFile := filepath.Join(locksDir, agentID+".pid")
-	identity := process.LockIdentity(os.Getpid())
-	if err := os.WriteFile(lockFile, []byte(identity), 0o644); err != nil {
-		return nil, fmt.Errorf("write agent lock %s: %w", lockFile, err)
-	}
-	return func() { os.Remove(lockFile) }, nil
+	return lockfile.Register(locksDir, agentID)
 }
 
 // CleanStaleLocks removes lock files for agents that are no longer running.
@@ -73,9 +64,9 @@ func CleanStaleLocks(tasksDir string) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pid") {
 			continue
 		}
-		agentID := strings.TrimSuffix(e.Name(), ".pid")
-		if !identity.IsAgentActive(tasksDir, agentID) {
-			os.Remove(filepath.Join(locksDir, e.Name()))
+		lockPath := filepath.Join(locksDir, e.Name())
+		if !lockfile.IsHeld(lockPath) {
+			os.Remove(lockPath)
 		}
 	}
 }
@@ -102,12 +93,9 @@ func CleanStaleReviewLocks(tasksDir string) {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), "review-") || !strings.HasSuffix(e.Name(), ".lock") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(locksDir, e.Name()))
-		if err != nil {
-			continue
-		}
-		if !process.IsLockHolderAlive(strings.TrimSpace(string(data))) {
-			os.Remove(filepath.Join(locksDir, e.Name()))
+		lockPath := filepath.Join(locksDir, e.Name())
+		if !lockfile.IsHeld(lockPath) {
+			os.Remove(lockPath)
 		}
 	}
 }

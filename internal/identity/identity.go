@@ -4,11 +4,9 @@ package identity
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"os"
 	"path/filepath"
-	"strings"
 
-	"mato/internal/process"
+	"mato/internal/lockfile"
 )
 
 // GenerateAgentID returns a random 8-character hex string suitable for use
@@ -28,9 +26,5 @@ func IsAgentActive(tasksDir, agentID string) bool {
 		return false
 	}
 	lockFile := filepath.Join(tasksDir, ".locks", agentID+".pid")
-	data, err := os.ReadFile(lockFile)
-	if err != nil {
-		return false
-	}
-	return process.IsLockHolderAlive(strings.TrimSpace(string(data)))
+	return lockfile.IsHeld(lockFile)
 }

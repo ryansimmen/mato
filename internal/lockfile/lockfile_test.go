@@ -243,3 +243,132 @@ func TestEmptyLockFileBlocksAcquire(t *testing.T) {
 		t.Fatal("Acquire should fail when lock file is empty (treated as held)")
 	}
 }
+
+// --- IsHeld tests ---
+
+func TestIsHeld_LiveProcess(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "live.lock")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+
+	if !IsHeld(lockPath) {
+		t.Error("IsHeld should return true for a lock held by the current process")
+	}
+}
+
+func TestIsHeld_DeadProcess(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "dead.lock")
+	if err := os.WriteFile(lockPath, []byte("4194300:99999999"), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+
+	if IsHeld(lockPath) {
+		t.Error("IsHeld should return false for a lock held by a dead process")
+	}
+}
+
+func TestIsHeld_MissingFile(t *testing.T) {
+	if IsHeld("/nonexistent/path/to/lock") {
+		t.Error("IsHeld should return false for a missing file")
+	}
+}
+
+func TestIsHeld_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "empty.lock")
+	if err := os.WriteFile(lockPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+
+	if IsHeld(lockPath) {
+		t.Error("IsHeld should return false for an empty lock file")
+	}
+}
+
+func TestIsHeld_PIDReuse(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "reuse.lock")
+	// Write our PID but a bogus start time — simulates PID reuse.
+	bogus := fmt.Sprintf("%d:0", os.Getpid())
+	if err := os.WriteFile(lockPath, []byte(bogus), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+
+	if IsHeld(lockPath) {
+		t.Error("IsHeld should return false when PID start time doesn't match (PID reuse)")
+	}
+}
+
+// --- Register tests ---
+
+func TestRegister(t *testing.T) {
+	dir := t.TempDir()
+
+	cleanup, err := Register(dir, "test-agent")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	pidFile := filepath.Join(dir, "test-agent.pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("pid file not created: %v", err)
+	}
+	expected := process.LockIdentity(os.Getpid())
+	if string(data) != expected {
+		t.Errorf("pid file content = %q, want %q", string(data), expected)
+	}
+
+	cleanup()
+
+	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+		t.Error("cleanup should remove pid file")
+	}
+}
+
+func TestRegister_CreatesDir(t *testing.T) {
+	base := t.TempDir()
+	locksDir := filepath.Join(base, "nested", "locks")
+
+	cleanup, err := Register(locksDir, "agent")
+	if err != nil {
+		t.Fatalf("Register should create missing directory: %v", err)
+	}
+	defer cleanup()
+
+	info, err := os.Stat(locksDir)
+	if err != nil {
+		t.Fatalf("locks directory should exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("locks path should be a directory")
+	}
+}
+
+func TestRegister_Overwrites(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "overwrite.pid")
+
+	// Write an existing file with stale content.
+	if err := os.WriteFile(pidFile, []byte("oldcontent"), 0o644); err != nil {
+		t.Fatalf("writing old pid file: %v", err)
+	}
+
+	cleanup, err := Register(dir, "overwrite")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer cleanup()
+
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("reading pid file: %v", err)
+	}
+	expected := process.LockIdentity(os.Getpid())
+	if string(data) != expected {
+		t.Errorf("pid file content = %q, want %q (should overwrite old content)", string(data), expected)
+	}
+}
