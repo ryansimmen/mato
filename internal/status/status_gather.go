@@ -1,14 +1,13 @@
 package status
 
 import (
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
-	"mato/internal/process"
 	"mato/internal/queue"
 )
 
@@ -141,13 +140,6 @@ func gatherStatus(tasksDir string) (statusData, error) {
 
 // isMergeLockActive checks whether the merge queue lock is held by a live process.
 func isMergeLockActive(tasksDir string) bool {
-	data, err := os.ReadFile(filepath.Join(tasksDir, ".locks", "merge.lock"))
-	if err != nil {
-		return false
-	}
-	identity := strings.TrimSpace(string(data))
-	if identity == "" {
-		return false
-	}
-	return process.IsLockHolderAlive(identity)
+	lockPath := filepath.Join(tasksDir, ".locks", "merge.lock")
+	return lockfile.IsHeld(lockPath)
 }

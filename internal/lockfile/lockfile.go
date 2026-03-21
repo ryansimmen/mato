@@ -12,6 +12,37 @@ import (
 	"mato/internal/process"
 )
 
+// IsHeld checks whether a lock file at the given path exists and is held by
+// a live process. Returns false if the file does not exist, is empty, or
+// the holder process is no longer running.
+func IsHeld(lockPath string) bool {
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return false
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return false
+	}
+	return process.IsLockHolderAlive(content)
+}
+
+// Register writes the current process identity ("PID:starttime") to a file
+// named "<name>.pid" inside locksDir. Unlike Acquire, this is non-exclusive:
+// it overwrites any existing file. Returns a cleanup function that removes
+// the file. Used for agent presence registration.
+func Register(locksDir, name string) (func(), error) {
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create locks dir %s: %w", locksDir, err)
+	}
+	lockFile := filepath.Join(locksDir, name+".pid")
+	identity := process.LockIdentity(os.Getpid())
+	if err := os.WriteFile(lockFile, []byte(identity), 0o644); err != nil {
+		return nil, fmt.Errorf("write lock %s: %w", lockFile, err)
+	}
+	return func() { os.Remove(lockFile) }, nil
+}
+
 // Acquire attempts to create an exclusive lock file named "<name>.lock"
 // inside locksDir. It writes the current process identity into the file so
 // other callers can detect stale locks from dead processes.
