@@ -1953,7 +1953,7 @@ func TestAppendTaskRecord_ReadOnlyDir(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when directory is read-only, got nil")
 	}
-	if !strings.Contains(err.Error(), "create temp file") {
+	if !strings.Contains(err.Error(), "create temp") {
 		t.Fatalf("error should mention temp file creation, got: %v", err)
 	}
 }

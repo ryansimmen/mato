@@ -28,7 +28,7 @@ func WriteFunc(path string, fn func(f *os.File) error) error {
 	dir := filepath.Dir(path)
 	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+		return fmt.Errorf("atomic write %s: create temp: %w", path, err)
 	}
 	tmpName := tmpFile.Name()
 	cleanup := func() {
@@ -38,19 +38,19 @@ func WriteFunc(path string, fn func(f *os.File) error) error {
 
 	if err := tmpFile.Chmod(0o644); err != nil {
 		cleanup()
-		return fmt.Errorf("chmod temp file: %w", err)
+		return fmt.Errorf("atomic write %s: chmod temp: %w", path, err)
 	}
 	if err := fn(tmpFile); err != nil {
 		cleanup()
-		return fmt.Errorf("write temp file: %w", err)
+		return fmt.Errorf("atomic write %s: write temp: %w", path, err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("close temp file: %w", err)
+		return fmt.Errorf("atomic write %s: close temp: %w", path, err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("rename temp file: %w", err)
+		return fmt.Errorf("atomic write %s: rename temp: %w", path, err)
 	}
 	return nil
 }
