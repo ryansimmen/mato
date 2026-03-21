@@ -44,7 +44,7 @@ High-level flow:
 5. Create messaging directories with `messaging.Init(...)`: `.tasks/messages/events/`, `.tasks/messages/completions/`, and `.tasks/messages/presence/`.
 6. Generate an agent ID with `queue.GenerateAgentID()`.
 7. Register the process as active by writing `.tasks/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
-8. Ensure `/.tasks/` is in `.gitignore` via `git.EnsureGitignored(...)`.
+8. Ensure `/.tasks/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
 9. Resolve host tools and config: Docker image, `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity.
 10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.tasks`, the configured target branch, and `/workspace/.tasks/messages`.
 11. Install `SIGINT`/`SIGTERM` handlers.
@@ -348,7 +348,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Shows waiting-task dependency summaries and recent messages.
 
 ### Test files
-Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignored`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
+Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignoreContains` and `CommitGitignore`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
 ## 10. Host-Curated Knowledge Flow
 The host acts as a knowledge broker between agents, following an agent → host → agent pattern. Individual agents produce information as side effects of their work (conflict warnings with changed-file lists, failure records in task metadata), and the host aggregates this information and injects curated context into new agents before they start.
 

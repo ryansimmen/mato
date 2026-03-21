@@ -254,8 +254,14 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		git.Output(repoRoot, "config", "user.email", e)
 	}
 
-	if err := git.EnsureGitignored(repoRoot, "/.tasks/"); err != nil {
+	changed, err := git.EnsureGitignoreContains(repoRoot, "/.tasks/")
+	if err != nil {
 		return err
+	}
+	if changed {
+		if err := git.CommitGitignore(repoRoot, "chore: add /.tasks/ to .gitignore"); err != nil {
+			return err
+		}
 	}
 
 	agentTimeout, err := parseAgentTimeout(os.Getenv("MATO_AGENT_TIMEOUT"))
