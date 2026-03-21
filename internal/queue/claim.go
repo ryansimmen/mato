@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 )
 
@@ -132,32 +133,8 @@ func writeBranchComment(taskPath, branch string) error {
 
 	content := []byte(strings.Join(result, "\n"))
 
-	dir := filepath.Dir(taskPath)
-	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(taskPath)+".branch-*")
-	if err != nil {
-		return fmt.Errorf("create temp file for branch comment: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	cleanup := func() {
-		tmpFile.Close()
-		os.Remove(tmpName)
-	}
-
-	if err := tmpFile.Chmod(0o644); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod temp file for branch comment: %w", err)
-	}
-	if _, err := tmpFile.Write(content); err != nil {
-		cleanup()
-		return fmt.Errorf("write temp file for branch comment: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp file for branch comment: %w", err)
-	}
-	if err := os.Rename(tmpName, taskPath); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename temp file for branch comment: %w", err)
+	if err := atomicwrite.WriteFile(taskPath, content); err != nil {
+		return fmt.Errorf("write branch comment: %w", err)
 	}
 	return nil
 }
@@ -312,32 +289,8 @@ func prependClaimedBy(taskPath, agentID, claimedAt string) error {
 	header := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: %s -->\n", agentID, claimedAt)
 	content := append([]byte(header), existing...)
 
-	dir := filepath.Dir(taskPath)
-	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(taskPath)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp file for claimed-by header: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	cleanup := func() {
-		tmpFile.Close()
-		os.Remove(tmpName)
-	}
-
-	if err := tmpFile.Chmod(0o644); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod temp file for claimed-by header: %w", err)
-	}
-	if _, err := tmpFile.Write(content); err != nil {
-		cleanup()
-		return fmt.Errorf("write temp file for claimed-by header: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp file for claimed-by header: %w", err)
-	}
-	if err := os.Rename(tmpName, taskPath); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename temp file for claimed-by header: %w", err)
+	if err := atomicwrite.WriteFile(taskPath, content); err != nil {
+		return fmt.Errorf("write claimed-by header: %w", err)
 	}
 	return nil
 }

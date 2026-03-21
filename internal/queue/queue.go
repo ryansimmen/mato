@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
@@ -691,7 +692,7 @@ func WriteQueueManifest(tasksDir string, exclude map[string]struct{}) error {
 	if manifest != "" {
 		manifest += "\n"
 	}
-	return writeFileAtomically(filepath.Join(tasksDir, ".queue"), []byte(manifest))
+	return atomicwrite.WriteFile(filepath.Join(tasksDir, ".queue"), []byte(manifest))
 }
 
 func safeRename(src, dst string) error {
@@ -748,35 +749,4 @@ func logCircularDependency(logged map[string]struct{}, a, b string) {
 	}
 	logged[key] = struct{}{}
 	fmt.Fprintf(os.Stderr, "warning: circular dependency detected between %s and %s\n", a, b)
-}
-
-func writeFileAtomically(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	cleanup := func() {
-		tmpFile.Close()
-		os.Remove(tmpName)
-	}
-
-	if err := tmpFile.Chmod(0o644); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-	if _, err := tmpFile.Write(data); err != nil {
-		cleanup()
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename temp file: %w", err)
-	}
-	return nil
 }
