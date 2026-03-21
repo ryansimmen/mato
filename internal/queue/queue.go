@@ -45,12 +45,12 @@ func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
 func RegisterAgent(tasksDir, agentID string) (func(), error) {
 	locksDir := filepath.Join(tasksDir, ".locks")
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create locks dir: %w", err)
+		return nil, fmt.Errorf("create locks dir %s: %w", locksDir, err)
 	}
 	lockFile := filepath.Join(locksDir, agentID+".pid")
 	identity := process.LockIdentity(os.Getpid())
 	if err := os.WriteFile(lockFile, []byte(identity), 0o644); err != nil {
-		return nil, fmt.Errorf("write agent lock: %w", err)
+		return nil, fmt.Errorf("write agent lock %s: %w", lockFile, err)
 	}
 	return func() { os.Remove(lockFile) }, nil
 }
