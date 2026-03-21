@@ -1,0 +1,122 @@
+package merge
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"mato/internal/atomicwrite"
+	"mato/internal/frontmatter"
+	"mato/internal/queue"
+)
+
+func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr error) error {
+	if err := failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), mergeErr.Error()); err != nil {
+		return err
+	}
+	if errors.Is(mergeErr, errSquashMergeConflict) {
+		cleanupTaskBranch(repoRoot, taskBranchName(task))
+	}
+	return nil
+}
+
+func mergeFailureDestination(tasksDir, taskPath, taskName string) string {
+	dir := queue.DirBacklog
+	if shouldFailTask(taskPath) {
+		dir = queue.DirFailed
+	}
+	return filepath.Join(tasksDir, dir, taskName)
+}
+
+func shouldFailTask(taskPath string) bool {
+	maxRetries := 3
+	meta, _, err := frontmatter.ParseTaskFile(taskPath)
+	if err == nil {
+		maxRetries = meta.MaxRetries
+	}
+
+	failures, failErr := queue.CountFailureLines(taskPath)
+	if failErr != nil {
+		// Can't read the file — conservative choice: don't move to failed.
+		return false
+	}
+
+	return failures >= maxRetries
+}
+
+func failMergeTask(src, dst, reason string) error {
+	reason = strings.TrimSpace(reason)
+	reason = strings.ReplaceAll(reason, "\r", " ")
+	reason = strings.ReplaceAll(reason, "\n", " ")
+	reason = strings.ReplaceAll(reason, "--", "—")
+	if reason == "" {
+		reason = "merge queue failure"
+	}
+
+	appendErr := appendTaskRecord(src, "<!-- failure: merge-queue at %s — %s -->", time.Now().UTC().Format(time.RFC3339), reason)
+	if appendErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not append failure record to %s: %v\n", filepath.Base(src), appendErr)
+	}
+	if dst == "" {
+		return appendErr
+	}
+	if err := queue.AtomicMove(src, dst); err != nil {
+		if appendErr != nil {
+			return fmt.Errorf("move task file after merge failure: %w (also failed to append failure record: %v)", err, appendErr)
+		}
+		return fmt.Errorf("move task file after merge failure: %w", err)
+	}
+	return nil
+}
+
+func markTaskMerged(path string) error {
+	if taskHasMergeSuccessRecord(path) {
+		return nil
+	}
+	if err := appendTaskRecord(path, "%s%s -->", mergedTaskRecordPrefix, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("append merged record: %w", err)
+	}
+	return nil
+}
+
+func taskHasMergeSuccessRecord(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), mergedTaskRecordPrefix)
+}
+
+func appendTaskRecord(path, format string, args ...any) error {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read task file for merge record: %w", err)
+	}
+
+	record := fmt.Sprintf(format, args...)
+	updated := string(existing) + "\n" + record + "\n"
+
+	if err := atomicwrite.WriteFile(path, []byte(updated)); err != nil {
+		return fmt.Errorf("write merge record: %w", err)
+	}
+	return nil
+}
+
+func moveTaskWithRetry(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("create task destination dir: %w", err)
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := queue.AtomicMove(src, dst); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return lastErr
+}
