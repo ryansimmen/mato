@@ -350,10 +350,11 @@ func CountPromotableWaitingTasks(tasksDir string) int {
 
 // ComputeQueueManifest returns the queue manifest content as a string without
 // writing it to disk. This is the read-only equivalent of WriteQueueManifest.
-func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) string {
+// It returns an error if the backlog directory cannot be read.
+func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) (string, error) {
 	entries, err := os.ReadDir(filepath.Join(tasksDir, DirBacklog))
 	if err != nil {
-		return ""
+		return "", err
 	}
 
 	queueEntries := make([]queueEntry, 0, len(entries))
@@ -368,6 +369,7 @@ func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) string {
 		}
 		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, DirBacklog, e.Name()))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", e.Name(), err)
 			continue
 		}
 		queueEntries = append(queueEntries, queueEntry{name: e.Name(), priority: meta.Priority})
@@ -388,7 +390,7 @@ func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) string {
 	if manifest != "" {
 		manifest += "\n"
 	}
-	return manifest
+	return manifest, nil
 }
 
 func completedTaskIDs(tasksDir string) map[string]struct{} {
@@ -653,44 +655,12 @@ func overlappingAffects(a, b []string) []string {
 	return overlap
 }
 
+// WriteQueueManifest computes the queue manifest via ComputeQueueManifest
+// and atomically writes it to the .queue file in tasksDir.
 func WriteQueueManifest(tasksDir string, exclude map[string]struct{}) error {
-	entries, err := os.ReadDir(filepath.Join(tasksDir, DirBacklog))
+	manifest, err := ComputeQueueManifest(tasksDir, exclude)
 	if err != nil {
 		return err
-	}
-
-	queueEntries := make([]queueEntry, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		if exclude != nil {
-			if _, excluded := exclude[e.Name()]; excluded {
-				continue
-			}
-		}
-		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, DirBacklog, e.Name()))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", e.Name(), err)
-			continue
-		}
-		queueEntries = append(queueEntries, queueEntry{name: e.Name(), priority: meta.Priority})
-	}
-
-	sort.Slice(queueEntries, func(i, j int) bool {
-		if queueEntries[i].priority != queueEntries[j].priority {
-			return queueEntries[i].priority < queueEntries[j].priority
-		}
-		return queueEntries[i].name < queueEntries[j].name
-	})
-
-	lines := make([]string, 0, len(queueEntries))
-	for _, entry := range queueEntries {
-		lines = append(lines, entry.name)
-	}
-	manifest := strings.Join(lines, "\n")
-	if manifest != "" {
-		manifest += "\n"
 	}
 	return atomicwrite.WriteFile(filepath.Join(tasksDir, ".queue"), []byte(manifest))
 }
