@@ -190,7 +190,17 @@ func laterStateDuplicateDir(tasksDir, name string) string {
 	return ""
 }
 
-func ReconcileReadyQueue(tasksDir string) int {
+// promotableTask describes a waiting task whose dependencies are satisfied.
+type promotableTask struct {
+	name string
+	path string
+	meta frontmatter.TaskMeta
+}
+
+// resolvePromotableTasks determines which waiting tasks have all dependencies
+// met and are not blocked by active overlap. It is a pure read-only function:
+// no file moves, no warnings to stderr.
+func resolvePromotableTasks(tasksDir string) []promotableTask {
 	completedIDs := completedTaskIDs(tasksDir)
 	nonCompletedIDs := nonCompletedTaskIDs(tasksDir)
 
@@ -199,66 +209,51 @@ func ReconcileReadyQueue(tasksDir string) int {
 	// is satisfied — it may refer to the non-completed copy.
 	for id := range nonCompletedIDs {
 		if _, dup := completedIDs[id]; dup {
-			fmt.Fprintf(os.Stderr, "warning: task ID %q exists in both completed and non-completed directories; dependency on it will not be satisfied\n", id)
 			delete(completedIDs, id)
 		}
 	}
 
-	knownIDs := allKnownTaskIDs(tasksDir)
 	waitingDir := filepath.Join(tasksDir, DirWaiting)
 	entries, err := os.ReadDir(waitingDir)
 	if err != nil {
-		return 0
+		return nil
 	}
 
-	type waitingTask struct {
+	type parsedWaiting struct {
 		name string
 		path string
 		meta frontmatter.TaskMeta
 	}
 
-	waitingTasks := make([]waitingTask, 0, len(entries))
+	var parsed []parsedWaiting
 	waitingDeps := make(map[string][]string, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
-
 		path := filepath.Join(waitingDir, e.Name())
 		meta, _, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", e.Name(), err)
-			failedPath := filepath.Join(tasksDir, DirFailed, e.Name())
-			if moveErr := safeRename(path, failedPath); moveErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", e.Name(), moveErr)
-			}
 			continue
 		}
-
-		waitingTasks = append(waitingTasks, waitingTask{name: e.Name(), path: path, meta: meta})
+		parsed = append(parsed, parsedWaiting{name: e.Name(), path: path, meta: meta})
 		waitingDeps[meta.ID] = meta.DependsOn
 	}
 
-	promoted := 0
-	loggedCircularDeps := make(map[string]struct{})
-	for _, task := range waitingTasks {
+	var result []promotableTask
+	for _, task := range parsed {
 		ready := true
 		for _, dep := range task.meta.DependsOn {
 			if dep == task.meta.ID {
-				fmt.Fprintf(os.Stderr, "warning: task %s depends on itself\n", task.meta.ID)
 				ready = false
 				continue
 			}
 			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, task.meta.ID, waitingDeps, map[string]struct{}{}) {
-				logCircularDependency(loggedCircularDeps, task.meta.ID, dep)
 				ready = false
 				continue
 			}
 			if _, ok := completedIDs[dep]; ok {
 				continue
-			}
-			if _, ok := knownIDs[dep]; !ok {
-				fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", task.name, dep)
 			}
 			ready = false
 		}
@@ -268,7 +263,84 @@ func ReconcileReadyQueue(tasksDir string) int {
 		if hasActiveOverlap(tasksDir, task.meta.Affects) {
 			continue
 		}
+		result = append(result, promotableTask{name: task.name, path: task.path, meta: task.meta})
+	}
+	return result
+}
 
+func ReconcileReadyQueue(tasksDir string) int {
+	// Move unparseable waiting tasks to failed/ before resolving promotions.
+	waitingDir := filepath.Join(tasksDir, DirWaiting)
+	entries, err := os.ReadDir(waitingDir)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			path := filepath.Join(waitingDir, e.Name())
+			if _, _, parseErr := frontmatter.ParseTaskFile(path); parseErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", e.Name(), parseErr)
+				failedPath := filepath.Join(tasksDir, DirFailed, e.Name())
+				if moveErr := safeRename(path, failedPath); moveErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", e.Name(), moveErr)
+				}
+			}
+		}
+	}
+
+	// Emit warnings for ambiguous IDs, self-dependencies, circular
+	// dependencies, and unknown dependency IDs.
+	completedIDs := completedTaskIDs(tasksDir)
+	nonCompletedIDs := nonCompletedTaskIDs(tasksDir)
+	for id := range nonCompletedIDs {
+		if _, dup := completedIDs[id]; dup {
+			fmt.Fprintf(os.Stderr, "warning: task ID %q exists in both completed and non-completed directories; dependency on it will not be satisfied\n", id)
+		}
+	}
+
+	knownIDs := allKnownTaskIDs(tasksDir)
+	waitingEntries, _ := os.ReadDir(waitingDir)
+	waitingDeps := make(map[string][]string)
+	type waitingInfo struct {
+		name string
+		meta frontmatter.TaskMeta
+	}
+	var waitingInfos []waitingInfo
+	for _, e := range waitingEntries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		meta, _, parseErr := frontmatter.ParseTaskFile(filepath.Join(waitingDir, e.Name()))
+		if parseErr != nil {
+			continue
+		}
+		waitingDeps[meta.ID] = meta.DependsOn
+		waitingInfos = append(waitingInfos, waitingInfo{name: e.Name(), meta: meta})
+	}
+
+	loggedCircularDeps := make(map[string]struct{})
+	for _, task := range waitingInfos {
+		for _, dep := range task.meta.DependsOn {
+			if dep == task.meta.ID {
+				fmt.Fprintf(os.Stderr, "warning: task %s depends on itself\n", task.meta.ID)
+				continue
+			}
+			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, task.meta.ID, waitingDeps, map[string]struct{}{}) {
+				logCircularDependency(loggedCircularDeps, task.meta.ID, dep)
+				continue
+			}
+			if _, ok := completedIDs[dep]; ok {
+				continue
+			}
+			if _, ok := knownIDs[dep]; !ok {
+				fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", task.name, dep)
+			}
+		}
+	}
+
+	promotable := resolvePromotableTasks(tasksDir)
+	promoted := 0
+	for _, task := range promotable {
 		dst := filepath.Join(tasksDir, DirBacklog, task.name)
 		if err := safeRename(task.path, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not promote waiting task %s: %v\n", task.name, err)
@@ -284,68 +356,7 @@ func ReconcileReadyQueue(tasksDir string) int {
 // It returns the number of waiting tasks whose dependencies are satisfied and
 // would be promoted, without actually moving any files.
 func CountPromotableWaitingTasks(tasksDir string) int {
-	completedIDs := completedTaskIDs(tasksDir)
-	nonCompletedIDs := nonCompletedTaskIDs(tasksDir)
-
-	for id := range nonCompletedIDs {
-		if _, dup := completedIDs[id]; dup {
-			delete(completedIDs, id)
-		}
-	}
-
-	knownIDs := allKnownTaskIDs(tasksDir)
-	waitingDir := filepath.Join(tasksDir, DirWaiting)
-	entries, err := os.ReadDir(waitingDir)
-	if err != nil {
-		return 0
-	}
-
-	type waitingTask struct {
-		meta frontmatter.TaskMeta
-	}
-
-	waitingDeps := make(map[string][]string)
-	var tasks []waitingTask
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(waitingDir, e.Name())
-		meta, _, err := frontmatter.ParseTaskFile(path)
-		if err != nil {
-			continue
-		}
-		tasks = append(tasks, waitingTask{meta: meta})
-		waitingDeps[meta.ID] = meta.DependsOn
-	}
-
-	count := 0
-	for _, task := range tasks {
-		ready := true
-		for _, dep := range task.meta.DependsOn {
-			if dep == task.meta.ID {
-				ready = false
-				continue
-			}
-			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, task.meta.ID, waitingDeps, map[string]struct{}{}) {
-				ready = false
-				continue
-			}
-			if _, ok := completedIDs[dep]; ok {
-				continue
-			}
-			_ = knownIDs // suppress unused warning; matches ReconcileReadyQueue logic
-			ready = false
-		}
-		if !ready {
-			continue
-		}
-		if hasActiveOverlap(tasksDir, task.meta.Affects) {
-			continue
-		}
-		count++
-	}
-	return count
+	return len(resolvePromotableTasks(tasksDir))
 }
 
 // ComputeQueueManifest returns the queue manifest content as a string without
