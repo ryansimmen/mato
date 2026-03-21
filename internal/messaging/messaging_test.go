@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"mato/internal/queue"
 )
 
 func TestInitMessaging(t *testing.T) {
@@ -1072,7 +1074,7 @@ func TestWriteCompletionDetail_NormalIDUnchanged(t *testing.T) {
 
 func TestBuildAndWriteFileClaims(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := Init(tasksDir); err != nil {
@@ -1080,11 +1082,11 @@ func TestBuildAndWriteFileClaims(t *testing.T) {
 	}
 
 	// Create in-progress task with affects
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "fix-race.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "fix-race.md"),
 		[]byte("---\naffects:\n  - internal/queue/queue.go\n  - internal/queue/queue_test.go\n---\n# Fix Race\n"), 0o644)
 
 	// Create ready-to-merge task with affects
-	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "add-locks.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "add-locks.md"),
 		[]byte("---\naffects:\n  - internal/merge/merge.go\n---\n# Add Locks\n"), 0o644)
 
 	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
@@ -1106,20 +1108,20 @@ func TestBuildAndWriteFileClaims(t *testing.T) {
 		t.Fatalf("expected 3 claims, got %d: %v", len(claims), claims)
 	}
 
-	if c, ok := claims["internal/queue/queue.go"]; !ok || c.Task != "fix-race.md" || c.Status != "in-progress" {
+	if c, ok := claims["internal/queue/queue.go"]; !ok || c.Task != "fix-race.md" || c.Status != queue.DirInProgress {
 		t.Fatalf("unexpected claim for queue.go: %+v", c)
 	}
-	if c, ok := claims["internal/queue/queue_test.go"]; !ok || c.Task != "fix-race.md" || c.Status != "in-progress" {
+	if c, ok := claims["internal/queue/queue_test.go"]; !ok || c.Task != "fix-race.md" || c.Status != queue.DirInProgress {
 		t.Fatalf("unexpected claim for queue_test.go: %+v", c)
 	}
-	if c, ok := claims["internal/merge/merge.go"]; !ok || c.Task != "add-locks.md" || c.Status != "ready-to-merge" {
+	if c, ok := claims["internal/merge/merge.go"]; !ok || c.Task != "add-locks.md" || c.Status != queue.DirReadyMerge {
 		t.Fatalf("unexpected claim for merge.go: %+v", c)
 	}
 }
 
 func TestBuildAndWriteFileClaims_Empty(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := Init(tasksDir); err != nil {
@@ -1148,14 +1150,14 @@ func TestBuildAndWriteFileClaims_Empty(t *testing.T) {
 
 func TestBuildAndWriteFileClaims_AtomicWrite(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"),
 		[]byte("---\naffects:\n  - file-a.go\n---\n# Task A\n"), 0o644)
 
 	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
@@ -1185,7 +1187,7 @@ func TestBuildAndWriteFileClaims_AtomicWrite(t *testing.T) {
 
 func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := Init(tasksDir); err != nil {
@@ -1193,9 +1195,9 @@ func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 	}
 
 	// Two tasks claim the same file
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"),
 		[]byte("---\naffects:\n  - shared.go\n---\n# Task A\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "task-b.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "task-b.md"),
 		[]byte("---\naffects:\n  - shared.go\n---\n# Task B\n"), 0o644)
 
 	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
@@ -1228,7 +1230,7 @@ func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 
 func TestBuildAndWriteFileClaims_ExcludeTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := Init(tasksDir); err != nil {
@@ -1236,11 +1238,11 @@ func TestBuildAndWriteFileClaims_ExcludeTask(t *testing.T) {
 	}
 
 	// The excluded task (simulating the just-claimed task)
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "my-task.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "my-task.md"),
 		[]byte("---\naffects:\n  - internal/foo.go\n  - internal/bar.go\n---\n# My Task\n"), 0o644)
 
 	// Another in-progress task that should remain
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "other-task.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "other-task.md"),
 		[]byte("---\naffects:\n  - internal/baz.go\n---\n# Other Task\n"), 0o644)
 
 	if err := BuildAndWriteFileClaims(tasksDir, "my-task.md"); err != nil {
@@ -1274,16 +1276,16 @@ func TestBuildAndWriteFileClaims_ExcludeTask(t *testing.T) {
 
 func TestBuildAndWriteFileClaims_EmptyExclude(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-x.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "task-x.md"),
 		[]byte("---\naffects:\n  - x.go\n---\n# Task X\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "task-y.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "task-y.md"),
 		[]byte("---\naffects:\n  - y.go\n---\n# Task Y\n"), 0o644)
 
 	// Empty excludeTask means all tasks are included (backward compat)
@@ -1314,7 +1316,7 @@ func TestBuildAndWriteFileClaims_EmptyExclude(t *testing.T) {
 
 func TestBuildAndWriteFileClaims_ExcludeOnlyMatchingTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-to-merge"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := Init(tasksDir); err != nil {
@@ -1322,11 +1324,11 @@ func TestBuildAndWriteFileClaims_ExcludeOnlyMatchingTask(t *testing.T) {
 	}
 
 	// Three tasks: one to exclude, two to keep
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "excluded.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "excluded.md"),
 		[]byte("---\naffects:\n  - shared.go\n  - only-excluded.go\n---\n# Excluded\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "kept-a.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "kept-a.md"),
 		[]byte("---\naffects:\n  - shared.go\n  - a.go\n---\n# Kept A\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "kept-b.md"),
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "kept-b.md"),
 		[]byte("---\naffects:\n  - b.go\n---\n# Kept B\n"), 0o644)
 
 	if err := BuildAndWriteFileClaims(tasksDir, "excluded.md"); err != nil {

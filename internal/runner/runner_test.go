@@ -21,12 +21,12 @@ import (
 
 func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "example-task.md"
-	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
@@ -44,7 +44,7 @@ func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 	}
 
 	// Task should be in backlog/ with a failure record
-	backlogPath := filepath.Join(tasksDir, "backlog", taskFile)
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("task file not found in backlog/: %v", err)
@@ -59,16 +59,16 @@ func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 
 func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress", "ready-to-merge"} {
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "example-task.md"
 	// Task already moved to ready-to-merge by the agent (success case)
-	readyPath := filepath.Join(tasksDir, "ready-to-merge", taskFile)
+	readyPath := filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)
 	os.WriteFile(readyPath, []byte("# Example Task\n"), 0o644)
 
-	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
 		Branch:   "task/example-task",
@@ -80,7 +80,7 @@ func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 	recoverStuckTask(tasksDir, "agent1", claimed)
 
 	// backlog/ should remain empty
-	entries, _ := os.ReadDir(filepath.Join(tasksDir, "backlog"))
+	entries, _ := os.ReadDir(filepath.Join(tasksDir, queue.DirBacklog))
 	if len(entries) != 0 {
 		t.Fatalf("expected backlog/ to be empty, got %d entries", len(entries))
 	}
@@ -93,16 +93,16 @@ func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 
 func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "example-task.md"
-	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
 
 	// A file with the same name already exists in backlog/
-	backlogPath := filepath.Join(tasksDir, "backlog", taskFile)
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
 	os.WriteFile(backlogPath, []byte("# Existing Task\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
@@ -216,7 +216,7 @@ func TestHasModelArg(t *testing.T) {
 
 func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress"} {
+	for _, sub := range []string{queue.DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
@@ -225,7 +225,7 @@ func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 
 	// Create a task that depends on "dep-a" and "dep-b"
 	taskFile := "my-task.md"
-	taskPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	taskContent := "---\ndepends_on:\n  - dep-a\n  - dep-b\n---\n# My Task\n"
 	os.WriteFile(taskPath, []byte(taskContent), 0o644)
 
@@ -280,7 +280,7 @@ func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 
 func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress"} {
+	for _, sub := range []string{queue.DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
@@ -288,7 +288,7 @@ func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 	}
 
 	taskFile := "no-deps.md"
-	taskPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	taskContent := "---\npriority: 5\n---\n# No deps\n"
 	os.WriteFile(taskPath, []byte(taskContent), 0o644)
 
@@ -307,7 +307,7 @@ func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 
 func TestWriteDependencyContextFile_NoCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress"} {
+	for _, sub := range []string{queue.DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
@@ -315,7 +315,7 @@ func TestWriteDependencyContextFile_NoCompletionFiles(t *testing.T) {
 	}
 
 	taskFile := "has-deps.md"
-	taskPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	taskContent := "---\ndepends_on:\n  - missing-dep\n---\n# Has deps\n"
 	os.WriteFile(taskPath, []byte(taskContent), 0o644)
 
@@ -569,15 +569,15 @@ func TestExtractReviewRejections_NonexistentFile(t *testing.T) {
 
 func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "readonly-task.md"
-	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Read-only task\n"), 0o444)
 	t.Cleanup(func() {
-		os.Chmod(filepath.Join(tasksDir, "backlog", taskFile), 0o644)
+		os.Chmod(filepath.Join(tasksDir, queue.DirBacklog, taskFile), 0o644)
 	})
 
 	claimed := &queue.ClaimedTask{
@@ -590,7 +590,7 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	recoverStuckTask(tasksDir, "agent1", claimed)
 
 	// Task should be moved to backlog even though append will fail
-	backlogPath := filepath.Join(tasksDir, "backlog", taskFile)
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("task should be moved to backlog even when append fails: %v", err)
@@ -614,7 +614,7 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 
 func TestSelectTaskForReview_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "ready-for-review"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
 
 	got := selectTaskForReview(tasksDir)
 	if got != nil {
@@ -631,7 +631,7 @@ func TestSelectTaskForReview_NonexistentDir(t *testing.T) {
 
 func TestSelectTaskForReview_SingleTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	content := "<!-- claimed-by: abc12345  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: test-task\npriority: 10\n---\n# Test Task\nDo something.\n\n<!-- branch: task/test-task -->\n"
@@ -654,7 +654,7 @@ func TestSelectTaskForReview_SingleTask(t *testing.T) {
 
 func TestSelectTaskForReview_HighestPriority(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	// Priority 20 — lower priority (higher number)
@@ -680,7 +680,7 @@ func TestSelectTaskForReview_HighestPriority(t *testing.T) {
 
 func TestSelectTaskForReview_SamePriorityAlphabetical(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	os.WriteFile(filepath.Join(reviewDir, "beta-task.md"), []byte(
@@ -699,7 +699,7 @@ func TestSelectTaskForReview_SamePriorityAlphabetical(t *testing.T) {
 
 func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	// Non-.md files should be ignored
@@ -715,7 +715,7 @@ func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 
 func TestSelectTaskForReview_BranchFallback(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	// No branch comment — should fall back to task/<sanitized-name>
@@ -831,7 +831,7 @@ func TestFailedDirUnavailable_IsPredicateFromRunner(t *testing.T) {
 
 func TestSelectAndLockReview_AcquiresLock(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
 
@@ -860,7 +860,7 @@ func TestSelectAndLockReview_AcquiresLock(t *testing.T) {
 
 func TestSelectAndLockReview_SkipsLockedTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	locksDir := filepath.Join(tasksDir, ".locks")
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(locksDir, 0o755)
@@ -888,7 +888,7 @@ func TestSelectAndLockReview_SkipsLockedTask(t *testing.T) {
 
 func TestSelectAndLockReview_AllLocked(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	locksDir := filepath.Join(tasksDir, ".locks")
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(locksDir, 0o755)
@@ -910,7 +910,7 @@ func TestSelectAndLockReview_AllLocked(t *testing.T) {
 
 func TestSelectAndLockReview_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "ready-for-review"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
 
 	task, cleanup := selectAndLockReview(tasksDir)
 	if task != nil {
@@ -921,7 +921,7 @@ func TestSelectAndLockReview_EmptyDir(t *testing.T) {
 
 func TestReviewCandidates_SortedByPriority(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	os.WriteFile(filepath.Join(reviewDir, "low.md"), []byte(
@@ -948,8 +948,8 @@ func TestReviewCandidates_SortedByPriority(t *testing.T) {
 
 func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
-	failedDir := filepath.Join(tasksDir, "failed")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -996,8 +996,8 @@ func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 
 func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
-	failedDir := filepath.Join(tasksDir, "failed")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1025,8 +1025,8 @@ func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
 
 func TestSelectTaskForReview_SkipsRetryExhausted(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
-	failedDir := filepath.Join(tasksDir, "failed")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1052,8 +1052,8 @@ func TestSelectTaskForReview_SkipsRetryExhausted(t *testing.T) {
 
 func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
-	failedDir := filepath.Join(tasksDir, "failed")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1085,8 +1085,8 @@ func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 
 func TestReviewCandidates_TaskFailuresIgnored(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
-	failedDir := filepath.Join(tasksDir, "failed")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1120,8 +1120,8 @@ func TestReviewCandidates_TaskFailuresIgnored(t *testing.T) {
 
 func TestReviewCandidates_ReviewFailuresSeparateFromTaskFailures(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, "ready-for-review")
-	failedDir := filepath.Join(tasksDir, "failed")
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1158,7 +1158,7 @@ func TestRunOnce_TimeoutKillsCommand(t *testing.T) {
 	}
 
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -1281,12 +1281,12 @@ func TestAgentWroteFailureRecord(t *testing.T) {
 
 func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "my-task.md"
-	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	// Agent already wrote a failure record via ON_FAILURE.
 	os.WriteFile(inProgressPath, []byte(strings.Join([]string{
 		"<!-- claimed-by: agent-x -->\n# My Task",
@@ -1303,7 +1303,7 @@ func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 
 	recoverStuckTask(tasksDir, "agent-x", claimed)
 
-	backlogPath := filepath.Join(tasksDir, "backlog", taskFile)
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("task file not found in backlog/: %v", err)
@@ -1321,17 +1321,17 @@ func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 
 func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-for-review", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "example-task.md"
-	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
 
 	// Place a stale file at the ready-for-review/ destination.
 	staleContent := []byte("<!-- claimed-by: old-agent -->\n# Stale Task\n")
-	readyPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	os.WriteFile(readyPath, staleContent, 0o644)
 
 	// Set up a minimal git repo so postAgentPush can check for commits.
@@ -1396,13 +1396,13 @@ func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 
 func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-for-review", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "marker-fail.md"
 	taskContent := "<!-- claimed-by: agent1 -->\n# Marker Fail\n"
-	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
 
 	// Set up a git repo with commits on a task branch.
@@ -1470,7 +1470,7 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 	}
 
 	// Task should NOT remain in ready-for-review/.
-	readyPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	if _, statErr := os.Stat(readyPath); !os.IsNotExist(statErr) {
 		t.Fatal("task should not remain in ready-for-review/ after rollback")
 	}
@@ -1484,13 +1484,13 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 
 func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"in-progress", "ready-for-review", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "stranded.md"
 	taskContent := "<!-- claimed-by: agent1 -->\n# Stranded\n"
-	inProgressPath := filepath.Join(tasksDir, "in-progress", taskFile)
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
 
 	// Set up git repo.
@@ -1558,7 +1558,7 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 	}
 
 	// The ready-for-review/ file should still exist (stranded, since rollback failed).
-	readyPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	if _, statErr := os.Stat(readyPath); statErr != nil {
 		t.Fatalf("task should remain in ready-for-review/ when rollback fails: %v", statErr)
 	}
@@ -1566,12 +1566,12 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 
 func TestPostReviewAction_Approved(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write a verdict file (the new approach).
@@ -1588,14 +1588,14 @@ func TestPostReviewAction_Approved(t *testing.T) {
 	postReviewAction(tasksDir, "host-agent", task)
 
 	// Should be moved to ready-to-merge/.
-	if _, err := os.Stat(filepath.Join(tasksDir, "ready-to-merge", taskFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)); err != nil {
 		t.Fatal("approved task not moved to ready-to-merge/")
 	}
 	if _, err := os.Stat(reviewPath); err == nil {
 		t.Fatal("approved task still in ready-for-review/")
 	}
 	// Task file should have the approval marker written by the host.
-	data, _ := os.ReadFile(filepath.Join(tasksDir, "ready-to-merge", taskFile))
+	data, _ := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
 	if !strings.Contains(string(data), "<!-- reviewed:") {
 		t.Fatal("approval marker not written to task file")
 	}
@@ -1607,12 +1607,12 @@ func TestPostReviewAction_Approved(t *testing.T) {
 
 func TestPostReviewAction_Rejected(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write a rejection verdict file.
@@ -1629,14 +1629,14 @@ func TestPostReviewAction_Rejected(t *testing.T) {
 	postReviewAction(tasksDir, "host-agent", task)
 
 	// Should be moved to backlog/.
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", taskFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err != nil {
 		t.Fatal("rejected task not moved to backlog/")
 	}
 	if _, err := os.Stat(reviewPath); err == nil {
 		t.Fatal("rejected task still in ready-for-review/")
 	}
 	// Task file should have the rejection marker with the reason.
-	data, _ := os.ReadFile(filepath.Join(tasksDir, "backlog", taskFile))
+	data, _ := os.ReadFile(filepath.Join(tasksDir, queue.DirBacklog, taskFile))
 	if !strings.Contains(string(data), "<!-- review-rejection:") {
 		t.Fatal("rejection marker not written to task file")
 	}
@@ -1647,12 +1647,12 @@ func TestPostReviewAction_Rejected(t *testing.T) {
 
 func TestPostReviewAction_NoVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	task := &queue.ClaimedTask{
@@ -1679,12 +1679,12 @@ func TestPostReviewAction_NoVerdict(t *testing.T) {
 
 func TestPostReviewAction_ErrorVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write an error verdict file (review agent's ON_FAILURE).
@@ -1719,12 +1719,12 @@ func TestPostReviewAction_ErrorVerdict(t *testing.T) {
 
 func TestPostReviewAction_UnknownVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
@@ -1753,12 +1753,12 @@ func TestPostReviewAction_UnknownVerdict(t *testing.T) {
 
 func TestPostReviewAction_MalformedJSON(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
@@ -1787,12 +1787,12 @@ func TestPostReviewAction_MalformedJSON(t *testing.T) {
 
 func TestPostReviewAction_EmptyVerdictFile(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
@@ -1864,12 +1864,12 @@ func TestReviewRejectionReRegex(t *testing.T) {
 
 func TestPostReviewAction_PartialRejectionMarkerTreatedAsNoVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"ready-for-review", "ready-to-merge", "backlog", "messages", "messages/events"} {
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, "ready-for-review", taskFile)
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
 	// Partial rejection marker (no closing -->, simulating agent crash during write)
 	os.WriteFile(reviewPath, []byte(strings.Join([]string{
 		"<!-- claimed-by: task-agent -->",
@@ -1893,7 +1893,7 @@ func TestPostReviewAction_PartialRejectionMarkerTreatedAsNoVerdict(t *testing.T)
 	if _, err := os.Stat(reviewPath); err != nil {
 		t.Fatal("task with partial rejection marker should stay in ready-for-review/")
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", taskFile)); err == nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err == nil {
 		t.Fatal("task with partial rejection marker should not be moved to backlog/")
 	}
 	data, _ := os.ReadFile(reviewPath)
@@ -1984,8 +1984,8 @@ func TestIsTerminal(t *testing.T) {
 
 func TestMoveReviewedTask_Success(t *testing.T) {
 	tasksDir := t.TempDir()
-	srcDir := filepath.Join(tasksDir, "ready-for-review")
-	dstDir := filepath.Join(tasksDir, "ready-to-merge")
+	srcDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	dstDir := filepath.Join(tasksDir, queue.DirReadyMerge)
 	msgDir := filepath.Join(tasksDir, "messages", "events")
 	for _, d := range []string{srcDir, dstDir, msgDir} {
 		os.MkdirAll(d, 0o755)
@@ -2002,7 +2002,7 @@ func TestMoveReviewedTask_Success(t *testing.T) {
 		TaskPath: srcPath,
 	}
 
-	moveReviewedTask(tasksDir, "agent1", task, "ready-to-merge", "approved", "review")
+	moveReviewedTask(tasksDir, "agent1", task, queue.DirReadyMerge, "approved", "review")
 
 	// Source should be removed
 	if _, err := os.Stat(srcPath); err == nil {
@@ -2017,8 +2017,8 @@ func TestMoveReviewedTask_Success(t *testing.T) {
 
 func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 	tasksDir := t.TempDir()
-	srcDir := filepath.Join(tasksDir, "ready-for-review")
-	dstDir := filepath.Join(tasksDir, "backlog")
+	srcDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	dstDir := filepath.Join(tasksDir, queue.DirBacklog)
 	msgDir := filepath.Join(tasksDir, "messages", "events")
 	for _, d := range []string{srcDir, dstDir, msgDir} {
 		os.MkdirAll(d, 0o755)
@@ -2039,7 +2039,7 @@ func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 		TaskPath: srcPath,
 	}
 
-	moveReviewedTask(tasksDir, "agent1", task, "backlog", "rejected", "review")
+	moveReviewedTask(tasksDir, "agent1", task, queue.DirBacklog, "rejected", "review")
 
 	// Source should still exist (move was skipped)
 	if _, err := os.Stat(srcPath); err != nil {
@@ -2310,14 +2310,14 @@ func TestDryRun_BasicValidation(t *testing.T) {
 	cmd.Run()
 
 	tasksDir := filepath.Join(repoDir, ".tasks")
-	subdirs := []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"}
+	subdirs := queue.AllDirs
 	for _, sub := range subdirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a valid backlog task
 	taskContent := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n---\n# Task A\nDo something.\n"
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "task-a.md"), []byte(taskContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskContent), 0o644)
 
 	err := DryRun(repoDir, "main", tasksDir)
 	if err != nil {
@@ -2338,13 +2338,13 @@ func TestDryRun_DetectsParseErrors(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a task with invalid frontmatter
 	badContent := "---\npriority: not-a-number\n---\n# Bad Task\n"
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "bad-task.md"), []byte(badContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badContent), 0o644)
 
 	// DryRun should succeed (parse errors are reported, not fatal)
 	err := DryRun(repoDir, "main", tasksDir)
@@ -2361,15 +2361,15 @@ func TestDryRun_DetectsOverlaps(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create two tasks with overlapping affects
 	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n---\n# Task A\n"
 	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n---\n# Task B\n"
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "task-b.md"), []byte(taskB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 
 	err := DryRun(repoDir, "main", tasksDir)
 	if err != nil {
@@ -2392,7 +2392,7 @@ func TestDryRun_MissingDirectories(t *testing.T) {
 	tasksDir := filepath.Join(repoDir, ".tasks")
 	os.MkdirAll(tasksDir, 0o755)
 	// Only create some subdirs, leaving others missing
-	os.MkdirAll(filepath.Join(tasksDir, "backlog"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirBacklog), 0o755)
 
 	err := DryRun(repoDir, "main", tasksDir)
 	if err == nil {
@@ -2411,17 +2411,17 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a completed dependency
 	depContent := "---\nid: dep-task\npriority: 5\n---\n# Dep Task\n"
-	os.WriteFile(filepath.Join(tasksDir, "completed", "dep-task.md"), []byte(depContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "dep-task.md"), []byte(depContent), 0o644)
 
 	// Create a waiting task that depends on the completed task
 	waitingContent := "---\nid: child-task\npriority: 10\ndepends_on:\n  - dep-task\n---\n# Child Task\n"
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "child-task.md"), []byte(waitingContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "child-task.md"), []byte(waitingContent), 0o644)
 
 	err := DryRun(repoDir, "main", tasksDir)
 	if err != nil {
@@ -2429,10 +2429,10 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 	}
 
 	// DryRun is read-only: the waiting task should NOT be moved.
-	if _, statErr := os.Stat(filepath.Join(tasksDir, "waiting", "child-task.md")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirWaiting, "child-task.md")); statErr != nil {
 		t.Fatal("child-task.md should still be in waiting/ (dry-run is read-only)")
 	}
-	if _, statErr := os.Stat(filepath.Join(tasksDir, "backlog", "child-task.md")); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "child-task.md")); statErr == nil {
 		t.Fatal("child-task.md should NOT have been promoted to backlog/ during dry-run")
 	}
 }
@@ -2445,13 +2445,13 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Add a backlog task — in normal run this would trigger Docker launch
 	taskContent := "---\nid: runnable\npriority: 1\n---\n# Runnable Task\n"
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "runnable.md"), []byte(taskContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(taskContent), 0o644)
 
 	// DryRun should complete without attempting to claim or launch Docker
 	err := DryRun(repoDir, "main", tasksDir)
@@ -2460,10 +2460,10 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	}
 
 	// The task should still be in backlog (not claimed/moved)
-	if _, statErr := os.Stat(filepath.Join(tasksDir, "backlog", "runnable.md")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md")); statErr != nil {
 		t.Fatal("task should remain in backlog/ during dry-run")
 	}
-	if _, statErr := os.Stat(filepath.Join(tasksDir, "in-progress", "runnable.md")); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirInProgress, "runnable.md")); statErr == nil {
 		t.Fatal("task should NOT be moved to in-progress/ during dry-run")
 	}
 }

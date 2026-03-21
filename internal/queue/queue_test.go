@@ -155,11 +155,11 @@ func TestSafeRename_ConcurrentRace(t *testing.T) {
 
 func TestRecoverOrphanedTasks(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress", "completed", "failed"} {
+	for _, sub := range []string{DirBacklog, DirInProgress, DirCompleted, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	orphan := filepath.Join(tasksDir, "in-progress", "fix-bug.md")
+	orphan := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
 	os.WriteFile(orphan, []byte("# Fix bug\nDo the thing.\n"), 0o644)
 
 	RecoverOrphanedTasks(tasksDir)
@@ -167,7 +167,7 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatal("orphaned task was not removed from in-progress/")
 	}
-	recovered := filepath.Join(tasksDir, "backlog", "fix-bug.md")
+	recovered := filepath.Join(tasksDir, DirBacklog, "fix-bug.md")
 	data, err := os.ReadFile(recovered)
 	if err != nil {
 		t.Fatalf("recovered task not found in backlog/: %v", err)
@@ -182,11 +182,11 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 
 func TestRecoverOrphanedTasks_IgnoresNonMd(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{DirBacklog, DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	other := filepath.Join(tasksDir, "in-progress", "notes.txt")
+	other := filepath.Join(tasksDir, DirInProgress, "notes.txt")
 	os.WriteFile(other, []byte("hello"), 0o644)
 
 	RecoverOrphanedTasks(tasksDir)
@@ -198,12 +198,12 @@ func TestRecoverOrphanedTasks_IgnoresNonMd(t *testing.T) {
 
 func TestRecoverOrphanedTasks_DoesNotOverwriteExistingBacklogTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{DirBacklog, DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	backlogPath := filepath.Join(tasksDir, "backlog", "fix-bug.md")
-	orphanPath := filepath.Join(tasksDir, "in-progress", "fix-bug.md")
+	backlogPath := filepath.Join(tasksDir, DirBacklog, "fix-bug.md")
+	orphanPath := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
 	os.WriteFile(backlogPath, []byte("# Existing task\n"), 0o644)
 	os.WriteFile(orphanPath, []byte("# Recovered task\n"), 0o644)
 
@@ -228,12 +228,12 @@ func TestRecoverOrphanedTasks_DoesNotOverwriteExistingBacklogTask(t *testing.T) 
 
 func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress", ".locks"} {
+	for _, sub := range []string{DirBacklog, DirInProgress, ".locks"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	agentID := "active-agent"
-	task := filepath.Join(tasksDir, "in-progress", "active-task.md")
+	task := filepath.Join(tasksDir, DirInProgress, "active-task.md")
 	content := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: 2026-01-01T00:00:00Z -->\n# Active task\n", agentID)
 	os.WriteFile(task, []byte(content), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
@@ -243,22 +243,22 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	if _, err := os.Stat(task); err != nil {
 		t.Fatal("task claimed by active agent should NOT be recovered")
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "active-task.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "active-task.md")); err == nil {
 		t.Fatal("task claimed by active agent should NOT appear in backlog")
 	}
 }
 
 func TestRecoverOrphanedTasks_RemovesStaleInProgressCopyWhenTaskAlreadyAdvanced(t *testing.T) {
-	for _, laterDir := range []string{"ready-to-merge", "completed", "failed"} {
+	for _, laterDir := range []string{DirReadyMerge, DirCompleted, DirFailed} {
 		t.Run(laterDir, func(t *testing.T) {
 			tasksDir := t.TempDir()
-			for _, sub := range []string{"backlog", "in-progress", "ready-to-merge", "completed", "failed"} {
+			for _, sub := range []string{DirBacklog, DirInProgress, DirReadyMerge, DirCompleted, DirFailed} {
 				if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 					t.Fatalf("MkdirAll(%s): %v", sub, err)
 				}
 			}
 
-			stalePath := filepath.Join(tasksDir, "in-progress", "fix-bug.md")
+			stalePath := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
 			authoritativePath := filepath.Join(tasksDir, laterDir, "fix-bug.md")
 			if err := os.WriteFile(stalePath, []byte("# Stale task\n"), 0o644); err != nil {
 				t.Fatalf("write stale task: %v", err)
@@ -272,7 +272,7 @@ func TestRecoverOrphanedTasks_RemovesStaleInProgressCopyWhenTaskAlreadyAdvanced(
 			if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 				t.Fatalf("stale in-progress copy should be removed, stat err = %v", err)
 			}
-			if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "fix-bug.md")); !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "fix-bug.md")); !os.IsNotExist(err) {
 				t.Fatalf("task should not be recovered to backlog when %s copy exists, stat err = %v", laterDir, err)
 			}
 			data, err := os.ReadFile(authoritativePath)
@@ -288,11 +288,11 @@ func TestRecoverOrphanedTasks_RemovesStaleInProgressCopyWhenTaskAlreadyAdvanced(
 
 func TestRecoverOrphanedTasks_AppendFailureLogsWarning(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{DirBacklog, DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	orphan := filepath.Join(tasksDir, "in-progress", "unwritable.md")
+	orphan := filepath.Join(tasksDir, DirInProgress, "unwritable.md")
 	os.WriteFile(orphan, []byte("# Unwritable task\n"), 0o644)
 
 	// Make backlog directory writable so the rename succeeds,
@@ -318,7 +318,7 @@ func TestRecoverOrphanedTasks_AppendFailureLogsWarning(t *testing.T) {
 
 	// Move the file to backlog ourselves, make it read-only, then
 	// re-create it in in-progress and call recovery.
-	backlogPath := filepath.Join(tasksDir, "backlog", "unwritable.md")
+	backlogPath := filepath.Join(tasksDir, DirBacklog, "unwritable.md")
 	// First, do a normal recovery to get the file into backlog
 	RecoverOrphanedTasks(tasksDir)
 
@@ -338,17 +338,17 @@ func TestRecoverOrphanedTasks_AppendFailureLogsWarning(t *testing.T) {
 
 func TestRecoverOrphanedTasks_StillMovesWhenAppendFails(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{DirBacklog, DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	orphan := filepath.Join(tasksDir, "in-progress", "readonly-task.md")
+	orphan := filepath.Join(tasksDir, DirInProgress, "readonly-task.md")
 	os.WriteFile(orphan, []byte("# Read-only task\n"), 0o644)
 	// Make file read-only so OpenFile with O_WRONLY will fail after rename
 	os.Chmod(orphan, 0o444)
 	t.Cleanup(func() {
 		// Ensure test cleanup can remove the file
-		os.Chmod(filepath.Join(tasksDir, "backlog", "readonly-task.md"), 0o644)
+		os.Chmod(filepath.Join(tasksDir, DirBacklog, "readonly-task.md"), 0o644)
 	})
 
 	stderr := captureStderr(t, func() {
@@ -356,7 +356,7 @@ func TestRecoverOrphanedTasks_StillMovesWhenAppendFails(t *testing.T) {
 	})
 
 	// Task should still be moved to backlog even though append fails
-	backlogPath := filepath.Join(tasksDir, "backlog", "readonly-task.md")
+	backlogPath := filepath.Join(tasksDir, DirBacklog, "readonly-task.md")
 	if _, err := os.Stat(backlogPath); err != nil {
 		t.Fatalf("task should be moved to backlog even when append fails: %v", err)
 	}
@@ -382,13 +382,13 @@ func TestRecoverOrphanedTasks_StillMovesWhenAppendFails(t *testing.T) {
 
 func TestRecoverOrphanedTasks_ConcurrentCalls(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress"} {
+	for _, sub := range []string{DirBacklog, DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	for i := 0; i < 5; i++ {
 		name := fmt.Sprintf("task-%d.md", i)
-		path := filepath.Join(tasksDir, "in-progress", name)
+		path := filepath.Join(tasksDir, DirInProgress, name)
 		if err := os.WriteFile(path, []byte(fmt.Sprintf("# Task %d\n", i)), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
@@ -418,7 +418,7 @@ func TestRecoverOrphanedTasks_ConcurrentCalls(t *testing.T) {
 		t.Fatalf("RecoverOrphanedTasks panicked: %v", p)
 	}
 
-	backlogEntries, err := os.ReadDir(filepath.Join(tasksDir, "backlog"))
+	backlogEntries, err := os.ReadDir(filepath.Join(tasksDir, DirBacklog))
 	if err != nil {
 		t.Fatalf("ReadDir(backlog): %v", err)
 	}
@@ -426,7 +426,7 @@ func TestRecoverOrphanedTasks_ConcurrentCalls(t *testing.T) {
 		t.Fatalf("backlog entries = %d, want 5", len(backlogEntries))
 	}
 
-	inProgressEntries, err := os.ReadDir(filepath.Join(tasksDir, "in-progress"))
+	inProgressEntries, err := os.ReadDir(filepath.Join(tasksDir, DirInProgress))
 	if err != nil {
 		t.Fatalf("ReadDir(in-progress): %v", err)
 	}
@@ -436,7 +436,7 @@ func TestRecoverOrphanedTasks_ConcurrentCalls(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		name := fmt.Sprintf("task-%d.md", i)
-		data, err := os.ReadFile(filepath.Join(tasksDir, "backlog", name))
+		data, err := os.ReadFile(filepath.Join(tasksDir, DirBacklog, name))
 		if err != nil {
 			t.Fatalf("read %s from backlog: %v", name, err)
 		}
@@ -468,7 +468,7 @@ func TestParseClaimedBy(t *testing.T) {
 
 func TestHasAvailableTasks(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"backlog", "in-progress", "completed", "failed"} {
+	for _, sub := range []string{DirBacklog, DirInProgress, DirCompleted, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -476,23 +476,23 @@ func TestHasAvailableTasks(t *testing.T) {
 		t.Fatal("expected no available tasks in empty dirs")
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "notes.txt"), []byte("hi"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "notes.txt"), []byte("hi"), 0o644)
 	if HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("non-.md file should not count as an available task")
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "task1.md"), []byte("# Task 1\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "task1.md"), []byte("# Task 1\n"), 0o644)
 	if !HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("expected available task in backlog")
 	}
 
-	os.Remove(filepath.Join(tasksDir, "backlog", "task1.md"))
-	os.WriteFile(filepath.Join(tasksDir, "in-progress", "task2.md"), []byte("# Task 2\n"), 0o644)
+	os.Remove(filepath.Join(tasksDir, DirBacklog, "task1.md"))
+	os.WriteFile(filepath.Join(tasksDir, DirInProgress, "task2.md"), []byte("# Task 2\n"), 0o644)
 	if HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("in-progress tasks should not count as available")
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "task3.md"), []byte("# Task 3\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "task3.md"), []byte("# Task 3\n"), 0o644)
 	if !HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("expected available task in backlog")
 	}
@@ -574,20 +574,20 @@ func TestCleanStaleLocks(t *testing.T) {
 
 func TestReconcileReadyQueue_PromotesWhenDepsMet(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "completed", "different-name.md"), []byte("---\nid: dep-a\n---\nDone\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "completed", "dep-b.md"), []byte("Done\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "different-name.md"), []byte("---\nid: dep-a\n---\nDone\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "dep-b.md"), []byte("Done\n"), 0o644)
 
-	waitingPath := filepath.Join(tasksDir, "waiting", "task.md")
+	waitingPath := filepath.Join(tasksDir, DirWaiting, "task.md")
 	os.WriteFile(waitingPath, []byte("---\ndepends_on: [dep-a, dep-b]\n---\nReady now\n"), 0o644)
 
 	if got := ReconcileReadyQueue(tasksDir); got != 1 {
 		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task.md")); err != nil {
 		t.Fatalf("promoted task missing from backlog: %v", err)
 	}
 	if _, err := os.Stat(waitingPath); !os.IsNotExist(err) {
@@ -597,11 +597,11 @@ func TestReconcileReadyQueue_PromotesWhenDepsMet(t *testing.T) {
 
 func TestReconcileReadyQueue_LeavesUnmetDepsWaiting(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	waitingPath := filepath.Join(tasksDir, "waiting", "blocked-task.md")
+	waitingPath := filepath.Join(tasksDir, DirWaiting, "blocked-task.md")
 	os.WriteFile(waitingPath, []byte("---\ndepends_on:\n  - missing-task\n---\nStill blocked\n"), 0o644)
 
 	if got := ReconcileReadyQueue(tasksDir); got != 0 {
@@ -614,32 +614,32 @@ func TestReconcileReadyQueue_LeavesUnmetDepsWaiting(t *testing.T) {
 
 func TestReconcileReadyQueue_PromotesTaskWithNoDeps(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "solo-task.md"), []byte("# Solo\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "solo-task.md"), []byte("# Solo\n"), 0o644)
 
 	if got := ReconcileReadyQueue(tasksDir); got != 1 {
 		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "solo-task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "solo-task.md")); err != nil {
 		t.Fatalf("promoted task missing from backlog: %v", err)
 	}
 }
 
 func TestReconcileReadyQueue_SkipsOverlappingWithActive(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed", "in-progress"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirInProgress} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, DirInProgress, "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
 		t.Fatalf("write active task: %v", err)
 	}
-	waitingPath := filepath.Join(tasksDir, "waiting", "task-b.md")
+	waitingPath := filepath.Join(tasksDir, DirWaiting, "task-b.md")
 	if err := os.WriteFile(waitingPath, []byte("---\naffects: [main.go]\n---\nBlocked by active overlap\n"), 0o644); err != nil {
 		t.Fatalf("write waiting task: %v", err)
 	}
@@ -650,23 +650,23 @@ func TestReconcileReadyQueue_SkipsOverlappingWithActive(t *testing.T) {
 	if _, err := os.Stat(waitingPath); err != nil {
 		t.Fatalf("overlapping waiting task should stay in waiting: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task-b.md")); !os.IsNotExist(err) {
 		t.Fatalf("overlapping waiting task should not be promoted, stat err = %v", err)
 	}
 }
 
 func TestReconcileReadyQueue_PromotesAfterActiveCompletes(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(tasksDir, "completed", "task-a.md"), []byte("---\nid: task-a\naffects: [main.go]\n---\nDone\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, DirCompleted, "task-a.md"), []byte("---\nid: task-a\naffects: [main.go]\n---\nDone\n"), 0o644); err != nil {
 		t.Fatalf("write completed task: %v", err)
 	}
-	waitingPath := filepath.Join(tasksDir, "waiting", "task-b.md")
+	waitingPath := filepath.Join(tasksDir, DirWaiting, "task-b.md")
 	if err := os.WriteFile(waitingPath, []byte("---\ndepends_on: [task-a]\naffects: [main.go]\n---\nReady now\n"), 0o644); err != nil {
 		t.Fatalf("write waiting task: %v", err)
 	}
@@ -674,7 +674,7 @@ func TestReconcileReadyQueue_PromotesAfterActiveCompletes(t *testing.T) {
 	if got := ReconcileReadyQueue(tasksDir); got != 1 {
 		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task-b.md")); err != nil {
 		t.Fatalf("task should be promoted after active completion: %v", err)
 	}
 	if _, err := os.Stat(waitingPath); !os.IsNotExist(err) {
@@ -684,12 +684,12 @@ func TestReconcileReadyQueue_PromotesAfterActiveCompletes(t *testing.T) {
 
 func TestReconcileReadyQueue_DoesNotOverwriteExistingBacklogTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	waitingPath := filepath.Join(tasksDir, "waiting", "task.md")
-	backlogPath := filepath.Join(tasksDir, "backlog", "task.md")
+	waitingPath := filepath.Join(tasksDir, DirWaiting, "task.md")
+	backlogPath := filepath.Join(tasksDir, DirBacklog, "task.md")
 	os.WriteFile(waitingPath, []byte("# Ready\n"), 0o644)
 	os.WriteFile(backlogPath, []byte("# Existing backlog\n"), 0o644)
 
@@ -716,11 +716,11 @@ func TestReconcileReadyQueue_DoesNotOverwriteExistingBacklogTask(t *testing.T) {
 
 func TestReconcileReadyQueue_DetectsSelfDependency(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	waitingPath := filepath.Join(tasksDir, "waiting", "self-task.md")
+	waitingPath := filepath.Join(tasksDir, DirWaiting, "self-task.md")
 	os.WriteFile(waitingPath, []byte("---\nid: self-task\ndepends_on: [self-task]\n---\nBlocked\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
@@ -739,12 +739,12 @@ func TestReconcileReadyQueue_DetectsSelfDependency(t *testing.T) {
 
 func TestReconcileReadyQueue_DetectsCircularDependency(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "task-a.md"), []byte("---\nid: task-a\ndepends_on: [task-b]\n---\nA\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "task-b.md"), []byte("---\nid: task-b\ndepends_on: [task-a]\n---\nB\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-a.md"), []byte("---\nid: task-a\ndepends_on: [task-b]\n---\nA\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-b.md"), []byte("---\nid: task-b\ndepends_on: [task-a]\n---\nB\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
 		if got := ReconcileReadyQueue(tasksDir); got != 0 {
@@ -758,17 +758,17 @@ func TestReconcileReadyQueue_DetectsCircularDependency(t *testing.T) {
 	if strings.Count(stderr, "circular dependency detected between task-a and task-b") != 1 {
 		t.Fatalf("expected one circular dependency warning, got %q", stderr)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-a.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-a.md")); err != nil {
 		t.Fatalf("task-a should remain in waiting: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-b.md")); err != nil {
 		t.Fatalf("task-b should remain in waiting: %v", err)
 	}
 }
 
 func TestWriteQueueManifest_SortsByPriorityThenFilename(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "backlog"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, DirBacklog), 0o755)
 
 	for name, content := range map[string]string{
 		"z-low.md":     "---\npriority: 20\n---\nBody\n",
@@ -776,7 +776,7 @@ func TestWriteQueueManifest_SortsByPriorityThenFilename(t *testing.T) {
 		"a-high.md":    "---\npriority: 5\n---\nBody\n",
 		"c-default.md": "Body\n",
 	} {
-		os.WriteFile(filepath.Join(tasksDir, "backlog", name), []byte(content), 0o644)
+		os.WriteFile(filepath.Join(tasksDir, DirBacklog, name), []byte(content), 0o644)
 	}
 
 	if err := WriteQueueManifest(tasksDir, nil); err != nil {
@@ -792,7 +792,7 @@ func TestWriteQueueManifest_SortsByPriorityThenFilename(t *testing.T) {
 
 func TestWriteQueueManifest_EmptyBacklog(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tasksDir, "backlog"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(tasksDir, DirBacklog), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
@@ -811,11 +811,11 @@ func TestWriteQueueManifest_EmptyBacklog(t *testing.T) {
 
 func TestWriteQueueManifest_SkipsMalformedFiles(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "backlog"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, DirBacklog), 0o755)
 
 	os.WriteFile(filepath.Join(tasksDir, ".queue"), []byte("stale\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "good.md"), []byte("---\npriority: 10\n---\nGood\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "bad.md"), []byte("---\npriority: nope\n---\nBad\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "good.md"), []byte("---\npriority: 10\n---\nGood\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "bad.md"), []byte("---\npriority: nope\n---\nBad\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
 		if err := WriteQueueManifest(tasksDir, nil); err != nil {
@@ -846,9 +846,9 @@ func TestWriteQueueManifest_SkipsMalformedFiles(t *testing.T) {
 
 func TestCompletedTaskIDs_UsesFilenameStemWhenParseFails(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "completed"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, DirCompleted), 0o755)
 
-	os.WriteFile(filepath.Join(tasksDir, "completed", "broken-task.md"), []byte("---\npriority: nope\n---\nDone\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "broken-task.md"), []byte("---\npriority: nope\n---\nDone\n"), 0o644)
 
 	ids := completedTaskIDs(tasksDir)
 	if _, ok := ids["broken-task"]; !ok {
@@ -858,7 +858,7 @@ func TestCompletedTaskIDs_UsesFilenameStemWhenParseFails(t *testing.T) {
 
 func TestDeferredOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog"} {
+	for _, sub := range []string{DirWaiting, DirBacklog} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -867,7 +867,7 @@ func TestDeferredOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
 		"low-priority.md":  "---\npriority: 20\naffects: [pkg/client/http.go]\n---\nDefer me\n",
 		"independent.md":   "---\npriority: 30\naffects: [docs/guide.md]\n---\nKeep me too\n",
 	} {
-		os.WriteFile(filepath.Join(tasksDir, "backlog", name), []byte(content), 0o644)
+		os.WriteFile(filepath.Join(tasksDir, DirBacklog, name), []byte(content), 0o644)
 	}
 
 	deferred := DeferredOverlappingTasks(tasksDir)
@@ -878,32 +878,32 @@ func TestDeferredOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
 	if _, ok := deferred["low-priority.md"]; !ok {
 		t.Fatalf("deferred set missing %q: %#v", "low-priority.md", deferred)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "high-priority.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "high-priority.md")); err != nil {
 		t.Fatalf("high priority task should stay in backlog: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "independent.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "independent.md")); err != nil {
 		t.Fatalf("independent task should stay in backlog: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "low-priority.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "low-priority.md")); err != nil {
 		t.Fatalf("low priority overlapping task should stay in backlog: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "low-priority.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "low-priority.md")); !os.IsNotExist(err) {
 		t.Fatalf("low priority overlapping task should not move to waiting, stat err = %v", err)
 	}
 }
 
 func TestDeferredOverlappingTasks_ChecksInProgress(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "in-progress"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirInProgress} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(tasksDir, "in-progress", "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, DirInProgress, "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
 		t.Fatalf("write active task: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tasksDir, "backlog", "task-b.md"), []byte("---\naffects: [main.go]\n---\nConflicting\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, DirBacklog, "task-b.md"), []byte("---\naffects: [main.go]\n---\nConflicting\n"), 0o644); err != nil {
 		t.Fatalf("write backlog task: %v", err)
 	}
 
@@ -915,26 +915,26 @@ func TestDeferredOverlappingTasks_ChecksInProgress(t *testing.T) {
 	if _, ok := deferred["task-b.md"]; !ok {
 		t.Fatalf("deferred set missing %q: %#v", "task-b.md", deferred)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task-b.md")); err != nil {
 		t.Fatalf("conflicting backlog task should stay in backlog: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-b.md")); !os.IsNotExist(err) {
 		t.Fatalf("conflicting backlog task should not move to waiting, stat err = %v", err)
 	}
 }
 
 func TestDeferredOverlappingTasks_ChecksReadyToMerge(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "ready-to-merge"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirReadyMerge} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(tasksDir, "ready-to-merge", "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, DirReadyMerge, "task-a.md"), []byte("---\naffects: [main.go]\n---\nActive\n"), 0o644); err != nil {
 		t.Fatalf("write ready-to-merge task: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tasksDir, "backlog", "task-b.md"), []byte("---\naffects: [main.go]\n---\nConflicting\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, DirBacklog, "task-b.md"), []byte("---\naffects: [main.go]\n---\nConflicting\n"), 0o644); err != nil {
 		t.Fatalf("write backlog task: %v", err)
 	}
 
@@ -946,17 +946,17 @@ func TestDeferredOverlappingTasks_ChecksReadyToMerge(t *testing.T) {
 	if _, ok := deferred["task-b.md"]; !ok {
 		t.Fatalf("deferred set missing %q: %#v", "task-b.md", deferred)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "task-b.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task-b.md")); err != nil {
 		t.Fatalf("conflicting backlog task should stay in backlog: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "task-b.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-b.md")); !os.IsNotExist(err) {
 		t.Fatalf("conflicting backlog task should not move to waiting, stat err = %v", err)
 	}
 }
 
 func TestDeferredOverlappingTasks_AllIdenticalAffects(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog"} {
+	for _, sub := range []string{DirWaiting, DirBacklog} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -967,7 +967,7 @@ func TestDeferredOverlappingTasks_AllIdenticalAffects(t *testing.T) {
 		"priority-10.md": "---\npriority: 10\naffects: [main.go]\n---\nWait\n",
 		"priority-20.md": "---\npriority: 20\naffects: [main.go]\n---\nWait\n",
 	} {
-		if err := os.WriteFile(filepath.Join(tasksDir, "backlog", name), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(tasksDir, DirBacklog, name), []byte(content), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
@@ -986,14 +986,14 @@ func TestDeferredOverlappingTasks_AllIdenticalAffects(t *testing.T) {
 	if _, ok := deferred["priority-5.md"]; ok {
 		t.Fatalf("deferred set should not include %q: %#v", "priority-5.md", deferred)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "priority-5.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "priority-5.md")); err != nil {
 		t.Fatalf("highest-priority task should remain in backlog: %v", err)
 	}
 	for _, name := range []string{"priority-10.md", "priority-20.md"} {
-		if _, err := os.Stat(filepath.Join(tasksDir, "backlog", name)); err != nil {
+		if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, name)); err != nil {
 			t.Fatalf("%s should remain in backlog: %v", name, err)
 		}
-		if _, err := os.Stat(filepath.Join(tasksDir, "waiting", name)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, name)); !os.IsNotExist(err) {
 			t.Fatalf("%s should not move to waiting, stat err = %v", name, err)
 		}
 	}
@@ -1001,14 +1001,14 @@ func TestDeferredOverlappingTasks_AllIdenticalAffects(t *testing.T) {
 
 func TestDeferredOverlappingTasks_NoAffects(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog"} {
+	for _, sub := range []string{DirWaiting, DirBacklog} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
 	}
 
 	for _, name := range []string{"task-a.md", "task-b.md", "task-c.md"} {
-		if err := os.WriteFile(filepath.Join(tasksDir, "backlog", name), []byte("# Task\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(tasksDir, DirBacklog, name), []byte("# Task\n"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
@@ -1019,10 +1019,10 @@ func TestDeferredOverlappingTasks_NoAffects(t *testing.T) {
 		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
 	}
 	for _, name := range []string{"task-a.md", "task-b.md", "task-c.md"} {
-		if _, err := os.Stat(filepath.Join(tasksDir, "backlog", name)); err != nil {
+		if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, name)); err != nil {
 			t.Fatalf("%s should remain in backlog: %v", name, err)
 		}
-		if _, err := os.Stat(filepath.Join(tasksDir, "waiting", name)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, name)); !os.IsNotExist(err) {
 			t.Fatalf("%s should not move to waiting, stat err = %v", name, err)
 		}
 	}
@@ -1030,14 +1030,14 @@ func TestDeferredOverlappingTasks_NoAffects(t *testing.T) {
 
 func TestQueueOps_SpecialCharacterFilenames(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
 	}
 
 	name := "my task (v2).md"
-	waitingPath := filepath.Join(tasksDir, "waiting", name)
+	waitingPath := filepath.Join(tasksDir, DirWaiting, name)
 	if err := os.WriteFile(waitingPath, []byte("# Special task\n"), 0o644); err != nil {
 		t.Fatalf("write waiting task: %v", err)
 	}
@@ -1045,7 +1045,7 @@ func TestQueueOps_SpecialCharacterFilenames(t *testing.T) {
 	if got := ReconcileReadyQueue(tasksDir); got != 1 {
 		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", name)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, name)); err != nil {
 		t.Fatalf("special-character task missing from backlog: %v", err)
 	}
 	if _, err := os.Stat(waitingPath); !os.IsNotExist(err) {
@@ -1066,23 +1066,23 @@ func TestQueueOps_SpecialCharacterFilenames(t *testing.T) {
 
 func TestReconcileReadyQueue_HighPriorityNotBlockedByLowPriorityBacklog(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed", "in-progress", "ready-to-merge"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirInProgress, DirReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Low-priority task already in backlog with overlapping affects
-	os.WriteFile(filepath.Join(tasksDir, "backlog", "low-priority.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "low-priority.md"),
 		[]byte("---\npriority: 20\naffects: [main.go]\n---\n# Low\n"), 0o644)
 
 	// High-priority task in waiting with same affects, no deps
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "high-priority.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "high-priority.md"),
 		[]byte("---\npriority: 5\naffects: [main.go]\n---\n# High\n"), 0o644)
 
 	got := ReconcileReadyQueue(tasksDir)
 	if got != 1 {
 		t.Fatalf("ReconcileReadyQueue() = %d, want 1 (high-priority should promote)", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "high-priority.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "high-priority.md")); err != nil {
 		t.Fatal("high-priority task should be promoted to backlog")
 	}
 	// Both are now in backlog — DeferredOverlappingTasks can mark the
@@ -1093,29 +1093,29 @@ func TestReconcileReadyQueue_DuplicateIDDoesNotSatisfyDependency(t *testing.T) {
 	// Regression: if a completed task and a waiting task share the same ID,
 	// a dependent task must NOT be promoted — the dependency is ambiguous.
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed", "in-progress", "ready-to-merge", "failed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirInProgress, DirReadyMerge, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Completed task with id "shared-id"
-	os.WriteFile(filepath.Join(tasksDir, "completed", "first-task.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "first-task.md"),
 		[]byte("---\nid: shared-id\n---\n# First\nDone\n"), 0o644)
 
 	// Waiting task also with id "shared-id"
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "second-task.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "second-task.md"),
 		[]byte("---\nid: shared-id\n---\n# Second\nNot done\n"), 0o644)
 
 	// Third task depends on "shared-id" — should NOT be promoted
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "dependent-task.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "dependent-task.md"),
 		[]byte("---\nid: dependent\ndepends_on: [shared-id]\n---\n# Dependent\n"), 0o644)
 
 	got := ReconcileReadyQueue(tasksDir)
 	// second-task has no deps so it may promote, but dependent-task must not
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "dependent-task.md")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "dependent-task.md")); os.IsNotExist(err) {
 		t.Fatal("dependent-task should NOT be promoted when dep ID is ambiguous (duplicate)")
 	}
 	// second-task (no deps) should still promote
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "second-task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "second-task.md")); err != nil {
 		t.Fatalf("second-task (no deps) should promote, got err: %v (promoted=%d)", err, got)
 	}
 }
@@ -1123,33 +1123,33 @@ func TestReconcileReadyQueue_DuplicateIDDoesNotSatisfyDependency(t *testing.T) {
 func TestReconcileReadyQueue_UniqueCompletedIDStillWorks(t *testing.T) {
 	// Sanity check: when there is no duplicate, dependencies are still satisfied.
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed", "in-progress", "ready-to-merge", "failed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirInProgress, DirReadyMerge, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, "completed", "unique-dep.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "unique-dep.md"),
 		[]byte("---\nid: unique-dep\n---\n# Unique dep\nDone\n"), 0o644)
 
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "consumer.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "consumer.md"),
 		[]byte("---\nid: consumer\ndepends_on: [unique-dep]\n---\n# Consumer\n"), 0o644)
 
 	got := ReconcileReadyQueue(tasksDir)
 	if got != 1 {
 		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "consumer.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "consumer.md")); err != nil {
 		t.Fatal("consumer task should be promoted when dep is uniquely completed")
 	}
 }
 
 func TestReconcileReadyQueue_MovesUnparseableToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed", "failed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Invalid YAML frontmatter
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "bad-yaml.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "bad-yaml.md"),
 		[]byte("---\n: :\n  - [invalid\n---\n# Bad YAML\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
@@ -1159,10 +1159,10 @@ func TestReconcileReadyQueue_MovesUnparseableToFailed(t *testing.T) {
 		}
 	})
 
-	if _, err := os.Stat(filepath.Join(tasksDir, "failed", "bad-yaml.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-yaml.md")); err != nil {
 		t.Fatalf("unparseable task should be moved to failed/: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "bad-yaml.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "bad-yaml.md")); !os.IsNotExist(err) {
 		t.Fatal("unparseable task should no longer be in waiting/")
 	}
 	if !strings.Contains(stderr, "moving unparseable waiting task") {
@@ -1172,12 +1172,12 @@ func TestReconcileReadyQueue_MovesUnparseableToFailed(t *testing.T) {
 
 func TestReconcileReadyQueue_MovesMissingTerminatorToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed", "failed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Valid YAML but missing closing --- terminator
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "no-terminator.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "no-terminator.md"),
 		[]byte("---\nid: no-term\ndepends_on: [dep-a]\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
@@ -1187,10 +1187,10 @@ func TestReconcileReadyQueue_MovesMissingTerminatorToFailed(t *testing.T) {
 		}
 	})
 
-	if _, err := os.Stat(filepath.Join(tasksDir, "failed", "no-terminator.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "no-terminator.md")); err != nil {
 		t.Fatalf("task with missing terminator should be moved to failed/: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "waiting", "no-terminator.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "no-terminator.md")); !os.IsNotExist(err) {
 		t.Fatal("task with missing terminator should no longer be in waiting/")
 	}
 	if !strings.Contains(stderr, "moving unparseable waiting task") {
@@ -1200,16 +1200,16 @@ func TestReconcileReadyQueue_MovesMissingTerminatorToFailed(t *testing.T) {
 
 func TestReconcileReadyQueue_ValidTasksStillPromotedAlongsideUnparseable(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{"waiting", "backlog", "completed", "failed"} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// One unparseable task
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "broken.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "broken.md"),
 		[]byte("---\n: :\n  - [invalid\n---\n# Broken\n"), 0o644)
 
 	// One valid task with no deps (should be promoted)
-	os.WriteFile(filepath.Join(tasksDir, "waiting", "good-task.md"),
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "good-task.md"),
 		[]byte("---\nid: good\n---\n# Good task\n"), 0o644)
 
 	captureStderr(t, func() {
@@ -1219,10 +1219,10 @@ func TestReconcileReadyQueue_ValidTasksStillPromotedAlongsideUnparseable(t *test
 		}
 	})
 
-	if _, err := os.Stat(filepath.Join(tasksDir, "failed", "broken.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "broken.md")); err != nil {
 		t.Fatal("unparseable task should be in failed/")
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog", "good-task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "good-task.md")); err != nil {
 		t.Fatal("valid task should be promoted to backlog/")
 	}
 }
