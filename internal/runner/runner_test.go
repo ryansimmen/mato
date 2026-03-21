@@ -616,14 +616,14 @@ func TestSelectTaskForReview_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
 
-	got := selectTaskForReview(tasksDir)
+	got := selectTaskForReview(tasksDir, nil)
 	if got != nil {
 		t.Fatalf("expected nil for empty ready-for-review/, got %+v", got)
 	}
 }
 
 func TestSelectTaskForReview_NonexistentDir(t *testing.T) {
-	got := selectTaskForReview(filepath.Join(t.TempDir(), "nonexistent"))
+	got := selectTaskForReview(filepath.Join(t.TempDir(), "nonexistent"), nil)
 	if got != nil {
 		t.Fatalf("expected nil for nonexistent tasks dir, got %+v", got)
 	}
@@ -637,7 +637,7 @@ func TestSelectTaskForReview_SingleTask(t *testing.T) {
 	content := "<!-- claimed-by: abc12345  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: test-task\npriority: 10\n---\n# Test Task\nDo something.\n\n<!-- branch: task/test-task -->\n"
 	os.WriteFile(filepath.Join(reviewDir, "test-task.md"), []byte(content), 0o644)
 
-	got := selectTaskForReview(tasksDir)
+	got := selectTaskForReview(tasksDir, nil)
 	if got == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -669,7 +669,7 @@ func TestSelectTaskForReview_HighestPriority(t *testing.T) {
 	os.WriteFile(filepath.Join(reviewDir, "mid-pri.md"), []byte(
 		"---\npriority: 10\n---\n# Mid Priority\n<!-- branch: task/mid-pri -->\n"), 0o644)
 
-	got := selectTaskForReview(tasksDir)
+	got := selectTaskForReview(tasksDir, nil)
 	if got == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -688,7 +688,7 @@ func TestSelectTaskForReview_SamePriorityAlphabetical(t *testing.T) {
 	os.WriteFile(filepath.Join(reviewDir, "alpha-task.md"), []byte(
 		"---\npriority: 10\n---\n# Alpha\n<!-- branch: task/alpha -->\n"), 0o644)
 
-	got := selectTaskForReview(tasksDir)
+	got := selectTaskForReview(tasksDir, nil)
 	if got == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -707,7 +707,7 @@ func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(reviewDir, ".hidden"), []byte("hidden"), 0o644)
 	os.MkdirAll(filepath.Join(reviewDir, "subdir"), 0o755)
 
-	got := selectTaskForReview(tasksDir)
+	got := selectTaskForReview(tasksDir, nil)
 	if got != nil {
 		t.Fatalf("expected nil when only non-.md files present, got %+v", got)
 	}
@@ -722,7 +722,7 @@ func TestSelectTaskForReview_BranchFallback(t *testing.T) {
 	os.WriteFile(filepath.Join(reviewDir, "my-task.md"), []byte(
 		"---\npriority: 5\n---\n# My Task\nNo branch comment here.\n"), 0o644)
 
-	got := selectTaskForReview(tasksDir)
+	got := selectTaskForReview(tasksDir, nil)
 	if got == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -838,7 +838,7 @@ func TestSelectAndLockReview_AcquiresLock(t *testing.T) {
 	os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
 		"---\npriority: 10\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644)
 
-	task, cleanup := selectAndLockReview(tasksDir)
+	task, cleanup := selectAndLockReview(tasksDir, nil)
 	if task == nil {
 		t.Fatal("expected non-nil task")
 	}
@@ -876,7 +876,7 @@ func TestSelectAndLockReview_SkipsLockedTask(t *testing.T) {
 	os.WriteFile(filepath.Join(locksDir, "review-task-a.md.lock"),
 		[]byte(process.LockIdentity(os.Getpid())), 0o644)
 
-	task, cleanup := selectAndLockReview(tasksDir)
+	task, cleanup := selectAndLockReview(tasksDir, nil)
 	if task == nil {
 		t.Fatal("expected non-nil task (should fall back to task-b)")
 	}
@@ -901,7 +901,7 @@ func TestSelectAndLockReview_AllLocked(t *testing.T) {
 	os.WriteFile(filepath.Join(locksDir, "review-task-a.md.lock"),
 		[]byte(process.LockIdentity(os.Getpid())), 0o644)
 
-	task, cleanup := selectAndLockReview(tasksDir)
+	task, cleanup := selectAndLockReview(tasksDir, nil)
 	if task != nil {
 		cleanup()
 		t.Fatal("expected nil when all tasks are locked")
@@ -912,7 +912,7 @@ func TestSelectAndLockReview_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
 
-	task, cleanup := selectAndLockReview(tasksDir)
+	task, cleanup := selectAndLockReview(tasksDir, nil)
 	if task != nil {
 		cleanup()
 		t.Fatal("expected nil for empty ready-for-review/")
@@ -931,7 +931,7 @@ func TestReviewCandidates_SortedByPriority(t *testing.T) {
 	os.WriteFile(filepath.Join(reviewDir, "mid.md"), []byte(
 		"---\npriority: 10\n---\n# Mid\n"), 0o644)
 
-	candidates := reviewCandidates(tasksDir)
+	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 3 {
 		t.Fatalf("expected 3 candidates, got %d", len(candidates))
 	}
@@ -977,7 +977,7 @@ func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 		"",
 	}, "\n")), 0o644)
 
-	candidates := reviewCandidates(tasksDir)
+	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate, got %d", len(candidates))
 	}
@@ -1013,7 +1013,7 @@ func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
 		"",
 	}, "\n")), 0o644)
 
-	candidates := reviewCandidates(tasksDir)
+	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 0 {
 		t.Fatalf("expected 0 candidates (custom max_retries=1 exhausted), got %d", len(candidates))
 	}
@@ -1040,7 +1040,7 @@ func TestSelectTaskForReview_SkipsRetryExhausted(t *testing.T) {
 		"",
 	}, "\n")), 0o644)
 
-	got := selectTaskForReview(tasksDir)
+	got := selectTaskForReview(tasksDir, nil)
 	if got != nil {
 		t.Fatalf("expected nil (all tasks retry-exhausted), got %+v", got)
 	}
@@ -1069,7 +1069,7 @@ func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 		"",
 	}, "\n")), 0o644)
 
-	candidates := reviewCandidates(tasksDir)
+	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate, got %d", len(candidates))
 	}
@@ -1104,7 +1104,7 @@ func TestReviewCandidates_TaskFailuresIgnored(t *testing.T) {
 		"",
 	}, "\n")), 0o644)
 
-	candidates := reviewCandidates(tasksDir)
+	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate (task failures should not exhaust review budget), got %d", len(candidates))
 	}
@@ -1141,7 +1141,7 @@ func TestReviewCandidates_ReviewFailuresSeparateFromTaskFailures(t *testing.T) {
 		"",
 	}, "\n")), 0o644)
 
-	candidates := reviewCandidates(tasksDir)
+	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate (only 2 review-failures < max_retries 3), got %d", len(candidates))
 	}

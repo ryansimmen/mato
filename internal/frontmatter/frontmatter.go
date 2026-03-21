@@ -27,12 +27,21 @@ type TaskMeta struct {
 	MaxRetries          int    `yaml:"max_retries"`
 }
 
+// ParseTaskFile reads a task file from disk and parses its YAML frontmatter
+// and body. It is a convenience wrapper around ParseTaskData.
 func ParseTaskFile(path string) (TaskMeta, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return TaskMeta{}, "", fmt.Errorf("read task file %s: %w", path, err)
 	}
+	return ParseTaskData(data, path)
+}
 
+// ParseTaskData parses YAML frontmatter and body from raw file bytes. The path
+// argument is used only for the default task ID (filename stem) and error
+// messages. This allows callers that already hold the file contents (e.g.
+// PollIndex) to avoid a redundant os.ReadFile.
+func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 	meta := TaskMeta{
 		ID:         TaskFileStem(path),

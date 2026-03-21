@@ -29,7 +29,7 @@ func TestSelectAndClaimTask_Normal(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "beta.md"), "# Beta\nDo beta.\n")
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "alpha.md\nbeta.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-1", nil)
+	task, err := SelectAndClaimTask(dir, "agent-1", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestSelectAndClaimTask_RetryExhausted(t *testing.T) {
 	}, "\n"))
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "retry.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-2", nil)
+	task, err := SelectAndClaimTask(dir, "agent-2", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestSelectAndClaimTask_SkipsExhaustedClaimsNext(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "good.md"), "# Good\nDo it.\n")
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "bad.md\ngood.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-3", nil)
+	task, err := SelectAndClaimTask(dir, "agent-3", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestSelectAndClaimTask_AllClaimed(t *testing.T) {
 	// backlog is empty
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "missing.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-4", nil)
+	task, err := SelectAndClaimTask(dir, "agent-4", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSelectAndClaimTask_AllClaimed(t *testing.T) {
 func TestSelectAndClaimTask_EmptyQueue(t *testing.T) {
 	dir := setupClaimTestDir(t)
 
-	task, err := SelectAndClaimTask(dir, "agent-5", nil)
+	task, err := SelectAndClaimTask(dir, "agent-5", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestSelectAndClaimTask_DeferredExclusion(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "high.md\nlow.md\n")
 
 	deferred := map[string]struct{}{"high.md": {}}
-	task, err := SelectAndClaimTask(dir, "agent-6", deferred)
+	task, err := SelectAndClaimTask(dir, "agent-6", deferred, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestSelectAndClaimTask_QueueFileOrdering(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "a-first.md"), "# A First\n")
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "z-last.md\na-first.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-7", nil)
+	task, err := SelectAndClaimTask(dir, "agent-7", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestSelectAndClaimTask_NoQueueFileUsesAlphabetical(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "z-last.md"), "# Z Last\n")
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "a-first.md"), "# A First\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-8", nil)
+	task, err := SelectAndClaimTask(dir, "agent-8", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestSelectAndClaimTask_FrontmatterMaxRetries(t *testing.T) {
 	}, "\n"))
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "custom.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-9", nil)
+	task, err := SelectAndClaimTask(dir, "agent-9", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestSelectAndClaimTask_ClaimedByWriteFailure_FallsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-cb1", nil)
+	task, err := SelectAndClaimTask(dir, "agent-cb1", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestSelectAndClaimTask_ClaimedByWriteFailure_AllFail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-cb2", nil)
+	task, err := SelectAndClaimTask(dir, "agent-cb2", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestSelectAndClaimTask_ZeroMaxRetries(t *testing.T) {
 	}, "\n"))
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "zero-retry.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-10", nil)
+	task, err := SelectAndClaimTask(dir, "agent-10", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestSelectAndClaimTask_RollbackFailure_ReturnsError(t *testing.T) {
 		return fmt.Errorf("simulated rollback failure")
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-rb1", nil)
+	task, err := SelectAndClaimTask(dir, "agent-rb1", nil, nil)
 	if err == nil {
 		t.Fatal("expected error when both prepend and rollback fail, got nil")
 	}
@@ -430,7 +430,7 @@ func TestSelectAndClaimTask_RollbackFailure_SkipsFurtherCandidates(t *testing.T)
 		return fmt.Errorf("simulated rollback failure")
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-rb2", nil)
+	task, err := SelectAndClaimTask(dir, "agent-rb2", nil, nil)
 	if err == nil {
 		t.Fatal("expected error on double failure")
 	}
@@ -466,7 +466,7 @@ func TestSelectAndClaimTask_PrependFails_RollbackSucceeds_ContinuesToNext(t *tes
 		return prependClaimedBy(path, agentID, claimedAt)
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-rb3", nil)
+	task, err := SelectAndClaimTask(dir, "agent-rb3", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestSelectAndClaimTask_RetryExhausted_MoveToFailedFails_RollbackToBacklog(t
 		return fmt.Errorf("simulated move-to-failed failure")
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-re1", nil)
+	task, err := SelectAndClaimTask(dir, "agent-re1", nil, nil)
 	if err == nil {
 		t.Fatal("expected error when move-to-failed fails and rollback succeeds, got nil")
 	}
@@ -562,7 +562,7 @@ func TestSelectAndClaimTask_RetryExhausted_DoubleFailure_ReturnsError(t *testing
 		return fmt.Errorf("simulated rollback failure")
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-re2", nil)
+	task, err := SelectAndClaimTask(dir, "agent-re2", nil, nil)
 	if err == nil {
 		t.Fatal("expected error when both move-to-failed and rollback fail, got nil")
 	}
@@ -614,7 +614,7 @@ func TestSelectAndClaimTask_RetryExhausted_DoubleFailure_SkipsFurtherCandidates(
 		return fmt.Errorf("simulated rollback failure")
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-re3", nil)
+	task, err := SelectAndClaimTask(dir, "agent-re3", nil, nil)
 	if err == nil {
 		t.Fatal("expected error on double failure")
 	}
@@ -694,7 +694,7 @@ func TestSelectAndClaimTask_InvalidYAML_WarnsAndUsesDefaults(t *testing.T) {
 	}
 	os.Stderr = w
 
-	task, claimErr := SelectAndClaimTask(dir, "agent-warn", nil)
+	task, claimErr := SelectAndClaimTask(dir, "agent-warn", nil, nil)
 
 	w.Close()
 	captured, readErr := io.ReadAll(r)
@@ -749,7 +749,7 @@ func TestSelectAndClaimTask_InvalidYAML_ExhaustedRetries_UsesDefault(t *testing.
 	}
 	os.Stderr = w
 
-	task, claimErr := SelectAndClaimTask(dir, "agent-exhaust", nil)
+	task, claimErr := SelectAndClaimTask(dir, "agent-exhaust", nil, nil)
 
 	w.Close()
 	r.Close()
@@ -922,7 +922,7 @@ func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stderr = w
 
-	task, err := SelectAndClaimTask(dir, "agent-x", nil)
+	task, err := SelectAndClaimTask(dir, "agent-x", nil, nil)
 
 	w.Close()
 	stderrBytes, _ := io.ReadAll(r)
@@ -957,7 +957,7 @@ func TestSelectAndClaimTask_BranchCollisionAddsDisambiguator(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "add feature.md"), "# Add Feature (v2)\n")
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "add feature.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-coll1", nil)
+	task, err := SelectAndClaimTask(dir, "agent-coll1", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -995,7 +995,7 @@ func TestSelectAndClaimTask_NoBranchCollision_NormalBranch(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "unique-task.md"), "# Unique Task\n")
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "unique-task.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-nocoll", nil)
+	task, err := SelectAndClaimTask(dir, "agent-nocoll", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -1023,7 +1023,7 @@ func TestCollectActiveBranches(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirReadyReview, "d.md"), "<!-- branch: task/delta -->\n# D\n")
 	testutil.WriteFile(t, filepath.Join(dir, DirReadyMerge, "e.md"), "<!-- branch: task/epsilon -->\n# E\n")
 
-	active := CollectActiveBranches(dir)
+	active := CollectActiveBranches(dir, nil)
 
 	for _, want := range []string{"task/alpha", "task/beta", "task/delta", "task/epsilon"} {
 		if _, ok := active[want]; !ok {
@@ -1090,7 +1090,7 @@ func TestSelectAndClaimTask_DestinationExistsInProgress(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "ok.md"), "# OK\nDo ok.\n")
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "dup.md\nok.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-dup", nil)
+	task, err := SelectAndClaimTask(dir, "agent-dup", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -1127,7 +1127,7 @@ func TestSelectAndClaimTask_DestinationExistsInFailed(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(dir, DirFailed, "old.md"), "# Old task (original)\n")
 	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "old.md\n")
 
-	task, err := SelectAndClaimTask(dir, "agent-fd", nil)
+	task, err := SelectAndClaimTask(dir, "agent-fd", nil, nil)
 	// Retry-exhausted move to failed/ fails (EEXIST), rollback succeeds,
 	// so FailedDirUnavailableError is returned.
 	if err == nil {
@@ -1170,7 +1170,7 @@ func TestSelectAndClaimTask_RollbackDestinationExists(t *testing.T) {
 		return fmt.Errorf("simulated prepend failure")
 	}
 
-	task, err := SelectAndClaimTask(dir, "agent-race", nil)
+	task, err := SelectAndClaimTask(dir, "agent-race", nil, nil)
 	// Rollback via AtomicMove fails because backlog/race.md reappeared,
 	// resulting in a hard error (task stranded in in-progress).
 	if err == nil {

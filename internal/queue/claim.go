@@ -62,7 +62,12 @@ type ClaimedTask struct {
 // ready-to-merge/ for <!-- branch: ... --> comments and returns a set of
 // branch names currently in use. All three directories are checked because a
 // task's branch remains active until it is merged or failed.
-func CollectActiveBranches(tasksDir string) map[string]struct{} {
+//
+// When idx is non-nil, the index is used instead of scanning the filesystem.
+func CollectActiveBranches(tasksDir string, idx *PollIndex) map[string]struct{} {
+	if idx != nil {
+		return idx.ActiveBranches()
+	}
 	active := make(map[string]struct{})
 	dirs := []string{
 		filepath.Join(tasksDir, DirInProgress),
@@ -167,7 +172,10 @@ func rollbackClaimToBacklog(name, dst, src string, claimErr error) error {
 // moves it to in-progress/, stamps the claimed-by header, and checks the
 // retry budget. Tasks whose retry budget is exhausted are moved directly to
 // failed/ and skipped. Returns nil when no claimable task remains.
-func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) (*ClaimedTask, error) {
+//
+// When idx is non-nil, the index is used for active branch lookup and
+// pre-parsed metadata. When idx is nil, the filesystem is scanned directly.
+func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, idx *PollIndex) (*ClaimedTask, error) {
 	candidates, err := selectCandidates(tasksDir, deferred)
 	if err != nil {
 		return nil, err
@@ -177,25 +185,44 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 	failedDir := filepath.Join(tasksDir, DirFailed)
 	backlogDir := filepath.Join(tasksDir, DirBacklog)
 
-	activeBranches := CollectActiveBranches(tasksDir)
+	activeBranches := CollectActiveBranches(tasksDir, idx)
 
 	for _, name := range candidates {
 		src := filepath.Join(backlogDir, name)
 		dst := filepath.Join(inProgressDir, name)
 
-		// Parse metadata and check retry budget before claiming so the
-		// claimed-by header doesn't interfere with frontmatter parsing.
-		meta, body, parseErr := frontmatter.ParseTaskFile(src)
-		maxRetries := 3
-		if parseErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, using defaults: %v\n", name, parseErr)
-		} else {
-			maxRetries = meta.MaxRetries
+		// Try to use pre-parsed metadata from the index first.
+		var meta frontmatter.TaskMeta
+		var body string
+		var maxRetries int
+		var failures int
+
+		snap := (*TaskSnapshot)(nil)
+		if idx != nil {
+			snap = idx.Snapshot(DirBacklog, name)
 		}
-		failures, failErr := CountFailureLines(src)
-		if failErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not count failures for %s, skipping: %v\n", name, failErr)
-			continue
+
+		if snap != nil {
+			meta = snap.Meta
+			body = snap.Body
+			maxRetries = meta.MaxRetries
+			failures = snap.FailureCount
+		} else {
+			// Fallback: parse from disk.
+			var parseErr error
+			meta, body, parseErr = frontmatter.ParseTaskFile(src)
+			maxRetries = 3
+			if parseErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, using defaults: %v\n", name, parseErr)
+			} else {
+				maxRetries = meta.MaxRetries
+			}
+			var failErr error
+			failures, failErr = CountFailureLines(src)
+			if failErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not count failures for %s, skipping: %v\n", name, failErr)
+				continue
+			}
 		}
 
 		if err := AtomicMove(src, dst); err != nil {

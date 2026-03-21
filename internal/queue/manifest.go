@@ -19,33 +19,48 @@ type queueEntry struct {
 // ComputeQueueManifest returns the queue manifest content as a string without
 // writing it to disk. This is the read-only equivalent of WriteQueueManifest.
 // It returns an error if the backlog directory cannot be read.
-func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) (string, error) {
-	names, err := ListTaskFiles(filepath.Join(tasksDir, DirBacklog))
-	if err != nil {
-		return "", err
-	}
+//
+// When idx is nil, the backlog directory is scanned and each task is parsed
+// from disk (backward-compatible path). When idx is non-nil, the index is
+// used for zero additional I/O.
+func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}, idx *PollIndex) (string, error) {
+	var queueEntries []queueEntry
 
-	queueEntries := make([]queueEntry, 0, len(names))
-	for _, name := range names {
-		if exclude != nil {
-			if _, excluded := exclude[name]; excluded {
+	if idx != nil {
+		sorted := idx.BacklogByPriority(exclude)
+		queueEntries = make([]queueEntry, 0, len(sorted))
+		for _, snap := range sorted {
+			queueEntries = append(queueEntries, queueEntry{name: snap.Filename, priority: snap.Meta.Priority})
+		}
+	} else {
+		// Fallback: scan filesystem.
+		names, err := ListTaskFiles(filepath.Join(tasksDir, DirBacklog))
+		if err != nil {
+			return "", err
+		}
+
+		queueEntries = make([]queueEntry, 0, len(names))
+		for _, name := range names {
+			if exclude != nil {
+				if _, excluded := exclude[name]; excluded {
+					continue
+				}
+			}
+			meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, DirBacklog, name))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", name, err)
 				continue
 			}
+			queueEntries = append(queueEntries, queueEntry{name: name, priority: meta.Priority})
 		}
-		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, DirBacklog, name))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", name, err)
-			continue
-		}
-		queueEntries = append(queueEntries, queueEntry{name: name, priority: meta.Priority})
-	}
 
-	sort.Slice(queueEntries, func(i, j int) bool {
-		if queueEntries[i].priority != queueEntries[j].priority {
-			return queueEntries[i].priority < queueEntries[j].priority
-		}
-		return queueEntries[i].name < queueEntries[j].name
-	})
+		sort.Slice(queueEntries, func(i, j int) bool {
+			if queueEntries[i].priority != queueEntries[j].priority {
+				return queueEntries[i].priority < queueEntries[j].priority
+			}
+			return queueEntries[i].name < queueEntries[j].name
+		})
+	}
 
 	lines := make([]string, 0, len(queueEntries))
 	for _, entry := range queueEntries {
@@ -60,8 +75,10 @@ func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) (string,
 
 // WriteQueueManifest computes the queue manifest via ComputeQueueManifest
 // and atomically writes it to the .queue file in tasksDir.
-func WriteQueueManifest(tasksDir string, exclude map[string]struct{}) error {
-	manifest, err := ComputeQueueManifest(tasksDir, exclude)
+//
+// When idx is nil, each backlog task is parsed from disk.
+func WriteQueueManifest(tasksDir string, exclude map[string]struct{}, idx *PollIndex) error {
+	manifest, err := ComputeQueueManifest(tasksDir, exclude, idx)
 	if err != nil {
 		return err
 	}
