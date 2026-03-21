@@ -16,6 +16,7 @@ import (
 	"mato/internal/identity"
 	"mato/internal/lockfile"
 	"mato/internal/process"
+	"mato/internal/taskfile"
 )
 
 var claimedByRe = regexp.MustCompile(`<!-- claimed-by:\s*(\S+)`)
@@ -451,35 +452,6 @@ type backlogTask struct {
 	affects  []string
 }
 
-func collectActiveAffects(tasksDir string) []backlogTask {
-	var active []backlogTask
-	for _, dir := range []string{DirInProgress, DirReadyReview, DirReadyMerge} {
-		dirPath := filepath.Join(tasksDir, dir)
-		names, err := ListTaskFiles(dirPath)
-		if err != nil {
-			continue
-		}
-		for _, name := range names {
-			path := filepath.Join(dirPath, name)
-			meta, _, err := frontmatter.ParseTaskFile(path)
-			if err != nil {
-				continue
-			}
-			if len(meta.Affects) == 0 {
-				continue
-			}
-			active = append(active, backlogTask{
-				name:     name,
-				dir:      dir,
-				path:     path,
-				priority: 0,
-				affects:  meta.Affects,
-			})
-		}
-	}
-	return active
-}
-
 func hasActiveOverlap(tasksDir string, affects []string) bool {
 	if len(affects) == 0 {
 		return false
@@ -562,9 +534,15 @@ func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
 		return tasks[i].name < tasks[j].name
 	})
 
-	activeAffects := collectActiveAffects(tasksDir)
-	kept := make([]backlogTask, 0, len(tasks)+len(activeAffects))
-	kept = append(kept, activeAffects...)
+	active := taskfile.CollectActiveAffects(tasksDir)
+	kept := make([]backlogTask, 0, len(tasks)+len(active))
+	for _, at := range active {
+		kept = append(kept, backlogTask{
+			name:    at.Name,
+			dir:     at.Dir,
+			affects: at.Affects,
+		})
+	}
 	for _, task := range tasks {
 		isDef := false
 		for _, other := range kept {
