@@ -1,11 +1,24 @@
 package taskfile
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 
 	"mato/internal/frontmatter"
-	"mato/internal/queue"
 )
+
+// Active directory names — duplicated from queue.Dir* to avoid a circular
+// import between taskfile and queue.
+const (
+	dirInProgress  = "in-progress"
+	dirReadyReview = "ready-for-review"
+	dirReadyMerge  = "ready-to-merge"
+)
+
+// activeDirs lists the directories that contain tasks currently being
+// worked on, under review, or awaiting merge.
+var activeDirs = []string{dirInProgress, dirReadyReview, dirReadyMerge}
 
 // ActiveTask describes a task currently being worked on or awaiting merge,
 // along with the files it declares in its affects: metadata.
@@ -19,9 +32,9 @@ type ActiveTask struct {
 // ready-to-merge/ that have non-empty affects: metadata.
 func CollectActiveAffects(tasksDir string) []ActiveTask {
 	var active []ActiveTask
-	for _, dir := range []string{queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge} {
+	for _, dir := range activeDirs {
 		dirPath := filepath.Join(tasksDir, dir)
-		names, err := queue.ListTaskFiles(dirPath)
+		names, err := listTaskFiles(dirPath)
 		if err != nil {
 			continue
 		}
@@ -42,4 +55,20 @@ func CollectActiveAffects(tasksDir string) []ActiveTask {
 		}
 	}
 	return active
+}
+
+// listTaskFiles returns the names of .md files in dir, sorted by name.
+func listTaskFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	return names, nil
 }

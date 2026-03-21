@@ -1,4 +1,4 @@
-package taskfile
+package taskfile_test
 
 import (
 	"os"
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"mato/internal/queue"
+	"mato/internal/taskfile"
 	"mato/internal/testutil"
 )
 
@@ -41,7 +42,7 @@ affects:
 # Task C
 `)
 
-	active := CollectActiveAffects(tasksDir)
+	active := taskfile.CollectActiveAffects(tasksDir)
 	if len(active) != 3 {
 		t.Fatalf("expected 3 active tasks, got %d", len(active))
 	}
@@ -80,7 +81,7 @@ affects:
 
 func TestCollectActiveAffects_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	active := CollectActiveAffects(tasksDir)
+	active := taskfile.CollectActiveAffects(tasksDir)
 	if len(active) != 0 {
 		t.Fatalf("expected 0 active tasks for empty dir, got %d", len(active))
 	}
@@ -105,7 +106,7 @@ affects: []
 # Empty Affects Task
 `)
 
-	active := CollectActiveAffects(tasksDir)
+	active := taskfile.CollectActiveAffects(tasksDir)
 	if len(active) != 0 {
 		t.Fatalf("expected 0 active tasks when no affects present, got %d", len(active))
 	}
@@ -132,7 +133,7 @@ affects:
 # Valid Task
 `)
 
-	active := CollectActiveAffects(tasksDir)
+	active := taskfile.CollectActiveAffects(tasksDir)
 	if len(active) != 1 {
 		t.Fatalf("expected 1 active task, got %d", len(active))
 	}
@@ -155,7 +156,7 @@ affects:
 # Commented Task
 `)
 
-	active := CollectActiveAffects(tasksDir)
+	active := taskfile.CollectActiveAffects(tasksDir)
 	if len(active) != 1 {
 		t.Fatalf("expected 1 active task, got %d", len(active))
 	}
@@ -183,7 +184,7 @@ affects:
 # Done Task
 `)
 
-	active := CollectActiveAffects(tasksDir)
+	active := taskfile.CollectActiveAffects(tasksDir)
 	if len(active) != 0 {
 		t.Fatalf("expected 0 active tasks from non-active dirs, got %d", len(active))
 	}
