@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -239,20 +237,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 	}
 	defer cleanupLock()
 
-	gitName, _ := git.Output(repoRoot, "config", "user.name")
-	gitEmail, _ := git.Output(repoRoot, "config", "user.email")
-	if strings.TrimSpace(gitName) == "" {
-		gitName, _ = git.Output("", "config", "--global", "user.name")
-	}
-	if strings.TrimSpace(gitEmail) == "" {
-		gitEmail, _ = git.Output("", "config", "--global", "user.email")
-	}
-	if n := strings.TrimSpace(gitName); n != "" {
-		git.Output(repoRoot, "config", "user.name", n)
-	}
-	if e := strings.TrimSpace(gitEmail); e != "" {
-		git.Output(repoRoot, "config", "user.email", e)
-	}
+	gitName, gitEmail := resolveGitIdentity(repoRoot)
 
 	changed, err := git.EnsureGitignoreContains(repoRoot, "/.tasks/")
 	if err != nil {
@@ -269,100 +254,92 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		return err
 	}
 
+	tools, err := discoverHostTools()
+	if err != nil {
+		return err
+	}
+
+	cfg := buildDockerConfig(branch, tools, agentID, gitName, gitEmail, copilotArgs, repoRoot, tasksDir, agentTimeout)
+
+	ctx, cancel := setupSignalContext()
+	defer cancel()
+	defer signal.Stop(signalChan(ctx))
+
+	return pollLoop(ctx, cfg, repoRoot, tasksDir, branch, agentID)
+}
+
+// resolveGitIdentity reads git user.name and user.email from the local
+// repo config, falling back to global config, and ensures both are set
+// on the local repo for use inside Docker containers.
+func resolveGitIdentity(repoRoot string) (name, email string) {
+	name, _ = git.Output(repoRoot, "config", "user.name")
+	email, _ = git.Output(repoRoot, "config", "user.email")
+	if strings.TrimSpace(name) == "" {
+		name, _ = git.Output("", "config", "--global", "user.name")
+	}
+	if strings.TrimSpace(email) == "" {
+		email, _ = git.Output("", "config", "--global", "user.email")
+	}
+	if n := strings.TrimSpace(name); n != "" {
+		git.Output(repoRoot, "config", "user.name", n)
+	}
+	if e := strings.TrimSpace(email); e != "" {
+		git.Output(repoRoot, "config", "user.email", e)
+	}
+	return name, email
+}
+
+// buildDockerConfig assembles the dockerConfig from resolved host tools,
+// agent identity, and runtime settings.
+func buildDockerConfig(branch string, tools hostTools, agentID, gitName, gitEmail string, copilotArgs []string, repoRoot, tasksDir string, timeout time.Duration) dockerConfig {
 	image := os.Getenv("MATO_DOCKER_IMAGE")
 	if image == "" {
 		image = "ubuntu:24.04"
 	}
 	workdir := "/workspace"
 
-	copilotPath, err := exec.LookPath("copilot")
-	if err != nil {
-		return fmt.Errorf("find copilot CLI: %w", err)
-	}
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		return fmt.Errorf("find git CLI: %w", err)
-	}
-	gitUploadPackPath, err := findGitHelper("git-upload-pack")
-	if err != nil {
-		return err
-	}
-	gitReceivePackPath, err := findGitHelper("git-receive-pack")
-	if err != nil {
-		return err
-	}
-	ghPath := "/usr/bin/gh"
-	if info, statErr := os.Stat(ghPath); statErr != nil || info.IsDir() {
-		ghPath, err = exec.LookPath("gh")
-		if err != nil {
-			return fmt.Errorf("find gh CLI: %w", err)
-		}
-	}
-	goRoot := runtime.GOROOT()
-
-	gitTemplatesDir := "/usr/share/git-core/templates"
-	hasGitTemplates := false
-	if info, statErr := os.Stat(gitTemplatesDir); statErr == nil && info.IsDir() {
-		hasGitTemplates = true
-	}
-
-	systemCertsDir := "/etc/ssl/certs"
-	hasSystemCerts := false
-	if info, statErr := os.Stat(systemCertsDir); statErr == nil && info.IsDir() {
-		hasSystemCerts = true
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-	ghConfigDir := filepath.Join(homeDir, ".config", "gh")
-	hasGhConfig := false
-	if info, statErr := os.Stat(ghConfigDir); statErr == nil && info.IsDir() {
-		hasGhConfig = true
-	}
-
 	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
 	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
 	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
 
-	cfg := dockerConfig{
+	return dockerConfig{
 		image:              image,
 		workdir:            workdir,
 		prompt:             prompt,
-		copilotPath:        copilotPath,
-		gitPath:            gitPath,
-		gitUploadPackPath:  gitUploadPackPath,
-		gitReceivePackPath: gitReceivePackPath,
-		ghPath:             ghPath,
-		goRoot:             goRoot,
+		copilotPath:        tools.copilotPath,
+		gitPath:            tools.gitPath,
+		gitUploadPackPath:  tools.gitUploadPackPath,
+		gitReceivePackPath: tools.gitReceivePackPath,
+		ghPath:             tools.ghPath,
+		goRoot:             tools.goRoot,
 		gitName:            gitName,
 		gitEmail:           gitEmail,
-		homeDir:            homeDir,
-		ghConfigDir:        ghConfigDir,
-		hasGhConfig:        hasGhConfig,
-		gitTemplatesDir:    gitTemplatesDir,
-		hasGitTemplates:    hasGitTemplates,
-		systemCertsDir:     systemCertsDir,
-		hasSystemCerts:     hasSystemCerts,
+		homeDir:            tools.homeDir,
+		ghConfigDir:        tools.ghConfigDir,
+		hasGhConfig:        tools.hasGhConfig,
+		gitTemplatesDir:    tools.gitTemplatesDir,
+		hasGitTemplates:    tools.hasGitTemplates,
+		systemCertsDir:     tools.systemCertsDir,
+		hasSystemCerts:     tools.hasSystemCerts,
 		agentID:            agentID,
 		copilotArgs:        copilotArgs,
 		repoRoot:           repoRoot,
 		tasksDir:           tasksDir,
 		targetBranch:       branch,
-		timeout:            agentTimeout,
+		timeout:            timeout,
 		isTTY:              isTerminal(os.Stdin),
 	}
+}
 
-	// Create a context that is cancelled when SIGINT or SIGTERM is received.
-	// This context is passed to runOnce and runReview so that running Docker
-	// containers receive a graceful SIGTERM followed by SIGKILL after
-	// gracefulShutdownDelay.
+// setupSignalContext creates a context.Context that is cancelled when
+// SIGINT or SIGTERM is received. The caller must defer both the returned
+// cancel function and signal.Stop on the signal channel to ensure the
+// signal-listener goroutine exits and signal registration is cleaned up.
+func setupSignalContext() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
 
 	go func() {
 		select {
@@ -372,6 +349,25 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		}
 	}()
 
+	// Store sigCh in ctx so the caller can call signal.Stop on it.
+	ctx = context.WithValue(ctx, signalChanKey{}, sigCh)
+	return ctx, cancel
+}
+
+// signalChanKey is the context key for the signal channel.
+type signalChanKey struct{}
+
+// signalChan retrieves the signal channel from a context created by
+// setupSignalContext. Returns nil if not present.
+func signalChan(ctx context.Context) chan<- os.Signal {
+	ch, _ := ctx.Value(signalChanKey{}).(chan os.Signal)
+	return ch
+}
+
+// pollLoop is the main orchestration loop that claims tasks, runs agents,
+// handles reviews, and processes merges. It runs until the context is
+// cancelled (via signal).
+func pollLoop(ctx context.Context, cfg dockerConfig, repoRoot, tasksDir, branch, agentID string) error {
 	wasIdle := false
 	failedDirExcluded := make(map[string]struct{})
 	consecutiveErrors := 0
