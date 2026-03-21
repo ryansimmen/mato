@@ -85,7 +85,7 @@ import (
 | Exported types       | PascalCase    | `TaskMeta`, `ClaimedTask`          |
 | Unexported types     | camelCase     | `envConfig`, `runContext`          |
 | Sentinel errors      | `errXxx` var  | `errSquashMergeConflict`           |
-| Regex vars           | camelCase+Re  | `claimedByRe`, `branchUnsafeRe`   |
+| Regex vars           | camelCase+Re  | `reviewedRe`, `branchUnsafeRe`    |
 | Constants            | camelCase     | `defaultAgentTimeout`, `basePollInterval` |
 | Files                | lowercase     | `runner.go`, `frontmatter.go`      |
 | Packages             | single word   | `queue`, `merge`, `lockfile`       |

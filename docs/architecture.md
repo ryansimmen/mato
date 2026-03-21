@@ -82,11 +82,11 @@ Important details from the implementation:
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
 ### Orphan recovery and lock cleanup
-The `queue` package (spread across `locks.go` and `reconcile.go`) provides the host-side recovery primitives:
-- `queue.RegisterAgent(...)` writes `.tasks/.locks/<agentID>.pid` and returns a cleanup function.
+The `queue` package provides the host-side recovery primitives:
+- `queue.RegisterAgent(...)` (in `queue.go`) writes `.tasks/.locks/<agentID>.pid` and returns a cleanup function.
 - `identity.IsAgentActive(...)` reads a PID file and tests liveness with signal `0`.
 - `queue.CleanStaleLocks(...)` removes dead agent lock files.
-- `queue.RecoverOrphanedTasks(...)` scans `in-progress/*.md`; if the claiming agent is no longer active, it appends `<!-- failure: mato-recovery ... -->` and renames the task back to `backlog/`.
+- `queue.RecoverOrphanedTasks(...)` (in `queue.go`) scans `in-progress/*.md`; if the claiming agent is no longer active, it appends `<!-- failure: mato-recovery ... -->` and renames the task back to `backlog/`.
 - If `claimed-by` points at a still-live agent, recovery skips that task.
 ### Signal handling
 `Run()` listens for `SIGINT` and `SIGTERM`. On either signal it prints `Interrupted. Exiting.`, returns `nil`, and the deferred cleanup removes the host lock file.
@@ -158,7 +158,7 @@ State-by-state behavior:
 - `COMMIT`: `git add -A`, commit with the task title, and exit. The host detects commits and handles push + review transition.
 - `ON_FAILURE`: append a structured `<!-- failure: ... -->` record, try to check out the target branch, then always move the task back to `backlog/`. The host checks the failure record budget on the next cycle via `SelectAndClaimTask`.
 
-After the agent exits, the host (`postAgentPush` in `runner.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, and sends `conflict-warning` and `completion` messages.
+After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, and sends `conflict-warning` and `completion` messages.
 
 The prompt enforces several invariants: one task per run; agents never push any branches (the host handles all pushes); they send at most 4 messages per task (3 `progress` + 1 for `ON_FAILURE`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States
@@ -311,10 +311,12 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `internal/queue/`
 - Task claiming and failure-record counting (`claim.go`).
 - Queue directory constants (`dirs.go`).
-- Lock file management — `RegisterAgent`, `CleanStaleLocks` (`locks.go`).
+- Agent registration — `RegisterAgent` (`queue.go`).
+- Lock file management — `CleanStaleLocks`, `AcquireReviewLock` (`locks.go`).
 - Queue manifest writing (`manifest.go`).
 - Overlap deferral — `DeferredOverlappingTasks` (`overlap.go`).
-- Orphan recovery, dependency promotion — `ReconcileReadyQueue`, `RecoverOrphanedTasks` (`reconcile.go`).
+- Dependency promotion — `ReconcileReadyQueue` (`reconcile.go`).
+- Orphan recovery — `RecoverOrphanedTasks` (`queue.go`).
 - Task file enumeration — `ListTaskFiles` (`taskfiles.go`).
 - Atomic file moves — `AtomicMove` (`queue.go`).
 

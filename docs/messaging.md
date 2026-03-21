@@ -169,7 +169,7 @@ When the host claims a task that has `depends_on` entries, `runner.writeDependen
 Presence files live in `.tasks/messages/presence/` and are host-managed.
 The host runner calls `messaging.WritePresence(tasksDir, agentID, taskFile, branch)` immediately after claiming a task, writing JSON with `agent_id`, `task`, `branch`, and `updated_at` to `<sanitized-agent-id>.json`. Task agents should not edit `presence/` directly.
 
-`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It checks `.tasks/.locks/<agent>.pid` through `queue.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
+`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It checks `.tasks/.locks/<agent>.pid` through `identity.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
 
 ## Garbage Collection
 `messaging.CleanOldMessages(tasksDir, 24*time.Hour)` garbage-collects event files.
