@@ -80,7 +80,7 @@ import (
 | Element              | Convention    | Example                            |
 |----------------------|---------------|------------------------------------|
 | Exported functions   | PascalCase    | `ParseTaskFile`, `RecoverOrphanedTasks` |
-| Unexported functions | camelCase     | `pollBackoff`, `safeRename`        |
+| Unexported functions | camelCase     | `pollBackoff`, `crossDeviceMove`   |
 | Exported types       | PascalCase    | `TaskMeta`, `ClaimedTask`          |
 | Unexported types     | camelCase     | `dockerConfig`, `queueEntry`       |
 | Sentinel errors      | `errXxx` var  | `errSquashMergeConflict`           |
@@ -103,7 +103,7 @@ import (
 ### File I/O
 
 - **Atomic writes**: Use `atomicwrite.WriteFile` or `atomicwrite.WriteFunc` from `internal/atomicwrite/`. Exception: failure record appends use `O_APPEND`.
-- **Atomic moves (TOCTOU-safe)**: `os.Link` + `os.Remove` instead of rename. See `safeRename` in `queue.go`.
+- **Atomic moves (TOCTOU-safe)**: `queue.AtomicMove(src, dst)` for all file moves. Uses `os.Link` + `os.Remove`; handles `EXDEV` cross-device fallback.
 - **Permissions**: `0o644` for files, `0o755` for directories.
 - **Timestamps**: Always UTC (`time.Now().UTC()`), stored as RFC3339.
 

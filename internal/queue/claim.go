@@ -48,9 +48,9 @@ func IsFailedDirUnavailable(err error) bool {
 // tricks.
 var (
 	claimPrependFn         = prependClaimedBy
-	claimRollbackFn        = safeRename
-	retryExhaustedMoveFn   = safeRename
-	retryExhaustedRollback = safeRename
+	claimRollbackFn        = AtomicMove
+	retryExhaustedMoveFn   = AtomicMove
+	retryExhaustedRollback = AtomicMove
 )
 
 // ClaimedTask holds the pre-resolved metadata for a task claimed on the host
@@ -205,7 +205,7 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 			continue
 		}
 
-		if err := safeRename(src, dst); err != nil {
+		if err := AtomicMove(src, dst); err != nil {
 			// Another agent may have claimed it, or the destination
 			// already exists (EEXIST). Skip to the next candidate.
 			continue
