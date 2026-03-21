@@ -199,28 +199,28 @@ func TestExtractKnownFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, branch, tasks, dryRun, extra, err := extractKnownFlags(tt.args)
+			cfg, err := extractKnownFlags(tt.args)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if repo != tt.wantRepo {
-				t.Errorf("repo = %q, want %q", repo, tt.wantRepo)
+			if cfg.repo != tt.wantRepo {
+				t.Errorf("repo = %q, want %q", cfg.repo, tt.wantRepo)
 			}
-			if branch != tt.wantBranch {
-				t.Errorf("branch = %q, want %q", branch, tt.wantBranch)
+			if cfg.branch != tt.wantBranch {
+				t.Errorf("branch = %q, want %q", cfg.branch, tt.wantBranch)
 			}
-			if tasks != tt.wantTasks {
-				t.Errorf("tasksDir = %q, want %q", tasks, tt.wantTasks)
+			if cfg.tasksDir != tt.wantTasks {
+				t.Errorf("tasksDir = %q, want %q", cfg.tasksDir, tt.wantTasks)
 			}
-			if dryRun != tt.wantDryRun {
-				t.Errorf("dryRun = %v, want %v", dryRun, tt.wantDryRun)
+			if cfg.dryRun != tt.wantDryRun {
+				t.Errorf("dryRun = %v, want %v", cfg.dryRun, tt.wantDryRun)
 			}
-			if len(extra) != len(tt.wantExtra) {
-				t.Fatalf("extra = %v, want %v", extra, tt.wantExtra)
+			if len(cfg.copilotArgs) != len(tt.wantExtra) {
+				t.Fatalf("extra = %v, want %v", cfg.copilotArgs, tt.wantExtra)
 			}
-			for i := range extra {
-				if extra[i] != tt.wantExtra[i] {
-					t.Errorf("extra[%d] = %q, want %q", i, extra[i], tt.wantExtra[i])
+			for i := range cfg.copilotArgs {
+				if cfg.copilotArgs[i] != tt.wantExtra[i] {
+					t.Errorf("extra[%d] = %q, want %q", i, cfg.copilotArgs[i], tt.wantExtra[i])
 				}
 			}
 		})
@@ -317,7 +317,7 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, _, _, _, err := extractKnownFlags(tt.args)
+			_, err := extractKnownFlags(tt.args)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -378,8 +378,8 @@ func TestRootCmd_HelpAfterDoubleDashForwarded(t *testing.T) {
 			cmd := newRootCmd()
 			cmd.SetArgs(tt.args)
 			cmd.RunE = func(cmd *cobra.Command, args []string) error {
-				_, _, _, _, copilotArgs, _ := extractKnownFlags(args)
-				capturedArgs = copilotArgs
+				cfg, _ := extractKnownFlags(args)
+				capturedArgs = cfg.copilotArgs
 				return nil
 			}
 			if err := cmd.Execute(); err != nil {
@@ -402,8 +402,8 @@ func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--repo=/tmp/repo", "--model", "gpt-5.2"})
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		_, _, _, _, copilotArgs, _ := extractKnownFlags(args)
-		capturedArgs = copilotArgs
+		cfg, _ := extractKnownFlags(args)
+		capturedArgs = cfg.copilotArgs
 		return nil
 	}
 	if err := cmd.Execute(); err != nil {
