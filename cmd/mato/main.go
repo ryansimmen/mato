@@ -15,6 +15,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// assignFlag sets the target variable for a known flag name. It returns true
+// if the flag was recognised, false otherwise. This avoids duplicating the
+// assignment switch for the --flag=value and --flag value parsing paths.
+func assignFlag(name, val string, repo, branch, tasksDir *string) bool {
+	switch name {
+	case "--repo":
+		*repo = val
+	case "--branch":
+		*branch = val
+	case "--tasks-dir":
+		*tasksDir = val
+	default:
+		return false
+	}
+	return true
+}
+
 // extractKnownFlags separates mato's own flags from arguments that should be
 // forwarded to the copilot CLI inside the Docker container. The root command
 // uses DisableFlagParsing so that unknown flags (like --model) are not rejected
@@ -51,14 +68,7 @@ func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun boo
 					err = fmt.Errorf("flag %s requires a value", flag)
 					return
 				}
-				switch flag {
-				case "--repo":
-					repo = val
-				case "--branch":
-					branch = val
-				case "--tasks-dir":
-					tasksDir = val
-				}
+				assignFlag(flag, val, &repo, &branch, &tasksDir)
 				handled = true
 				break
 			}
@@ -83,14 +93,7 @@ func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun boo
 				err = fmt.Errorf("flag %s requires a value", arg)
 				return
 			}
-			switch arg {
-			case "--repo":
-				repo = val
-			case "--branch":
-				branch = val
-			case "--tasks-dir":
-				tasksDir = val
-			}
+			assignFlag(arg, val, &repo, &branch, &tasksDir)
 			continue
 		}
 		copilotArgs = append(copilotArgs, arg)
