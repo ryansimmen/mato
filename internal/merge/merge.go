@@ -46,41 +46,37 @@ const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 // Returns the number of tasks successfully merged.
 func ProcessQueue(repoRoot, tasksDir, branch string) int {
 	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
-	entries, err := os.ReadDir(readyDir)
+	names, err := queue.ListTaskFiles(readyDir)
 	if err != nil {
 		return 0
 	}
 
 	activeBranches := queue.CollectActiveBranches(tasksDir)
 
-	tasks := make([]mergeQueueTask, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-
-		path := filepath.Join(readyDir, entry.Name())
+	tasks := make([]mergeQueueTask, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(readyDir, name)
 		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse ready-to-merge task %s: %v\n", entry.Name(), err)
-			if failureErr := failMergeTask(path, filepath.Join(tasksDir, queue.DirBacklog, entry.Name()), fmt.Sprintf("parse task file: %v", err)); failureErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not requeue task %s: %v\n", entry.Name(), failureErr)
+			fmt.Fprintf(os.Stderr, "warning: could not parse ready-to-merge task %s: %v\n", name, err)
+			if failureErr := failMergeTask(path, filepath.Join(tasksDir, queue.DirBacklog, name), fmt.Sprintf("parse task file: %v", err)); failureErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not requeue task %s: %v\n", name, failureErr)
 			}
 			continue
 		}
 
 		taskBranch := taskfile.ParseBranch(path)
 		if taskBranch == "" {
-			taskBranch = "task/" + frontmatter.SanitizeBranchName(entry.Name())
+			taskBranch = "task/" + frontmatter.SanitizeBranchName(name)
 			if _, taken := activeBranches[taskBranch]; taken {
-				taskBranch = taskBranch + "-" + frontmatter.BranchDisambiguator(entry.Name())
+				taskBranch = taskBranch + "-" + frontmatter.BranchDisambiguator(name)
 			}
 		}
 
 		tasks = append(tasks, mergeQueueTask{
-			name:     entry.Name(),
+			name:     name,
 			path:     path,
-			title:    frontmatter.ExtractTitle(entry.Name(), body),
+			title:    frontmatter.ExtractTitle(name, body),
 			priority: meta.Priority,
 			branch:   taskBranch,
 			id:       meta.ID,
@@ -163,16 +159,11 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 }
 
 func HasReadyTasks(tasksDir string) bool {
-	entries, err := os.ReadDir(filepath.Join(tasksDir, queue.DirReadyMerge))
+	names, err := queue.ListTaskFiles(filepath.Join(tasksDir, queue.DirReadyMerge))
 	if err != nil {
 		return false
 	}
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
-			return true
-		}
-	}
-	return false
+	return len(names) > 0
 }
 
 func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult, error) {
