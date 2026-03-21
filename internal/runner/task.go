@@ -3,7 +3,6 @@ package runner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -132,31 +131,24 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 		return fmt.Errorf("push task branch %s: %w", claimed.Branch, err)
 	}
 
-	// Move task from in-progress/ to ready-for-review/ using os.Link +
-	// os.Remove instead of os.Rename to prevent silently overwriting a file
-	// that appeared at the destination after the pre-check (TOCTOU defense).
+	// Move task from in-progress/ to ready-for-review/ using AtomicMove
+	// (os.Link + os.Remove) to prevent silently overwriting a file that
+	// appeared at the destination after the pre-check (TOCTOU defense).
 	// The branch marker is written AFTER the move so that a failed move
 	// does not leave the in-progress file with an incorrect marker.
-	if err := os.Link(claimed.TaskPath, readyPath); err != nil {
-		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
-			return fmt.Errorf("move task to ready-for-review: destination already exists (race): %w", err)
-		}
+	if err := queue.AtomicMove(claimed.TaskPath, readyPath); err != nil {
 		return fmt.Errorf("move task to ready-for-review: %w", err)
-	}
-	if err := os.Remove(claimed.TaskPath); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not remove in-progress/%s after linking to ready-for-review: %v\n", claimed.Filename, err)
 	}
 
 	// Write branch marker to the moved file in ready-for-review/.
 	if err := appendToFileFn(readyPath, fmt.Sprintf("\n<!-- branch: %s -->\n", claimed.Branch)); err != nil {
 		// Roll back: move file from ready-for-review/ back to in-progress/.
-		if linkErr := os.Link(readyPath, claimed.TaskPath); linkErr != nil {
+		if rollbackErr := queue.AtomicMove(readyPath, claimed.TaskPath); rollbackErr != nil {
 			// Rollback failed — task is stranded in ready-for-review without
 			// branch metadata. Log and return the original error.
-			fmt.Fprintf(os.Stderr, "error: branch marker write failed and rollback to in-progress/ also failed: %v\n", linkErr)
-			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", readyPath, err, linkErr)
+			fmt.Fprintf(os.Stderr, "error: branch marker write failed and rollback to in-progress/ also failed: %v\n", rollbackErr)
+			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", readyPath, err, rollbackErr)
 		}
-		os.Remove(readyPath)
 		return fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", readyPath, err)
 	}
 
@@ -201,19 +193,9 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	}
 
 	dst := filepath.Join(tasksDir, queue.DirBacklog, claimed.Filename)
-	// Use os.Link + os.Remove instead of os.Rename to atomically prevent
-	// overwriting an existing file at dst (TOCTOU race fix). os.Link fails
-	// with os.ErrExist if the destination already exists.
-	if err := os.Link(claimed.TaskPath, dst); err != nil {
-		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
-			fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: destination already exists in backlog\n", claimed.Filename)
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
-		}
+	if err := queue.AtomicMove(claimed.TaskPath, dst); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
 		return
-	}
-	if err := os.Remove(claimed.TaskPath); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not remove in-progress task %s after linking to backlog: %v\n", claimed.Filename, err)
 	}
 
 	// Only append a generic failure record if the agent did not already write

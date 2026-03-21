@@ -3,7 +3,6 @@ package runner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -79,18 +78,11 @@ func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 				fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", entry.Name(), err)
 				continue
 			}
-			// Use os.Link + os.Remove instead of os.Rename to prevent
-			// silently overwriting an existing file (TOCTOU race defense).
-			if linkErr := os.Link(path, dst); linkErr != nil {
-				if errors.Is(linkErr, os.ErrExist) || errors.Is(linkErr, syscall.EEXIST) {
-					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: destination already exists\n", entry.Name())
-				} else {
-					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", entry.Name(), linkErr)
-				}
+			// Use AtomicMove to prevent silently overwriting an existing
+			// file (TOCTOU race defense).
+			if moveErr := queue.AtomicMove(path, dst); moveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", entry.Name(), moveErr)
 			} else {
-				if rmErr := os.Remove(path); rmErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not remove %s after linking to failed/: %v\n", entry.Name(), rmErr)
-				}
 				fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
 					entry.Name(), failures, maxRetries)
 			}
@@ -284,21 +276,14 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 }
 
 // moveReviewedTask moves a reviewed task to the given destination directory
-// and sends a completion message. It uses os.Link + os.Remove instead of
-// os.Rename to prevent silently overwriting an existing file at the
+// and sends a completion message. It uses queue.AtomicMove (os.Link +
+// os.Remove) to prevent silently overwriting an existing file at the
 // destination (TOCTOU race defense).
 func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, dstDir, msgBody, logPrefix string) {
 	dst := filepath.Join(tasksDir, dstDir, task.Filename)
-	if err := os.Link(task.TaskPath, dst); err != nil {
-		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
-			fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: destination already exists\n", task.Filename, dstDir)
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, dstDir, err)
-		}
+	if err := queue.AtomicMove(task.TaskPath, dst); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, dstDir, err)
 		return
-	}
-	if err := os.Remove(task.TaskPath); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not remove %s after linking to %s: %v\n", task.Filename, dstDir, err)
 	}
 	messaging.WriteMessage(tasksDir, messaging.Message{
 		From:   agentID,

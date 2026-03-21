@@ -1171,7 +1171,7 @@ func TestSelectAndClaimTask_RollbackDestinationExists(t *testing.T) {
 	}
 
 	task, err := SelectAndClaimTask(dir, "agent-race", nil)
-	// Rollback via safeRename fails because backlog/race.md reappeared,
+	// Rollback via AtomicMove fails because backlog/race.md reappeared,
 	// resulting in a hard error (task stranded in in-progress).
 	if err == nil {
 		t.Fatal("expected hard error when rollback destination exists")

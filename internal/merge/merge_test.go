@@ -2,6 +2,7 @@ package merge
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -114,7 +115,7 @@ func TestAcquireLockCleanupRemovesLockFile(t *testing.T) {
 	}
 }
 
-func TestMoveTaskFile_DestinationExists(t *testing.T) {
+func TestAtomicMove_DestinationExists(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, queue.DirReadyMerge, "task.md")
 	dst := filepath.Join(dir, queue.DirBacklog, "task.md")
@@ -131,12 +132,12 @@ func TestMoveTaskFile_DestinationExists(t *testing.T) {
 		t.Fatalf("os.WriteFile dst: %v", err)
 	}
 
-	err := moveTaskFile(src, dst)
+	err := queue.AtomicMove(src, dst)
 	if err == nil {
-		t.Fatal("moveTaskFile should fail when destination exists")
+		t.Fatal("AtomicMove should fail when destination exists")
 	}
-	if !strings.Contains(err.Error(), "destination already exists") {
-		t.Fatalf("moveTaskFile error = %q, want destination already exists", err)
+	if !errors.Is(err, queue.ErrDestinationExists) {
+		t.Fatalf("AtomicMove error = %q, want ErrDestinationExists", err)
 	}
 	if data, readErr := os.ReadFile(dst); readErr != nil {
 		t.Fatalf("os.ReadFile dst: %v", readErr)

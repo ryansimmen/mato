@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"mato/internal/atomicwrite"
@@ -436,7 +435,7 @@ func failMergeTask(src, dst, reason string) error {
 	if dst == "" {
 		return appendErr
 	}
-	if err := moveTaskFile(src, dst); err != nil {
+	if err := queue.AtomicMove(src, dst); err != nil {
 		if appendErr != nil {
 			return fmt.Errorf("move task file after merge failure: %w (also failed to append failure record: %v)", err, appendErr)
 		}
@@ -479,9 +478,12 @@ func appendTaskRecord(path, format string, args ...any) error {
 }
 
 func moveTaskWithRetry(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("create task destination dir: %w", err)
+	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		if err := moveTaskFile(src, dst); err == nil {
+		if err := queue.AtomicMove(src, dst); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -489,37 +491,6 @@ func moveTaskWithRetry(src, dst string) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return lastErr
-}
-
-func moveTaskFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("create task destination dir: %w", err)
-	}
-	// Use os.Link + os.Remove instead of os.Stat + os.Rename to eliminate
-	// the TOCTOU race window. os.Link fails atomically with EEXIST if the
-	// destination already exists.
-	if err := os.Link(src, dst); err != nil {
-		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
-			return fmt.Errorf("destination already exists: %s", dst)
-		}
-		// Cross-device link: fall back to Stat+Rename as best-effort.
-		if errors.Is(err, syscall.EXDEV) {
-			if _, statErr := os.Stat(dst); statErr == nil {
-				return fmt.Errorf("destination already exists: %s", dst)
-			} else if !os.IsNotExist(statErr) {
-				return fmt.Errorf("stat destination %s: %w", dst, statErr)
-			}
-			if renameErr := os.Rename(src, dst); renameErr != nil {
-				return fmt.Errorf("rename task file: %w", renameErr)
-			}
-			return nil
-		}
-		return fmt.Errorf("link task file %s to %s: %w", src, dst, err)
-	}
-	if err := os.Remove(src); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not remove source %s after linking to %s: %v\n", src, dst, err)
-	}
-	return nil
 }
 
 // AcquireLock attempts to acquire an exclusive merge lock.

@@ -156,7 +156,7 @@ func RecoverOrphanedTasks(tasksDir string) {
 		}
 
 		dst := filepath.Join(tasksDir, DirBacklog, e.Name())
-		if err := safeRename(src, dst); err != nil {
+		if err := AtomicMove(src, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", e.Name(), err)
 			continue
 		}
@@ -281,7 +281,7 @@ func ReconcileReadyQueue(tasksDir string) int {
 			if _, _, parseErr := frontmatter.ParseTaskFile(path); parseErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", e.Name(), parseErr)
 				failedPath := filepath.Join(tasksDir, DirFailed, e.Name())
-				if moveErr := safeRename(path, failedPath); moveErr != nil {
+				if moveErr := AtomicMove(path, failedPath); moveErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", e.Name(), moveErr)
 				}
 			}
@@ -342,7 +342,7 @@ func ReconcileReadyQueue(tasksDir string) int {
 	promoted := 0
 	for _, task := range promotable {
 		dst := filepath.Join(tasksDir, DirBacklog, task.name)
-		if err := safeRename(task.path, dst); err != nil {
+		if err := AtomicMove(task.path, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not promote waiting task %s: %v\n", task.name, err)
 			continue
 		}
@@ -665,27 +665,59 @@ func WriteQueueManifest(tasksDir string, exclude map[string]struct{}) error {
 	return atomicwrite.WriteFile(filepath.Join(tasksDir, ".queue"), []byte(manifest))
 }
 
-func safeRename(src, dst string) error {
-	// Use os.Link + os.Remove instead of os.Stat + os.Rename to eliminate
-	// the TOCTOU race window. os.Link fails atomically with EEXIST if the
-	// destination already exists.
+// ErrDestinationExists is returned by AtomicMove when the destination path
+// already exists. Callers can check for it with errors.Is.
+var ErrDestinationExists = errors.New("destination already exists")
+
+// AtomicMove atomically moves src to dst using os.Link + os.Remove to prevent
+// TOCTOU races. If the destination already exists, it returns
+// ErrDestinationExists. On cross-device links (EXDEV), it falls back to
+// O_CREATE|O_EXCL + copy + remove, which is still TOCTOU-safe at the
+// destination.
+func AtomicMove(src, dst string) error {
 	if err := os.Link(src, dst); err != nil {
 		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
-			return fmt.Errorf("destination already exists: %s", dst)
+			return fmt.Errorf("atomic move %s → %s: %w", src, dst, ErrDestinationExists)
 		}
-		// Cross-device link (EXDEV): the source and destination are on
-		// different filesystems. Falling back to Stat+Rename would
-		// reintroduce the same TOCTOU race this function exists to
-		// prevent, so we return an actionable error instead.
+		// Cross-device link: fall back to exclusive-create + copy.
 		if errors.Is(err, syscall.EXDEV) {
-			return fmt.Errorf("cannot atomically move %s to %s: cross-device link (source and destination must be on the same filesystem)", src, dst)
+			return crossDeviceMove(src, dst)
 		}
-		return fmt.Errorf("link %s to %s: %w", src, dst, err)
+		return fmt.Errorf("atomic move %s → %s: link: %w", src, dst, err)
 	}
-	// Link succeeded; remove the original.
 	if err := os.Remove(src); err != nil {
 		// The move is logically complete (dst exists), so warn but don't fail.
 		fmt.Fprintf(os.Stderr, "warning: could not remove source %s after linking to %s: %v\n", src, dst, err)
+	}
+	return nil
+}
+
+// crossDeviceMove handles the EXDEV case where src and dst are on different
+// filesystems. It uses O_CREATE|O_EXCL to atomically fail if the destination
+// already exists, then copies the content and removes the source.
+func crossDeviceMove(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("atomic move %s → %s: read source: %w", src, dst, err)
+	}
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("atomic move %s → %s: %w", src, dst, ErrDestinationExists)
+		}
+		return fmt.Errorf("atomic move %s → %s: create destination: %w", src, dst, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(dst)
+		return fmt.Errorf("atomic move %s → %s: write destination: %w", src, dst, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(dst)
+		return fmt.Errorf("atomic move %s → %s: close destination: %w", src, dst, err)
+	}
+	if err := os.Remove(src); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not remove source %s after copying to %s: %v\n", src, dst, err)
 	}
 	return nil
 }

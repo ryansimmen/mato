@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -41,17 +42,17 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(data)
 }
 
-func TestSafeRename_MissingSource(t *testing.T) {
+func TestAtomicMove_MissingSource(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "missing.md")
 	dst := filepath.Join(dir, "moved.md")
 
-	if err := safeRename(src, dst); err == nil {
-		t.Fatal("safeRename should return an error for a missing source")
+	if err := AtomicMove(src, dst); err == nil {
+		t.Fatal("AtomicMove should return an error for a missing source")
 	}
 }
 
-func TestSafeRename_DestinationExists(t *testing.T) {
+func TestAtomicMove_DestinationExists(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.md")
 	dst := filepath.Join(dir, "dst.md")
@@ -63,12 +64,12 @@ func TestSafeRename_DestinationExists(t *testing.T) {
 		t.Fatalf("write destination: %v", err)
 	}
 
-	err := safeRename(src, dst)
+	err := AtomicMove(src, dst)
 	if err == nil {
-		t.Fatal("safeRename should fail when destination exists")
+		t.Fatal("AtomicMove should fail when destination exists")
 	}
-	if !strings.Contains(err.Error(), "destination already exists") {
-		t.Fatalf("safeRename error = %q, want destination already exists", err)
+	if !errors.Is(err, ErrDestinationExists) {
+		t.Fatalf("AtomicMove error = %q, want ErrDestinationExists", err)
 	}
 
 	data, err := os.ReadFile(dst)
@@ -81,11 +82,11 @@ func TestSafeRename_DestinationExists(t *testing.T) {
 
 	// Source file should still exist (Link did not happen, so Remove was not called)
 	if _, err := os.Stat(src); err != nil {
-		t.Fatalf("source file should still exist after failed safeRename: %v", err)
+		t.Fatalf("source file should still exist after failed AtomicMove: %v", err)
 	}
 }
 
-func TestSafeRename_SuccessRemovesSource(t *testing.T) {
+func TestAtomicMove_SuccessRemovesSource(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.md")
 	dst := filepath.Join(dir, "dst.md")
@@ -94,8 +95,8 @@ func TestSafeRename_SuccessRemovesSource(t *testing.T) {
 		t.Fatalf("write source: %v", err)
 	}
 
-	if err := safeRename(src, dst); err != nil {
-		t.Fatalf("safeRename: %v", err)
+	if err := AtomicMove(src, dst); err != nil {
+		t.Fatalf("AtomicMove: %v", err)
 	}
 
 	// Destination should have the content
@@ -109,11 +110,11 @@ func TestSafeRename_SuccessRemovesSource(t *testing.T) {
 
 	// Source should be removed
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
-		t.Fatalf("source file should be removed after successful safeRename, got err: %v", err)
+		t.Fatalf("source file should be removed after successful AtomicMove, got err: %v", err)
 	}
 }
 
-func TestSafeRename_ConcurrentRace(t *testing.T) {
+func TestAtomicMove_ConcurrentRace(t *testing.T) {
 	dir := t.TempDir()
 	const goroutines = 10
 
@@ -134,7 +135,7 @@ func TestSafeRename_ConcurrentRace(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			src := filepath.Join(dir, fmt.Sprintf("src-%d.md", idx))
-			errs[idx] = safeRename(src, dst)
+			errs[idx] = AtomicMove(src, dst)
 		}(i)
 	}
 	wg.Wait()
@@ -144,12 +145,39 @@ func TestSafeRename_ConcurrentRace(t *testing.T) {
 	for _, err := range errs {
 		if err == nil {
 			successCount++
-		} else if !strings.Contains(err.Error(), "destination already exists") {
+		} else if !errors.Is(err, ErrDestinationExists) {
 			t.Errorf("unexpected error: %v", err)
 		}
 	}
 	if successCount != 1 {
 		t.Fatalf("expected exactly 1 success, got %d", successCount)
+	}
+}
+
+func TestAtomicMove_PermissionError(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dstDir := filepath.Join(dir, "readonly")
+
+	if err := os.WriteFile(src, []byte("content\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := os.MkdirAll(dstDir, 0o555); err != nil {
+		t.Fatalf("mkdir readonly: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dstDir, 0o755) })
+
+	dst := filepath.Join(dstDir, "dst.md")
+	err := AtomicMove(src, dst)
+	if err == nil {
+		t.Fatal("AtomicMove should fail with permission error")
+	}
+	if errors.Is(err, ErrDestinationExists) {
+		t.Fatal("error should not be ErrDestinationExists for permission failure")
+	}
+	// Source should still exist
+	if _, statErr := os.Stat(src); statErr != nil {
+		t.Fatalf("source should still exist after permission error: %v", statErr)
 	}
 }
 
@@ -299,7 +327,7 @@ func TestRecoverOrphanedTasks_AppendFailureLogsWarning(t *testing.T) {
 	// but make the destination file read-only after rename by
 	// making the backlog dir non-writable — but that would block
 	// the rename too. Instead, we pre-create a read-only backlog
-	// file? No, that would block safeRename.
+	// file? No, that would block AtomicMove.
 	//
 	// Best approach: move the file first, then make it read-only.
 	// We can't do that in RecoverOrphanedTasks. Instead, use a
