@@ -139,6 +139,37 @@ func writeBranchComment(taskPath, branch string) error {
 	return nil
 }
 
+// handleRetryExhaustedTask moves a retry-exhausted task from in-progress/ to
+// failed/. If the move to failed/ fails, it rolls back to backlog/ and returns
+// a FailedDirUnavailableError so the host can avoid livelocking. Returns nil
+// when the task was successfully moved to failed/.
+func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
+	if err := retryExhaustedMoveFn(dst, filepath.Join(failedDir, name)); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not move retry-exhausted task %s to failed: %v\n", name, err)
+		// Move back to backlog so the task is not left orphaned
+		// in in-progress/ without a claimed-by marker.
+		if rbErr := retryExhaustedRollback(dst, src); rbErr != nil {
+			return fmt.Errorf("retry-exhausted rollback failed for %s (task stranded in in-progress): move-to-failed: %v, rollback: %w", name, err, rbErr)
+		}
+		// Rollback succeeded, but the task is now back in backlog/
+		// while still retry-exhausted. Return a hard error so the
+		// host does not immediately re-claim and livelock.
+		return &FailedDirUnavailableError{TaskFilename: name, MoveErr: err}
+	}
+	return nil
+}
+
+// rollbackClaimToBacklog moves a task from in-progress/ back to backlog/ after
+// a claim operation (e.g., writing the claimed-by header) fails. Returns nil
+// when the rollback succeeds. Returns a hard error when rollback also fails,
+// meaning the task is stranded in in-progress/ without ownership metadata.
+func rollbackClaimToBacklog(name, dst, src string, claimErr error) error {
+	if rbErr := claimRollbackFn(dst, src); rbErr != nil {
+		return fmt.Errorf("claim rollback failed for %s (task stranded in in-progress): prepend: %v, rollback: %w", name, claimErr, rbErr)
+	}
+	return nil
+}
+
 // SelectAndClaimTask picks the highest-priority available task, atomically
 // moves it to in-progress/, stamps the claimed-by header, and checks the
 // retry budget. Tasks whose retry budget is exhausted are moved directly to
@@ -181,17 +212,8 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		}
 
 		if failures >= maxRetries {
-			if err := retryExhaustedMoveFn(dst, filepath.Join(failedDir, name)); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move retry-exhausted task %s to failed: %v\n", name, err)
-				// Move back to backlog so the task is not left orphaned
-				// in in-progress/ without a claimed-by marker.
-				if rbErr := retryExhaustedRollback(dst, src); rbErr != nil {
-					return nil, fmt.Errorf("retry-exhausted rollback failed for %s (task stranded in in-progress): move-to-failed: %v, rollback: %w", name, err, rbErr)
-				}
-				// Rollback succeeded, but the task is now back in backlog/
-				// while still retry-exhausted. Return a hard error so the
-				// host does not immediately re-claim and livelock.
-				return nil, &FailedDirUnavailableError{TaskFilename: name, MoveErr: err}
+			if err := handleRetryExhaustedTask(name, dst, src, failedDir); err != nil {
+				return nil, err
 			}
 			continue
 		}
@@ -199,15 +221,8 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}) 
 		claimedAt := time.Now().UTC().Format(time.RFC3339)
 		if err := claimPrependFn(dst, agentID, claimedAt); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write claimed-by header for %s: %v\n", name, err)
-			// Move the task back to backlog so it is not left in in-progress
-			// without ownership metadata, which would confuse RecoverOrphanedTasks
-			// and other agents.
-			if rbErr := claimRollbackFn(dst, src); rbErr != nil {
-				// Both the claimed-by write and the rollback rename failed.
-				// The task is now stranded in in-progress/ without ownership.
-				// Return a hard error so the host can act instead of silently
-				// leaving an orphan.
-				return nil, fmt.Errorf("claim rollback failed for %s (task stranded in in-progress): prepend: %v, rollback: %w", name, err, rbErr)
+			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
+				return nil, rbErr
 			}
 			continue
 		}
