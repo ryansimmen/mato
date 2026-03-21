@@ -49,8 +49,11 @@ func checkDocker() error {
 	return nil
 }
 
-type dockerConfig struct {
-	image, workdir, prompt                  string
+// envConfig holds immutable environment configuration populated once during
+// initialization. It contains tool paths, Docker image settings, git identity,
+// feature flags, and filesystem paths that do not change between task runs.
+type envConfig struct {
+	image, workdir                          string
 	copilotPath, gitPath, gitUploadPackPath string
 	gitReceivePackPath, ghPath, goRoot      string
 	gitName, gitEmail, homeDir, ghConfigDir string
@@ -59,12 +62,20 @@ type dockerConfig struct {
 	hasGitTemplates                         bool
 	systemCertsDir                          string
 	hasSystemCerts                          bool
-	agentID                                 string
 	copilotArgs                             []string
-	repoRoot, cloneDir, tasksDir            string
+	repoRoot, tasksDir                      string
 	targetBranch                            string
-	timeout                                 time.Duration
 	isTTY                                   bool
+}
+
+// runContext holds per-task execution state that varies between task runs.
+// Each call to runOnce or runReview constructs its own runContext so that
+// mutable fields like cloneDir are never shared across concurrent calls.
+type runContext struct {
+	cloneDir string
+	prompt   string
+	agentID  string
+	timeout  time.Duration
 }
 
 // isTerminal reports whether f is connected to a terminal (not just any
@@ -78,48 +89,48 @@ func isTerminal(f *os.File) bool {
 	return errno == 0
 }
 
-func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string) []string {
-	containerHome := cfg.homeDir
-	copilotDir := filepath.Join(cfg.homeDir, ".copilot")
-	goModCache := filepath.Join(cfg.homeDir, "go", "pkg", "mod")
-	goBuildCache := filepath.Join(cfg.homeDir, ".cache", "go-build")
+func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVolumes []string) []string {
+	containerHome := env.homeDir
+	copilotDir := filepath.Join(env.homeDir, ".copilot")
+	goModCache := filepath.Join(env.homeDir, "go", "pkg", "mod")
+	goBuildCache := filepath.Join(env.homeDir, ".cache", "go-build")
 
 	runFlags := "-i"
-	if cfg.isTTY {
+	if env.isTTY {
 		runFlags = "-it"
 	}
 	args := []string{
 		"run", "--rm", "--init", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", fmt.Sprintf("%s:%s", cfg.cloneDir, cfg.workdir),
-		"-v", fmt.Sprintf("%s:%s/.tasks", cfg.tasksDir, cfg.workdir),
-		"-v", fmt.Sprintf("%s:%s", cfg.repoRoot, cfg.repoRoot),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", cfg.copilotPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", cfg.gitPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", cfg.gitUploadPackPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", cfg.gitReceivePackPath),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", cfg.ghPath),
-		"-v", fmt.Sprintf("%s:/usr/local/go:ro", cfg.goRoot),
+		"-v", fmt.Sprintf("%s:%s", run.cloneDir, env.workdir),
+		"-v", fmt.Sprintf("%s:%s/.tasks", env.tasksDir, env.workdir),
+		"-v", fmt.Sprintf("%s:%s", env.repoRoot, env.repoRoot),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", env.gitPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", env.gitUploadPackPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", env.gitReceivePackPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", env.ghPath),
+		"-v", fmt.Sprintf("%s:/usr/local/go:ro", env.goRoot),
 		"-e", "GOROOT=/usr/local/go",
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
 	args = append(args,
-		"-e", "MATO_AGENT_ID="+cfg.agentID,
+		"-e", "MATO_AGENT_ID="+run.agentID,
 		"-e", "MATO_MESSAGING_ENABLED=1",
-		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", cfg.workdir),
+		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", env.workdir),
 	)
-	for _, env := range extraEnvs {
-		args = append(args, "-e", env)
+	for _, e := range extraEnvs {
+		args = append(args, "-e", e)
 	}
 	args = append(args,
 		"-e", "GIT_CONFIG_COUNT=1",
 		"-e", "GIT_CONFIG_KEY_0=safe.directory",
 		"-e", "GIT_CONFIG_VALUE_0=*",
 	)
-	if n := strings.TrimSpace(cfg.gitName); n != "" {
+	if n := strings.TrimSpace(env.gitName); n != "" {
 		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
 	}
-	if e := strings.TrimSpace(cfg.gitEmail); e != "" {
+	if e := strings.TrimSpace(env.gitEmail); e != "" {
 		args = append(args, "-e", "GIT_AUTHOR_EMAIL="+e, "-e", "GIT_COMMITTER_EMAIL="+e)
 	}
 	args = append(args,
@@ -131,27 +142,27 @@ func buildDockerArgs(cfg dockerConfig, extraEnvs []string, extraVolumes []string
 		"-v", fmt.Sprintf("%s:%s/go/pkg/mod", goModCache, containerHome),
 		"-v", fmt.Sprintf("%s:%s/.cache/go-build", goBuildCache, containerHome),
 	)
-	if cfg.hasGhConfig {
-		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", cfg.ghConfigDir, containerHome))
+	if env.hasGhConfig {
+		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", env.ghConfigDir, containerHome))
 	}
-	if cfg.hasGitTemplates {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", cfg.gitTemplatesDir, cfg.gitTemplatesDir))
+	if env.hasGitTemplates {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", env.gitTemplatesDir, env.gitTemplatesDir))
 	}
-	if cfg.hasSystemCerts {
-		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", cfg.systemCertsDir))
+	if env.hasSystemCerts {
+		args = append(args, "-v", fmt.Sprintf("%s:/etc/ssl/certs:ro", env.systemCertsDir))
 	}
 	for _, vol := range extraVolumes {
 		args = append(args, "-v", vol)
 	}
 	args = append(args,
-		"-w", cfg.workdir,
-		cfg.image,
-		"copilot", "-p", cfg.prompt, "--autopilot", "--allow-all",
+		"-w", env.workdir,
+		env.image,
+		"copilot", "-p", run.prompt, "--autopilot", "--allow-all",
 	)
-	if !hasModelArg(cfg.copilotArgs) {
+	if !hasModelArg(env.copilotArgs) {
 		args = append(args, "--model", defaultModel())
 	}
-	args = append(args, cfg.copilotArgs...)
+	args = append(args, env.copilotArgs...)
 	return args
 }
 

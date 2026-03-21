@@ -17,20 +17,20 @@ import (
 	"mato/internal/queue"
 )
 
-func runOnce(ctx context.Context, cfg dockerConfig, claimed *queue.ClaimedTask) error {
-	cloneDir, err := git.CreateClone(cfg.repoRoot)
+func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.ClaimedTask) error {
+	cloneDir, err := git.CreateClone(env.repoRoot)
 	if err != nil {
 		return fmt.Errorf("create clone: %w", err)
 	}
 	defer git.RemoveClone(cloneDir)
 
-	if err := configureReceiveDeny(cfg.repoRoot); err != nil {
+	if err := configureReceiveDeny(env.repoRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
 	}
 
-	cfg.cloneDir = cloneDir
+	run.cloneDir = cloneDir
 
-	fmt.Printf("Launching agent from %s (clone: %s)\n", cfg.repoRoot, cloneDir)
+	fmt.Printf("Launching agent from %s (clone: %s)\n", env.repoRoot, cloneDir)
 
 	maxRetries := 3
 	extraEnvs := []string{}
@@ -48,14 +48,14 @@ func runOnce(ctx context.Context, cfg dockerConfig, claimed *queue.ClaimedTask) 
 			"MATO_TASK_FILE="+claimed.Filename,
 			"MATO_TASK_BRANCH="+claimed.Branch,
 			"MATO_TASK_TITLE="+claimed.Title,
-			fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/%s/%s", cfg.workdir, queue.DirInProgress, claimed.Filename),
-			fmt.Sprintf("MATO_FILE_CLAIMS=%s/.tasks/messages/file-claims.json", cfg.workdir),
+			fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/%s/%s", env.workdir, queue.DirInProgress, claimed.Filename),
+			fmt.Sprintf("MATO_FILE_CLAIMS=%s/.tasks/messages/file-claims.json", env.workdir),
 		)
-		if depCtxPath := writeDependencyContextFile(cfg.tasksDir, claimed); depCtxPath != "" {
-			defer removeDependencyContextFile(cfg.tasksDir, claimed.Filename)
+		if depCtxPath := writeDependencyContextFile(env.tasksDir, claimed); depCtxPath != "" {
+			defer removeDependencyContextFile(env.tasksDir, claimed.Filename)
 			extraEnvs = append(extraEnvs, fmt.Sprintf(
 				"MATO_DEPENDENCY_CONTEXT=%s/.tasks/messages/dependency-context-%s.json",
-				cfg.workdir, claimed.Filename,
+				env.workdir, claimed.Filename,
 			))
 		}
 		if failures := extractFailureLines(claimed.TaskPath); failures != "" {
@@ -67,9 +67,9 @@ func runOnce(ctx context.Context, cfg dockerConfig, claimed *queue.ClaimedTask) 
 	}
 	extraEnvs = append(extraEnvs, fmt.Sprintf("MATO_MAX_RETRIES=%d", maxRetries))
 
-	args := buildDockerArgs(cfg, extraEnvs, nil)
+	args := buildDockerArgs(env, run, extraEnvs, nil)
 
-	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, cfg.timeout)
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, run.timeout)
 	defer timeoutCancel()
 
 	cmd := exec.CommandContext(timeoutCtx, "docker", args...)
@@ -83,7 +83,7 @@ func runOnce(ctx context.Context, cfg dockerConfig, claimed *queue.ClaimedTask) 
 	cmd.Stderr = os.Stderr
 	agentErr := cmd.Run()
 	if timeoutCtx.Err() == context.DeadlineExceeded {
-		fmt.Fprintf(os.Stderr, "error: agent timed out after %v\n", cfg.timeout)
+		fmt.Fprintf(os.Stderr, "error: agent timed out after %v\n", run.timeout)
 	} else if ctx.Err() != nil {
 		fmt.Fprintf(os.Stderr, "agent interrupted by signal\n")
 	}
@@ -91,7 +91,7 @@ func runOnce(ctx context.Context, cfg dockerConfig, claimed *queue.ClaimedTask) 
 	// Post-agent: if the task is still in in-progress/ and the agent made
 	// commits, push the branch and move the task to ready-for-review/.
 	if claimed != nil {
-		if err := postAgentPush(cfg, claimed, cloneDir); err != nil {
+		if err := postAgentPush(env, run.agentID, claimed, cloneDir); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: post-agent push failed: %v\n", err)
 		}
 	}
@@ -102,14 +102,14 @@ func runOnce(ctx context.Context, cfg dockerConfig, claimed *queue.ClaimedTask) 
 // postAgentPush checks whether the agent committed work on the task branch.
 // If commits exist and the task is still in in-progress/, the host pushes the
 // branch, writes the branch marker, and moves the task to ready-for-review/.
-func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string) error {
+func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cloneDir string) error {
 	// Task must still be in in-progress/ (agent no longer moves files).
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
 		return nil
 	}
 
 	// Check whether the agent made any commits above the target branch.
-	logOut, err := git.Output(cloneDir, "log", "--oneline", cfg.targetBranch+"..HEAD")
+	logOut, err := git.Output(cloneDir, "log", "--oneline", env.targetBranch+"..HEAD")
 	if err != nil {
 		return nil // can't determine; leave for recoverStuckTask
 	}
@@ -120,7 +120,7 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 	// Pre-check: verify ready-for-review/ destination is clear before pushing.
 	// If a stale file exists (e.g., from a prior incomplete cycle), skip the
 	// push to avoid corrupting its metadata.
-	if _, err := os.Stat(filepath.Join(cfg.tasksDir, queue.DirReadyReview, claimed.Filename)); err == nil {
+	if _, err := os.Stat(filepath.Join(env.tasksDir, queue.DirReadyReview, claimed.Filename)); err == nil {
 		fmt.Fprintf(os.Stderr, "warning: %s already exists in ready-for-review/; skipping push (task is likely already being reviewed)\n", claimed.Filename)
 		return fmt.Errorf("ready-for-review/%s already exists: skipping push to avoid overwriting", claimed.Filename)
 	}
@@ -131,20 +131,20 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 	}
 
 	// Move task to ready-for-review/ and write branch marker.
-	if err := moveTaskToReviewWithMarker(cfg.tasksDir, claimed, claimed.Branch); err != nil {
+	if err := moveTaskToReviewWithMarker(env.tasksDir, claimed, claimed.Branch); err != nil {
 		return err
 	}
 
 	// Send conflict-warning with changed files.
-	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", cfg.targetBranch+"..HEAD")
+	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", env.targetBranch+"..HEAD")
 	var filesChanged []string
 	for _, f := range strings.Split(strings.TrimSpace(filesOut), "\n") {
 		if f != "" {
 			filesChanged = append(filesChanged, f)
 		}
 	}
-	messaging.WriteMessage(cfg.tasksDir, messaging.Message{
-		From:   cfg.agentID,
+	messaging.WriteMessage(env.tasksDir, messaging.Message{
+		From:   agentID,
 		Type:   "conflict-warning",
 		Task:   claimed.Filename,
 		Branch: claimed.Branch,
@@ -153,8 +153,8 @@ func postAgentPush(cfg dockerConfig, claimed *queue.ClaimedTask, cloneDir string
 	})
 
 	// Send completion message.
-	messaging.WriteMessage(cfg.tasksDir, messaging.Message{
-		From:   cfg.agentID,
+	messaging.WriteMessage(env.tasksDir, messaging.Message{
+		From:   agentID,
 		Type:   "completion",
 		Task:   claimed.Filename,
 		Branch: claimed.Branch,

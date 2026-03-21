@@ -143,37 +143,37 @@ func selectAndLockReview(tasksDir string) (*queue.ClaimedTask, func()) {
 	return nil, nil
 }
 
-func runReview(ctx context.Context, cfg dockerConfig, task *queue.ClaimedTask, branch string) error {
-	cfg.prompt = strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", cfg.workdir+"/.tasks")
-	cfg.prompt = strings.ReplaceAll(cfg.prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
-	cfg.prompt = strings.ReplaceAll(cfg.prompt, "MESSAGES_DIR_PLACEHOLDER", cfg.workdir+"/.tasks/messages")
+func runReview(ctx context.Context, env envConfig, run runContext, task *queue.ClaimedTask, branch string) error {
+	run.prompt = strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", env.workdir+"/.tasks")
+	run.prompt = strings.ReplaceAll(run.prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
+	run.prompt = strings.ReplaceAll(run.prompt, "MESSAGES_DIR_PLACEHOLDER", env.workdir+"/.tasks/messages")
 
-	cloneDir, err := git.CreateClone(cfg.repoRoot)
+	cloneDir, err := git.CreateClone(env.repoRoot)
 	if err != nil {
 		return fmt.Errorf("create clone for review: %w", err)
 	}
 	defer git.RemoveClone(cloneDir)
 
-	if err := configureReceiveDeny(cfg.repoRoot); err != nil {
+	if err := configureReceiveDeny(env.repoRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
 	}
 
-	cfg.cloneDir = cloneDir
+	run.cloneDir = cloneDir
 
-	fmt.Printf("Launching review agent from %s (clone: %s)\n", cfg.repoRoot, cloneDir)
+	fmt.Printf("Launching review agent from %s (clone: %s)\n", env.repoRoot, cloneDir)
 
 	extraEnvs := []string{
 		"MATO_REVIEW_MODE=1",
 		"MATO_TASK_FILE=" + task.Filename,
 		"MATO_TASK_BRANCH=" + task.Branch,
 		"MATO_TASK_TITLE=" + task.Title,
-		fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/%s/%s", cfg.workdir, queue.DirReadyReview, task.Filename),
-		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/.tasks/messages/verdict-%s.json", cfg.workdir, task.Filename),
+		fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/%s/%s", env.workdir, queue.DirReadyReview, task.Filename),
+		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/.tasks/messages/verdict-%s.json", env.workdir, task.Filename),
 	}
 
-	args := buildDockerArgs(cfg, extraEnvs, nil)
+	args := buildDockerArgs(env, run, extraEnvs, nil)
 
-	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, cfg.timeout)
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, run.timeout)
 	defer timeoutCancel()
 
 	cmd := exec.CommandContext(timeoutCtx, "docker", args...)
@@ -186,7 +186,7 @@ func runReview(ctx context.Context, cfg dockerConfig, task *queue.ClaimedTask, b
 	cmd.Stderr = os.Stderr
 	runErr := cmd.Run()
 	if timeoutCtx.Err() == context.DeadlineExceeded {
-		fmt.Fprintf(os.Stderr, "error: review agent timed out after %v\n", cfg.timeout)
+		fmt.Fprintf(os.Stderr, "error: review agent timed out after %v\n", run.timeout)
 	} else if ctx.Err() != nil {
 		fmt.Fprintf(os.Stderr, "review agent interrupted by signal\n")
 	}
