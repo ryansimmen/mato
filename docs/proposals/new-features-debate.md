@@ -1,10 +1,14 @@
-# New Features Debate: Multi-Agent Discussion
+# New Features Debate: Multi-Agent Discussion (Round 2)
 
 **Date:** 2026-03-21
 **Participants:**
-- 🟣 **Claude Opus 4.6** — "Correctness First" advocate
+- 🟣 **Claude Opus 4.6** — "Correctness + Pragmatism" advocate
 - 🟢 **GPT-5.4** — "Correct, Operable, Scalable" advocate
-- 🔵 **Gemini 3.1 Pro** — "Velocity & Visibility" advocate
+- 🔵 **Gemini 3.1 Pro** — "Developer Experience & Observability" advocate
+
+> **Correction from Round 1:** The first round of this debate incorrectly proposed "Parallel Review Pipeline" and "Task Cancellation" as new features. Both already exist:
+> - **Concurrency** is achieved by launching additional `mato` processes in separate terminals. Atomic task claiming, per-agent lock files, per-task review locks, and merge locking already handle coordination safely.
+> - **Cancellation** works via Ctrl-C (SIGINT) or SIGTERM/SIGKILL. The runner catches signals, gracefully stops Docker containers (SIGTERM → 10s grace → SIGKILL), cleans up lock files, and orphaned tasks are auto-recovered on next startup.
 
 ---
 
@@ -12,30 +16,29 @@
 
 | Rank | 🟣 Claude Opus 4.6 | 🟢 GPT-5.4 | 🔵 Gemini 3.1 Pro |
 |------|---------------------|-------------|---------------------|
-| 1 | DAG Dependency Resolution | DAG Scheduler w/ Cycle Detection | Interactive TUI Dashboard |
-| 2 | Task Cancellation & Abort | Task Cancellation & Force-Abort | Dynamic Task Environments |
-| 3 | Glob Affects Matching | Parallel Review Workers | Smart Glob Conflict Detection |
-| 4 | Structured Audit Trail | Structured Audit Log & Run History | Parallel Review Pipeline |
-| 5 | Parallel Review Pipeline | Per-Task Resource Profiles | Task Scaffolding & Templates |
+| 1 | Glob Affects Matching | DAG-Aware Dependency Scheduler | Interactive TUI Dashboard |
+| 2 | `mato doctor` Command | Per-Task Execution Profiles | Glob Pattern Affects |
+| 3 | DAG Dependency Resolution | Event Journal + Live Status | Task Scaffolding & Templates |
+| 4 | Persistent JSONL Audit Log | `mato doctor` Diagnostics | Dependency Cycle Detection |
+| 5 | Task Templates + Batch Gen | Task Templates + Batch Gen | Per-Task Docker Images |
 
 ### Consensus Features (appeared in 2+ proposals)
 
 | Feature | Advocates | Combined Priority |
 |---------|-----------|-------------------|
-| **DAG Dependency Resolution** | Opus (#1), GPT (#1) | 🔴 Critical |
-| **Task Cancellation** | Opus (#2), GPT (#2) | 🔴 Critical |
-| **Parallel Review Pipeline** | Opus (#5), GPT (#3), Gemini (#4) | 🟠 High |
-| **Glob Affects Matching** | Opus (#3), Gemini (#3) | 🟡 Medium |
-| **Structured Audit Trail** | Opus (#4), GPT (#4) | 🟡 Medium |
+| **Glob Affects Matching** | Opus (#1), Gemini (#2) | 🔴 Critical |
+| **DAG Dependency Resolution** | Opus (#3), GPT (#1), Gemini (#4) | 🔴 Critical |
+| **`mato doctor` Command** | Opus (#2), GPT (#4) | 🟠 High |
+| **Structured Audit Trail** | Opus (#4), GPT (#3) | 🟠 High |
+| **Task Templates & Batch Gen** | Opus (#5), GPT (#5), Gemini (#3) | 🟡 Medium |
 
 ### Unique Proposals
 
 | Feature | Advocate | Priority |
 |---------|----------|----------|
 | **Interactive TUI Dashboard** | Gemini (#1) | 🟡 Medium |
-| **Dynamic Task Environments** | Gemini (#2) | 🟡 Medium |
-| **Per-Task Resource Profiles** | GPT (#5) | 🟡 Medium |
-| **Task Scaffolding & Templates** | Gemini (#5) | ⚪ Low |
+| **Per-Task Execution Profiles** | GPT (#2) | 🟡 Medium |
+| **Per-Task Docker Images** | Gemini (#5) | 🟡 Medium |
 
 ---
 
@@ -43,105 +46,115 @@
 
 ---
 
-## 🟣 Claude Opus 4.6 — "Correctness First"
+## 🟣 Claude Opus 4.6 — "Correctness + Pragmatism"
 
 ### Philosophy
 
-> A task orchestrator that produces wrong results quickly is worse than useless. One that produces correct results slowly will frustrate teams but at least won't ship broken code. One that is correct, fast, *and* operable is what we should be building.
+> I've studied every package in this codebase — every struct field, every state transition, every `AtomicMove` call. My five proposals are the features that would transform mato from a capable prototype into a production-grade orchestrator. I've ordered them by the **ratio of impact to risk**, because in infrastructure software, the fastest way to destroy trust is to ship something that breaks the queue.
 
-Opus prioritizes **correctness → throughput → operability**, arguing that foundational scheduling correctness must come before any UX improvements.
+Opus prioritizes features with highest impact-to-effort ratio, leading with quick wins that prevent real failures, then building toward deeper correctness and productivity improvements.
 
-### Feature 1: Full DAG Dependency Resolution with Transitive Cycle Detection
+### Feature 1: Glob Pattern Matching in `affects`
 
-**Problem:** The current dependency system is dangerously shallow. `resolvePromotableTasks()` checks direct dependencies only, completely missing transitive cycles (A → B → C → A), diamond dependency failures (no cascade-fail), and lacks topological ordering for promotion.
-
-**Proposed Design:**
-- New package `internal/dag/` with clean graph abstraction
-- Tarjan's algorithm for cycle detection — O(V+E), single-pass
-- Topological sort for valid promotion ordering
-- Cascade-fail: mark unreachable tasks when a dependency fails
-- New CLI: `mato status --deps` shows the dependency graph
-- New CLI: `mato doctor` reports cycles, missing deps, orphan references
-
-**Impact:** Prevents silent deadlocks. Without this, users see "0 tasks in backlog" with no explanation. This is the single most dangerous gap in mato's correctness guarantees.
-
-**Effort:** Medium (3–5 days)
-
-### Feature 2: Task Cancellation and Graceful Abort
-
-**Problem:** Once a task enters `in-progress/`, there is no mechanism to stop it. Runaway agents, bad prompts, and obsolete tasks all require an emergency brake. Without cancellation, operators lose control of the system.
+**Problem:** `overlappingAffects()` in `internal/queue/overlap.go` performs exact string equality (map lookup). If Task A affects `internal/runner/runner.go` and Task B affects `internal/runner/review.go`, mato sees zero conflict — even though both are editing the same package. Users must enumerate every file path manually. Worse, it's unsound by default: users who forget a file get silent merge conflicts.
 
 **Proposed Design:**
-- Cancel markers in `.tasks/.control/cancel-<task-id>` (atomic signal files)
-- Runner checks for cancel markers before claim, during review, and in the main loop
-- Graceful shutdown: SIGTERM → grace period → SIGKILL
-- New CLI: `mato cancel <task-name>` with `--force` flag
-- Cancelled tasks get `<!-- cancelled: reason -->` metadata
-- Support cancelling by agent ID: `mato cancel --agent <id>`
+- Add `matchAffects(pattern, path string) bool` to `internal/queue/overlap.go`
+- Use `filepath.Match` for simple globs, `doublestar.Match` for `**` recursive patterns
+- When either affects list contains glob characters (`*`, `?`, `[`), fall back to O(n×m) pairwise matching; otherwise keep O(n+m) set-intersection fast path
+- Globs expanded at comparison time, never rewrite the task file (preserves filesystem-as-state)
+- Update `docs/task-format.md` with glob examples
 
-**Impact:** Basic operational safety. Autonomous systems without a kill switch are liabilities.
+**Example:**
+```yaml
+affects:
+  - "internal/runner/*.go"
+  - "docs/architecture.md"
+  - "cmd/**"
+```
 
-**Effort:** Medium (3–5 days)
-
-### Feature 3: Glob Pattern Matching for Affects
-
-**Problem:** Exact string matching in `affects:` is brittle at scale. An agent that creates `internal/foo/bar_test.go` must predict that exact path. Missed conflicts lead to merge failures and wasted work.
-
-**Proposed Design:**
-- Integrate `doublestar` or `filepath.Match` into `internal/queue/overlap.go`
-- Replace set membership check with glob matching loop
-- Support patterns like `internal/queue/**/*.go`, `docs/*.md`
-- Maintain backward compatibility: exact strings still work
-- Add pattern validation at task load time
-
-**Impact:** Reduces accidental concurrency issues. Makes task definitions more robust and easier to write. Directly prevents wasted compute from merge conflicts.
+**Impact:** Highest-ROI change. Merge conflicts are the most expensive failure mode — they waste an entire agent run, burn a retry, and cascade. Existing exact-path entries work identically (zero behavioral change for current users).
 
 **Effort:** Small (1–2 days)
 
-### Feature 4: Structured Audit Trail (JSONL Event Log)
+### Feature 2: `mato doctor` Diagnostic Command
 
-**Problem:** Mato generates useful state transitions but has no durable record. Debugging failures, proving operational history, and understanding "what happened" requires manually inspecting scattered files.
+**Problem:** When mato fails or behaves unexpectedly, debugging is painful. Is Docker running? Is Copilot CLI installed? Is `gh auth status` happy? Are there orphaned locks? Malformed task files? The `discoverHostTools()` function fails fast on the first missing tool with no summary.
 
 **Proposed Design:**
-- New package `internal/audit/` with append-only JSONL writer
-- Storage: `.tasks/audit/events.jsonl` with daily rotation
-- Event types: `task_claimed`, `task_completed`, `review_passed`, `review_rejected`, `merge_completed`, `task_failed`, `task_cancelled`
-- Each event includes: timestamp (UTC), agent_id, task_id, from_state, to_state, reason
-- New CLI: `mato history [task-id]`, `mato events --since 1h`
-- Fits mato's filesystem philosophy — no database required
+- New package: `internal/doctor/`
+- New CLI: `mato doctor [--repo PATH] [--tasks-dir PATH]`
+- 14 checks: Docker reachable, Copilot CLI version, Git version, GitHub CLI auth, valid git repo, target branch exists, `.tasks/` structure valid, orphaned locks, stuck tasks, circular dependencies, missing dependency IDs, malformed YAML, disk space, Docker image pullable
+- Output with ✓/✗/⚠ indicators and `Fix:` suggestions for each failure
+- `mato doctor --json` for scripted use
 
-**Impact:** Foundation for all observability. Enables future dashboards, analytics, and compliance without adding infrastructure. JSONL is greppable, appendable, and simple.
+**Impact:** Lowest-effort, highest-UX-value feature. Every CLI tool with external dependencies needs a doctor command. Turns "mato doesn't work" (bug report) into "mato told me what's wrong" (30-second fix). Also serves as living documentation of prerequisites.
+
+**Effort:** Small (1–2 days)
+
+### Feature 3: Full DAG Dependency Resolution with Cycle Reporting
+
+**Problem:** Three blind spots in `internal/queue/reconcile.go`:
+1. **No topological ordering** — `resolvePromotableTasks()` iterates in directory order, promoting one task per poll cycle. A 5-task chain takes 5 × 10s = 50s just for promotion cascading.
+2. **Cycle detection is advisory-only** — `logCircularDependency()` prints to stderr but deadlocked tasks sit in `waiting/` forever. `mato status` doesn't surface this.
+3. **No transitive dependency context** — task C depending on B depending on A only gets B's completion detail, not A's.
+
+**Proposed Design:**
+- New package: `internal/dag/` with `BuildGraph()`, `TopologicalSort()`, `TransitiveDeps()`, `PromotableSet()`
+- Replace `resolvePromotableTasks()` with DAG-based promotion (full set in one pass)
+- Surface cycles in `mato status` with full cycle path (A → B → C → A)
+- Include transitive dependency context in `MATO_DEPENDENCY_CONTEXT`
+- Add `mato status --validate-deps` pre-flight check
+
+**Impact:** Deep dependency chains are mato's sweet spot. This turns the dependency system from "works for simple cases" to "production-grade."
 
 **Effort:** Medium (3–5 days)
 
-### Feature 5: Parallel Review Pipeline
+### Feature 4: Persistent Structured Audit Log
 
-**Problem:** Review is serialized: one review per poll loop iteration. With multiple agents producing work in parallel, the review stage becomes the bottleneck. Tasks pile up in `ready-for-review/` waiting for their turn.
+**Problem:** Events are garbage-collected after 24 hours via `CleanOldMessages()`. Runtime metadata is scattered across HTML comments in task files. No cross-task timeline exists — answering "what happened between 2pm and 3pm?" requires scanning every file.
 
 **Proposed Design:**
-- Bounded worker pool for review goroutines
-- New config: `MATO_REVIEW_CONCURRENCY` (default: 1, preserving current behavior)
-- Retain per-task review lock semantics via `AcquireReviewLock`
-- Keep merge serialized (one-at-a-time discipline maintained)
-- Prioritize oldest or highest-priority reviews first
+- New package: `internal/auditlog/`
+- Append-only JSONL at `.tasks/audit.log` (~200 bytes/entry, atomic on Linux for lines < PIPE_BUF)
+- ~12 event types: `task.claimed`, `task.promoted`, `task.completed`, `task.failed`, `task.review.approved`, `task.review.rejected`, `task.merged`, `task.deferred`, `task.recovered`, `agent.registered`, `agent.exited`, `cycle.detected`
+- New CLI: `mato log`, `mato log --task <id>`, `mato log --since 2h`, `mato log --type task.failed`, `mato log --json`
+- Manual rotation via `mato log --rotate` (no auto-rotation — disk is cheap, lost debug context is expensive)
+- Does NOT replace existing messaging system (different lifecycles, different consumers)
 
-**Impact:** Directly increases end-to-end throughput. The existing lock infrastructure already supports concurrent reviews — this is the cleanest concurrency win available.
+**Impact:** Table stakes for production use. When a task fails at 2am on retry 3, you need the full history. JSONL is greppable, `jq`-friendly, and needs zero new dependencies.
+
+**Effort:** Medium (3–5 days)
+
+### Feature 5: Task Templates with Batch Generation
+
+**Problem:** Repetitive task patterns ("add error handling to every HTTP handler" = 15 tasks) require manual copy-paste of frontmatter. Error-prone and tedious. Also blocks CI/CD integration — no programmatic task creation.
+
+**Proposed Design:**
+- New package: `internal/template/`
+- New CLI: `mato generate --template <file> [--var key=value ...] [--batch batch.yaml] [--dry-run]`
+- Templates use Go `text/template` with custom FuncMap (`default`, `join`, `kebab`, `quote`)
+- Batch YAML defines multiple tasks from one template with per-task variable overrides
+- Validation: parse rendered output, check duplicate IDs, validate depends_on references, warn if affects patterns match no files
+- Generated files land in `.tasks/waiting/` or `.tasks/backlog/`
+
+**Impact:** Productivity multiplier. The bottleneck isn't mato's execution — it's task authoring. Templates enable CI/CD integration (pipeline generates batch → mato executes).
 
 **Effort:** Medium (3–5 days)
 
 ### Rebuttals
 
-> "A TUI dashboard should be top priority for visibility."
+> "Glob patterns add complexity — exact paths are safer."
 
-A dashboard without correct scheduling, audit logs, and cancellation is cosmetic. First make mato reliable and observable at the data level; then the UI becomes easy and honest.
+Exact paths are safer only if users list them all. In practice, they don't. Any task with no `affects` field is never deferred, even if it modifies conflicting files. The system already operates with incomplete information. Globs make the *expressed* information more accurate.
 
-> "Templates are quick wins with high visibility."
+> "A DAG package is over-engineered."
 
-Templates help users *create* tasks; they do not help mato *execute* them safely. Authoring convenience is secondary to runtime correctness.
+Consider batch generation (Feature 5): 15 tasks with a dependency chain. Under the current system, promotion takes 15 × 10s = 2.5 minutes of idle waiting. With topological sort, all promotable tasks are identified in one pass. Also, current cycle detection only prints to stderr — invisible in CI/CD.
 
-> "DAG resolution is over-engineering for simple task lists."
+> "Why not a web UI instead of `mato doctor` + `mato log`?"
 
-Until someone creates a transitive cycle and the queue silently deadlocks. The current code has a known blind spot — `dependsOnWaitingTask()` only catches pairwise cycles. This is not theoretical; it's a bug waiting to happen.
+A web UI requires persistent HTTP server, frontend assets, WebSocket — 2+ weeks minimum. `mato doctor` and `mato log` ship in 2–4 days total and provide 80% of the observability value through the terminal users already live in. Build CLI tools first; they become the API a future web UI calls.
 
 ---
 
@@ -149,199 +162,212 @@ Until someone creates a transitive cycle and the queue silently deadlocks. The c
 
 ### Philosophy
 
-> If Mato wants to graduate from a clever orchestrator to a dependable one, it should prioritize: **correct scheduling, operator control, throughput, auditability, and execution policy.**
+> Mato's core loop is already strong: queueing, claiming, isolation, review, and merge all exist. The next features should **improve correctness, operability, and scale of use** — not just add surface area.
 
-GPT-5.4 shares Opus's correctness-first stance but adds emphasis on **execution policy** (per-task resource limits) as a production necessity.
+GPT-5.4 focuses on making the existing system more robust and production-ready, emphasizing execution policy and observability.
 
-### Feature 1: DAG Scheduler with Cycle Detection
+### Feature 1: DAG-Aware Dependency Scheduler
 
-**Problem:** Without full DAG resolution and cycle detection, users can create deadlocks, hidden dependency chains, and confusing "why is this task stuck?" situations. This is the biggest correctness gap.
+**Problem:** Only direct `depends_on` relationships are checked. No full DAG reasoning, no robust cycle prevention, weak explanations for why a task is blocked.
 
 **Proposed Design:**
-- Extend `internal/queue/reconcile.go` with DAG builder from task metadata
-- Cycle detection via DFS / Kahn's algorithm
-- Blocked-reason computation per task
-- New CLI: `mato status --graph`, `mato doctor` for diagnostics
-- Generated `.tasks/.queue/dependency-graph.json`
-- Tasks only promote when all upstream nodes are completed
-- Cycles surfaced explicitly, never silent stalls
+- New file: `internal/queue/dag.go` with `BuildDependencyGraph()`, `DetectCycles()`, `BlockedReasons()`, `ReadyTasks()`
+- Extend `internal/queue/reconcile.go` to compute full graph, reject/quarantine cyclic tasks, move only truly-ready tasks, emit precise blocking reasons
+- Extend `internal/status/` with dependency chains, cycle reports, "blocked by X → Y → Z"
+- Optional CLI: `mato status --deps`, reusable by `mato doctor`
 
-**Impact:** Foundational. If dependency semantics are incomplete, higher-level features sit on shaky ground. Improves correctness, predictability, and user trust more than any UI or template feature.
+**Impact:** Upgrades mato from "queue with dependency hints" to a real orchestrator. Prevents deadlocks, improves scheduling quality, gives users immediate clarity.
 
 **Effort:** Medium (3–5 days)
 
-### Feature 2: Task Cancellation and Force-Abort
+### Feature 2: Per-Task Execution Profiles
 
-**Problem:** Once a task is in flight, operators have no clean way to stop it. Bad prompts, wrong branches, runaway agents, obsolete tasks — all need an emergency brake.
+**Problem:** Docker image is fixed per run, limits are global. A docs task, a Go refactor, and a Node migration shouldn't all run in the same environment with the same timeout.
 
 **Proposed Design:**
-- Cancellation markers under `.tasks/control/`
-- Runner checks before claim, before review, and during task loop
-- On cancel: SIGTERM container → grace period → SIGKILL if needed
-- Move to `failed/` or `backlog/` depending on stage and flags
-- New CLI: `mato cancel <task-id>`, `mato abort <task-id> --force`, `mato cancel --agent <agent-id>`
-- Status shows "cancelling", "aborted", "cancel requested by …"
+- New frontmatter fields: `profile`, or `runtime.image`, `runtime.timeout`, `runtime.cpu`, `runtime.memory`
+- New file: `internal/runner/profile.go` to resolve profiles
+- Repo-level profile definitions: `.mato/profiles/*.yaml`
+- Update runner to choose image per task, apply Docker resource flags, fall back to global defaults
+- CLI: `mato run --profile-dir .mato/profiles`, `mato status` shows active profile
 
-**Impact:** Basic operability. Autonomous systems without a kill switch become liabilities. More important than templates, web UI, or nicer conflict matching.
+**Example:**
+```yaml
+profile: go-default
+# or
+runtime:
+  image: ghcr.io/org/mato-go:latest
+  timeout: 20m
+  cpu: "2"
+  memory: "4g"
+```
+
+**Impact:** Unlocks mato for heterogeneous repos and production use. Improves reliability, reduces wasted compute, avoids over-provisioning.
 
 **Effort:** Medium (3–5 days)
 
-### Feature 3: Parallel Review Workers
+### Feature 3: Event Journal + Live Status Stream
 
-**Problem:** The whole pipeline backs up behind review even when execution is parallel. This is the clearest throughput bottleneck.
+**Problem:** Mato has scattered state but no durable, queryable run history and no true live observability. `mato status` is a point-in-time snapshot.
 
 **Proposed Design:**
-- Replace single review selection with bounded worker pool
-- New config: `MATO_REVIEW_CONCURRENCY`
-- Retain per-task review lock semantics
-- Keep merge serialized
-- Prioritize oldest-ready or highest-priority review first
+- New package: `internal/history/`
+- Append-only JSONL event records to `.tasks/history/YYYY/MM/DD/events.jsonl`
+- Record all state transitions: claimed, started, progress, review, merge, retries, failures, recoveries
+- Extend `internal/status/` with `mato status --json`, `mato status --follow`, `mato status --since 1h`
+- Optional: `mato dashboard` serving tiny local web UI via `internal/status/server.go` (SSE or polling backed by journal)
 
-**Impact:** Highest-ROI performance feature. More agents are pointless if review remains single-file.
+**Impact:** Solves two gaps at once: observability and auditability. Makes debugging, demos, adoption, and postmortems dramatically easier. Creates foundation for future web UI without inventing a second source of truth.
+
+**Effort:** Large (1–2 weeks)
+
+### Feature 4: `mato doctor` Diagnostics and Safe Repair
+
+**Problem:** When mato misbehaves, users infer problems from filesystem state, Docker availability, locks, and metadata. Too much operational knowledge required for a CLI tool.
+
+**Proposed Design:**
+- New package: `internal/doctor/`
+- New command: `mato doctor`
+- Checks: Docker reachable, CLI tools available, repo cleanliness, malformed frontmatter, unknown/circular dependencies, stale locks, orphaned tasks, duplicate IDs, impossible queue states
+- Modes: `mato doctor`, `mato doctor --json`, `mato doctor --fix` (safe repairs: remove stale locks, recover orphans, rebuild derived state)
+
+**Impact:** Force multiplier. Cuts setup friction, reduces support burden, makes mato feel trustworthy. Every serious CLI orchestrator needs a diagnostic story.
 
 **Effort:** Medium (3–5 days)
 
-### Feature 4: Structured Audit Log and Run History
+### Feature 5: Task Templates and Batch Generation
 
-**Problem:** Operators need durable answers to: *what happened, when, and why?* Without a real audit trail, debugging failures and proving operational history are harder than they should be.
-
-**Proposed Design:**
-- New `internal/audit/` package
-- Storage: `.tasks/audit/events/*.jsonl` with optional daily rollups
-- Event types: task_claimed, task_started, task_progress, task_cancel_requested, review_started, review_passed, review_failed, merge_started, merged, task_failed
-- New CLI: `mato history`, `mato history <task-id>`, `mato events --since 1h`
-- Append-only JSONL writer, reusing existing message/completion data
-
-**Impact:** Backbone for observability, debugging, compliance, incident review, and future analytics. Unlocks a future API/UI without first building a database.
-
-**Effort:** Medium (3–5 days)
-
-### Feature 5: Per-Task Resource Profiles
-
-**Problem:** A global timeout is too blunt. Some tasks need more time, some need stricter limits, some need different environments. Without per-task resource policy, mato wastes capacity and makes failures harder to reason about.
+**Problem:** Creating high-quality task files is manual. Hurts consistency, slows adoption, makes large backlogs tedious.
 
 **Proposed Design:**
-- New frontmatter fields: `timeout`, `cpu_limit`, `memory_limit`, `docker_image`, `review_timeout`
-- Parse into task metadata, pass through Docker flags in `buildDockerArgs()`
-- Validate against repo-level max caps
-- Surface effective limits in status and audit log
+- New package: `internal/template/`, optional `internal/batch/`
+- Repo structure: `.mato/templates/*.md.tmpl`, `.mato/batches/*.yaml`
+- Commands: `mato template list`, `mato template render feature --var name=auth`, `mato batch create sprint-12.yaml`
+- Go `text/template` with schema validation for required variables
+- Generated files land in `.tasks/backlog/` or `.tasks/waiting/` with normalized frontmatter
 
-**Impact:** The right way to scale heterogeneous work safely. Improves fairness, reduces runaway jobs, enables complex tasks without weakening defaults. More valuable than templates because it changes execution quality, not just authoring convenience.
+**Impact:** Makes mato scalable for real planning workflows. Better task inputs lead directly to better autonomous execution quality.
 
 **Effort:** Medium (3–5 days)
 
 ### Rebuttals
 
-> "Web UI should be top 5 because users need visibility."
+> "A web UI should be top priority."
 
-A dashboard without stronger scheduling, audit logs, and cancellation is lipstick on a control-plane gap. Build the data plane first; then the dashboard becomes easy and honest.
+Not yet. A UI without a durable event model becomes a thin veneer over fragile filesystem scraping. Build the event journal first; then a dashboard becomes cheap and correct.
 
-> "Templates are faster to ship and more visible."
+> "Templates are just convenience."
 
-Yes — and less important. Templates help users create tasks; they do not help mato execute them safely or at scale.
+In agentic systems, task quality is throughput quality. Templates reduce ambiguity, enforce metadata hygiene, and make batch planning practical.
 
-> "Affects globbing is a simpler win."
+> "Per-task profiles add too much complexity."
 
-True, but it solves a narrower paper cut. DAG correctness and cancellation solve system-level failure modes.
+Only if they allow arbitrary Docker flags. Keep it safe: prefer named profiles in `.mato/profiles/`, with controlled overrides. Flexibility without turning mato into a container orchestration free-for-all.
 
-> "Resource profiles are overkill for an MVP."
+> "Doctor can wait."
 
-Not for autonomous agents in Docker. Per-task limits are basic production hygiene.
+Operational trust cannot. When a tool coordinates agents, git, Docker, locks, and queue state, diagnosis is not optional — it is product quality.
 
 ---
 
-## 🔵 Gemini 3.1 Pro — "Velocity & Visibility"
+## 🔵 Gemini 3.1 Pro — "Developer Experience & Observability"
 
 ### Philosophy
 
-> We shouldn't just build a better queue; we should build a better *developer experience*. Correctness is a baseline; velocity is the feature.
+> While my colleagues make excellent points regarding stability, I believe we must aim higher than just "fixing" the current system. To evolve from a "task runner" to a true "orchestration platform," we must address the friction points that slow down agent development and observability. Mato's concurrency model is already sufficient — focus on DX.
 
-Gemini challenges the "correctness first" camp, arguing that operational UX and runtime flexibility deliver more practical value than theoretical graph algorithms.
+Gemini focuses on operator experience and runtime flexibility, arguing that the system's biggest gaps are in visibility and usability, not scheduling algorithms.
 
 ### Feature 1: Interactive TUI Dashboard (`mato monitor`)
 
-**Problem:** `mato status` is a static snapshot of a dynamic system. To understand what's happening *now*, operators frantically `cat` files in `.tasks/` or tail logs. No real-time visibility is a critical operational blind spot.
+**Problem:** `mato status` provides a static snapshot. Engineers running long-lived agent swarms have no visibility into real-time progress without manually refreshing. Hard to spot stuck agents or visualize queue flow.
 
 **Proposed Design:**
-- Bubble Tea framework (`github.com/charmbracelet/bubbletea`) for rich TUI
-- New command: `mato monitor`
-- Left pane: live list of in-progress and ready-for-review tasks with spinners
-- Right pane: real-time stream of selected task's messages
-- Footer: global metrics (tasks/min, active agents)
-- Uses `fsnotify` for instant `.tasks/` directory watching
+- New command: `mato monitor` using Bubble Tea framework (`charmbracelet/bubbletea`)
+- Left pane: task queue stats (Waiting: 5, In-Progress: 2, Done: 10)
+- Center pane: live list of active agents showing Task ID, Agent ID, Duration
+- Footer: last 5 system events (log tail)
+- Implementation: `cmd/mato/monitor.go` with `fsnotify` watching `.tasks/` for event-driven updates
 
-**Impact:** Transforms mato from a "black box" into a transparent system. Increases operator confidence and drastically reduces time-to-recovery during incidents.
+**Impact:** Transforms mato from a "black box" into a transparent system. Crucial for debugging multi-agent contentions.
 
 **Effort:** Medium (3–5 days)
 
-### Feature 2: Dynamic Task Environments (Per-Task Docker Images)
+### Feature 2: Glob Pattern Support for `affects`
 
-**Problem:** Locking all agents into a single Docker image is a severe limitation for polyglot repositories. You cannot orchestrate Node.js frontend tasks, Go backend tasks, and Python data scripts without a bloated "kitchen sink" image.
-
-**Proposed Design:**
-- Add `image: string` field to `TaskMeta` frontmatter
-- Runner reads `task.Meta.Image` and passes to Docker run command instead of default
-- Example: `image: node:20-alpine` in task frontmatter
-- Pre-pull images before execution to avoid timeouts
-
-**Impact:** Unlocks true polyglot orchestration. Agents use the best tool for the job without infrastructure headaches.
-
-**Effort:** Small (2 days)
-
-### Feature 3: Smart Glob Conflict Detection
-
-**Problem:** `affects` requires exact string matches. This is brittle. If an agent creates a new file at an unpredicted path, mato might schedule a conflicting task, leading to merge conflicts or data loss.
+**Problem:** Exact string matching in resource locking is brittle. Modifying `internal/queue/queue.go` often requires locking the entire package. Listing every file is impossible; locking just the folder string is ambiguous without explicit support.
 
 **Proposed Design:**
-- Integrate `github.com/bmatcuk/doublestar` into `internal/queue/overlap.go`
-- Replace `map[string]struct{}` exact match with glob matching loop
-- Support patterns like `internal/queue/**/*.go`
-- Pre-compile globs or use trie structure for performance at scale
+- Allow `affects: ["internal/queue/**/*.go"]` syntax
+- Replace exact-match map lookup with `path/filepath.Match` or `bmatcuk/doublestar`
+- Performance: O(N) instead of O(1), but with N < 1000 active tasks, overhead is negligible compared to Docker startup time
 
-**Impact:** Significantly reduces accidental concurrency issues. Makes task definitions more robust and easier to write.
+**Impact:** Drastically reduces "lock missing" bugs where agents overwrite each other's work.
 
 **Effort:** Small (1–2 days)
 
-### Feature 4: Parallel Review Pipeline
+### Feature 3: Task Scaffolding & Templates
 
-**Problem:** The `pollLoop` processes reviews sequentially. Multiple agents generate code in parallel, but they all funnel into a single-threaded review gate. A slow review blocks the entire merge train.
+**Problem:** Creating tasks manually is error-prone. Users forget `affects`, misformat YAML, or forget initial state. No standardized way to inject context (like coding guidelines) into every task.
 
 **Proposed Design:**
-- Dedicated pool of reviewer goroutines managed by semaphore
-- Main loop dispatches `ready-for-review` tasks to pool up to `MaxReviewConcurrency`
-- Careful concurrency management for file locking
+- Template directory: `.tasks/.templates/*.md`
+- New command: `mato create <template-name> --title "Fix Bug" --param priority=high`
+- Use Go `text/template` with `cmd/mato/create.go`
+- Default templates: `bugfix`, `feature`, `refactor`
 
-**Impact:** Removes the single biggest structural bottleneck in the system.
+**Impact:** Standardizes task quality and context injection, leading to higher agent success rates.
+
+**Effort:** Small (1–2 days)
+
+### Feature 4: Dependency Cycle Detection & Visualization
+
+**Problem:** `depends_on` has no validation. Users can create deadlocks (A waits for B, B waits for A) causing agents to spin forever. No way to visualize the critical path.
+
+**Proposed Design:**
+- New command: `mato graph [--check-cycles]`
+- Build DAG from all task files, run DFS to detect back-edges
+- If cycle found during `mato run` startup, error out with cycle path
+- `mato graph` outputs DOT format (Graphviz) for visualization
+
+**Impact:** Prevents "silent failures" where the system hangs indefinitely due to bad configuration.
 
 **Effort:** Medium (3–5 days)
 
-### Feature 5: Task Scaffolding & Templates (`mato new`)
+### Feature 5: Polyglot Runtime Support (Per-Task Docker Images)
 
-**Problem:** Creating task files manually — copy-pasting frontmatter, remembering field names, ensuring YAML validity — is high-friction. This discourages developers from breaking work into smaller, atomic tasks, leading to "mega-tasks" harder to review and merge.
+**Problem:** Single runtime environment for all tasks. Monorepos with Go backend, TypeScript frontend, and Python scripts can't use mato effectively without a bloated "mega-image."
 
 **Proposed Design:**
-- New directory: `.tasks/templates/` with Go template syntax
-- New command: `mato new <template-name> [flags]`
-- Example: `mato new bugfix --title="Fix NPE" --affects="pkg/api"`
-- Generates properly formatted task file in `waiting/` or `backlog/`
+- New frontmatter field: `runtime.image` and `runtime.env`
+- Update `internal/frontmatter` struct and `internal/runner` to read and use per-task images
+- Fall back to global default if not specified
 
-**Impact:** Improves developer velocity and enforces consistency across task definitions.
+**Example:**
+```yaml
+runtime:
+  image: "node:20-alpine"
+  env:
+    NODE_ENV: "production"
+```
 
-**Effort:** Small (1–2 days)
+**Impact:** Unlocks mato for full-stack repository orchestration.
+
+**Effort:** Medium (3–5 days)
 
 ### Rebuttals
 
-> "We need full DAG dependency resolution first!"
+> "Why a TUI instead of a Web UI?"
 
-Most user workflows are linear sequences or simple fan-outs. The current "wait until dependency is complete" logic covers 90% of real-world cases. Fixing bottlenecks yields more than fixing theoretical graph problems.
+A Web UI introduces HTTP server, WebSocket, frontend assets, security concerns (CORS, auth). Mato is a CLI tool for terminals and CI. A TUI via Bubble Tea uses the existing TTY, requires no ports, and fits Unix philosophy.
 
-> "A TUI is just eye candy; we need audit logs."
+> "Glob matching is slow."
 
-Logs are for post-mortems; a TUI is for *operations*. When a system is stuck, you want a red status bar, not grep through 50MB of JSON. We can have both, but immediate observability enables faster iteration.
+Premature optimization. Even with 500 tasks, glob comparison in Go takes microseconds. The bottleneck is Docker startup (seconds) and LLM inference (seconds).
 
-> "Templates can be done with shell scripts."
+> "Just use one big Docker image."
 
-They *can*, but they *won't*. A first-class `mato new` command is discoverable and self-documenting. Shell scripts are hidden and brittle.
+Mega-images are slow to pull, hard to cache, and riddled with version conflicts (Python 3.9 vs 3.11). Per-task images let agents bring their own tools.
 
 ---
 
@@ -349,56 +375,61 @@ They *can*, but they *won't*. A first-class `mato new` command is discoverable a
 
 ### Where All Three Agree
 
-1. **Parallel Review Pipeline** — All three agents identified review serialization as a key bottleneck. This has the strongest consensus for implementation.
+1. **Glob Affects Matching** — All three agents identified exact-string matching as fundamentally brittle. Strongest consensus feature. Two ranked it #1-2, the third included it. Low effort, high impact.
 
-2. **The system needs better observability** — Whether through audit logs (Opus, GPT) or a TUI dashboard (Gemini), all agents agree mato is too opaque during operation.
+2. **DAG Dependency Resolution** — All three include some form of dependency graph improvement. GPT and Opus propose comprehensive DAG packages; Gemini focuses on cycle detection and visualization.
+
+3. **Task Templates** — All three include template/scaffolding features. Universal agreement that manual task authoring is the human bottleneck.
 
 ### Where Two Agree (Strong Signal)
 
-3. **DAG Dependency Resolution** — Both Opus and GPT rank this #1, calling it the most dangerous correctness gap. Gemini disagrees, arguing it's over-engineering for most workflows.
+4. **`mato doctor` Command** — Both Opus (#2) and GPT (#4) propose a comprehensive diagnostic command. Strong signal for operability improvement.
 
-4. **Task Cancellation** — Both Opus and GPT rank this #2, calling it essential operational safety. Gemini omits it entirely, prioritizing velocity features instead.
+5. **Structured Audit Trail** — Both Opus (#4) and GPT (#3) propose JSONL event logging. Foundation for all future observability.
 
-5. **Glob Affects Matching** — Both Opus and Gemini include this as a practical, low-effort win.
+6. **Per-Task Execution Environments** — Both GPT (#2) and Gemini (#5) propose per-task Docker images and resource profiles. Enables polyglot orchestration.
 
 ### Key Disagreements
 
-| Topic | Correctness Camp (Opus, GPT) | Velocity Camp (Gemini) |
-|-------|------------------------------|------------------------|
-| **Top priority** | Fix dependency scheduling bugs | Improve operator experience (TUI) |
-| **DAG resolution** | Critical — silent deadlocks are catastrophic | Over-engineering — 90% of workflows are linear |
-| **Task cancellation** | Essential operational safety | Not prioritized |
-| **TUI dashboard** | Premature without data plane | Most impactful for daily use |
-| **Templates** | Authoring sugar, not priority | Reduces friction, improves task quality |
+| Topic | Correctness Camp (Opus, GPT) | DX Camp (Gemini) |
+|-------|------------------------------|------------------|
+| **Top priority** | Glob matching + `mato doctor` | TUI dashboard |
+| **Observability approach** | JSONL audit log first, UI later | TUI first (real-time ops) |
+| **DAG depth** | Full topological sort + transitive context | Cycle detection + DOT output |
+| **Template scope** | Batch generation + CI/CD integration | Interactive scaffolding |
 
 ### Recommended Implementation Order
 
-Based on the debate, a pragmatic ordering that balances correctness and velocity:
+Based on the debate, ordered by consensus strength and effort:
 
 | Phase | Feature | Effort | Rationale |
 |-------|---------|--------|-----------|
-| **Phase 1** | Glob Affects Matching | Small (1-2 days) | Quick win, broad consensus, prevents real failures |
-| **Phase 1** | Task Cancellation | Medium (3-5 days) | Operational safety — ship the kill switch early |
-| **Phase 2** | DAG Dependency Resolution | Medium (3-5 days) | Correctness foundation, prevents silent deadlocks |
-| **Phase 2** | Parallel Review Pipeline | Medium (3-5 days) | Throughput bottleneck removal, unanimous agreement |
-| **Phase 3** | Structured Audit Trail | Medium (3-5 days) | Observability backbone, enables future features |
-| **Phase 3** | Per-Task Docker Images | Small (2 days) | Polyglot support, low risk |
+| **Phase 1** | Glob Affects Matching | Small (1-2 days) | Unanimous consensus, highest ROI, prevents real failures |
+| **Phase 1** | `mato doctor` | Small (1-2 days) | Quick win, strong consensus, immediate UX improvement |
+| **Phase 2** | DAG Dependency Resolution | Medium (3-5 days) | All three agree deps need improvement; prevents deadlocks |
+| **Phase 2** | Structured Audit Trail | Medium (3-5 days) | Foundation for all future observability features |
+| **Phase 3** | Per-Task Execution Profiles | Medium (3-5 days) | Enables polyglot repos, production hardening |
+| **Phase 3** | Task Templates + Batch Gen | Medium (3-5 days) | Removes human authoring bottleneck, enables CI/CD |
 | **Phase 4** | Interactive TUI Dashboard | Medium (3-5 days) | Best built on top of audit trail data |
-| **Phase 4** | Per-Task Resource Profiles | Medium (3-5 days) | Production hardening |
-| **Phase 5** | Task Templates (`mato new`) | Small (1-2 days) | UX polish, low priority |
 
-**Total estimated effort:** ~6-8 weeks for all features across phases.
+**Total estimated effort:** ~4-5 weeks for all features across phases.
 
 ---
 
 ## Conclusion
 
-The debate reveals a healthy tension between **correctness** (making mato trustworthy) and **velocity** (making mato pleasant to use). The strongest consensus is around:
+With concurrency and cancellation already handled, the debate reveals clear priorities for what mato actually needs:
 
-1. **Parallel Review Pipeline** — the clearest bottleneck, agreed upon by all three agents
-2. **Task Cancellation** — essential for operational safety (2 of 3 agents)
-3. **DAG Dependencies** — the most dangerous correctness gap (2 of 3 agents)
-4. **Glob Matching** — low-effort, high-value quick win (2 of 3 agents)
-5. **Structured Audit Trail** — observability foundation (2 of 3 agents)
+1. **Glob Affects Matching** — Unanimous consensus. The simplest, highest-impact change. Prevents the most expensive failure mode (merge conflicts from missed overlaps).
 
-The recommended approach is to ship quick wins (glob matching, cancellation) first, then address foundational issues (DAG, parallel review), and finally layer on UX improvements (audit trail, TUI, templates).
+2. **`mato doctor`** — Strong consensus. Lowest-effort diagnostic command that makes mato immediately more approachable and debuggable.
+
+3. **DAG Dependency Resolution** — All three agents agree dependencies need improvement. Prevents silent deadlocks, enables deep task chains, surfaces cycles prominently.
+
+4. **Structured Audit Trail** — Strong consensus. Production-grade observability without infrastructure. Foundation for any future UI.
+
+5. **Per-Task Execution Profiles** — Two agents agree. Unlocks polyglot orchestration and proper resource management.
+
+6. **Task Templates** — Universal agreement this is valuable, but lower priority than correctness and observability features.
+
+7. **TUI Dashboard** — Gemini's #1 pick, but best built after the audit trail provides reliable data to display.
