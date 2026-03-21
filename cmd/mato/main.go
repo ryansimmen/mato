@@ -15,17 +15,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// assignFlag sets the target variable for a known flag name. It returns true
-// if the flag was recognised, false otherwise. This avoids duplicating the
-// assignment switch for the --flag=value and --flag value parsing paths.
-func assignFlag(name, val string, repo, branch, tasksDir *string) bool {
+// runConfig holds the parsed flags for the root command.
+type runConfig struct {
+	repo        string
+	branch      string
+	tasksDir    string
+	dryRun      bool
+	copilotArgs []string
+}
+
+// assignFlag sets the target field on cfg for a known flag name. It returns
+// true if the flag was recognised, false otherwise. This avoids duplicating
+// the assignment switch for the --flag=value and --flag value parsing paths.
+func assignFlag(name, val string, cfg *runConfig) bool {
 	switch name {
 	case "--repo":
-		*repo = val
+		cfg.repo = val
 	case "--branch":
-		*branch = val
+		cfg.branch = val
 	case "--tasks-dir":
-		*tasksDir = val
+		cfg.tasksDir = val
 	default:
 		return false
 	}
@@ -36,27 +45,26 @@ func assignFlag(name, val string, repo, branch, tasksDir *string) bool {
 // forwarded to the copilot CLI inside the Docker container. The root command
 // uses DisableFlagParsing so that unknown flags (like --model) are not rejected
 // by cobra and can be passed through.
-func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun bool, copilotArgs []string, err error) {
-	copilotArgs = make([]string, 0, len(args))
+func extractKnownFlags(args []string) (runConfig, error) {
+	cfg := runConfig{copilotArgs: make([]string, 0, len(args))}
 	known := map[string]bool{"--repo": true, "--branch": true, "--tasks-dir": true}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			copilotArgs = append(copilotArgs, args[i+1:]...)
+			cfg.copilotArgs = append(cfg.copilotArgs, args[i+1:]...)
 			break
 		}
 		if arg == "--dry-run" {
-			dryRun = true
+			cfg.dryRun = true
 			continue
 		}
 		if strings.HasPrefix(arg, "--dry-run=") {
 			val := strings.TrimPrefix(arg, "--dry-run=")
 			b, parseErr := strconv.ParseBool(val)
 			if parseErr != nil {
-				err = fmt.Errorf("invalid value %q for flag --dry-run: must be a boolean", val)
-				return
+				return runConfig{}, fmt.Errorf("invalid value %q for flag --dry-run: must be a boolean", val)
 			}
-			dryRun = b
+			cfg.dryRun = b
 			continue
 		}
 		// --flag=value form
@@ -65,10 +73,9 @@ func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun boo
 			if strings.HasPrefix(arg, flag+"=") {
 				val := strings.TrimSpace(strings.TrimPrefix(arg, flag+"="))
 				if val == "" {
-					err = fmt.Errorf("flag %s requires a value", flag)
-					return
+					return runConfig{}, fmt.Errorf("flag %s requires a value", flag)
 				}
-				assignFlag(flag, val, &repo, &branch, &tasksDir)
+				assignFlag(flag, val, &cfg)
 				handled = true
 				break
 			}
@@ -79,26 +86,23 @@ func extractKnownFlags(args []string) (repo, branch, tasksDir string, dryRun boo
 		// --flag value form
 		if known[arg] {
 			if i+1 >= len(args) {
-				err = fmt.Errorf("flag %s requires a value", arg)
-				return
+				return runConfig{}, fmt.Errorf("flag %s requires a value", arg)
 			}
 			next := args[i+1]
 			if strings.HasPrefix(next, "--") {
-				err = fmt.Errorf("flag %s requires a value, got flag %s", arg, next)
-				return
+				return runConfig{}, fmt.Errorf("flag %s requires a value, got flag %s", arg, next)
 			}
 			i++
 			val := strings.TrimSpace(next)
 			if val == "" {
-				err = fmt.Errorf("flag %s requires a value", arg)
-				return
+				return runConfig{}, fmt.Errorf("flag %s requires a value", arg)
 			}
-			assignFlag(arg, val, &repo, &branch, &tasksDir)
+			assignFlag(arg, val, &cfg)
 			continue
 		}
-		copilotArgs = append(copilotArgs, arg)
+		cfg.copilotArgs = append(cfg.copilotArgs, arg)
 	}
-	return
+	return cfg, nil
 }
 
 func resolveRepo(repo string) (string, error) {
@@ -139,19 +143,19 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 					return cmd.Help()
 				}
 			}
-			repo, branch, tasksDir, dryRun, copilotArgs, err := extractKnownFlags(args)
+			cfg, err := extractKnownFlags(args)
 			if err != nil {
 				return err
 			}
-			resolved, err := resolveRepo(repo)
+			resolved, err := resolveRepo(cfg.repo)
 			if err != nil {
 				return err
 			}
-			br := resolveBranch(branch)
-			if dryRun {
-				return runner.DryRun(resolved, br, tasksDir)
+			br := resolveBranch(cfg.branch)
+			if cfg.dryRun {
+				return runner.DryRun(resolved, br, cfg.tasksDir)
 			}
-			return runner.Run(resolved, br, tasksDir, copilotArgs)
+			return runner.Run(resolved, br, cfg.tasksDir, cfg.copilotArgs)
 		},
 	}
 
