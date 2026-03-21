@@ -1,5 +1,5 @@
 # Mato Architecture
-This document describes the architecture implemented by `main.go`, `runner.go`, `queue.go`, `git.go`, `merge.go`, `frontmatter.go`, `messaging.go`, `status.go`, and the embedded prompts in `task-instructions.md` and `review-instructions.md`.
+This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `queue/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.tasks/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
@@ -42,7 +42,7 @@ High-level flow:
 3. Resolve `tasksDir`; default is `<repoRoot>/.tasks`.
 4. Create queue directories: `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`.
 5. Create messaging directories with `messaging.Init(...)`: `.tasks/messages/events/`, `.tasks/messages/completions/`, and `.tasks/messages/presence/`.
-6. Generate an agent ID with `queue.GenerateAgentID()`.
+6. Generate an agent ID with `identity.GenerateAgentID()`.
 7. Register the process as active by writing `.tasks/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
 8. Ensure `/.tasks/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
 9. Resolve host tools and config: Docker image, `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity.
@@ -82,9 +82,9 @@ Important details from the implementation:
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
 ### Orphan recovery and lock cleanup
-`queue.go` provides the host-side recovery primitives:
+The `queue` package (spread across `locks.go` and `reconcile.go`) provides the host-side recovery primitives:
 - `queue.RegisterAgent(...)` writes `.tasks/.locks/<agentID>.pid` and returns a cleanup function.
-- `queue.IsAgentActive(...)` reads a PID file and tests liveness with signal `0`.
+- `identity.IsAgentActive(...)` reads a PID file and tests liveness with signal `0`.
 - `queue.CleanStaleLocks(...)` removes dead agent lock files.
 - `queue.RecoverOrphanedTasks(...)` scans `in-progress/*.md`; if the claiming agent is no longer active, it appends `<!-- failure: mato-recovery ... -->` and renames the task back to `backlog/`.
 - If `claimed-by` points at a still-live agent, recovery skips that task.
@@ -183,9 +183,9 @@ State meanings:
 | `failed/` | failure record budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
 Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
 ## 5. Dependency Resolution
-`queue.ReconcileReadyQueue(tasksDir)` in `queue.go` promotes waiting tasks whose dependencies are satisfied.
+`queue.ReconcileReadyQueue(tasksDir)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied.
 How it works:
-1. `completedTaskIDs(tasksDir)` scans `completed/*.md`.
+1. `completedTaskIDs(tasksDir)` (in `reconcile.go`) scans `completed/*.md`.
 2. For each completed task, it records both the filename stem and `TaskMeta.ID` in a set.
 3. `queue.ReconcileReadyQueue(...)` scans `waiting/*.md` and parses each file with `frontmatter.ParseTaskFile(...)`.
 4. Every entry in `meta.DependsOn` must exist in the completed-ID set.
@@ -214,7 +214,7 @@ This is the main multi-process safety mechanism for host-side merges.
 `merge.ProcessQueue(...)` scans `ready-to-merge/*.md`, parses each task, and sorts by ascending `priority`, then filename.
 For each task:
 1. Parse the task file with `frontmatter.ParseTaskFile(...)`.
-2. Derive the task title with `frontmatter.ExtractTitle(...)` from the first non-empty body line; leading `#` is stripped. Build the squash commit message via `formatSquashCommitMessage(task, agentLog)` (see [Squash commit message format](#squash-commit-message-format) below).
+2. Derive the task title with `frontmatter.ExtractTitle(...)` from the first non-empty body line; leading `#` is stripped. Build the squash commit message via `formatSquashCommitMessage(task, agentLog)` in `squash.go` (see [Squash commit message format](#squash-commit-message-format) below).
 3. Read `<!-- branch: ... -->` from the task file when present; if absent, fall back to `task/<sanitizeBranchName(filename)>`.
 4. Create a fresh temp clone.
 5. Configure clone identity from repo Git config, then global config, with fallbacks `mato` and `mato@local.invalid`.
@@ -275,7 +275,7 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 - The review verdict is communicated via a JSON verdict file. The host writes the HTML comment markers to the task file for state tracking after reading the verdict.
 
 ## 8. Conflict Prevention
-`queue.DeferredOverlappingTasks(tasksDir)` prevents multiple backlog tasks from claiming the same files simultaneously.
+`queue.DeferredOverlappingTasks(tasksDir)` (in `queue/overlap.go`) prevents multiple backlog tasks from claiming the same files simultaneously.
 Algorithm:
 1. Scan `backlog/*.md` and `in-progress/*.md` + `ready-to-merge/*.md` (active tasks).
 2. Parse each task's `priority` and `affects`.
@@ -284,7 +284,7 @@ Algorithm:
 5. For each backlog task, compare its `affects` list with every kept task.
 6. If there is overlap, add the task to the deferred exclusion set (it stays in `backlog/` but is excluded from `.queue` — agents won't see it).
 7. The exclusion set is passed to `WriteQueueManifest` and `SelectAndClaimTask`.
-`overlappingAffects(a, b)` is an exact intersection test:
+`overlappingAffects(a, b)` (in `overlap.go`) is an exact intersection test:
 - no overlap if either list is empty
 - values must match by exact string equality
 - duplicates are removed from the overlap report
@@ -301,14 +301,25 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `internal/runner/`
 - Embeds `task-instructions.md` (the task agent prompt/state machine) and `review-instructions.md` (the review agent prompt).
-- `Run(...)` initializes the repo/queue and executes the polling loop.
-- `runOnce(...)` builds the temp clone + Docker runtime for one task agent run.
-- `selectTaskForReview(...)` scans `ready-for-review/` for the next task to review.
-- `runReview(...)` builds the temp clone + Docker runtime for one review agent run.
+- `Run(...)` initializes the repo/queue and executes the polling loop (`runner.go`).
+- `runOnce(...)` builds the temp clone + Docker runtime for one task agent run (`runner.go`).
+- Docker configuration split into immutable `envConfig` and per-task `runContext` (`config.go`).
+- Host tool discovery (`findGitHelper`) in `tools.go`.
+- Task lifecycle: `postAgentPush`, `extractFailureLines` (`task.go`).
+- Review lifecycle: `selectTaskForReview`, `runReview`, `postReviewAction` (`review.go`).
 
 ### `internal/queue/`
-- Agent identity (`GenerateAgentID`) and liveness via `.locks/*.pid`.
-- Orphan recovery, dependency promotion, backlog overlap deferral, and `.queue` manifest writing.
+- Task claiming and failure-record counting (`claim.go`).
+- Queue directory constants (`dirs.go`).
+- Lock file management — `RegisterAgent`, `CleanStaleLocks` (`locks.go`).
+- Queue manifest writing (`manifest.go`).
+- Overlap deferral — `DeferredOverlappingTasks` (`overlap.go`).
+- Orphan recovery, dependency promotion — `ReconcileReadyQueue`, `RecoverOrphanedTasks` (`reconcile.go`).
+- Task file enumeration — `ListTaskFiles` (`taskfiles.go`).
+- Atomic file moves — `AtomicMove` (`queue.go`).
+
+### `internal/identity/`
+- Agent ID generation (`GenerateAgentID`) and liveness checks (`IsAgentActive`) via `.locks/*.pid`.
 
 ### `internal/git/`
 - `Output(...)` wrapper for git commands.
@@ -316,10 +327,9 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Branch creation/check-out and `.gitignore` maintenance.
 
 ### `internal/merge/`
-- Ready-to-merge scanning and ordering.
-- Temp-clone squash merges into the target branch.
-- Merge lock and merge-failure requeue path.
-- Branch-name sanitization.
+- Ready-to-merge scanning, ordering, and merge lock — `ProcessQueue`, `HasReadyTasks`, `AcquireLock` (`merge.go`).
+- Temp-clone squash merges — `mergeReadyTask`, `formatSquashCommitMessage`, branch cleanup (`squash.go`).
+- Task lifecycle during merging — retry-budget checks (`shouldFailTask`), failure/success record writing, requeue path (`taskops.go`).
 
 ### `internal/process/`
 - Shared process identity and liveness helpers used by the lock systems in `internal/queue/` and `internal/merge/`.
@@ -328,11 +338,21 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `processStartTime(pid)` — reads `/proc/<pid>/stat` field 22 (unexported).
 - `isProcessActive(pid)` — sends signal 0 to check if a PID is alive (unexported).
 
+### `internal/atomicwrite/`
+- `WriteFile` — atomically writes `[]byte` to a path via temp-file-then-rename.
+- `WriteFunc` — atomically writes via a caller-supplied callback.
+
+### `internal/taskfile/`
+- Branch comment parsing — `ParseBranch`, `ParseBranchComment`, `ParseClaimedBy`, `ParseClaimedAt` (`taskfile.go`, `metadata.go`).
+- Failure/review-failure tracking — `CountFailureMarkers`, `ExtractFailureLines`, `AppendFailureRecord`, etc. (`metadata.go`).
+- Active task collection — `CollectActiveAffects` scans in-progress/review/merge directories (`active.go`).
+
 ### `internal/frontmatter/`
 - `TaskMeta` schema.
 - YAML-like frontmatter parsing (stdlib only).
 - Default metadata values and task-body extraction.
 - Strips comment-only HTML metadata lines from the body.
+- Branch-name sanitization — `SanitizeBranchName`, `BranchDisambiguator`.
 
 ### `internal/messaging/`
 - `Message` and `presence` JSON types, plus `CompletionDetail` for merge-time completion data.
@@ -342,10 +362,9 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `WriteCompletionDetail(...)` and `ReadCompletionDetail(...)` for storing and retrieving per-task merge results used by the dependency context flow.
 
 ### `internal/status/`
-- `mato status` implementation.
-- Counts task files by queue directory.
-- Lists active agents from `.locks/*.pid`.
-- Shows waiting-task dependency summaries and recent messages.
+- `mato status` dashboard — `Show`, `ShowTo`, `Watch` (`status.go`).
+- Data gathering layer — `gatherStatus` collects queue counts, active agents, presence, task lists, completions, messages, merge-lock state (`status_gather.go`).
+- Rendering layer — individual `render*` functions for each dashboard section, terminal colors (`status_render.go`).
 
 ### Test files
 Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignoreContains` and `CommitGitignore`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
