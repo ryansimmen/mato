@@ -317,80 +317,18 @@ func TestEnsureBranch_FetchFailsFallsBackToHEAD(t *testing.T) {
 	}
 }
 
-func TestEnsureGitignored_DoesNotCommitUnrelatedStagedFiles(t *testing.T) {
-	_, repo := initBareAndClone(t)
+func TestEnsureGitignoreContains_CreatesNewGitignore(t *testing.T) {
+	dir := t.TempDir()
 
-	// Stage an unrelated file before calling EnsureGitignored.
-	unrelated := filepath.Join(repo, "unrelated.txt")
-	if err := os.WriteFile(unrelated, []byte("should not be committed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("git", "-C", repo, "add", "unrelated.txt")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add unrelated.txt: %v\n%s", err, out)
-	}
-
-	// EnsureGitignored should only commit .gitignore changes.
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
-		t.Fatalf("EnsureGitignored: %v", err)
-	}
-
-	// Verify .gitignore was committed.
-	out, err := Output(repo, "log", "--oneline", "--name-only", "-1")
+	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
 	if err != nil {
-		t.Fatalf("git log: %v", err)
+		t.Fatalf("EnsureGitignoreContains: %v", err)
 	}
-	if !strings.Contains(out, ".gitignore") {
-		t.Errorf("expected .gitignore in commit, got: %s", out)
-	}
-	if strings.Contains(out, "unrelated.txt") {
-		t.Errorf("unrelated.txt should NOT be in the gitignore commit, got: %s", out)
+	if !changed {
+		t.Error("expected changed=true when creating new .gitignore")
 	}
 
-	// Verify unrelated.txt is still staged (not committed).
-	status, err := Output(repo, "status", "--porcelain")
-	if err != nil {
-		t.Fatalf("git status: %v", err)
-	}
-	if !strings.Contains(status, "unrelated.txt") {
-		t.Errorf("expected unrelated.txt to still be staged, got status: %s", status)
-	}
-}
-
-func TestEnsureGitignored_UnreadableGitignoreReturnsError(t *testing.T) {
-	_, repo := initBareAndClone(t)
-
-	// Create a .gitignore that is not readable.
-	gitignorePath := filepath.Join(repo, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("existing\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(gitignorePath, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		// Restore permissions so TempDir cleanup works.
-		os.Chmod(gitignorePath, 0o644)
-	})
-
-	err := EnsureGitignored(repo, "/.tasks/")
-	if err == nil {
-		t.Fatal("expected error for unreadable .gitignore, got nil")
-	}
-	if !strings.Contains(err.Error(), "read .gitignore") {
-		t.Errorf("expected 'read .gitignore' in error, got: %v", err)
-	}
-}
-
-func TestEnsureGitignored_CreatesNewGitignore(t *testing.T) {
-	_, repo := initBareAndClone(t)
-
-	// No .gitignore exists yet.
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
-		t.Fatalf("EnsureGitignored: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
@@ -403,25 +341,21 @@ func TestEnsureGitignored_CreatesNewGitignore(t *testing.T) {
 	}
 }
 
-func TestEnsureGitignored_AppendsToFileWithoutTrailingNewline(t *testing.T) {
-	_, repo := initBareAndClone(t)
+func TestEnsureGitignoreContains_AppendsToFileWithoutTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
 
-	// Create a .gitignore without a trailing newline, commit it.
-	gitignorePath := filepath.Join(repo, ".gitignore")
+	// Create a .gitignore without a trailing newline.
+	gitignorePath := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(gitignorePath, []byte("*.log"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("git", "-C", repo, "add", ".gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v\n%s", err, out)
-	}
-	cmd = exec.Command("git", "-C", repo, "commit", "-m", "add gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v\n%s", err, out)
-	}
 
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
-		t.Fatalf("EnsureGitignored: %v", err)
+	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
+	if err != nil {
+		t.Fatalf("EnsureGitignoreContains: %v", err)
+	}
+	if !changed {
+		t.Error("expected changed=true")
 	}
 
 	data, err := os.ReadFile(gitignorePath)
@@ -440,14 +374,18 @@ func TestEnsureGitignored_AppendsToFileWithoutTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestEnsureGitignored_AtomicWritePreservesPermissions(t *testing.T) {
-	_, repo := initBareAndClone(t)
+func TestEnsureGitignoreContains_AtomicWritePreservesPermissions(t *testing.T) {
+	dir := t.TempDir()
 
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
-		t.Fatalf("EnsureGitignored: %v", err)
+	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
+	if err != nil {
+		t.Fatalf("EnsureGitignoreContains: %v", err)
+	}
+	if !changed {
+		t.Error("expected changed=true")
 	}
 
-	gitignorePath := filepath.Join(repo, ".gitignore")
+	gitignorePath := filepath.Join(dir, ".gitignore")
 	info, err := os.Stat(gitignorePath)
 	if err != nil {
 		t.Fatalf("stat .gitignore: %v", err)
@@ -458,178 +396,142 @@ func TestEnsureGitignored_AtomicWritePreservesPermissions(t *testing.T) {
 	}
 }
 
-func TestEnsureGitignored_DoesNotCommitUnstagedGitignoreChanges(t *testing.T) {
-	_, repo := initBareAndClone(t)
+func TestEnsureGitignoreContains_Idempotent(t *testing.T) {
+	dir := t.TempDir()
 
-	// Create and commit an initial .gitignore.
-	gitignorePath := filepath.Join(repo, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("*.log\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("git", "-C", repo, "add", ".gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v\n%s", err, out)
-	}
-	cmd = exec.Command("git", "-C", repo, "commit", "-m", "initial gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v\n%s", err, out)
-	}
-
-	// Add unrelated changes to .gitignore (unstaged).
-	if err := os.WriteFile(gitignorePath, []byte("*.log\n*.tmp\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
-		t.Fatalf("EnsureGitignored: %v", err)
-	}
-
-	// Verify the commit only contains the /.tasks/ addition.
-	diff, err := Output(repo, "show", "--format=", "--", ".gitignore")
+	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
 	if err != nil {
-		t.Fatalf("git show: %v", err)
-	}
-	if !strings.Contains(diff, "+/.tasks/") {
-		t.Errorf("expected commit to add /.tasks/, got:\n%s", diff)
-	}
-	if strings.Contains(diff, "*.tmp") {
-		t.Errorf("commit should NOT include *.tmp changes, got:\n%s", diff)
-	}
-
-	// Verify working tree .gitignore still has *.tmp and /.tasks/.
-	data, err := os.ReadFile(gitignorePath)
-	if err != nil {
-		t.Fatalf("read .gitignore: %v", err)
-	}
-	if !strings.Contains(string(data), "*.tmp") {
-		t.Errorf("expected working tree .gitignore to still have *.tmp, got: %s", data)
-	}
-	if !strings.Contains(string(data), "/.tasks/") {
-		t.Errorf("expected working tree .gitignore to have /.tasks/, got: %s", data)
-	}
-}
-
-func TestEnsureGitignored_DoesNotCommitStagedGitignoreChanges(t *testing.T) {
-	_, repo := initBareAndClone(t)
-
-	// Create and commit an initial .gitignore.
-	gitignorePath := filepath.Join(repo, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("*.log\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("git", "-C", repo, "add", ".gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v\n%s", err, out)
-	}
-	cmd = exec.Command("git", "-C", repo, "commit", "-m", "initial gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v\n%s", err, out)
-	}
-
-	// Stage unrelated changes to .gitignore.
-	if err := os.WriteFile(gitignorePath, []byte("*.log\n*.tmp\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd = exec.Command("git", "-C", repo, "add", ".gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add staged: %v\n%s", err, out)
-	}
-
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
-		t.Fatalf("EnsureGitignored: %v", err)
-	}
-
-	// Verify the commit only contains the /.tasks/ addition.
-	diff, err := Output(repo, "show", "--format=", "--", ".gitignore")
-	if err != nil {
-		t.Fatalf("git show: %v", err)
-	}
-	if !strings.Contains(diff, "+/.tasks/") {
-		t.Errorf("expected commit to add /.tasks/, got:\n%s", diff)
-	}
-	if strings.Contains(diff, "*.tmp") {
-		t.Errorf("commit should NOT include *.tmp changes, got:\n%s", diff)
-	}
-
-	// Verify working tree .gitignore still has *.tmp and /.tasks/.
-	data, err := os.ReadFile(gitignorePath)
-	if err != nil {
-		t.Fatalf("read .gitignore: %v", err)
-	}
-	if !strings.Contains(string(data), "*.tmp") {
-		t.Errorf("expected working tree .gitignore to still have *.tmp, got: %s", data)
-	}
-	if !strings.Contains(string(data), "/.tasks/") {
-		t.Errorf("expected working tree .gitignore to have /.tasks/, got: %s", data)
-	}
-}
-
-func TestEnsureGitignored_Idempotent(t *testing.T) {
-	_, repo := initBareAndClone(t)
-
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
 		t.Fatalf("first call: %v", err)
+	}
+	if !changed {
+		t.Error("expected changed=true on first call")
 	}
 
 	// Second call should be a no-op.
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
-		t.Fatalf("second call should be no-op: %v", err)
+	changed, err = EnsureGitignoreContains(dir, "/.tasks/")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if changed {
+		t.Error("expected changed=false on second call (pattern already present)")
 	}
 
-	// Only one gitignore commit should exist.
-	out, err := Output(repo, "log", "--oneline")
+	// Verify content has exactly one occurrence of the pattern.
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	count := strings.Count(out, ".gitignore")
+	count := strings.Count(string(data), "/.tasks/")
 	if count != 1 {
-		t.Errorf("expected exactly 1 gitignore commit, got %d in:\n%s", count, out)
+		t.Errorf("expected exactly 1 occurrence of /.tasks/, got %d in: %s", count, data)
 	}
 }
 
-func TestEnsureGitignored_PreservesStagedIndexState(t *testing.T) {
+func TestEnsureGitignoreContains_UnreadableGitignoreReturnsError(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a .gitignore that is not readable.
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(gitignorePath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(gitignorePath, 0o644)
+	})
+
+	_, err := EnsureGitignoreContains(dir, "/.tasks/")
+	if err == nil {
+		t.Fatal("expected error for unreadable .gitignore, got nil")
+	}
+	if !strings.Contains(err.Error(), "read .gitignore") {
+		t.Errorf("expected 'read .gitignore' in error, got: %v", err)
+	}
+}
+
+func TestEnsureGitignoreContains_ReturnsFalseWhenAlreadyPresent(t *testing.T) {
+	dir := t.TempDir()
+
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("/.tasks/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
+	if err != nil {
+		t.Fatalf("EnsureGitignoreContains: %v", err)
+	}
+	if changed {
+		t.Error("expected changed=false when pattern is already present")
+	}
+}
+
+func TestCommitGitignore(t *testing.T) {
 	_, repo := initBareAndClone(t)
 
-	// Create and commit an initial .gitignore.
+	// Create a .gitignore to commit.
 	gitignorePath := filepath.Join(repo, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("*.log\n"), 0o644); err != nil {
+	if err := os.WriteFile(gitignorePath, []byte("/.tasks/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("git", "-C", repo, "add", ".gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v\n%s", err, out)
-	}
-	cmd = exec.Command("git", "-C", repo, "commit", "-m", "initial gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v\n%s", err, out)
+
+	if err := CommitGitignore(repo, "chore: add /.tasks/ to .gitignore"); err != nil {
+		t.Fatalf("CommitGitignore: %v", err)
 	}
 
-	// Stage a change to .gitignore (add *.tmp).
-	if err := os.WriteFile(gitignorePath, []byte("*.log\n*.tmp\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd = exec.Command("git", "-C", repo, "add", ".gitignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add staged: %v\n%s", err, out)
-	}
-
-	// Record the staged blob hash before calling EnsureGitignored.
-	blobBefore := stagedGitignoreBlob(repo)
-	if blobBefore == "" {
-		t.Fatal("expected staged blob hash before EnsureGitignored")
-	}
-
-	if err := EnsureGitignored(repo, "/.tasks/"); err != nil {
-		t.Fatalf("EnsureGitignored: %v", err)
-	}
-
-	// Verify the index still has the pre-existing staged changes.
-	// "git diff --cached" should show *.tmp as a staged change.
-	cachedDiff, err := Output(repo, "diff", "--cached", "--", ".gitignore")
+	// Verify .gitignore was committed.
+	out, err := Output(repo, "log", "--oneline", "--name-only", "-1")
 	if err != nil {
-		t.Fatalf("git diff --cached: %v", err)
+		t.Fatalf("git log: %v", err)
 	}
-	if !strings.Contains(cachedDiff, "*.tmp") {
-		t.Errorf("expected staged diff to contain *.tmp, got:\n%s", cachedDiff)
+	if !strings.Contains(out, ".gitignore") {
+		t.Errorf("expected .gitignore in commit, got: %s", out)
+	}
+	if !strings.Contains(out, "chore: add /.tasks/ to .gitignore") {
+		t.Errorf("expected commit message, got: %s", out)
+	}
+}
+
+func TestCommitGitignore_DoesNotCommitUnrelatedStagedFiles(t *testing.T) {
+	_, repo := initBareAndClone(t)
+
+	// Stage an unrelated file.
+	unrelated := filepath.Join(repo, "unrelated.txt")
+	if err := os.WriteFile(unrelated, []byte("should not be committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", repo, "add", "unrelated.txt")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add unrelated.txt: %v\n%s", err, out)
+	}
+
+	// Create .gitignore and commit only it.
+	gitignorePath := filepath.Join(repo, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("/.tasks/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CommitGitignore(repo, "chore: gitignore"); err != nil {
+		t.Fatalf("CommitGitignore: %v", err)
+	}
+
+	// Verify only .gitignore was committed.
+	out, err := Output(repo, "log", "--oneline", "--name-only", "-1")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if strings.Contains(out, "unrelated.txt") {
+		t.Errorf("unrelated.txt should NOT be in the gitignore commit, got: %s", out)
+	}
+
+	// Verify unrelated.txt is still staged.
+	status, err := Output(repo, "status", "--porcelain")
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if !strings.Contains(status, "unrelated.txt") {
+		t.Errorf("expected unrelated.txt to still be staged, got status: %s", status)
 	}
 }
