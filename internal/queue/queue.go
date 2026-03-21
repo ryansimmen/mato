@@ -429,10 +429,11 @@ func completedTaskIDs(tasksDir string) map[string]struct{} {
 	return ids
 }
 
-// nonCompletedTaskIDs returns the set of task IDs found in all directories except completed/.
-func nonCompletedTaskIDs(tasksDir string) map[string]struct{} {
+// collectTaskIDs scans the given subdirectories under tasksDir and returns the
+// set of task IDs found (both filename stems and frontmatter IDs).
+func collectTaskIDs(tasksDir string, dirs []string) map[string]struct{} {
 	ids := make(map[string]struct{})
-	for _, dir := range []string{DirWaiting, DirBacklog, DirInProgress, DirReadyReview, DirReadyMerge, DirFailed} {
+	for _, dir := range dirs {
 		entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
 		if err != nil {
 			continue
@@ -451,26 +452,14 @@ func nonCompletedTaskIDs(tasksDir string) map[string]struct{} {
 	return ids
 }
 
+// nonCompletedTaskIDs returns the set of task IDs found in all directories except completed/.
+func nonCompletedTaskIDs(tasksDir string) map[string]struct{} {
+	return collectTaskIDs(tasksDir, []string{DirWaiting, DirBacklog, DirInProgress, DirReadyReview, DirReadyMerge, DirFailed})
+}
+
 // allKnownTaskIDs returns the set of task IDs found across all queue directories.
 func allKnownTaskIDs(tasksDir string) map[string]struct{} {
-	ids := make(map[string]struct{})
-	for _, dir := range AllDirs {
-		entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			ids[frontmatter.TaskFileStem(e.Name())] = struct{}{}
-			path := filepath.Join(tasksDir, dir, e.Name())
-			if meta, _, err := frontmatter.ParseTaskFile(path); err == nil {
-				ids[meta.ID] = struct{}{}
-			}
-		}
-	}
-	return ids
+	return collectTaskIDs(tasksDir, AllDirs)
 }
 
 type queueEntry struct {
