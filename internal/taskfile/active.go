@@ -1,9 +1,7 @@
 package taskfile
 
 import (
-	"os"
 	"path/filepath"
-	"strings"
 
 	"mato/internal/frontmatter"
 	"mato/internal/queue"
@@ -23,15 +21,12 @@ func CollectActiveAffects(tasksDir string) []ActiveTask {
 	var active []ActiveTask
 	for _, dir := range []string{queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge} {
 		dirPath := filepath.Join(tasksDir, dir)
-		entries, err := os.ReadDir(dirPath)
+		names, err := queue.ListTaskFiles(dirPath)
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			path := filepath.Join(dirPath, e.Name())
+		for _, name := range names {
+			path := filepath.Join(dirPath, name)
 			meta, _, err := frontmatter.ParseTaskFile(path)
 			if err != nil {
 				continue
@@ -40,7 +35,7 @@ func CollectActiveAffects(tasksDir string) []ActiveTask {
 				continue
 			}
 			active = append(active, ActiveTask{
-				Name:    e.Name(),
+				Name:    name,
 				Dir:     dir,
 				Affects: meta.Affects,
 			})

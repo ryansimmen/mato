@@ -39,7 +39,7 @@ type reviewVerdict struct {
 // budget is exhausted are moved to failed/ and excluded from the result.
 func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	entries, err := os.ReadDir(reviewDir)
+	names, err := queue.ListTaskFiles(reviewDir)
 	if err != nil {
 		return nil
 	}
@@ -52,14 +52,11 @@ func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 	}
 
 	var candidates []candidate
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(reviewDir, entry.Name())
+	for _, name := range names {
+		path := filepath.Join(reviewDir, name)
 		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse review candidate %s: %v\n", entry.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not parse review candidate %s: %v\n", name, err)
 			continue
 		}
 
@@ -69,37 +66,37 @@ func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 		maxRetries := meta.MaxRetries
 		failures, failErr := queue.CountReviewFailureLines(path)
 		if failErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not count failures for review candidate %s, skipping: %v\n", entry.Name(), failErr)
+			fmt.Fprintf(os.Stderr, "warning: could not count failures for review candidate %s, skipping: %v\n", name, failErr)
 			continue
 		}
 		if failures >= maxRetries {
-			dst := filepath.Join(failedDir, entry.Name())
+			dst := filepath.Join(failedDir, name)
 			if err := os.MkdirAll(failedDir, 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", entry.Name(), err)
+				fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", name, err)
 				continue
 			}
 			// Use AtomicMove to prevent silently overwriting an existing
 			// file (TOCTOU race defense).
 			if moveErr := queue.AtomicMove(path, dst); moveErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", entry.Name(), moveErr)
+				fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", name, moveErr)
 			} else {
 				fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
-					entry.Name(), failures, maxRetries)
+					name, failures, maxRetries)
 			}
 			continue
 		}
 
 		branch := taskfile.ParseBranch(path)
 		if branch == "" {
-			branch = "task/" + frontmatter.SanitizeBranchName(entry.Name())
+			branch = "task/" + frontmatter.SanitizeBranchName(name)
 			if _, taken := queue.CollectActiveBranches(tasksDir)[branch]; taken {
-				branch = branch + "-" + frontmatter.BranchDisambiguator(entry.Name())
+				branch = branch + "-" + frontmatter.BranchDisambiguator(name)
 			}
 		}
-		title := frontmatter.ExtractTitle(entry.Name(), body)
+		title := frontmatter.ExtractTitle(name, body)
 		candidates = append(candidates, candidate{
 			task: &queue.ClaimedTask{
-				Filename: entry.Name(),
+				Filename: name,
 				Branch:   branch,
 				Title:    title,
 				TaskPath: path,

@@ -352,16 +352,13 @@ type taskEntry struct {
 }
 
 func listTasksInDir(tasksDir, dir string) []taskEntry {
-	entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
+	names, err := queue.ListTaskFiles(filepath.Join(tasksDir, dir))
 	if err != nil {
 		return nil
 	}
-	tasks := make([]taskEntry, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		meta, body, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, dir, e.Name()))
+	tasks := make([]taskEntry, 0, len(names))
+	for _, name := range names {
+		meta, body, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, dir, name))
 		priority := 50
 		maxRetries := 3
 		var title, id string
@@ -369,9 +366,9 @@ func listTasksInDir(tasksDir, dir string) []taskEntry {
 			priority = meta.Priority
 			maxRetries = meta.MaxRetries
 			id = meta.ID
-			title = frontmatter.ExtractTitle(e.Name(), body)
+			title = frontmatter.ExtractTitle(name, body)
 		}
-		tasks = append(tasks, taskEntry{name: e.Name(), title: title, id: id, priority: priority, maxRetries: maxRetries})
+		tasks = append(tasks, taskEntry{name: name, title: title, id: id, priority: priority, maxRetries: maxRetries})
 	}
 	sort.Slice(tasks, func(i, j int) bool {
 		if tasks[i].priority != tasks[j].priority {
@@ -407,17 +404,11 @@ type waitingTaskSummary struct {
 }
 
 func countMarkdownFiles(dir string) int {
-	entries, err := os.ReadDir(dir)
+	names, err := queue.ListTaskFiles(dir)
 	if err != nil {
 		return 0
 	}
-	count := 0
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
-			count++
-		}
-	}
-	return count
+	return len(names)
 }
 
 func activeAgents(tasksDir string) ([]statusAgent, error) {
@@ -464,7 +455,7 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		return nil, err
 	}
 
-	entries, err := os.ReadDir(filepath.Join(tasksDir, queue.DirWaiting))
+	names, err := queue.ListTaskFiles(filepath.Join(tasksDir, queue.DirWaiting))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -472,18 +463,15 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		return nil, fmt.Errorf("read waiting dir: %w", err)
 	}
 
-	waiting := make([]waitingTaskSummary, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(tasksDir, queue.DirWaiting, entry.Name())
+	waiting := make([]waitingTaskSummary, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(tasksDir, queue.DirWaiting, name)
 		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse %s: %v\n", path, err)
 			continue
 		}
-		title := frontmatter.ExtractTitle(entry.Name(), body)
+		title := frontmatter.ExtractTitle(name, body)
 
 		deps := make([]string, 0, len(meta.DependsOn))
 		greenSym := color.New(color.FgGreen).SprintFunc()
@@ -504,7 +492,7 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		}
 
 		waiting = append(waiting, waitingTaskSummary{
-			Name:         entry.Name(),
+			Name:         name,
 			Title:        title,
 			Priority:     meta.Priority,
 			Dependencies: deps,
@@ -536,24 +524,21 @@ func taskStatesByID(tasksDir string) (map[string]string, error) {
 
 	states := make(map[string]string)
 	for _, dirState := range dirStates {
-		entries, err := os.ReadDir(filepath.Join(tasksDir, dirState.Dir))
+		names, err := queue.ListTaskFiles(filepath.Join(tasksDir, dirState.Dir))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return nil, fmt.Errorf("read %s dir: %w", dirState.Dir, err)
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-				continue
-			}
-			path := filepath.Join(tasksDir, dirState.Dir, entry.Name())
+		for _, name := range names {
+			path := filepath.Join(tasksDir, dirState.Dir, name)
 			meta, _, err := frontmatter.ParseTaskFile(path)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not parse %s: %v\n", path, err)
 				continue
 			}
-			states[frontmatter.TaskFileStem(entry.Name())] = dirState.State
+			states[frontmatter.TaskFileStem(name)] = dirState.State
 			if meta.ID != "" {
 				states[meta.ID] = dirState.State
 			}
@@ -639,21 +624,18 @@ func lastFailureReason(path string) string {
 // reverseDependencies scans waiting/ tasks and returns a map from dependency ID
 // to the list of task filenames that depend on it.
 func reverseDependencies(tasksDir string) map[string][]string {
-	entries, err := os.ReadDir(filepath.Join(tasksDir, queue.DirWaiting))
+	names, err := queue.ListTaskFiles(filepath.Join(tasksDir, queue.DirWaiting))
 	if err != nil {
 		return nil
 	}
 	result := make(map[string][]string)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, queue.DirWaiting, entry.Name()))
+	for _, name := range names {
+		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, queue.DirWaiting, name))
 		if err != nil {
 			continue
 		}
 		for _, dep := range meta.DependsOn {
-			result[dep] = append(result[dep], entry.Name())
+			result[dep] = append(result[dep], name)
 		}
 	}
 	return result

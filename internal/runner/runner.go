@@ -104,18 +104,15 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 	totalTasks := 0
 	for _, sub := range subdirs {
 		dir := filepath.Join(tasksDir, sub)
-		entries, readErr := os.ReadDir(dir)
+		names, readErr := queue.ListTaskFiles(dir)
 		if readErr != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
+		for _, name := range names {
 			totalTasks++
-			path := filepath.Join(dir, e.Name())
+			path := filepath.Join(dir, name)
 			if _, _, parseErr := frontmatter.ParseTaskFile(path); parseErr != nil {
-				fmt.Printf("  ERROR %s/%s: %v\n", sub, e.Name(), parseErr)
+				fmt.Printf("  ERROR %s/%s: %v\n", sub, name, parseErr)
 				parseErrors++
 			}
 		}
@@ -176,14 +173,8 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 	fmt.Println("\n=== Queue Summary ===")
 	for _, sub := range subdirs {
 		dir := filepath.Join(tasksDir, sub)
-		entries, _ := os.ReadDir(dir)
-		count := 0
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-				count++
-			}
-		}
-		fmt.Printf("  %-20s %d\n", sub, count)
+		names, _ := queue.ListTaskFiles(dir)
+		fmt.Printf("  %-20s %d\n", sub, len(names))
 	}
 	if len(detailed) > 0 {
 		fmt.Printf("  %-20s %d\n", "deferred", len(detailed))

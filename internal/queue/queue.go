@@ -23,16 +23,13 @@ var claimedByRe = regexp.MustCompile(`<!-- claimed-by:\s*(\S+)`)
 // HasAvailableTasks reports whether there is at least one claimable .md task
 // file in backlog/ that is not in the deferred exclusion set.
 func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
-	entries, err := os.ReadDir(filepath.Join(tasksDir, DirBacklog))
+	names, err := ListTaskFiles(filepath.Join(tasksDir, DirBacklog))
 	if err != nil {
 		return false
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
+	for _, name := range names {
 		if deferred != nil {
-			if _, excluded := deferred[e.Name()]; excluded {
+			if _, excluded := deferred[name]; excluded {
 				continue
 			}
 		}
@@ -129,53 +126,50 @@ func CleanStaleReviewLocks(tasksDir string) {
 // in-progress copy is treated as stale and removed instead of recovered.
 func RecoverOrphanedTasks(tasksDir string) {
 	inProgress := filepath.Join(tasksDir, DirInProgress)
-	entries, err := os.ReadDir(inProgress)
+	names, err := ListTaskFiles(inProgress)
 	if err != nil {
 		return
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		src := filepath.Join(inProgress, e.Name())
+	for _, name := range names {
+		src := filepath.Join(inProgress, name)
 
-		if laterDir := laterStateDuplicateDir(tasksDir, e.Name()); laterDir != "" {
+		if laterDir := laterStateDuplicateDir(tasksDir, name); laterDir != "" {
 			if err := os.Remove(src); err != nil {
 				if !os.IsNotExist(err) {
-					fmt.Fprintf(os.Stderr, "warning: could not remove stale in-progress copy %s: %v\n", e.Name(), err)
+					fmt.Fprintf(os.Stderr, "warning: could not remove stale in-progress copy %s: %v\n", name, err)
 				}
 				continue
 			}
-			fmt.Printf("Removing stale in-progress copy of %s (already in %s/)\n", e.Name(), laterDir)
+			fmt.Printf("Removing stale in-progress copy of %s (already in %s/)\n", name, laterDir)
 			continue
 		}
 
 		if agent := ParseClaimedBy(src); agent != "" && identity.IsAgentActive(tasksDir, agent) {
-			fmt.Printf("Skipping in-progress task %s (agent %s still active)\n", e.Name(), agent)
+			fmt.Printf("Skipping in-progress task %s (agent %s still active)\n", name, agent)
 			continue
 		}
 
-		dst := filepath.Join(tasksDir, DirBacklog, e.Name())
+		dst := filepath.Join(tasksDir, DirBacklog, name)
 		if err := AtomicMove(src, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", e.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", name, err)
 			continue
 		}
 
 		f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not open task file to append failure record for %s: %v\n", e.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not open task file to append failure record for %s: %v\n", name, err)
 		} else {
 			_, writeErr := fmt.Fprintf(f, "\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
 				time.Now().UTC().Format(time.RFC3339))
 			closeErr := f.Close()
 			if writeErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", e.Name(), writeErr)
+				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", name, writeErr)
 			} else if closeErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", e.Name(), closeErr)
+				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", name, closeErr)
 			}
 		}
 
-		fmt.Printf("Recovered orphaned task %s back to backlog\n", e.Name())
+		fmt.Printf("Recovered orphaned task %s back to backlog\n", name)
 	}
 }
 
@@ -214,7 +208,7 @@ func resolvePromotableTasks(tasksDir string) []promotableTask {
 	}
 
 	waitingDir := filepath.Join(tasksDir, DirWaiting)
-	entries, err := os.ReadDir(waitingDir)
+	names, err := ListTaskFiles(waitingDir)
 	if err != nil {
 		return nil
 	}
@@ -226,17 +220,14 @@ func resolvePromotableTasks(tasksDir string) []promotableTask {
 	}
 
 	var parsed []parsedWaiting
-	waitingDeps := make(map[string][]string, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(waitingDir, e.Name())
+	waitingDeps := make(map[string][]string, len(names))
+	for _, name := range names {
+		path := filepath.Join(waitingDir, name)
 		meta, _, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			continue
 		}
-		parsed = append(parsed, parsedWaiting{name: e.Name(), path: path, meta: meta})
+		parsed = append(parsed, parsedWaiting{name: name, path: path, meta: meta})
 		waitingDeps[meta.ID] = meta.DependsOn
 	}
 
@@ -271,18 +262,15 @@ func resolvePromotableTasks(tasksDir string) []promotableTask {
 func ReconcileReadyQueue(tasksDir string) int {
 	// Move unparseable waiting tasks to failed/ before resolving promotions.
 	waitingDir := filepath.Join(tasksDir, DirWaiting)
-	entries, err := os.ReadDir(waitingDir)
+	names, err := ListTaskFiles(waitingDir)
 	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			path := filepath.Join(waitingDir, e.Name())
+		for _, name := range names {
+			path := filepath.Join(waitingDir, name)
 			if _, _, parseErr := frontmatter.ParseTaskFile(path); parseErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", e.Name(), parseErr)
-				failedPath := filepath.Join(tasksDir, DirFailed, e.Name())
+				fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", name, parseErr)
+				failedPath := filepath.Join(tasksDir, DirFailed, name)
 				if moveErr := AtomicMove(path, failedPath); moveErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", e.Name(), moveErr)
+					fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", name, moveErr)
 				}
 			}
 		}
@@ -299,23 +287,20 @@ func ReconcileReadyQueue(tasksDir string) int {
 	}
 
 	knownIDs := allKnownTaskIDs(tasksDir)
-	waitingEntries, _ := os.ReadDir(waitingDir)
+	waitingNames, _ := ListTaskFiles(waitingDir)
 	waitingDeps := make(map[string][]string)
 	type waitingInfo struct {
 		name string
 		meta frontmatter.TaskMeta
 	}
 	var waitingInfos []waitingInfo
-	for _, e := range waitingEntries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		meta, _, parseErr := frontmatter.ParseTaskFile(filepath.Join(waitingDir, e.Name()))
+	for _, name := range waitingNames {
+		meta, _, parseErr := frontmatter.ParseTaskFile(filepath.Join(waitingDir, name))
 		if parseErr != nil {
 			continue
 		}
 		waitingDeps[meta.ID] = meta.DependsOn
-		waitingInfos = append(waitingInfos, waitingInfo{name: e.Name(), meta: meta})
+		waitingInfos = append(waitingInfos, waitingInfo{name: name, meta: meta})
 	}
 
 	loggedCircularDeps := make(map[string]struct{})
@@ -363,27 +348,24 @@ func CountPromotableWaitingTasks(tasksDir string) int {
 // writing it to disk. This is the read-only equivalent of WriteQueueManifest.
 // It returns an error if the backlog directory cannot be read.
 func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) (string, error) {
-	entries, err := os.ReadDir(filepath.Join(tasksDir, DirBacklog))
+	names, err := ListTaskFiles(filepath.Join(tasksDir, DirBacklog))
 	if err != nil {
 		return "", err
 	}
 
-	queueEntries := make([]queueEntry, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
+	queueEntries := make([]queueEntry, 0, len(names))
+	for _, name := range names {
 		if exclude != nil {
-			if _, excluded := exclude[e.Name()]; excluded {
+			if _, excluded := exclude[name]; excluded {
 				continue
 			}
 		}
-		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, DirBacklog, e.Name()))
+		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, DirBacklog, name))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", e.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", name, err)
 			continue
 		}
-		queueEntries = append(queueEntries, queueEntry{name: e.Name(), priority: meta.Priority})
+		queueEntries = append(queueEntries, queueEntry{name: name, priority: meta.Priority})
 	}
 
 	sort.Slice(queueEntries, func(i, j int) bool {
@@ -406,22 +388,19 @@ func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}) (string,
 
 func completedTaskIDs(tasksDir string) map[string]struct{} {
 	completedDir := filepath.Join(tasksDir, DirCompleted)
-	entries, err := os.ReadDir(completedDir)
+	names, err := ListTaskFiles(completedDir)
 	if err != nil {
 		return map[string]struct{}{}
 	}
 
-	ids := make(map[string]struct{}, len(entries)*2)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		stem := frontmatter.TaskFileStem(e.Name())
+	ids := make(map[string]struct{}, len(names)*2)
+	for _, name := range names {
+		stem := frontmatter.TaskFileStem(name)
 		ids[stem] = struct{}{}
-		path := filepath.Join(completedDir, e.Name())
+		path := filepath.Join(completedDir, name)
 		meta, _, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse completed task %s: %v\n", e.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not parse completed task %s: %v\n", name, err)
 			continue
 		}
 		ids[meta.ID] = struct{}{}
@@ -434,16 +413,13 @@ func completedTaskIDs(tasksDir string) map[string]struct{} {
 func collectTaskIDs(tasksDir string, dirs []string) map[string]struct{} {
 	ids := make(map[string]struct{})
 	for _, dir := range dirs {
-		entries, err := os.ReadDir(filepath.Join(tasksDir, dir))
+		names, err := ListTaskFiles(filepath.Join(tasksDir, dir))
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			ids[frontmatter.TaskFileStem(e.Name())] = struct{}{}
-			path := filepath.Join(tasksDir, dir, e.Name())
+		for _, name := range names {
+			ids[frontmatter.TaskFileStem(name)] = struct{}{}
+			path := filepath.Join(tasksDir, dir, name)
 			if meta, _, err := frontmatter.ParseTaskFile(path); err == nil {
 				ids[meta.ID] = struct{}{}
 			}
@@ -479,15 +455,12 @@ func collectActiveAffects(tasksDir string) []backlogTask {
 	var active []backlogTask
 	for _, dir := range []string{DirInProgress, DirReadyReview, DirReadyMerge} {
 		dirPath := filepath.Join(tasksDir, dir)
-		entries, err := os.ReadDir(dirPath)
+		names, err := ListTaskFiles(dirPath)
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			path := filepath.Join(dirPath, e.Name())
+		for _, name := range names {
+			path := filepath.Join(dirPath, name)
 			meta, _, err := frontmatter.ParseTaskFile(path)
 			if err != nil {
 				continue
@@ -496,7 +469,7 @@ func collectActiveAffects(tasksDir string) []backlogTask {
 				continue
 			}
 			active = append(active, backlogTask{
-				name:     e.Name(),
+				name:     name,
 				dir:      dir,
 				path:     path,
 				priority: 0,
@@ -520,15 +493,12 @@ func hasActiveOverlap(tasksDir string, affects []string) bool {
 	// backlog task that hasn't even been claimed yet.
 	for _, dir := range []string{DirInProgress, DirReadyReview, DirReadyMerge} {
 		dirPath := filepath.Join(tasksDir, dir)
-		entries, err := os.ReadDir(dirPath)
+		names, err := ListTaskFiles(dirPath)
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			meta, _, err := frontmatter.ParseTaskFile(filepath.Join(dirPath, e.Name()))
+		for _, name := range names {
+			meta, _, err := frontmatter.ParseTaskFile(filepath.Join(dirPath, name))
 			if err != nil {
 				continue
 			}
@@ -564,25 +534,21 @@ func DeferredOverlappingTasks(tasksDir string) map[string]struct{} {
 func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
 	deferred := make(map[string]DeferralInfo)
 	backlogDir := filepath.Join(tasksDir, DirBacklog)
-	entries, err := os.ReadDir(backlogDir)
+	names, err := ListTaskFiles(backlogDir)
 	if err != nil {
 		return deferred
 	}
 
-	tasks := make([]backlogTask, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-
-		path := filepath.Join(backlogDir, entry.Name())
+	tasks := make([]backlogTask, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(backlogDir, name)
 		meta, _, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for overlap detection: %v\n", entry.Name(), err)
+			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for overlap detection: %v\n", name, err)
 			continue
 		}
 		tasks = append(tasks, backlogTask{
-			name:     entry.Name(),
+			name:     name,
 			path:     path,
 			priority: meta.Priority,
 			affects:  meta.Affects,

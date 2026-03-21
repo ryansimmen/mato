@@ -74,15 +74,12 @@ func CollectActiveBranches(tasksDir string) map[string]struct{} {
 		filepath.Join(tasksDir, DirReadyMerge),
 	}
 	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
+		names, err := ListTaskFiles(dir)
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			if b := readBranchFromFile(filepath.Join(dir, e.Name())); b != "" {
+		for _, name := range names {
+			if b := readBranchFromFile(filepath.Join(dir, name)); b != "" {
 				active[b] = struct{}{}
 			}
 		}
@@ -273,23 +270,20 @@ func selectCandidates(tasksDir string, deferred map[string]struct{}) ([]string, 
 			candidates = append(candidates, line)
 		}
 	} else {
-		entries, err := os.ReadDir(backlogDir)
+		names, err := ListTaskFiles(backlogDir)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("read backlog dir: %w", err)
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
+		for _, name := range names {
 			if deferred != nil {
-				if _, excluded := deferred[e.Name()]; excluded {
+				if _, excluded := deferred[name]; excluded {
 					continue
 				}
 			}
-			candidates = append(candidates, e.Name())
+			candidates = append(candidates, name)
 		}
 	}
 
