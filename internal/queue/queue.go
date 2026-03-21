@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -19,7 +18,15 @@ import (
 	"mato/internal/taskfile"
 )
 
-var claimedByRe = regexp.MustCompile(`<!-- claimed-by:\s*(\S+)`)
+// ParseClaimedBy extracts the agent ID from a task file's claimed-by metadata.
+func ParseClaimedBy(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	agent, _ := taskfile.ParseClaimedBy(data)
+	return agent
+}
 
 // HasAvailableTasks reports whether there is at least one claimable .md task
 // file in backlog/ that is not in the deferred exclusion set.
@@ -53,19 +60,6 @@ func RegisterAgent(tasksDir, agentID string) (func(), error) {
 		return nil, fmt.Errorf("write agent lock %s: %w", lockFile, err)
 	}
 	return func() { os.Remove(lockFile) }, nil
-}
-
-// ParseClaimedBy extracts the agent ID from a task file's claimed-by metadata.
-func ParseClaimedBy(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	m := claimedByRe.FindStringSubmatch(string(data))
-	if len(m) < 2 {
-		return ""
-	}
-	return m[1]
 }
 
 // CleanStaleLocks removes lock files for agents that are no longer running.

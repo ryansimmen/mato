@@ -324,18 +324,8 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 // appendReviewFailure writes a review-failure comment to the task file.
 // The task stays in ready-for-review/ for a future review attempt.
 func appendReviewFailure(taskPath, agentID, reason string) {
-	f, err := os.OpenFile(taskPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not open task file to append review-failure: %v\n", err)
-		return
-	}
-	_, writeErr := fmt.Fprintf(f, "\n<!-- review-failure: %s at %s step=REVIEW error=%s -->\n",
-		agentID, time.Now().UTC().Format(time.RFC3339), reason)
-	closeErr := f.Close()
-	if writeErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write review-failure record: %v\n", writeErr)
-	} else if closeErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write review-failure record: %v\n", closeErr)
+	if err := taskfile.AppendReviewFailure(taskPath, agentID, reason); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 }
 
@@ -346,11 +336,5 @@ func extractReviewRejections(taskPath string) string {
 	if err != nil {
 		return ""
 	}
-	var rejections []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, "<!-- review-rejection:") {
-			rejections = append(rejections, strings.TrimSpace(line))
-		}
-	}
-	return strings.Join(rejections, "\n")
+	return taskfile.ExtractReviewRejections(data)
 }
