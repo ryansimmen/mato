@@ -626,48 +626,344 @@ real-time event notification on top.
 
 ---
 
-### Alternative 5: Hybrid Filesystem + Structured Index
+### Alternative 5: Hybrid Filesystem + In-Memory Index (Deep Dive)
 
-Keep the filesystem as the source of truth but add a structured index
-for fast queries, filtering, and status aggregation.
+Keep the filesystem as the source of truth but add an in-memory index
+to eliminate redundant I/O. This section provides a concrete analysis of
+today's performance problems, quantified overhead, and a detailed design
+for multi-agent safety.
 
-**How it would work:**
-- Task `.md` files remain in state directories (unchanged)
-- An in-memory index (rebuilt on startup, updated on file operations)
-  provides O(1) lookups by ID, state, priority, and affects
-- Index supports:
-  - Fast dependency graph traversal (vs. current O(n²) directory scans)
-  - Instant queue depth counts (vs. `readdir` + parse per poll)
-  - Fuzzy/prefix `affects` matching without glob expansion
-  - Task search by tags, complexity, or custom metadata
+#### The Performance Problem Today
 
-**Data structure:**
-```go
-type TaskIndex struct {
-    mu       sync.RWMutex
-    byID     map[string]*IndexEntry      // O(1) lookup
-    byState  map[string][]*IndexEntry    // grouped by directory
-    byFile   map[string][]*IndexEntry    // affects → tasks
-    depGraph map[string][]string         // dependency edges
-}
+The main poll loop (`runner.go:385-487`) runs every 10 seconds. Each cycle
+performs a cascade of directory scans and file parses that are **redundant
+across functions** and **re-read data that hasn't changed.** Here is the
+exact I/O breakdown of a single poll cycle traced through the code:
+
+**Step 1 — Housekeeping** (`runner.go:388-392`):
+```
+RecoverOrphanedTasks()     → os.ReadDir(in-progress/)        [queue.go:131]
+CleanStaleLocks()          → os.ReadDir(.locks/)              [queue.go:73]
+CleanStaleReviewLocks()    → os.ReadDir(.locks/) + ReadFile×n [queue.go:104]
+CleanStalePresence()       → os.ReadDir(.messages/)
+CleanOldMessages()         → os.ReadDir(.messages/)
 ```
 
-**Advantages:**
-- No new dependencies — pure Go data structures
-- Filesystem remains source of truth (transparent, git-friendly)
-- Eliminates repeated directory scans in the poll loop
-- Enables features like task search, complex filtering, and graph queries
-- Index corruption is harmless — rebuild from filesystem at any time
+**Step 2 — Dependency resolution** (`runner.go:394`, `queue.go:192-280`):
+```
+ReconcileReadyQueue():
+  completedTaskIDs()       → os.ReadDir(completed/)           [queue.go:395]
+                           → ParseTaskFile() × completed_count [queue.go:408]
+  nonCompletedTaskIDs()    → os.ReadDir() × 6 directories     [queue.go:422]
+                           → ParseTaskFile() × all_non_completed [queue.go:432]
+  allKnownTaskIDs()        → os.ReadDir() × 7 directories     [queue.go:444]
+                           → ParseTaskFile() × total_tasks     [queue.go:454]
+                           (ONLY used for a warning message at line 259!)
+  os.ReadDir(waiting/)                                         [queue.go:208]
+  FOR EACH waiting task:
+    ParseTaskFile()                                            [queue.go:227]
+    hasActiveOverlap():    → os.ReadDir() × 3 directories     [queue.go:520]
+                           → ParseTaskFile() × active_count    [queue.go:528]
+```
 
-**Implementation sketch:**
-- Add `internal/queue/index.go` with `TaskIndex` type
-- Build index in `ReconcileReadyQueue` (already scans all directories)
-- Use index in `SelectAndClaimTask`, `DeferredOverlappingTasks`, etc.
-- Add `mato status --search <query>` for indexed task search
+The critical problem is `hasActiveOverlap()` at `queue.go:507-538`. It is
+called once per waiting task, and each call independently scans all three
+active directories (`in-progress/`, `ready-for-review/`, `ready-to-merge/`)
+and parses every file in them. With `w` waiting tasks and `a` active tasks,
+this produces **w × 3 directory scans** and **w × a file parses**.
+
+**Step 3 — Conflict detection** (`runner.go:395`, `queue.go:561-624`):
+```
+DeferredOverlappingTasksDetailed():
+  os.ReadDir(backlog/)                                         [queue.go:564]
+  ParseTaskFile() × backlog_count                              [queue.go:576]
+  collectActiveAffects():  → os.ReadDir() × 3 directories     [queue.go:479]
+                           → ParseTaskFile() × active_count    [queue.go:488]
+  O(b²) comparison loop                                        [queue.go:599-621]
+```
+
+Note: `collectActiveAffects()` re-scans the same 3 active directories and
+re-parses the same files that `hasActiveOverlap()` just parsed N times.
+
+**Step 4 — Queue manifest** (`runner.go:401`, `queue.go:655-695`):
+```
+WriteQueueManifest():
+  os.ReadDir(backlog/)                                         [queue.go:656]
+  ParseTaskFile() × backlog_count                              [queue.go:671]
+```
+
+This re-reads `backlog/` and re-parses every backlog file — all of which
+were just parsed in Step 3 by `DeferredOverlappingTasksDetailed()`.
+
+**Step 5 — Task claiming** (`runner.go:406`, `claim.go:165-257`):
+```
+SelectAndClaimTask():
+  selectCandidates()       → os.ReadFile(.queue) or os.ReadDir(backlog/)
+  CollectActiveBranches()  → os.ReadDir() × 3 directories     [queue.go:75]
+  ParseTaskFile() × 1      (just the claimed task)             [claim.go:187]
+```
+
+**Step 6 — Review scanning** (`runner.go:438+463`):
+```
+selectAndLockReview()      → reviewCandidates()                [review.go:144]
+                           → os.ReadDir(ready-for-review/)     [review.go:43]
+                           → ParseTaskFile() × review_count    [review.go:61]
+selectTaskForReview()      → reviewCandidates()                [review.go:136]
+                           → os.ReadDir(ready-for-review/)     [DUPLICATE]
+                           → ParseTaskFile() × review_count    [DUPLICATE]
+```
+
+`reviewCandidates()` is called twice per poll cycle — once at line 438 to
+claim a review, and again at line 463 just to check if review work exists.
+
+#### Quantified Overhead
+
+For a queue with **50 waiting, 30 backlog, 10 active, 20 completed, 5
+review** tasks (115 total — a modest workload):
+
+| Operation | Directory Scans | File Parses | Source |
+|-----------|:-:|:-:|--------|
+| completedTaskIDs() | 1 | 20 | queue.go:393 |
+| nonCompletedTaskIDs() | 6 | 95 | queue.go:419 |
+| allKnownTaskIDs() | 7 | 115 | queue.go:441 (only for warning!) |
+| ReconcileReadyQueue main loop | 1 | 50 | queue.go:208,227 |
+| hasActiveOverlap() × 50 waiting | **150** | **500** | queue.go:507 (**bottleneck**) |
+| DeferredOverlappingTasksDetailed | 4 | 40 | queue.go:561,596 |
+| WriteQueueManifest | 1 | 30 | queue.go:655 (**duplicate**) |
+| SelectAndClaimTask | 4 | 1 | claim.go:165 |
+| reviewCandidates() × 2 | 2 | 10 | review.go:41 (**duplicate**) |
+| **Total per poll cycle** | **~176** | **~861** | **Every 10 seconds** |
+
+That's **176 directory scans** and **861 YAML file parses every 10 seconds**
+for just 115 tasks. Each `ParseTaskFile()` call does: `os.ReadFile()` → strip
+HTML comments → find YAML delimiters → `yaml.Unmarshal()` → validate fields.
+
+At 200 tasks, `hasActiveOverlap()` alone produces ~1,200 file parses per
+cycle. At 500 tasks, it's ~7,500. The growth is **O(w × a)** where `w` is
+waiting tasks and `a` is active tasks.
+
+**The fundamental issue:** Every function independently scans directories
+and parses files, with zero data sharing between them within a poll cycle.
+The same file in `in-progress/` may be parsed 50+ times (once per waiting
+task in `hasActiveOverlap()`, plus once in `collectActiveAffects()`, plus
+once in `nonCompletedTaskIDs()`, plus once in `allKnownTaskIDs()`).
+
+#### What an In-Memory Index Would Fix
+
+An in-memory index would cache the results of directory scans and file
+parses, making them available across all functions within a poll cycle. The
+index is **not a persistent store** — it's a per-cycle cache rebuilt from
+the filesystem at the start of each poll, then consulted by all subsequent
+operations.
+
+**Before (current):**
+```
+Poll cycle starts
+  ReconcileReadyQueue → scan 14+ dirs, parse ~280 files
+  DeferredOverlappingTasks → scan 4 dirs, parse ~40 files (RE-READ)
+  WriteQueueManifest → scan 1 dir, parse ~30 files (RE-READ)
+  SelectAndClaimTask → scan 4 dirs, parse ~1 file
+  reviewCandidates → scan 1 dir, parse ~5 files
+  reviewCandidates → scan 1 dir, parse ~5 files (DUPLICATE)
+Poll cycle ends → all parsed data discarded
+```
+
+**After (with index):**
+```
+Poll cycle starts
+  index.Rebuild() → scan 7 dirs ONCE, parse ~115 files ONCE
+  ReconcileReadyQueue → index.TasksByState("waiting"), index.TasksByState("completed"), etc.
+  DeferredOverlappingTasks → index.TasksByState("backlog"), index.ActiveAffects()
+  WriteQueueManifest → index.BacklogByPriority()
+  SelectAndClaimTask → index.NextCandidate()
+  reviewCandidates → index.TasksByState("ready-for-review")
+Poll cycle ends → index retained, invalidated on file move
+```
+
+**Quantified improvement for the 115-task example:**
+
+| Metric | Before | After | Reduction |
+|--------|:------:|:-----:|:---------:|
+| Directory scans | 176 | 7 | **96%** |
+| File parses | 861 | 115 | **87%** |
+| `hasActiveOverlap` cost | O(w × a) | O(w) map lookup | **O(a) eliminated** |
+| `allKnownTaskIDs` cost | 7 dirs + 115 parses | Free (already indexed) | **100%** |
+| Review duplicate scan | 2 × full scan | 1 × index lookup | **50%** |
+| Backlog re-parse | 2 × full scan | 1 × index lookup | **50%** |
+
+#### Multi-Agent Safety: How the Index Stays Consistent
+
+The key question: **when multiple agents run simultaneously, each moving
+tasks between directories, how does the index stay correct?**
+
+**Current safety model (unchanged):** Mato uses atomic `os.Link()` +
+`os.Remove()` for all file moves (`safeRename()` at `queue.go:697`). Two
+agents scanning `backlog/` simultaneously is safe — the first to `Link()`
+a file to `in-progress/` wins; the second gets `EEXIST` and skips it.
+No process-level locks are needed because the filesystem provides atomicity.
+
+**Single-process deployment (today):** Mato currently runs as a single
+process with a sequential poll loop. There is only one goroutine executing
+the poll cycle, so an in-memory index within that process has no concurrency
+issues — it's rebuilt at the top of each cycle and consumed within the same
+cycle.
+
+**Multi-process deployment (multiple `mato` instances):** Each process has
+its own in-memory index. This is safe because:
+
+1. **The index is read-only within a cycle.** After `index.Rebuild()`, the
+   index is only consulted, never mutated, until the next rebuild. All
+   mutations go through the filesystem (atomic `Link+Remove`).
+
+2. **The filesystem remains the source of truth.** If Agent A's index says
+   `task-x.md` is in `backlog/`, but Agent B already moved it to
+   `in-progress/`, Agent A's `safeRename()` call will fail with `EEXIST`
+   (destination exists) or "source not found" — the same failure modes that
+   exist today. Agent A simply skips to the next candidate.
+
+3. **Stale index entries are harmless.** A stale entry means a function
+   tries an operation on a file that has moved. The atomic filesystem
+   operations catch this and fail safely. The index is rebuilt on the next
+   poll cycle (10 seconds later), which corrects the staleness.
+
+4. **The rebuild is cheap.** The whole point of the index is that rebuilding
+   it (7 directory scans + N file parses) is dramatically cheaper than the
+   current approach (176+ scans + 861+ parses). Even if it's rebuilt every
+   cycle, it's a net win.
+
+**Design for the future `--max-agents` pool (Feature 4):**
+
+When multiple agents run as goroutines within a single process, the index
+needs concurrency protection. The design:
+
+```go
+type PollIndex struct {
+    // Immutable after Build(). No mutex needed for reads.
+    tasks     map[string]*TaskSnapshot  // filename → snapshot
+    byState   map[string][]string       // state → filenames
+    byID      map[string]string         // task ID → filename
+    affects   map[string][]string       // filename → affects list
+    completed map[string]struct{}       // completed task IDs
+    version   int64                     // monotonic rebuild counter
+}
+
+// Build creates a new immutable snapshot from the filesystem.
+// Called once at the start of each poll cycle.
+func Build(tasksDir string) *PollIndex { ... }
+```
+
+The key insight: **the index is immutable after construction.** Each poll
+cycle calls `Build()` to create a new `*PollIndex`, then passes it to all
+functions. No mutex is needed because the index is never mutated — it's a
+snapshot. Worker goroutines share the same `*PollIndex` for the duration of
+the cycle. The next cycle creates a fresh one.
+
+This follows the **copy-on-write / immutable snapshot** pattern used by
+databases and concurrent data structures. It's the same approach Go's
+`sync.Map` documentation recommends for read-heavy workloads.
+
+**What the index does NOT replace:**
+- Atomic file moves (`safeRename`) — still needed for correctness
+- Lock files (`.locks/`) — still needed for review mutual exclusion
+- The `.queue` manifest — could be derived from the index instead of
+  re-scanning, but the file itself serves as a cross-process communication
+  channel and should remain
+
+#### Implementation Sketch
+
+```go
+// internal/queue/index.go
+
+// TaskSnapshot holds parsed metadata for one task file.
+type TaskSnapshot struct {
+    Filename string
+    State    string              // "waiting", "backlog", "in-progress", etc.
+    Path     string              // full filesystem path
+    Meta     frontmatter.TaskMeta
+    Body     string
+    ModTime  time.Time
+}
+
+// PollIndex is an immutable snapshot of all task state, built once per
+// poll cycle from the filesystem. All fields are read-only after Build().
+type PollIndex struct {
+    tasks     map[string]*TaskSnapshot  // filename → snapshot
+    byState   map[string][]*TaskSnapshot
+    byID      map[string]*TaskSnapshot
+    affects   map[string][]*TaskSnapshot // affected file → tasks claiming it
+    completed map[string]struct{}        // set of completed task IDs
+    buildTime time.Time
+}
+
+func BuildIndex(tasksDir string) *PollIndex {
+    idx := &PollIndex{
+        tasks:     make(map[string]*TaskSnapshot),
+        byState:   make(map[string][]*TaskSnapshot),
+        byID:      make(map[string]*TaskSnapshot),
+        affects:   make(map[string][]*TaskSnapshot),
+        completed: make(map[string]struct{}),
+        buildTime: time.Now(),
+    }
+    for _, state := range allStates {
+        dirPath := filepath.Join(tasksDir, state)
+        entries, err := os.ReadDir(dirPath)
+        if err != nil { continue }
+        for _, e := range entries {
+            if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") { continue }
+            path := filepath.Join(dirPath, e.Name())
+            meta, body, err := frontmatter.ParseTaskFile(path)
+            if err != nil { continue }
+            snap := &TaskSnapshot{
+                Filename: e.Name(), State: state, Path: path,
+                Meta: meta, Body: body,
+            }
+            idx.tasks[e.Name()] = snap
+            idx.byState[state] = append(idx.byState[state], snap)
+            idx.byID[meta.ID] = snap
+            for _, f := range meta.Affects {
+                idx.affects[f] = append(idx.affects[f], snap)
+            }
+            if state == "completed" {
+                idx.completed[meta.ID] = struct{}{}
+                idx.completed[frontmatter.TaskFileStem(e.Name())] = struct{}{}
+            }
+        }
+    }
+    return idx
+}
+
+// Lookup methods — all O(1):
+func (idx *PollIndex) TasksByState(state string) []*TaskSnapshot
+func (idx *PollIndex) CompletedIDs() map[string]struct{}
+func (idx *PollIndex) HasActiveOverlap(affects []string) bool  // O(len(affects))
+func (idx *PollIndex) BacklogByPriority() []*TaskSnapshot       // pre-sorted
+```
+
+**Functions that change with the index:**
+
+| Function | Current I/O | With Index |
+|----------|------------|------------|
+| `completedTaskIDs()` | ReadDir + parse all completed | `idx.CompletedIDs()` — O(1) |
+| `nonCompletedTaskIDs()` | ReadDir × 6 + parse all | `idx.NonCompletedIDs()` — O(1) |
+| `allKnownTaskIDs()` | ReadDir × 7 + parse all | `idx.AllIDs()` — O(1) |
+| `hasActiveOverlap()` | ReadDir × 3 + parse active × per-call | `idx.HasActiveOverlap()` — O(len(affects)) |
+| `collectActiveAffects()` | ReadDir × 3 + parse active | `idx.ActiveAffects()` — O(1) |
+| `WriteQueueManifest()` | ReadDir + parse backlog | `idx.BacklogByPriority()` — O(1) |
+| `reviewCandidates()` | ReadDir + parse review | `idx.TasksByState("ready-for-review")` — O(1) |
+
+**Effort estimate:** ~300-400 LOC for `index.go` + ~200 LOC to refactor
+callers to accept a `*PollIndex` parameter + tests.
+
+**Risk:** Very low. The filesystem operations remain unchanged. The index
+is purely additive — if it's wrong, the filesystem operations fail safely.
+If it were removed entirely, the system works exactly as it does today.
 
 **Recommendation:** **Strongly recommended as a near-term improvement.**
-This is the lowest-risk, highest-value change — it improves performance
-and enables new features without changing the storage model.
+The current I/O pattern is sustainable for small queues (under 50 tasks)
+but becomes measurably wasteful at 100+ tasks. The fix is a straightforward
+refactor that touches no external interfaces and can be implemented
+incrementally — start by passing a shared index into `ReconcileReadyQueue`
+and `DeferredOverlappingTasks`, then extend to other callers.
 
 ---
 
