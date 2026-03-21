@@ -250,13 +250,13 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		return err
 	}
 
-	cfg := buildDockerConfig(branch, tools, agentID, gitName, gitEmail, copilotArgs, repoRoot, tasksDir, agentTimeout)
+	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, copilotArgs, repoRoot, tasksDir, agentTimeout)
 
 	ctx, cancel := setupSignalContext()
 	defer cancel()
 	defer signal.Stop(signalChan(ctx))
 
-	return pollLoop(ctx, cfg, repoRoot, tasksDir, branch, agentID)
+	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID)
 }
 
 // resolveGitIdentity reads git user.name and user.email from the local
@@ -280,9 +280,9 @@ func resolveGitIdentity(repoRoot string) (name, email string) {
 	return name, email
 }
 
-// buildDockerConfig assembles the dockerConfig from resolved host tools,
-// agent identity, and runtime settings.
-func buildDockerConfig(branch string, tools hostTools, agentID, gitName, gitEmail string, copilotArgs []string, repoRoot, tasksDir string, timeout time.Duration) dockerConfig {
+// buildEnvAndRunContext assembles the envConfig and runContext from resolved
+// host tools, agent identity, and runtime settings.
+func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail string, copilotArgs []string, repoRoot, tasksDir string, timeout time.Duration) (envConfig, runContext) {
 	image := os.Getenv("MATO_DOCKER_IMAGE")
 	if image == "" {
 		image = "ubuntu:24.04"
@@ -293,10 +293,9 @@ func buildDockerConfig(branch string, tools hostTools, agentID, gitName, gitEmai
 	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
 	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
 
-	return dockerConfig{
+	env := envConfig{
 		image:              image,
 		workdir:            workdir,
-		prompt:             prompt,
 		copilotPath:        tools.copilotPath,
 		gitPath:            tools.gitPath,
 		gitUploadPackPath:  tools.gitUploadPackPath,
@@ -312,14 +311,20 @@ func buildDockerConfig(branch string, tools hostTools, agentID, gitName, gitEmai
 		hasGitTemplates:    tools.hasGitTemplates,
 		systemCertsDir:     tools.systemCertsDir,
 		hasSystemCerts:     tools.hasSystemCerts,
-		agentID:            agentID,
 		copilotArgs:        copilotArgs,
 		repoRoot:           repoRoot,
 		tasksDir:           tasksDir,
 		targetBranch:       branch,
-		timeout:            timeout,
 		isTTY:              isTerminal(os.Stdin),
 	}
+
+	run := runContext{
+		prompt:  prompt,
+		agentID: agentID,
+		timeout: timeout,
+	}
+
+	return env, run
 }
 
 // setupSignalContext creates a context.Context that is cancelled when
@@ -358,7 +363,7 @@ func signalChan(ctx context.Context) chan<- os.Signal {
 // pollLoop is the main orchestration loop that claims tasks, runs agents,
 // handles reviews, and processes merges. It runs until the context is
 // cancelled (via signal).
-func pollLoop(ctx context.Context, cfg dockerConfig, repoRoot, tasksDir, branch, agentID string) error {
+func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, tasksDir, branch, agentID string) error {
 	wasIdle := false
 	failedDirExcluded := make(map[string]struct{})
 	consecutiveErrors := 0
@@ -408,7 +413,7 @@ func pollLoop(ctx context.Context, cfg dockerConfig, repoRoot, tasksDir, branch,
 				fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)
 			}
 
-			if err := runOnce(ctx, cfg, claimed); err != nil {
+			if err := runOnce(ctx, env, run, claimed); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
 			}
 
@@ -417,12 +422,12 @@ func pollLoop(ctx context.Context, cfg dockerConfig, repoRoot, tasksDir, branch,
 
 		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir); reviewTask != nil {
 			// Verify the task branch exists before launching the review agent.
-			if _, err := git.Output(cfg.repoRoot, "rev-parse", "--verify", "refs/heads/"+reviewTask.Branch); err != nil {
+			if _, err := git.Output(env.repoRoot, "rev-parse", "--verify", "refs/heads/"+reviewTask.Branch); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: task branch %s missing from host repo, recording review failure for %s\n", reviewTask.Branch, reviewTask.Filename)
 				appendReviewFailure(reviewTask.TaskPath, agentID, "task branch "+reviewTask.Branch+" not found in host repo")
 			} else {
 				fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
-				if err := runReview(ctx, cfg, reviewTask, branch); err != nil {
+				if err := runReview(ctx, env, run, reviewTask, branch); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
 				}
 				postReviewAction(tasksDir, agentID, reviewTask)

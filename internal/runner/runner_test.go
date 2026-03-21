@@ -147,11 +147,13 @@ func TestDefaultModel(t *testing.T) {
 }
 
 func TestBuildDockerArgs_ModelPriority(t *testing.T) {
-	base := dockerConfig{
+	baseEnv := envConfig{
 		homeDir: "/home/test",
 		image:   "ubuntu:24.04",
 		workdir: "/workspace",
-		prompt:  "do stuff",
+	}
+	baseRun := runContext{
+		prompt: "do stuff",
 	}
 
 	findModelValue := func(args []string) string {
@@ -165,8 +167,7 @@ func TestBuildDockerArgs_ModelPriority(t *testing.T) {
 
 	t.Run("hardcoded default when no env and no args", func(t *testing.T) {
 		t.Setenv("MATO_DEFAULT_MODEL", "")
-		cfg := base
-		args := buildDockerArgs(cfg, nil, nil)
+		args := buildDockerArgs(baseEnv, baseRun, nil, nil)
 		if m := findModelValue(args); m != "claude-opus-4.6" {
 			t.Fatalf("expected hardcoded default, got %q", m)
 		}
@@ -174,8 +175,7 @@ func TestBuildDockerArgs_ModelPriority(t *testing.T) {
 
 	t.Run("env var overrides hardcoded default", func(t *testing.T) {
 		t.Setenv("MATO_DEFAULT_MODEL", "custom-model")
-		cfg := base
-		args := buildDockerArgs(cfg, nil, nil)
+		args := buildDockerArgs(baseEnv, baseRun, nil, nil)
 		if m := findModelValue(args); m != "custom-model" {
 			t.Fatalf("expected env var model, got %q", m)
 		}
@@ -183,9 +183,9 @@ func TestBuildDockerArgs_ModelPriority(t *testing.T) {
 
 	t.Run("explicit --model arg overrides env var", func(t *testing.T) {
 		t.Setenv("MATO_DEFAULT_MODEL", "custom-model")
-		cfg := base
-		cfg.copilotArgs = []string{"--model", "explicit-model"}
-		args := buildDockerArgs(cfg, nil, nil)
+		env := baseEnv
+		env.copilotArgs = []string{"--model", "explicit-model"}
+		args := buildDockerArgs(env, baseRun, nil, nil)
 		// When --model is in copilotArgs, buildDockerArgs should NOT inject a default.
 		// The explicit model from copilotArgs appears in the final args.
 		if m := findModelValue(args); m != "explicit-model" {
@@ -1162,13 +1162,13 @@ func TestRunOnce_TimeoutKillsCommand(t *testing.T) {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	cfg := dockerConfig{
+	run := runContext{
 		timeout: 100 * time.Millisecond,
 	}
 
 	// runOnceWithTimeout is not directly callable with a subprocess
 	// instead we test the context timeout behavior directly
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), run.timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sleep", "10")
@@ -1363,13 +1363,12 @@ func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 		Title:    "Example Task",
 		TaskPath: inProgressPath,
 	}
-	cfg := dockerConfig{
+	env := envConfig{
 		tasksDir:     tasksDir,
-		agentID:      "agent1",
 		targetBranch: "main",
 	}
 
-	err := postAgentPush(cfg, claimed, cloneDir)
+	err := postAgentPush(env, "agent1", claimed, cloneDir)
 
 	// Should return an error indicating the destination exists.
 	if err == nil {
@@ -1437,9 +1436,8 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 		Title:    "Marker Fail",
 		TaskPath: inProgressPath,
 	}
-	cfg := dockerConfig{
+	env := envConfig{
 		tasksDir:     tasksDir,
-		agentID:      "agent1",
 		targetBranch: "main",
 	}
 
@@ -1451,7 +1449,7 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 		return fmt.Errorf("simulated disk full")
 	}
 
-	err := postAgentPush(cfg, claimed, cloneDir)
+	err := postAgentPush(env, "agent1", claimed, cloneDir)
 
 	// Should return a fatal error mentioning the write failure.
 	if err == nil {
@@ -1525,9 +1523,8 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 		Title:    "Stranded",
 		TaskPath: inProgressPath,
 	}
-	cfg := dockerConfig{
+	env := envConfig{
 		tasksDir:     tasksDir,
-		agentID:      "agent1",
 		targetBranch: "main",
 	}
 
@@ -1542,7 +1539,7 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 		return fmt.Errorf("simulated write error")
 	}
 
-	err := postAgentPush(cfg, claimed, cloneDir)
+	err := postAgentPush(env, "agent1", claimed, cloneDir)
 
 	if err == nil {
 		t.Fatal("expected error when both marker write and rollback fail")
@@ -1919,25 +1916,26 @@ func TestAppendReviewFailure(t *testing.T) {
 }
 
 func TestBuildDockerArgs_TTYFlag(t *testing.T) {
-	base := dockerConfig{
+	baseEnv := envConfig{
 		homeDir: "/home/test",
 		image:   "ubuntu:24.04",
 		workdir: "/workspace",
 	}
+	baseRun := runContext{}
 
 	t.Run("with TTY passes -it", func(t *testing.T) {
-		cfg := base
-		cfg.isTTY = true
-		args := buildDockerArgs(cfg, nil, nil)
+		env := baseEnv
+		env.isTTY = true
+		args := buildDockerArgs(env, baseRun, nil, nil)
 		if args[3] != "-it" {
 			t.Fatalf("expected -it flag when isTTY=true, got %q", args[3])
 		}
 	})
 
 	t.Run("without TTY passes -i", func(t *testing.T) {
-		cfg := base
-		cfg.isTTY = false
-		args := buildDockerArgs(cfg, nil, nil)
+		env := baseEnv
+		env.isTTY = false
+		args := buildDockerArgs(env, baseRun, nil, nil)
 		if args[3] != "-i" {
 			t.Fatalf("expected -i flag when isTTY=false, got %q", args[3])
 		}
@@ -1945,12 +1943,13 @@ func TestBuildDockerArgs_TTYFlag(t *testing.T) {
 }
 
 func TestBuildDockerArgs_InitFlag(t *testing.T) {
-	cfg := dockerConfig{
+	env := envConfig{
 		homeDir: "/home/test",
 		image:   "ubuntu:24.04",
 		workdir: "/workspace",
 	}
-	args := buildDockerArgs(cfg, nil, nil)
+	run := runContext{}
+	args := buildDockerArgs(env, run, nil, nil)
 	if args[2] != "--init" {
 		t.Fatalf("expected --init at args[2], got %q", args[2])
 	}
