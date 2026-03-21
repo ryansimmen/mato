@@ -2001,7 +2001,11 @@ func TestMoveReviewedTask_Success(t *testing.T) {
 		TaskPath: srcPath,
 	}
 
-	moveReviewedTask(tasksDir, "agent1", task, queue.DirReadyMerge, "approved", "review")
+	moveReviewedTask(tasksDir, "agent1", task, reviewDisposition{
+		dir:         queue.DirReadyMerge,
+		messageBody: "approved",
+		logPrefix:   "review",
+	})
 
 	// Source should be removed
 	if _, err := os.Stat(srcPath); err == nil {
@@ -2038,7 +2042,11 @@ func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 		TaskPath: srcPath,
 	}
 
-	moveReviewedTask(tasksDir, "agent1", task, queue.DirBacklog, "rejected", "review")
+	moveReviewedTask(tasksDir, "agent1", task, reviewDisposition{
+		dir:         queue.DirBacklog,
+		messageBody: "rejected",
+		logPrefix:   "review",
+	})
 
 	// Source should still exist (move was skipped)
 	if _, err := os.Stat(srcPath); err != nil {

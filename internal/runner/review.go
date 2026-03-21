@@ -193,6 +193,44 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	return runErr
 }
 
+// reviewDisposition captures the three values that differ between an approval
+// and a rejection: destination directory, message body, and log prefix.
+type reviewDisposition struct {
+	dir         string
+	messageBody string
+	logPrefix   string
+}
+
+var approveDisposition = reviewDisposition{
+	dir:         queue.DirReadyMerge,
+	messageBody: "Review approved, ready for merge",
+	logPrefix:   "Review approved",
+}
+
+var rejectDisposition = reviewDisposition{
+	dir:         queue.DirBacklog,
+	messageBody: "Review rejected",
+	logPrefix:   "Review rejected",
+}
+
+// resolveReviewVerdict reads the task file and checks for approval or rejection
+// markers written directly by the review agent (backward compatibility path).
+// Returns "approve", "reject", or "" if neither marker is found.
+func resolveReviewVerdict(task *queue.ClaimedTask) string {
+	taskData, err := os.ReadFile(task.TaskPath)
+	if err != nil {
+		return ""
+	}
+	content := string(taskData)
+	if reviewedRe.MatchString(content) {
+		return "approve"
+	}
+	if reviewRejectionRe.MatchString(content) {
+		return "reject"
+	}
+	return ""
+}
+
 // postReviewAction reads the verdict file written by the review agent and
 // handles the result. If approved, the host writes the approval marker and
 // moves the task to ready-to-merge/. If rejected, writes rejection marker
@@ -210,22 +248,15 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	if err != nil {
 		// No verdict file: review agent crashed or failed to write verdict.
 		// Fall back to checking the task file for markers (backward compat).
-		taskData, readErr := os.ReadFile(task.TaskPath)
-		if readErr == nil {
-			content := string(taskData)
-			if reviewedRe.MatchString(content) {
-				moveReviewedTask(tasksDir, agentID, task, queue.DirReadyMerge,
-					"Review approved, ready for merge", "Review approved")
-				return
-			}
-			if reviewRejectionRe.MatchString(content) {
-				moveReviewedTask(tasksDir, agentID, task, queue.DirBacklog,
-					"Review rejected", "Review rejected")
-				return
-			}
+		switch resolveReviewVerdict(task) {
+		case "approve":
+			moveReviewedTask(tasksDir, agentID, task, approveDisposition)
+		case "reject":
+			moveReviewedTask(tasksDir, agentID, task, rejectDisposition)
+		default:
+			appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
+			fmt.Printf("Review incomplete: recorded review-failure for %s\n", task.Filename)
 		}
-		appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
-		fmt.Printf("Review incomplete: recorded review-failure for %s\n", task.Filename)
 		return
 	}
 
@@ -244,8 +275,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now)); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write approval marker: %v\n", err)
 		}
-		moveReviewedTask(tasksDir, agentID, task, queue.DirReadyMerge,
-			"Review approved, ready for merge", "Review approved")
+		moveReviewedTask(tasksDir, agentID, task, approveDisposition)
 
 	case "reject":
 		reason := strings.TrimSpace(verdict.Reason)
@@ -255,8 +285,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason)); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write rejection marker: %v\n", err)
 		}
-		moveReviewedTask(tasksDir, agentID, task, queue.DirBacklog,
-			"Review rejected", "Review rejected")
+		moveReviewedTask(tasksDir, agentID, task, rejectDisposition)
 
 	case "error":
 		reason := strings.TrimSpace(verdict.Reason)
@@ -272,14 +301,14 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	}
 }
 
-// moveReviewedTask moves a reviewed task to the given destination directory
-// and sends a completion message. It uses queue.AtomicMove (os.Link +
-// os.Remove) to prevent silently overwriting an existing file at the
-// destination (TOCTOU race defense).
-func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, dstDir, msgBody, logPrefix string) {
-	dst := filepath.Join(tasksDir, dstDir, task.Filename)
+// moveReviewedTask moves a reviewed task to the destination directory specified
+// by the disposition and sends a completion message. It uses queue.AtomicMove
+// (os.Link + os.Remove) to prevent silently overwriting an existing file at
+// the destination (TOCTOU race defense).
+func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp reviewDisposition) {
+	dst := filepath.Join(tasksDir, disp.dir, task.Filename)
 	if err := queue.AtomicMove(task.TaskPath, dst); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, dstDir, err)
+		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, disp.dir, err)
 		return
 	}
 	messaging.WriteMessage(tasksDir, messaging.Message{
@@ -287,9 +316,9 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, dstDir,
 		Type:   "completion",
 		Task:   task.Filename,
 		Branch: task.Branch,
-		Body:   msgBody,
+		Body:   disp.messageBody,
 	})
-	fmt.Printf("%s: moved %s to %s/\n", logPrefix, task.Filename, dstDir)
+	fmt.Printf("%s: moved %s to %s/\n", disp.logPrefix, task.Filename, disp.dir)
 }
 
 // appendReviewFailure writes a review-failure comment to the task file.
