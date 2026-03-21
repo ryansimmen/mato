@@ -162,7 +162,10 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 	for name := range detailed {
 		deferredSimple[name] = struct{}{}
 	}
-	manifest := queue.ComputeQueueManifest(tasksDir, deferredSimple)
+	manifest, manifestErr := queue.ComputeQueueManifest(tasksDir, deferredSimple)
+	if manifestErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not compute queue manifest: %v\n", manifestErr)
+	}
 	if len(strings.TrimSpace(manifest)) == 0 {
 		fmt.Println("  (queue is empty)")
 	} else {
