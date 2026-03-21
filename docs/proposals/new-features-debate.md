@@ -288,7 +288,7 @@ Gemini challenges the "correctness first" camp, arguing that operational UX and 
 
 **Effort:** Small (2 days)
 
-### Feature 3: Intelligent Smart Glob Conflict Detection
+### Feature 3: Smart Glob Conflict Detection
 
 **Problem:** `affects` requires exact string matches. This is brittle. If an agent creates a new file at an unpredicted path, mato might schedule a conflicting task, leading to merge conflicts or data loss.
 
