@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"mato/internal/atomicwrite"
 )
 
 func Output(dir string, args ...string) (string, error) {
@@ -193,33 +195,8 @@ func EnsureGitignored(repoRoot, pattern string) (retErr error) {
 		content = string(data) + pattern + "\n"
 	}
 
-	// Atomic write: temp file in same dir, then rename.
-	dir := filepath.Dir(gitignorePath)
-	tmpFile, err := os.CreateTemp(dir, ".gitignore.tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp file for .gitignore: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	cleanup := func() {
-		tmpFile.Close()
-		os.Remove(tmpName)
-	}
-
-	if err := tmpFile.Chmod(0o644); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod temp file for .gitignore: %w", err)
-	}
-	if _, err := tmpFile.WriteString(content); err != nil {
-		cleanup()
+	if err := atomicwrite.WriteFile(gitignorePath, []byte(content)); err != nil {
 		return fmt.Errorf("write .gitignore: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp file for .gitignore: %w", err)
-	}
-	if err := os.Rename(tmpName, gitignorePath); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename temp file for .gitignore: %w", err)
 	}
 
 	if _, err := Output(repoRoot, "add", "--", ".gitignore"); err != nil {

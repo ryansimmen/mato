@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/atomicwrite"
 	"mato/internal/identity"
 	"mato/internal/taskfile"
 )
@@ -348,34 +349,9 @@ func BuildAndWriteFileClaims(tasksDir, excludeTask string) error {
 }
 
 func writeJSONAtomically(path string, value any) error {
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	cleanup := func() {
-		tmpFile.Close()
-		os.Remove(tmpName)
-	}
-
-	if err := tmpFile.Chmod(0o644); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-	if err := json.NewEncoder(tmpFile).Encode(value); err != nil {
-		cleanup()
-		return fmt.Errorf("encode json to temp file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename temp file: %w", err)
-	}
-	return nil
+	return atomicwrite.WriteFunc(path, func(f *os.File) error {
+		return json.NewEncoder(f).Encode(value)
+	})
 }
 
 func messageFilePart(value, fallback string) string {

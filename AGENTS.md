@@ -39,6 +39,7 @@ go build ./... && go vet ./... && go test -count=1 ./...
 ```
 cmd/mato/          CLI entrypoint (cobra root command)
 internal/          All library packages:
+  atomicwrite/     Atomic file write utilities
   frontmatter/     YAML frontmatter parser
   git/             Git helpers (clone, checkout, commit, push)
   identity/        Agent ID generation (8-char hex)
@@ -101,7 +102,7 @@ import (
 
 ### File I/O
 
-- **Atomic writes**: Write to temp file in same directory, then `os.Rename`. See `writeFileAtomically` in `queue.go`. Exception: failure record appends use `O_APPEND`.
+- **Atomic writes**: Use `atomicwrite.WriteFile` or `atomicwrite.WriteFunc` from `internal/atomicwrite/`. Exception: failure record appends use `O_APPEND`.
 - **Atomic moves (TOCTOU-safe)**: `os.Link` + `os.Remove` instead of rename. See `safeRename` in `queue.go`.
 - **Permissions**: `0o644` for files, `0o755` for directories.
 - **Timestamps**: Always UTC (`time.Now().UTC()`), stored as RFC3339.

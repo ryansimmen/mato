@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/lockfile"
@@ -471,32 +472,8 @@ func appendTaskRecord(path, format string, args ...any) error {
 	record := fmt.Sprintf(format, args...)
 	updated := string(existing) + "\n" + record + "\n"
 
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp file for merge record: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	cleanup := func() {
-		tmpFile.Close()
-		os.Remove(tmpName)
-	}
-
-	if err := tmpFile.Chmod(0o644); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod temp file for merge record: %w", err)
-	}
-	if _, err := tmpFile.WriteString(updated); err != nil {
-		cleanup()
-		return fmt.Errorf("write temp file for merge record: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp file for merge record: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename temp file for merge record: %w", err)
+	if err := atomicwrite.WriteFile(path, []byte(updated)); err != nil {
+		return fmt.Errorf("write merge record: %w", err)
 	}
 	return nil
 }
