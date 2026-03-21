@@ -27,7 +27,7 @@ backlog/, detects `affects` conflicts, writes the `.queue` manifest, and prints 
 summary of the queue state. Useful for verifying setup in CI or before a real run.
 Status mode prints queue counts, active agents, waiting-task dependency summaries, and
 recent messages. `mato status` rejects extra positional arguments, but it does
-silently accept `--branch` even though status ignores that value.
+reject unrecognized flags such as `--branch`.
 Use `--` to stop `mato` flag parsing and forward the remaining arguments verbatim to
 Copilot CLI. In run mode, unrecognized arguments are also passed through to Copilot.
 
@@ -36,7 +36,7 @@ Long flags support both `--flag value` and `--flag=value` forms.
 | Flag | Applies to | Default | Description |
 | --- | --- | --- | --- |
 | `--repo <path>` | run, status, dry-run | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
-| `--branch <name>` | run; accepted-but-ignored by status and dry-run | `mato` | Target branch used for merge processing. `mato status` and `mato --dry-run` parse this flag via shared argument handling but do not use it. |
+| `--branch <name>` | run, dry-run | `mato` | Target branch used for merge processing. Not accepted by `mato status`. |
 | `--tasks-dir <path>` | run, status, dry-run | `<repo>/.tasks` | Task queue directory. If omitted, `mato` uses `.tasks` under the resolved repository root. |
 | `--dry-run` | run | `false` | Validate queue setup without launching Docker containers. Parses task files, promotes dependencies, detects `affects` conflicts, writes the `.queue` manifest, and prints a summary. Exits after one pass. |
 | `--help`, `-h` | run, status | none | Show help and exit. |
@@ -49,7 +49,7 @@ Long flags support both `--flag value` and `--flag=value` forms.
 - active agents discovered from `.tasks/.locks/*.pid`
 - waiting tasks plus dependency-status summaries
 - the five most recent messages from `.tasks/messages`
-Supported flags: `--repo`, `--tasks-dir`, and `--help`/`-h`. `--branch` is also accepted by the shared parser, but `mato status` ignores it.
+Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, and `--help`/`-h`.
 
 ## Environment Variables
 | Variable | Scope | Default | Description |
