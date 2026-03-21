@@ -51,6 +51,7 @@ internal/          All library packages:
   queue/           Task queue management + claiming
   runner/          Agent lifecycle, Docker, embedded prompts
   status/          mato status command
+  taskfile/        Task file helpers (metadata parsing, active-affects collection)
   testutil/        Shared test helpers (SetupRepo, SetupRepoWithTasks)
 docs/              Architecture, configuration, messaging, task-format docs
 .github/skills/mato/SKILL.md     Task planning skill
@@ -82,7 +83,7 @@ import (
 | Exported functions   | PascalCase    | `ParseTaskFile`, `RecoverOrphanedTasks` |
 | Unexported functions | camelCase     | `pollBackoff`, `crossDeviceMove`   |
 | Exported types       | PascalCase    | `TaskMeta`, `ClaimedTask`          |
-| Unexported types     | camelCase     | `dockerConfig`, `queueEntry`       |
+| Unexported types     | camelCase     | `envConfig`, `runContext`          |
 | Sentinel errors      | `errXxx` var  | `errSquashMergeConflict`           |
 | Regex vars           | camelCase+Re  | `claimedByRe`, `branchUnsafeRe`   |
 | Constants            | camelCase     | `defaultAgentTimeout`, `basePollInterval` |
