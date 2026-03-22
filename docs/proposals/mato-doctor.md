@@ -7,7 +7,7 @@ categories (git, host tools, Docker, queue layout, task parsing, locks/orphans,
 dependency integrity) and renders a text or JSON report with machine-usable exit
 codes. An optional `--fix` flag auto-repairs safe, idempotent issues.
 
-Estimated effort: ~2.5 days.
+Estimated effort: ~2 days.
 
 ## Goals
 
@@ -153,7 +153,12 @@ which requires a valid repo. This means:
 
 Checks that need queue/task state share a single `queue.BuildIndex()` result
 via a lazily-built field on the shared context. This avoids re-parsing files
-and keeps doctor aligned with runtime behavior.
+and keeps doctor aligned with runtime behavior. `BuildIndex()` also validates
+affects entries via `frontmatter.ValidateAffectsGlobs()`, recording invalid
+globs (broken syntax or glob combined with trailing `/`) as `BuildWarning`
+entries — doctor surfaces these in the task parsing check as
+`tasks.invalid_glob` warnings. These same entries trigger runtime
+quarantine in `ReconcileReadyQueue()`.
 
 The index is built once and reflects the filesystem state at build time. If
 `--fix` mutates the filesystem (e.g., `RecoverOrphanedTasks` moves tasks from
@@ -173,11 +178,14 @@ acceptable because:
 `--fix` only covers repairs that are clearly bounded, idempotent, and have
 obvious intent. Everything else stays read-only.
 
-### 4. No `internal/dag` dependency
+### 4. DAG-based dependency analysis via `internal/dag`
 
-Dependency diagnostics use the existing `dependsOnWaitingTask()` logic from
-`reconcile.go` for cycle detection. When `internal/dag/` lands, the diagnostics
-helper can be upgraded to use it — but doctor ships independently.
+Dependency diagnostics use the `internal/dag` package (`dag.Analyze()` with
+Kahn's algorithm + Tarjan's SCC detection) via `DiagnoseDependencies()` in
+`internal/queue/diagnostics.go`. The old `dependsOnWaitingTask()` and
+`logCircularDependency()` helpers have been removed. The DAG package provides
+richer blocking-reason classification (`BlockedByWaiting`, `BlockedByUnknown`,
+`BlockedByExternal`, `BlockedByAmbiguous`) that doctor can surface directly.
 
 ### 5. Function variable hooks for external probes
 
@@ -254,8 +262,8 @@ repair progress messages may appear on stderr by design.
 | Finding | Severity |
 |---------|----------|
 | Missing required tool: copilot, git, git-upload-pack, git-receive-pack, gh | ERROR |
+| Missing `~/.copilot` dir (bind-mounted unconditionally by Docker args) | ERROR |
 | Missing optional: git templates dir, system certs dir, gh config dir | WARN |
-| Missing optional: `~/.copilot` dir (net-new check, not in current `discoverHostTools()`) | WARN |
 | Resolved tool paths | INFO |
 
 Uses the new `InspectHostTools()` function, which probes the same tools as
@@ -263,6 +271,11 @@ Uses the new `InspectHostTools()` function, which probes the same tools as
 `InspectHostTools()` is a **parallel implementation**, not a refactor of
 `discoverHostTools()` — the existing function is left unchanged to avoid
 regressions in agent startup.
+
+**`~/.copilot` severity**: Docker args in `internal/runner/config.go`
+bind-mount `~/.copilot` unconditionally (not behind a `hasX` guard like
+`ghConfigDir`). A missing `~/.copilot` directory will cause `docker run`
+to fail at agent startup, so doctor treats this as ERROR rather than WARN.
 
 ### C. Docker (`docker`)
 
@@ -303,19 +316,40 @@ hardcoded strings in `internal/messaging/messaging.go` with no exported
 constant. Add an exported `MessagingDirs` slice to the `messaging` package
 (analogous to `queue.AllDirs`) so doctor doesn't duplicate the list.
 
+Note: runtime also writes flat files directly under `messages/` — including
+`file-claims.json`, `dependency-context-*.json`, and `verdict-*.json`. The
+directory check covers only the three subdirectories because those are the
+only ones created by `messaging.Init()`. The flat files are created
+on-demand by agent processes and do not need pre-existing directories.
+
 `BuildIndex()` records directory-level filesystem errors (e.g., permission
 denied when listing directory contents) as `BuildWarning` entries, separate
-from file-level `ParseFailure` entries. The queue check surfaces these via
-`idx.BuildWarnings()`.
+from file-level `ParseFailure` entries. It also records glob validation
+errors (invalid glob syntax in affects entries) as `BuildWarning` entries.
+The queue check surfaces directory-level errors; glob validation warnings
+are handled by the tasks check (see below).
 
 ### E. Task Parsing (`tasks`)
 
 | Finding | Severity |
 |---------|----------|
 | Malformed YAML frontmatter in any queue directory | ERROR |
+| Invalid glob syntax in affects entry (quarantined at runtime) | WARN |
 | Total parsed task count | INFO |
 
 Uses parse failures from the shared `PollIndex` rather than re-parsing files.
+Glob validation errors are surfaced via `idx.BuildWarnings()` — `BuildIndex()`
+validates affects entries using `frontmatter.ValidateAffectsGlobs()` and
+records invalid globs as build warnings alongside directory-level errors.
+
+**Runtime impact of invalid globs**: Invalid glob syntax is not just a
+passive warning. `ReconcileReadyQueue()` actively quarantines tasks with
+invalid globs: backlog tasks are moved to `failed/`, and waiting tasks that
+would otherwise be promotable are quarantined instead of promoted.
+`CountPromotableWaitingTasks()` also excludes them. `HasActiveOverlap()`
+treats invalid globs conservatively via static-prefix comparison (never a
+false negative, only false positives). Doctor surfaces these as warnings so
+users can fix the glob syntax before runtime quarantines the task.
 
 ### F. Locks & Orphans (`locks`)
 
@@ -331,17 +365,43 @@ Note: `RecoverOrphanedTasks()` is not a cosmetic cleanup — it moves tasks and
 appends failure records, which affects retry history. This is acceptable for
 `--fix` but must be described accurately in output.
 
+**Cycle handling**: `ReconcileReadyQueue()` already acts on cycles at
+runtime — it appends `<!-- cycle-failure: ... -->` markers via
+`taskfile.AppendCycleFailureRecord()` and moves cycle members to `failed/`.
+Doctor's deps check reports cycles as warnings but does **not** auto-fix
+them via `--fix`. Cycle resolution requires human action: break the circular
+dependency by editing task frontmatter, then move the task back from
+`failed/` to `waiting/` or `backlog/`. The runtime reconciler handles the
+quarantine; doctor handles the diagnosis.
+
 ### G. Dependency Integrity (`deps`)
 
 | Finding | Severity |
 |---------|----------|
 | Ambiguous ID (completed + non-completed collision) | WARN |
+| Duplicate waiting task ID | WARN |
 | Self-dependency | WARN |
 | Circular dependency between waiting tasks | WARN |
 | Unknown dependency ID reference | WARN |
-| Promotable waiting task count | INFO |
+| Blocked by external state (in-progress, failed, etc.) | INFO |
+| Blocked by ambiguous ID | INFO |
+| Deps-satisfied waiting task count | INFO |
 
-Uses `DiagnoseDependencies()` from `internal/queue/diagnostics.go`.
+Uses `DiagnoseDependencies()` from `internal/queue/diagnostics.go`, which
+wraps `dag.Analyze()` from `internal/dag/`. The DAG analysis provides
+structured `BlockDetail` entries with typed reasons (`BlockedByWaiting`,
+`BlockedByUnknown`, `BlockedByExternal`, `BlockedByAmbiguous`) that doctor
+maps directly to finding codes.
+
+**Deps-satisfied vs promotable**: `Analysis.DepsSatisfied` lists tasks whose
+dependency references all resolve to completed IDs. This is only the
+dependency gate — a task is not truly promotable until it also passes
+active-affects overlap filtering (`HasActiveOverlap()`) and glob validation
+(`ValidateAffectsGlobs()`). Doctor reports the deps-satisfied count as an
+INFO finding labeled "deps-satisfied" (not "promotable") to avoid implying
+the task will be promoted. The fully-filtered promotable count is available
+via `CountPromotableWaitingTasks()` but is not surfaced by doctor since it
+conflates dependency, overlap, and glob concerns.
 
 ## Fix Mode
 
@@ -357,9 +417,12 @@ Uses `DiagnoseDependencies()` from `internal/queue/diagnostics.go`.
 ### Not fixable (require human action)
 
 - Malformed task YAML
+- Invalid glob syntax in affects (runtime quarantines these to `failed/`)
 - Missing host tools
 - Docker daemon down
-- Dependency cycles
+- Dependency cycles (runtime quarantines cycle members to `failed/` with
+  `<!-- cycle-failure: ... -->` markers; human must break the cycle in
+  frontmatter and move the task back)
 - Unknown dependency IDs
 
 ### Structured repair reporting
@@ -443,6 +506,7 @@ These are stable identifiers for JSON consumers. Examples:
 | `git.not_a_repo` | git | Path is not a git repository |
 | `git.repo_root` | git | Resolved repo root (INFO) |
 | `tools.missing_required` | tools | Required tool not found |
+| `tools.missing_copilot_dir` | tools | `~/.copilot` directory not found (bind-mounted unconditionally) |
 | `tools.missing_optional` | tools | Optional directory not found |
 | `docker.cli_missing` | docker | Docker CLI not in PATH |
 | `docker.daemon_unreachable` | docker | Docker daemon timeout or error |
@@ -450,14 +514,18 @@ These are stable identifiers for JSON consumers. Examples:
 | `queue.missing_dir` | queue | Expected directory does not exist |
 | `queue.read_error` | queue | Directory-level filesystem error |
 | `tasks.parse_error` | tasks | Malformed YAML frontmatter |
+| `tasks.invalid_glob` | tasks | Invalid glob syntax in affects entry |
 | `locks.stale_pid` | locks | Agent PID file for dead process |
 | `locks.stale_review` | locks | Review lock for dead process |
 | `locks.orphaned_task` | locks | In-progress task with dead agent |
 | `locks.stale_duplicate` | locks | In-progress copy of later-state task |
 | `deps.ambiguous_id` | deps | Task ID in both completed and non-completed |
+| `deps.duplicate_id` | deps | Duplicate waiting task ID |
 | `deps.self_dependency` | deps | Task depends on itself |
 | `deps.cycle` | deps | Circular dependency between waiting tasks |
 | `deps.unknown_id` | deps | Dependency references non-existent task ID |
+| `deps.blocked_external` | deps | Dependency blocked by non-completed, non-waiting state |
+| `deps.blocked_ambiguous` | deps | Dependency blocked by ambiguous ID |
 
 ```go
 type CheckReport struct {
@@ -502,11 +570,15 @@ func Run(ctx context.Context, repoInput, tasksDir string, opts Options) (Report,
 
 ### Dependency diagnostics (`internal/queue/diagnostics.go`)
 
+This file already exists (added in commit 9aece17). The types and function
+are implemented and in use by `ReconcileReadyQueue()`.
+
 ```go
 type DependencyIssueKind string
 
 const (
 	DependencyAmbiguousID DependencyIssueKind = "ambiguous_id"
+	DependencyDuplicateID DependencyIssueKind = "duplicate_id"
 	DependencySelfCycle   DependencyIssueKind = "self_dependency"
 	DependencyCycle       DependencyIssueKind = "cycle"
 	DependencyUnknownID   DependencyIssueKind = "unknown_dependency"
@@ -520,29 +592,36 @@ type DependencyIssue struct {
 }
 
 type DependencyDiagnostics struct {
-	Issues     []DependencyIssue
-	Promotable int // number of waiting tasks with all deps satisfied
+	// Analysis is the underlying dag.Analysis result.
+	Analysis dag.Analysis
+
+	// Issues contains structured diagnostic issues sorted by
+	// (Kind, TaskID, DependsOn).
+	Issues []DependencyIssue
+
+	// RetainedFiles maps each retained waiting task ID to its filename.
+	// When duplicate waiting IDs exist, only the first file seen is
+	// retained.
+	RetainedFiles map[string]string
 }
 
-// DiagnoseDependencies performs read-only dependency analysis. When idx
-// is nil, a temporary index is built internally. Reuses the existing
-// resolvePromotableTasks() for the promotable count and
-// dependsOnWaitingTask() for cycle detection; both are unexported but
-// accessible within the queue package. Upgradeable to internal/dag
-// when that package lands.
+// DiagnoseDependencies builds the inputs to dag.Analyze() from the PollIndex,
+// runs the analysis, and produces structured diagnostic issues. It is a
+// read-only function with no file I/O beyond what the index already captured.
 func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 ```
 
-This extracts the warning logic from `ReconcileReadyQueue()` into structured
-return values. `ReconcileReadyQueue()` can then call `DiagnoseDependencies()`
-internally and emit warnings from the structured results, eliminating
-duplicated logic.
+Doctor's `checkDependencies` maps `DependencyIssue` entries to `Finding`
+structs. It also iterates `Analysis.Blocked` to surface `BlockedByExternal`
+and `BlockedByAmbiguous` entries as INFO findings, giving visibility into
+why tasks are not promotable beyond the issue-level warnings.
 
-**Cycle deduplication**: `logCircularDependency()` in `reconcile.go`
-deduplicates cycle warnings using a canonical-pair key (`min(a,b) + "\x00" +
-max(a,b)`). `DiagnoseDependencies()` uses the same canonical-pair pattern
-with its own `seen` map, appending to the issues slice instead of printing
-to stderr.
+The deps-satisfied count (for the INFO finding) is derived from
+`len(Analysis.DepsSatisfied)`. This is the pre-filter count — it reflects
+only the dependency gate, not the full promotability check which also
+requires passing active-affects overlap and glob validation filters. Doctor
+reports this as "deps-satisfied" to avoid confusion with the fully-filtered
+count from `CountPromotableWaitingTasks()`.
 
 ### Tool inspection (`internal/runner/tools.go`)
 
@@ -630,41 +709,60 @@ var dockerProbe = func(ctx context.Context) error {
 | `internal/doctor/checks.go` | `checkDef`, 7 check implementations, function variable hooks |
 | `internal/doctor/render.go` | Text and JSON rendering |
 | `internal/doctor/doctor_test.go` | Unit tests for checks and rendering |
-| `internal/queue/diagnostics.go` | `DiagnoseDependencies()`, issue types |
-| `internal/queue/diagnostics_test.go` | Dependency diagnostic tests |
 
 ### Files to modify
 
 | File | Change |
 |------|--------|
 | `cmd/mato/main.go` | Add `ExitError` type, `newDoctorCmd()` as normal subcommand, exit code wiring |
-| `internal/queue/reconcile.go` | Refactor warning logic to call `DiagnoseDependencies()` |
 | `internal/queue/queue.go` | Change 3 `fmt.Printf` calls in `RecoverOrphanedTasks()` to `fmt.Fprintf(os.Stderr, ...)` |
 | `internal/messaging/messaging.go` | Add exported `MessagingDirs` slice; refactor `Init()` to use it |
 | `README.md` | Document `mato doctor` command |
 
+### Files that already exist (from commit 9aece17)
+
+| File | Status |
+|------|--------|
+| `internal/dag/dag.go` | Complete — `Analyze()`, Kahn's + Tarjan's SCC, `BlockDetail` types |
+| `internal/dag/dag_test.go` | Complete |
+| `internal/queue/diagnostics.go` | Complete — `DiagnoseDependencies()`, issue types, `RetainedFiles` |
+| `internal/queue/diagnostics_test.go` | Complete |
+
 Note: `internal/runner/tools.go` gets the new `InspectHostTools()` function
 and types added alongside the existing code. `discoverHostTools()` is **not**
 modified.
+
+The `ReconcileReadyQueue()` refactor (to call `DiagnoseDependencies()`) is
+already complete — no additional changes needed there.
 
 ## Existing Code Reuse
 
 **Reuse directly** (no changes needed):
 
 - `frontmatter.ParseTaskFile()` — task parsing
+- `frontmatter.ValidateAffectsGlobs()` — glob syntax validation
 - `queue.BuildIndex()` — build `PollIndex`
+- `queue.DiagnoseDependencies()` — DAG-based dependency analysis (already exists)
 - `queue.RecoverOrphanedTasks()` — fix orphaned tasks
 - `queue.CleanStaleLocks()` — fix stale `.pid` files
 - `queue.CleanStaleReviewLocks()` — fix stale review locks
 - `lockfile.IsHeld()` — check lock liveness
 - `queue.ParseClaimedBy()` — extract agent from claimed-by comment
 - `identity.IsAgentActive()` — check if agent process is alive
+- `dag.Analyze()` — DAG analysis (used via `DiagnoseDependencies()`)
 
-**Refactor for structured output** (small additions):
+**New code needed** (small additions):
 
 - `internal/runner/tools.go` → new `InspectHostTools()` as a parallel
   implementation alongside `discoverHostTools()` (existing function unchanged)
-- `internal/queue/reconcile.go` → extract dep warning logic into `DiagnoseDependencies()`
+
+**Already completed** (by commit 9aece17):
+
+- `internal/queue/diagnostics.go` — `DiagnoseDependencies()` with DAG-based
+  analysis, structured `DependencyIssue` types, `DependencyDiagnostics` return
+- `internal/dag/dag.go` — `dag.Analyze()` with Kahn's algorithm + Tarjan's SCC
+- `ReconcileReadyQueue()` refactor to use `DiagnoseDependencies()` — done
+- Removal of `dependsOnWaitingTask()` and `logCircularDependency()` — done
 
 **Do NOT reuse for read-only checks:**
 
@@ -688,6 +786,8 @@ modified.
 | `TestDoctor_CircularDependency` | Warning for cycle |
 | `TestDoctor_UnknownDependencyID` | Warning for unknown ref |
 | `TestDoctor_AmbiguousID` | Warning for ID in completed + non-completed |
+| `TestDoctor_DuplicateWaitingID` | Warning for duplicate waiting task ID |
+| `TestDoctor_InvalidGlobSyntax` | Warning for invalid glob in affects |
 | `TestDoctor_OnlyFilter` | `--only` runs subset of checks, others have `status: "skipped"` |
 | `TestDoctor_OnlyFilter_InvalidName` | Unknown check name rejected |
 | `TestDoctor_OnlyFilter_PrereqFailure` | `--only queue` with bad repo and no `--tasks-dir` produces `queue.no_tasks_dir` error |
@@ -703,13 +803,10 @@ modified.
 
 ### Dependency diagnostics tests (`internal/queue/diagnostics_test.go`)
 
-| Test | Coverage |
-|------|----------|
-| `TestDiagnoseDependencies_Healthy` | No issues, correct promotable count |
-| `TestDiagnoseDependencies_SelfCycle` | Detects self-dependency |
-| `TestDiagnoseDependencies_CircularDeps` | Detects circular dependencies |
-| `TestDiagnoseDependencies_UnknownIDs` | Detects missing references |
-| `TestDiagnoseDependencies_AmbiguousIDs` | Detects completed + non-completed collision |
+These tests already exist (added in commit 9aece17). No additional tests
+needed for doctor — the existing test coverage includes healthy repos,
+self-cycles, circular deps, unknown IDs, ambiguous IDs, and duplicate
+waiting IDs.
 
 ### Integration test (`internal/integration/doctor_test.go`)
 
@@ -735,14 +832,17 @@ originals via `t.Cleanup()`. All tests use `t.TempDir()` and
 | 4 | `internal/runner/tools.go` — add `InspectHostTools()` alongside existing code | — |
 | 5 | `internal/doctor/checks.go` — `checkTools`, `checkDocker` (with 5s timeout) | Steps 3, 4 |
 | 6 | `internal/doctor/checks.go` — `checkTaskParsing`, `checkLocksAndOrphans` (with fix) | Step 3 |
-| 7 | `internal/queue/diagnostics.go` — `DiagnoseDependencies()`; refactor `ReconcileReadyQueue()` | — |
-| 8 | `internal/doctor/checks.go` — `checkDependencies` | Steps 3, 7 |
-| 9 | `cmd/mato/main.go` — `newDoctorCmd()`, exit code wiring | Steps 1, 2 |
-| 10 | Unit tests | Steps 1–8 |
-| 11 | Integration test | Steps 1–9 |
-| 12 | `README.md` documentation | Step 9 |
+| 7 | `internal/doctor/checks.go` — `checkDependencies` | Step 3 |
+| 8 | `cmd/mato/main.go` — `newDoctorCmd()`, exit code wiring | Steps 1, 2 |
+| 9 | Unit tests | Steps 1–7 |
+| 10 | Integration test | Steps 1–8 |
+| 11 | `README.md` documentation | Step 8 |
 
-Steps 1–3, 4, and 7 can proceed in parallel.
+Steps 1–3 and 4 can proceed in parallel.
+
+Note: `internal/queue/diagnostics.go` and `internal/dag/dag.go` (with tests)
+already exist. Step 7 consumes them directly — no additional dependency
+analysis code is needed.
 
 ## Effort Estimate
 
@@ -751,15 +851,18 @@ Steps 1–3, 4, and 7 can proceed in parallel.
 | Report model + `Run()` orchestration | 2 hours |
 | Text + JSON rendering | 1.5 hours |
 | Git + Tools + Docker checks (incl. timeout) | 2 hours |
-| Queue layout + Task parsing checks | 1.5 hours |
+| Queue layout + Task parsing checks (incl. glob validation) | 1.5 hours |
 | Locks/orphans check + fix mode | 1.5 hours |
-| Dependency diagnostics (`DiagnoseDependencies()`) | 2 hours |
-| `ReconcileReadyQueue()` refactor + regression testing | 2 hours |
+| Dependency check (consuming existing `DiagnoseDependencies()`) | 1 hour |
 | CLI wiring + exit codes | 1 hour |
 | Unit tests | 3 hours |
 | Integration test | 1 hour |
 | Documentation | 30 min |
-| **Total** | **~2.5 days** |
+| **Total** | **~2 days** |
+
+Note: The dependency diagnostics infrastructure (`DiagnoseDependencies()`,
+`dag.Analyze()`) and the `ReconcileReadyQueue()` refactor are already
+complete, reducing the original ~2.5 day estimate.
 
 ## Open Questions
 
@@ -767,5 +870,7 @@ Steps 1–3, 4, and 7 can proceed in parallel.
    doctor's value is point-in-time diagnosis.
 2. **`--thorough` mode**: Slower checks like Docker image pullability or GitHub
    API access. Adds network dependency and latency — defer.
-3. **Deeper DAG-backed diagnostics**: Upgrade `DiagnoseDependencies()` to use
-   `internal/dag` once that package exists and stabilizes.
+3. **Glob conflict diagnostics**: Consider surfacing glob-vs-glob overlap
+   warnings in the deps check, using `affectsMatch()` from
+   `internal/queue/overlap.go` to detect potentially conflicting affects
+   patterns across waiting tasks.
