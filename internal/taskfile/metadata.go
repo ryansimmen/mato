@@ -188,6 +188,63 @@ func AppendFailureRecord(path, agentID, step, errMsg string) error {
 	return nil
 }
 
+// cycleFailurePrefix is the marker prefix for cycle-failure records.
+var cycleFailurePrefix = "<!-- cycle-failure:"
+
+// AppendCycleFailureRecord appends a <!-- cycle-failure: ... --> record to the
+// task file at path using O_APPEND. Cycle failures are structural (circular
+// dependency) and do not consume normal retry budget.
+func AppendCycleFailureRecord(path string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open task file to append cycle-failure: %w", err)
+	}
+	_, writeErr := fmt.Fprintf(f, "\n<!-- cycle-failure: mato at %s — circular dependency -->\n",
+		time.Now().UTC().Format(time.RFC3339))
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write cycle-failure record: %w", writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close after cycle-failure record: %w", closeErr)
+	}
+	return nil
+}
+
+// ContainsCycleFailure reports whether data contains a <!-- cycle-failure: ... -->
+// marker. Used for idempotency checks before appending a new record.
+func ContainsCycleFailure(data []byte) bool {
+	return strings.Contains(string(data), cycleFailurePrefix)
+}
+
+// CountCycleFailureMarkers counts <!-- cycle-failure: ... --> lines in data.
+func CountCycleFailureMarkers(data []byte) int {
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), cycleFailurePrefix) {
+			count++
+		}
+	}
+	return count
+}
+
+// LastCycleFailureReason extracts the reason from the last
+// <!-- cycle-failure: ... --> comment in data. Returns "" if none found.
+func LastCycleFailureReason(data []byte) string {
+	last := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, cycleFailurePrefix) {
+			continue
+		}
+		reason := failureReasonFromLine(trimmed)
+		if reason != "" {
+			last = reason
+		}
+	}
+	return last
+}
+
 // AppendReviewFailure appends a <!-- review-failure: ... --> record to the
 // task file at path using O_APPEND. The task stays in its current directory
 // for a future review attempt.

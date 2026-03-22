@@ -48,7 +48,7 @@ Arrays may be written as inline lists (`[a, b]`) or block lists.
 | --- | --- | --- | --- |
 | `id` | string | filename without `.md` | Stable task ID. If omitted, `my-task.md` becomes `my-task`. Use this in `depends_on`. Completed deps match either explicit `id` or filename stem. |
 | `priority` | int | `50` | Lower numbers are higher priority. `.queue` is generated from `backlog/` sorted by priority ascending, then filename ascending. |
-| `depends_on` | string array | empty | IDs that must be completed before a waiting task can be promoted into `backlog/`. No dependencies means the task is immediately ready. |
+| `depends_on` | string array | empty | IDs that must be completed before a waiting task can be promoted into `backlog/`. No dependencies means the task is immediately ready. Circular dependencies (including self-dependencies) are detected and the affected tasks are moved to `failed/` with a `<!-- cycle-failure: -->` marker. |
 | `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). Exact strings are compared literally; an entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Combining glob metacharacters with a trailing `/` is invalid and rejected at parse time. |
 | `tags` | string array | empty | Free-form categorization labels. Parsed today, but not used by queue reconciliation. |
 | `estimated_complexity` | string | empty | Human hint for task size. Use `simple`, `medium`, or `complex` by convention; current parsing does not enforce these values. |
@@ -98,6 +98,7 @@ Expected comment patterns:
 <!-- review-failure: review-agent-3 at 2026-01-01T00:05:00Z step=DIFF error=could_not_fetch_branch -->
 <!-- review-rejection: review-agent-3 at 2026-01-01T00:06:00Z — tests do not cover the retry backoff logic; add unit tests for exponential delays -->
 <!-- reviewed: review-agent-3 at 2026-01-01T00:07:00Z — approved -->
+<!-- cycle-failure: mato at 2026-01-01T00:08:00Z — circular dependency -->
 <!-- merged: merge-queue at 2026-01-01T00:10:00Z -->
 ```
 
@@ -108,6 +109,7 @@ What they mean:
 - `review-failure:` records a review infrastructure failure (e.g. network blip during `git fetch`, diff timeout). These are tracked separately from task failure records and do **not** count against the task's `max_retries` budget. Only review-failure records are counted for the review retry budget.
 - `review-rejection:` records feedback from the review agent when rejecting a task. Format: `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->`. Review rejections do **not** count against `max_retries`. The feedback is passed to the implementing agent via the `MATO_REVIEW_FEEDBACK` environment variable on the next attempt.
 - `reviewed:` records that the review agent approved the task. Format: `<!-- reviewed: <agent-id> at <timestamp> — approved -->`. The review agent writes this before moving the task to `ready-to-merge/`.
+- `cycle-failure:` records that the task was detected as part of a circular dependency during dependency resolution. Format: `<!-- cycle-failure: mato at <timestamp> — circular dependency -->`. The task is moved to `failed/` when this marker is appended. Cycle-failure markers do **not** count against the task's `max_retries` budget. To recover, fix the `depends_on` entries to break the cycle and move the task back to `waiting/`.
 - `merged:` records that the merge queue successfully squashed the task branch into the target branch.
 - The host parses `claimed-by` and strips full-line HTML comments from the task body before agent-facing interpretation.
 
@@ -148,6 +150,7 @@ Simplify the status summary formatting.
 - Put tasks with dependencies in `waiting/`.
 - Put tasks without dependencies in `backlog/`.
 - `waiting/` is for tasks with unmet dependencies. Conflict-deferred tasks stay in `backlog/` but are excluded from the `.queue` manifest.
+- Tasks with circular dependencies (including self-dependencies) are automatically moved from `waiting/` to `failed/` with a `<!-- cycle-failure: -->` marker. To recover, fix the `depends_on` entries and move the task back to `waiting/`.
 - Completed agent work moves through `ready-for-review/` (AI review gate) before reaching `ready-to-merge/`.
 - mato writes `.queue` from the current `backlog/`, ordered by priority and then filename.
 
