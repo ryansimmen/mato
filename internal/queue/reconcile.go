@@ -77,15 +77,22 @@ func resolvePromotableTasks(tasksDir string, idx *PollIndex) []promotableTask {
 }
 
 // ReconcileReadyQueue promotes waiting tasks whose dependencies are satisfied
-// to backlog/. It also moves unparseable waiting tasks to failed/.
+// to backlog/. It also moves unparseable waiting/backlog tasks to failed/.
 //
 // When idx is nil, a temporary index is built internally.
 func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 	idx = ensureIndex(tasksDir, idx)
 
-	// Move unparseable waiting tasks to failed/ using index parse failures.
+	// Move unparseable waiting/backlog tasks to failed/ using index parse failures.
 	for _, pf := range idx.WaitingParseFailures() {
 		fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", pf.Filename, pf.Err)
+		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
+		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
+		}
+	}
+	for _, pf := range idx.BacklogParseFailures() {
+		fmt.Fprintf(os.Stderr, "warning: moving unparseable backlog task %s to failed/: %v\n", pf.Filename, pf.Err)
 		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)

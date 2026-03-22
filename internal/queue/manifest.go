@@ -27,11 +27,31 @@ func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}, idx *Pol
 	var queueEntries []queueEntry
 
 	if idx != nil {
+		for _, warn := range idx.BuildWarnings() {
+			fmt.Fprintf(os.Stderr, "warning: could not build queue index cleanly: read %s: %v\n", warn.Path, warn.Err)
+			if warn.State == DirBacklog {
+				return "", fmt.Errorf("read backlog dir: %w", warn.Err)
+			}
+		}
 		sorted := idx.BacklogByPriority(exclude)
 		queueEntries = make([]queueEntry, 0, len(sorted))
 		for _, snap := range sorted {
 			queueEntries = append(queueEntries, queueEntry{name: snap.Filename, priority: snap.Meta.Priority})
 		}
+		for _, pf := range idx.BacklogParseFailures() {
+			if exclude != nil {
+				if _, excluded := exclude[pf.Filename]; excluded {
+					continue
+				}
+			}
+			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", pf.Filename, pf.Err)
+		}
+		sort.Slice(queueEntries, func(i, j int) bool {
+			if queueEntries[i].priority != queueEntries[j].priority {
+				return queueEntries[i].priority < queueEntries[j].priority
+			}
+			return queueEntries[i].name < queueEntries[j].name
+		})
 	} else {
 		// Fallback: scan filesystem.
 		names, err := ListTaskFiles(filepath.Join(tasksDir, DirBacklog))

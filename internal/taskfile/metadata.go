@@ -15,7 +15,6 @@ var (
 	branchCommentRe    = regexp.MustCompile(`<!-- branch:\s*(\S+)\s*-->`)
 	claimedByRe        = regexp.MustCompile(`<!-- claimed-by:\s*(\S+)`)
 	claimedAtRe        = regexp.MustCompile(`claimed-at:\s*(\S+)`)
-	failureReasonRe    = regexp.MustCompile(`<!-- failure:.*?—\s*(.+?)\s*-->`)
 	reviewRejectionStr = "<!-- review-rejection:"
 	failurePrefix      = "<!-- failure:"
 	reviewFailureStr   = "<!-- review-failure:"
@@ -113,11 +112,47 @@ func ContainsFailureFrom(data []byte, agentID string) bool {
 // LastFailureReason extracts the reason from the last <!-- failure: ... -->
 // comment in data. Returns "" if no failure comments are found.
 func LastFailureReason(data []byte) string {
-	matches := failureReasonRe.FindAllSubmatch(data, -1)
-	if len(matches) == 0 {
-		return ""
+	last := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, failurePrefix) || strings.HasPrefix(trimmed, reviewFailureStr) {
+			continue
+		}
+		reason := failureReasonFromLine(trimmed)
+		if reason != "" {
+			last = reason
+		}
 	}
-	return string(matches[len(matches)-1][1])
+	return last
+}
+
+func failureReasonFromLine(line string) string {
+	if idx := strings.Index(line, "—"); idx >= 0 {
+		return trimCommentSuffix(line[idx+len("—"):])
+	}
+	if idx := strings.Index(line, "error="); idx >= 0 {
+		reason := trimCommentSuffix(line[idx+len("error="):])
+		if metaIdx := strings.Index(reason, " files_changed="); metaIdx >= 0 {
+			reason = reason[:metaIdx]
+		}
+		return strings.TrimSpace(reason)
+	}
+	return ""
+}
+
+func trimCommentSuffix(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(s, "-->")
+	return strings.TrimSpace(s)
+}
+
+// SanitizeCommentText normalizes text before embedding it in an HTML comment.
+func SanitizeCommentText(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.ReplaceAll(text, "\r", " ")
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.ReplaceAll(text, "--", "—")
+	return strings.TrimSpace(text)
 }
 
 // WriteBranchComment writes a <!-- branch: ... --> comment to w.
@@ -135,6 +170,8 @@ func WriteClaimedByComment(w io.Writer, agentID, claimedAt string) error {
 // AppendFailureRecord appends a <!-- failure: ... --> record to the task file
 // at path using O_APPEND for safe concurrent writes.
 func AppendFailureRecord(path, agentID, step, errMsg string) error {
+	step = SanitizeCommentText(step)
+	errMsg = SanitizeCommentText(errMsg)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open task file to append failure record: %w", err)
@@ -155,6 +192,7 @@ func AppendFailureRecord(path, agentID, step, errMsg string) error {
 // task file at path using O_APPEND. The task stays in its current directory
 // for a future review attempt.
 func AppendReviewFailure(path, agentID, reason string) error {
+	reason = SanitizeCommentText(reason)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open task file to append review-failure: %w", err)
