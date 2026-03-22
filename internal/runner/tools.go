@@ -94,6 +94,134 @@ func discoverHostTools() (hostTools, error) {
 	}, nil
 }
 
+// ToolFinding describes a single tool or directory inspection result.
+type ToolFinding struct {
+	Name     string
+	Path     string // resolved path, empty if not found
+	Required bool
+	Found    bool
+	Message  string
+}
+
+// ToolReport collects all tool inspection findings.
+type ToolReport struct {
+	Findings []ToolFinding
+}
+
+// InspectHostTools probes all host tools and directories, returning
+// structured findings for every item regardless of success or failure.
+// This is a parallel implementation that mirrors the checks in
+// discoverHostTools() but collects findings instead of failing fast.
+// discoverHostTools() is NOT modified.
+func InspectHostTools() ToolReport {
+	var r ToolReport
+
+	// Required tools.
+	for _, tool := range []struct {
+		name     string
+		lookup   func() (string, error)
+		required bool
+	}{
+		{"copilot", func() (string, error) { return exec.LookPath("copilot") }, true},
+		{"git", func() (string, error) { return exec.LookPath("git") }, true},
+		{"git-upload-pack", func() (string, error) { return findGitHelper("git-upload-pack") }, true},
+		{"git-receive-pack", func() (string, error) { return findGitHelper("git-receive-pack") }, true},
+		{"gh", func() (string, error) {
+			ghPath := "/usr/bin/gh"
+			if info, err := os.Stat(ghPath); err == nil && !info.IsDir() {
+				return ghPath, nil
+			}
+			return exec.LookPath("gh")
+		}, true},
+	} {
+		path, err := tool.lookup()
+		if err != nil {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:     tool.name,
+				Required: tool.required,
+				Found:    false,
+				Message:  fmt.Sprintf("%s not found", tool.name),
+			})
+		} else {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:     tool.name,
+				Path:     path,
+				Required: tool.required,
+				Found:    true,
+				Message:  fmt.Sprintf("%s: %s", tool.name, path),
+			})
+		}
+	}
+
+	// ~/.copilot directory (bind-mounted unconditionally by Docker args).
+	homeDir, homeErr := os.UserHomeDir()
+	if homeErr == nil {
+		copilotDir := filepath.Join(homeDir, ".copilot")
+		if info, err := os.Stat(copilotDir); err == nil && info.IsDir() {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:     ".copilot",
+				Path:     copilotDir,
+				Required: true,
+				Found:    true,
+				Message:  fmt.Sprintf("~/.copilot: %s", copilotDir),
+			})
+		} else {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:     ".copilot",
+				Path:     copilotDir,
+				Required: true,
+				Found:    false,
+				Message:  fmt.Sprintf("~/.copilot not found at %s", copilotDir),
+			})
+		}
+	} else {
+		r.Findings = append(r.Findings, ToolFinding{
+			Name:     ".copilot",
+			Required: true,
+			Found:    false,
+			Message:  "~/.copilot not found (cannot resolve home directory)",
+		})
+	}
+
+	// Optional directories.
+	type optDir struct {
+		name string
+		path string
+	}
+	var optDirs []optDir
+
+	gitTemplatesDir := "/usr/share/git-core/templates"
+	optDirs = append(optDirs, optDir{"git templates dir", gitTemplatesDir})
+
+	systemCertsDir := "/etc/ssl/certs"
+	optDirs = append(optDirs, optDir{"system certs dir", systemCertsDir})
+
+	if homeErr == nil {
+		ghConfigDir := filepath.Join(homeDir, ".config", "gh")
+		optDirs = append(optDirs, optDir{"gh config dir", ghConfigDir})
+	}
+
+	for _, od := range optDirs {
+		if info, err := os.Stat(od.path); err == nil && info.IsDir() {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:    od.name,
+				Path:    od.path,
+				Found:   true,
+				Message: fmt.Sprintf("%s: %s", od.name, od.path),
+			})
+		} else {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:    od.name,
+				Path:    od.path,
+				Found:   false,
+				Message: fmt.Sprintf("%s not found at %s", od.name, od.path),
+			})
+		}
+	}
+
+	return r
+}
+
 // findGitHelper locates a git helper binary (e.g. "git-upload-pack") by
 // checking PATH first, then falling back to git's exec-path.
 func findGitHelper(name string) (string, error) {
