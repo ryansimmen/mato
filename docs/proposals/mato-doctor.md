@@ -76,6 +76,21 @@ func (e ExitError) Error() string {
 without printing the `mato error:` prefix. All other errors continue to
 print the prefix and exit 1.
 
+The doctor `RunE` uses the two-return-value `Run()` to distinguish hard
+failures from health findings:
+
+```go
+report, err := doctor.Run(ctx, repoInput, tasksDir, opts)
+if err != nil {
+	return err // hard failure → "mato error: ..." + exit 1
+}
+// render report to stdout
+if report.ExitCode != 0 {
+	return ExitError{Code: report.ExitCode} // health status → silent exit 1 or 2
+}
+return nil // healthy → exit 0
+```
+
 ### `--only` Validation
 
 Unknown `--only` values are rejected by `Run()` before any checks execute,
@@ -83,12 +98,32 @@ returning a report with a single error finding. This keeps validation
 consistent for both text and JSON consumers — cobra usage output is not
 printed.
 
+Non-selected checks are included in the report with `status: "skipped"` and
+an empty findings list. This is intentional for JSON schema stability: consumers
+can rely on a fixed set of check names in every report regardless of `--only`
+filtering. Do not "optimize" by omitting non-selected checks from output.
+
+`--only` controls which checks appear as `"ran"` in the report, not which
+internal steps execute. Repo resolution is an internal prerequisite that
+always runs when `tasksDir` must be derived (i.e., `--tasks-dir` not
+explicitly set), even if `git` is not in `--only`. For example,
+`mato doctor --only queue` still resolves the repo root to derive
+`<repo>/.tasks`, but the git check appears as `"skipped"` in the report.
+
+If a prerequisite fails and a dependent check cannot proceed, the failure
+is attached to the dependent check — not the hidden prerequisite. For
+example, `mato doctor --only queue --repo /not-a-repo` (no `--tasks-dir`)
+produces a `queue.no_tasks_dir` error finding on the queue check, not a
+silent skip. This ensures every `--only` report fully explains its exit code.
+
 ### `--format` Validation
 
 Invalid `--format` values are rejected in the cobra `RunE` function (not in
 `Run()`), consistent with how `mato status` validates `--interval` in its
-`RunE`. This is a flag-parsing concern, not a domain concern, so a standard
-cobra error with usage output is appropriate:
+`RunE`. This is a flag-parsing concern, not a domain concern. Because doctor
+sets `SilenceUsage: true` and `SilenceErrors: true` (matching root and status
+commands), cobra does not print usage on error — the error surfaces as
+`mato error: ...` via `main()`:
 
 ```go
 if format != "text" && format != "json" {
@@ -102,7 +137,17 @@ if format != "text" && format != "json" {
 
 `mato doctor --repo /not-a-repo` should produce a git error finding, not a
 command-level error. The git check populates `repoRoot` in the shared context
-only on success; other checks proceed regardless.
+only on success.
+
+`tasksDir` is resolved independently of git when `--tasks-dir` is explicitly
+provided. If `--tasks-dir` is not set, it defaults to `<repoRoot>/.tasks`,
+which requires a valid repo. This means:
+
+- `mato doctor --repo /bad/path` — git fails, `tasksDir` is empty (not
+  derivable), filesystem checks are skipped.
+- `mato doctor --repo /bad/path --tasks-dir /my/.tasks` — git fails but
+  queue/tasks/locks/deps checks proceed against the explicit path.
+- `mato doctor` — git resolves cwd, `tasksDir` defaults from repo root.
 
 ### 2. Shared `PollIndex`
 
@@ -179,16 +224,19 @@ Rules:
 - Category indicator is the worst remaining (non-fixed) severity.
 - If all findings in a category were fixed, the category shows `[OK]` with a
   `(N fixed)` suffix.
+- Checks that were not executed (filtered by `--only` or skipped due to
+  missing context like `tasksDir`) show `[SKIP]` with no findings.
 - Fixable-but-not-fixed findings show `(fixable with --fix)` when `--fix` is
   not active.
-- No emoji. `[OK]`, `[WARN]`, `[ERROR]` are greppable and match the codebase's
-  plain `fmt.Printf` style.
+- No emoji. `[OK]`, `[WARN]`, `[ERROR]`, `[SKIP]` are greppable and match
+  the codebase's plain `fmt.Printf` style.
 
 ### JSON rendering
 
 The `Report` struct is serialized directly via `encoding/json`. The `exit_code`
 field is included so JSON consumers don't need to inspect process exit status
-separately.
+separately. JSON consumers should parse stdout only; when `--fix` is active,
+repair progress messages may appear on stderr by design.
 
 ## Check Categories
 
@@ -241,6 +289,7 @@ var dockerProbe = func(ctx context.Context) error {
 
 | Finding | Severity | Fixable |
 |---------|----------|---------|
+| `tasksDir` not resolvable (repo resolution failed, no explicit `--tasks-dir`) | ERROR | No |
 | `.tasks` path unreadable | ERROR | No |
 | Missing queue directory (7 state dirs + `.locks/` + `messages/events/` + `messages/presence/` + `messages/completions/`) | ERROR | Yes |
 | Directory-level read error (e.g., permission denied) from `BuildWarnings()` | ERROR | No |
@@ -324,31 +373,37 @@ For doctor, implement scan-and-fix helpers in `internal/doctor/checks.go` that:
 
 1. Detect the condition (scan lock files, check PID liveness) — this is the
    read-only diagnostic.
-2. If `--fix` is active, call the existing repair function and mark findings as
-   `Fixed: true`.
-3. If `--fix` is not active, mark findings as `Fixable: true`.
+2. If `--fix` is not active, mark findings as `Fixable: true`.
+3. If `--fix` is active, call the existing repair function, then **re-scan**
+   to verify the condition is resolved. Mark `Fixed: true` only if the
+   re-scan confirms the issue is gone.
 
-This avoids refactoring the existing repair helpers while giving doctor
-structured reporting. The diagnostic scan is independent of the repair action.
+Re-scanning is cheap (an `os.Stat` per lock file or task file) and necessary
+because the existing repair helpers can silently fail:
+`CleanStaleLocks` and `CleanStaleReviewLocks` discard `os.Remove` errors,
+and `RecoverOrphanedTasks` can fail on `AtomicMove` or `os.OpenFile`. If a
+repair silently fails, the finding stays `Fixable: true, Fixed: false` and
+contributes to the exit code — which is correct, since exit codes are defined
+as the state after fixes.
 
-**Stdout/stderr capture during `--fix`**: `RecoverOrphanedTasks()` prints
-directly to stdout and stderr, which would corrupt `--format json` output.
-During `--fix`, doctor temporarily redirects `os.Stdout` and `os.Stderr` to
-`os.DevNull` around calls to repair functions that produce output, then
-restores them. Since `os.Stdout` is `*os.File`, the redirect opens
-`os.DevNull` as a file rather than using `io.Writer`:
+**Fix-mode output and JSON safety**: `RecoverOrphanedTasks()` prints progress
+messages directly to stdout and warnings to stderr. The stdout writes would
+corrupt `--format json` output if interleaved.
 
-```go
-devNull, _ := os.Open(os.DevNull)
-defer devNull.Close()
-saved := os.Stdout
-os.Stdout = devNull
-defer func() { os.Stdout = saved }()
-```
+Rather than redirecting global `os.Stdout` (which is brittle and race-prone
+in tests), apply a small upstream fix: change the three `fmt.Printf` calls in
+`RecoverOrphanedTasks()` to `fmt.Fprintf(os.Stderr, ...)`. Progress messages
+belong on stderr anyway — this is arguably a bug fix, not a behavioral change.
+`CleanStaleLocks` and `CleanStaleReviewLocks` produce no output, so no change
+is needed for those.
 
-The doctor report itself is written to the original stdout after all checks
-and fixes complete. `CleanStaleLocks` and `CleanStaleReviewLocks` produce no
-output, so no capture is needed for those.
+With all repair output on stderr, the doctor report flow is straightforward:
+
+1. Run all diagnostic checks, collecting findings.
+2. If `--fix`, call repair functions (their output goes to stderr).
+3. Write the report (text or JSON) to stdout.
+
+No global stdio swapping, no buffering tricks.
 
 ## Data Model
 
@@ -361,6 +416,13 @@ const (
 	SeverityInfo    Severity = "info"
 	SeverityWarning Severity = "warning"
 	SeverityError   Severity = "error"
+)
+
+type CheckStatus string
+
+const (
+	CheckRan     CheckStatus = "ran"
+	CheckSkipped CheckStatus = "skipped"
 )
 
 type Finding struct {
@@ -384,6 +446,7 @@ These are stable identifiers for JSON consumers. Examples:
 | `tools.missing_optional` | tools | Optional directory not found |
 | `docker.cli_missing` | docker | Docker CLI not in PATH |
 | `docker.daemon_unreachable` | docker | Docker daemon timeout or error |
+| `queue.no_tasks_dir` | queue | tasksDir not resolvable (no repo, no explicit flag) |
 | `queue.missing_dir` | queue | Expected directory does not exist |
 | `queue.read_error` | queue | Directory-level filesystem error |
 | `tasks.parse_error` | tasks | Malformed YAML frontmatter |
@@ -398,8 +461,9 @@ These are stable identifiers for JSON consumers. Examples:
 
 ```go
 type CheckReport struct {
-	Name     string    `json:"name"`
-	Findings []Finding `json:"findings"`
+	Name     string      `json:"name"`
+	Status   CheckStatus `json:"status"`
+	Findings []Finding   `json:"findings"`
 }
 
 type Summary struct {
@@ -426,7 +490,14 @@ type Options struct {
 // Run executes all configured checks and returns a report. The context
 // is threaded to checks that perform external probes (e.g., Docker) so
 // that Ctrl+C cancellation works cleanly.
-func Run(ctx context.Context, repoRoot, tasksDir string, opts Options) Report
+//
+// repoInput is the raw --repo flag value (or empty for cwd); the git
+// check resolves it into the actual root and stores it in the report.
+//
+// Returns an error only for hard failures (canceled context, internal
+// setup errors). Health findings — including errors — belong in the
+// report, not in the returned error.
+func Run(ctx context.Context, repoInput, tasksDir string, opts Options) (Report, error)
 ```
 
 ### Dependency diagnostics (`internal/queue/diagnostics.go`)
@@ -508,16 +579,22 @@ type checkContext struct {
 	ctx       context.Context
 	repoInput string
 	repoRoot  string // populated by checkGit on success
-	tasksDir  string
+	tasksDir  string // set from --tasks-dir or derived from repoRoot
 	opts      Options
 	idx       *queue.PollIndex // lazily built, shared across checks
 }
 
 // hasRepo returns true if the git check resolved a valid repo root.
-// Checks that depend on a valid repo (queue, tasks, locks, deps) should
-// skip gracefully when this returns false.
 func (c *checkContext) hasRepo() bool {
 	return c.repoRoot != ""
+}
+
+// hasTasksDir returns true if tasksDir is resolved — either explicitly
+// provided via --tasks-dir or derived from a valid repo root. When this
+// returns false, filesystem checks (queue, tasks, locks, deps) emit a
+// no_tasks_dir error finding rather than silently skipping.
+func (c *checkContext) hasTasksDir() bool {
+	return c.tasksDir != ""
 }
 
 type checkDef struct {
@@ -562,6 +639,7 @@ var dockerProbe = func(ctx context.Context) error {
 |------|--------|
 | `cmd/mato/main.go` | Add `ExitError` type, `newDoctorCmd()` as normal subcommand, exit code wiring |
 | `internal/queue/reconcile.go` | Refactor warning logic to call `DiagnoseDependencies()` |
+| `internal/queue/queue.go` | Change 3 `fmt.Printf` calls in `RecoverOrphanedTasks()` to `fmt.Fprintf(os.Stderr, ...)` |
 | `internal/messaging/messaging.go` | Add exported `MessagingDirs` slice; refactor `Init()` to use it |
 | `README.md` | Document `mato doctor` command |
 
@@ -610,11 +688,12 @@ modified.
 | `TestDoctor_CircularDependency` | Warning for cycle |
 | `TestDoctor_UnknownDependencyID` | Warning for unknown ref |
 | `TestDoctor_AmbiguousID` | Warning for ID in completed + non-completed |
-| `TestDoctor_OnlyFilter` | `--only` runs subset of checks |
+| `TestDoctor_OnlyFilter` | `--only` runs subset of checks, others have `status: "skipped"` |
 | `TestDoctor_OnlyFilter_InvalidName` | Unknown check name rejected |
+| `TestDoctor_OnlyFilter_PrereqFailure` | `--only queue` with bad repo and no `--tasks-dir` produces `queue.no_tasks_dir` error |
 | `TestDoctor_DockerTimeout` | 5-second timeout path covered |
 | `TestDoctor_FixReporting` | Fixed findings don't corrupt category severity |
-| `TestDoctor_FixJSONNotCorrupted` | `--fix` with `--format json` produces valid JSON (stdout capture works) |
+| `TestDoctor_FixJSONValid` | `--fix` with `--format json` produces valid JSON (no stderr interleave) |
 | `TestDoctor_BuildWarnings` | Directory-level read error surfaced in queue check |
 | `TestDoctor_JSONIncludesExitCode` | JSON shape includes exit_code field |
 | `TestDoctor_ContextCancellation` | Cancelled context stops checks cleanly |
