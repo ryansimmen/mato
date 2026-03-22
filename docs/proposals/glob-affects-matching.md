@@ -41,6 +41,12 @@ Glob metacharacters:
 - `{a,b}` brace expansion (supported by `doublestar`).
 
 A trailing `/` retains its current meaning: directory-prefix claim, not a glob.
+Combining glob metacharacters with a trailing `/` (e.g., `internal/*/`) is
+invalid and rejected at parse time — see Parse-time validation below.
+
+All `affects` patterns are repo-relative and use `/` as the path separator
+regardless of host OS. This is consistent with the use of `doublestar.Match`
+(not `doublestar.PathMatch`, which is OS-aware).
 
 ## Library Choice
 
@@ -288,6 +294,9 @@ using the `IsGlob` helper defined in the same package:
 ```go
 for _, af := range meta.Affects {
 	if IsGlob(af) {
+		if strings.HasSuffix(af, "/") {
+			return TaskMeta{}, "", fmt.Errorf("affects %q combines glob syntax with trailing /; use a glob pattern without trailing / or a plain directory prefix", af)
+		}
 		if _, err := doublestar.Match(af, ""); err != nil {
 			return TaskMeta{}, "", fmt.Errorf("invalid glob in affects %q: %w", af, err)
 		}
@@ -305,8 +314,9 @@ the queue.
 `BuildAndWriteFileClaims()` in `internal/messaging/` collects raw `affects`
 strings from active tasks. Glob entries will appear in `file-claims.json`
 as-is — no expansion. The embedded task instructions
-(`internal/runner/task-instructions.md`) should document that file-claim keys
-may contain glob patterns. This is a documentation-only change to messaging.
+(`internal/runner/task-instructions.md`) should instruct agents to treat a
+file as potentially claimed if it matches a glob-pattern key, not just exact
+or prefix keys. This is a documentation-only change to messaging.
 
 ## Files to Modify
 
@@ -320,15 +330,12 @@ may contain glob patterns. This is a documentation-only change to messaging.
 | `internal/frontmatter/frontmatter.go` | Add `IsGlob()`, add glob validation in `ParseTaskData()` |
 | `internal/frontmatter/frontmatter_test.go` | Valid/invalid glob parse tests |
 | `docs/task-format.md` | Document syntax, examples, and when-to-use-what table |
-| `docs/architecture.md` | Brief mention of glob-aware overlap detection |
-
-### Follow-up items (not part of core implementation)
-
-These are natural follow-ups but should not block the core glob matching work:
-
-- Update `internal/runner/task-instructions.md` to document glob file-claim keys.
-- Update `.github/skills/mato/SKILL.md` to teach the planning skill about globs.
-- Update `docs/messaging.md` if file-claims documentation needs glob notes.
+| `docs/architecture.md` | Rewrite line 298 ("mato does not interpret it as globs") to reflect glob support; add brief description of glob-aware overlap detection |
+| `internal/runner/task-instructions.md` | Update agent prompt so agents treat a file as potentially claimed if it matches a glob-pattern key, not just exact or prefix keys (line 93 currently says "exact file paths or directory prefixes") |
+| `internal/integration/prompt_test.go` | Add glob-claims prompt validation test (required by `AGENTS.md:148`: changes to `task-instructions.md` need prompt validation tests; existing `TestPromptFileClaimsMentionDirectoryPrefixes` at line 141 only covers directory prefixes) |
+| `docs/messaging.md` | Update file-claims documentation to describe glob-pattern keys and instruct that a file is claimed if it matches any key — exact, prefix, or glob (line 87 currently says "file paths" and "directory-prefix claims") |
+| `docs/configuration.md` | Update `MATO_FILE_CLAIMS` description (line 69) which uses prefix-only language; add glob pattern mention |
+| `.github/skills/mato/SKILL.md` | Update duplicated task format spec to document glob syntax in `affects:` (required: `docs/task-format.md:3` sync comment and `AGENTS.md:157` both mandate keeping this in sync with task format changes) |
 
 ## Test Plan
 
@@ -350,6 +357,7 @@ These are natural follow-ups but should not block the core glob matching work:
 | `TestIsGlob` | `foo.go` false, `*.go` true, `internal/**` true, `pkg/client/` false, `data[1].csv` true, `internal/{a,b}/*.go` true |
 | `TestParseTaskData_ValidGlob` | `affects: ["internal/**/*.go"]` parses successfully |
 | `TestParseTaskData_InvalidGlob` | `affects: ["internal/[bad"]` returns descriptive error |
+| `TestParseTaskData_GlobWithTrailingSlash` | `affects: ["internal/*/"]` rejected with descriptive error (glob + trailing `/` ambiguity) |
 
 ### Index tests (`internal/queue/index_test.go`)
 
@@ -369,6 +377,7 @@ These are natural follow-ups but should not block the core glob matching work:
 |------|----------|
 | Glob deferral | Two tasks with glob affects, verify deferral |
 | Mixed overlap | One task exact path, one task glob, overlapping |
+| `TestPromptFileClaimsMentionGlobPatterns` | Assert that `task-instructions.md` explains glob-pattern file-claim keys and instructs agents to treat a file as claimed when it matches a glob key (mirrors existing `TestPromptFileClaimsMentionDirectoryPrefixes` at `prompt_test.go:141`) |
 
 ## Backward Compatibility
 

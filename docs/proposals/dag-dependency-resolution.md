@@ -26,7 +26,7 @@ Estimated effort: ~3.5 days.
 | `internal/queue/diagnostics.go` — `DiagnoseDependencies()` wrapper exposing `Analysis` | 2 hours |
 | `internal/queue/diagnostics_test.go` + reconcile test updates | 3 hours |
 | `internal/status/status.go` — cycle-aware summaries | 2 hours |
-| Status rendering + tests | 2 hours |
+| Status rendering + tests | 3 hours |
 | Integration tests | 2 hours |
 | Documentation updates | 1 hour |
 | **Total** | **~3.5 days** |
@@ -105,9 +105,10 @@ type Node struct {
 type BlockReason int
 
 const (
-    BlockedByWaiting  BlockReason = iota // dependency is itself in waiting/
-    BlockedByUnknown                     // dependency ID not found anywhere
-    BlockedByExternal                    // dependency exists in a non-completed, non-waiting state (e.g. failed, in-progress)
+    BlockedByWaiting   BlockReason = iota // dependency is itself in waiting/
+    BlockedByUnknown                      // dependency ID not found anywhere
+    BlockedByExternal                     // dependency exists in a non-completed, non-waiting state (e.g. failed, in-progress)
+    BlockedByAmbiguous                    // dependency ID exists in both completed/ and a non-completed directory
 )
 
 type BlockDetail struct {
@@ -140,8 +141,11 @@ type Analysis struct {
 // removed). knownIDs is the full set of task IDs across all directories —
 // needed to distinguish BlockedByUnknown (ID not found anywhere) from
 // BlockedByExternal (ID exists in a non-completed, non-waiting state like
-// failed/ or in-progress/).
-func Analyze(waiting []Node, completedIDs, knownIDs map[string]struct{}) Analysis
+// failed/ or in-progress/). ambiguousIDs is the set of IDs that appear in both
+// completed/ and a non-completed directory — these are excluded from
+// completedIDs by the caller, and Analyze tags them as BlockedByAmbiguous
+// rather than BlockedByExternal so the blocking reason is self-documenting.
+func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]struct{}) Analysis
 ```
 
 **Naming note:** `DepsSatisfied` rather than `Ready` avoids confusion with
@@ -157,6 +161,14 @@ and one that references a real task in `failed/` or `in-progress/`
 `idx.AllIDs()` — passing it through avoids coupling the DAG package to
 filesystem concepts while preserving diagnostic precision.
 
+**Why `ambiguousIDs`:** Without this parameter, a dependency blocked because
+it was ambiguous (exists in both `completed/` and a non-completed directory)
+would be indistinguishable from a normal `BlockedByExternal` inside the
+`Analysis`. By accepting the ambiguous set explicitly, `Analyze()` can tag
+these as `BlockedByAmbiguous`, making the `Analysis` self-contained —
+callers inspecting `Blocked` see the real reason without needing side-channel
+information from the diagnostics layer.
+
 ### Scope of the graph
 
 The graph contains only waiting tasks.
@@ -169,6 +181,44 @@ The graph contains only waiting tasks.
 
 This matches current queue behavior and avoids blurring "waiting blocker" with
 "in-flight blocker."
+
+### Node identity and ID semantics
+
+The DAG package operates in task-ID space: `Node.ID` is the value from
+`meta.ID`, and `depends_on` references resolve against these IDs. This matches
+the current behavior in `reconcile.go:48` where `waitingDeps` is keyed by
+`snap.Meta.ID`.
+
+**Stem-vs-ID asymmetry.** `PollIndex` registers both the filename stem and
+`meta.ID` in `completedIDs` and `allIDs` (`index.go:141-189`), so a
+`depends_on` reference matching either value resolves against completed tasks.
+But the waiting graph only keys by `meta.ID` — a `depends_on` reference to a
+filename stem that differs from `meta.ID` would not find the waiting task as a
+graph edge.
+
+v1 preserves this asymmetry: waiting-edge resolution uses `meta.ID` only.
+Normalizing to also register stems in the waiting lookup would introduce a new
+ambiguity class — one task's filename stem could collide with another task's
+explicit `id`, even when their `meta.ID` values are unique. Handling that
+correctly would require alias-collision detection and resolution logic that
+adds complexity for marginal benefit. The asymmetry is a pre-existing behavior,
+not a regression. Users who want consistent resolution should set explicit `id`
+values matching their `depends_on` references.
+
+Unifying stem and `meta.ID` resolution across waiting and completed is a
+worthwhile follow-up once alias collision semantics are fully designed.
+
+**Duplicate waiting IDs.** If two files in `waiting/` share the same `meta.ID`
+(e.g., `foo.md` with `id: bar` alongside `bar.md` which defaults to `id: bar`),
+the current code silently overwrites one in `waitingDeps`. This is a
+pre-existing bug, not introduced by this proposal. `DiagnoseDependencies`
+should detect this collision and emit a `DependencyDuplicateID` issue. The
+`dag.Analyze()` function itself assumes unique node IDs — the caller is
+responsible for deduplication or error reporting before building the node list.
+If duplicates are detected, `DiagnoseDependencies` should skip the duplicate
+node (keeping the first by filename sort order, consistent with
+`ListTaskFiles()` in `internal/queue/taskfiles.go`) and emit the issue, rather
+than passing conflicting nodes into the graph.
 
 ## Readiness Rules
 
@@ -183,14 +233,17 @@ intentionally — see Backward Compatibility.
    behavioral change (see Backward Compatibility).
 2. A dependency on a waiting task blocks readiness.
 3. A dependency on a completed ID satisfies readiness.
-4. A dependency on a non-completed ID that exists in `knownIDs` blocks
-   readiness (`BlockedByExternal`).
-5. A dependency on an ID not found in `knownIDs` blocks readiness
+4. A dependency on an ambiguous ID (in both `completed/` and a non-completed
+   directory) blocks readiness (`BlockedByAmbiguous`). Ambiguous IDs must be
+   excluded from `completedIDs` before analysis.
+5. A dependency on a non-completed ID that exists in `knownIDs` (and is not
+   ambiguous) blocks readiness (`BlockedByExternal`).
+6. A dependency on an ID not found in `knownIDs` blocks readiness
    (`BlockedByUnknown`).
-6. Ambiguous IDs must be excluded from the completed set before analysis.
 
-The caller is responsible for passing `safeCompleted` as `completedIDs` and
-`idx.AllIDs()` as `knownIDs`.
+The caller is responsible for passing `safeCompleted` as `completedIDs`,
+`idx.AllIDs()` as `knownIDs`, and the set of IDs found in both
+`idx.CompletedIDs()` and `idx.NonCompletedIDs()` as `ambiguousIDs`.
 
 ## Cycle Handling
 
@@ -290,7 +343,7 @@ on the residual waiting-only subgraph.
 
 1. Build waiting-task adjacency and indegree.
 2. Run Kahn to determine which nodes are not blocked by waiting-task edges.
-3. Use readiness rules plus `completedIDs` and `knownIDs` to populate `DepsSatisfied` and `Blocked`.
+3. Use readiness rules plus `completedIDs`, `knownIDs`, and `ambiguousIDs` to populate `DepsSatisfied` and `Blocked`.
 4. Run SCC detection on the residual waiting subgraph and keep only SCCs that
    are truly cyclic:
    - size > 1, or
@@ -310,10 +363,18 @@ stack-based DFS tracking `index` and `lowlink` per node, yielding SCCs when
 
 ### Deterministic output
 
-`DepsSatisfied` and each `Cycles` slice must be sorted lexicographically before
-returning. Go map iteration is intentionally non-deterministic, so the
-implementation must sort all output slices to ensure stable results across runs
-and reliable test assertions.
+All output slices must be sorted to ensure stable results across runs and
+reliable test assertions. Go map iteration is intentionally non-deterministic,
+so every slice derived from map keys or values must be explicitly sorted.
+
+Specific ordering requirements:
+
+- `DepsSatisfied`: sorted lexicographically by task ID.
+- `Cycles`: each inner slice sorted lexicographically by task ID; outer slice
+  sorted by the first element of each inner slice.
+- `Blocked` values: each `[]BlockDetail` sorted by `DependencyID`.
+- `Issues` (in `DependencyDiagnostics`): sorted by `(Kind, TaskID, DependsOn)`
+  to ensure stable warning output order.
 
 ## Status Integration
 
@@ -339,6 +400,37 @@ package builds. This proposal does not consolidate that I/O — status will call
 per-dependency state display. Consolidating status onto `PollIndex` (e.g., by
 exposing an `IDStates() map[string]string` method) is a worthwhile follow-up
 but is out of scope for v1.
+
+### Known gap: `taskStatesByID` duplicate-ID overwrites
+
+`taskStatesByID()` in `internal/status/status.go:257-259` registers both
+filename stem and `meta.ID` in a flat map, with later directories overwriting
+earlier ones. If two tasks share an ID (or a stem collides with another task's
+`meta.ID`), the displayed dependency state may be misleading. This pre-dates
+the DAG proposal and is not addressed in v1, but should be noted as a known
+limitation.
+
+### Cycle-failed task rendering
+
+`status_render.go:218-224` renders failed tasks using `countFailureRecords`
+(which calls `taskfile.CountFailureMarkers`, counting only `<!-- failure:`
+lines) and `lastFailureReason` (which calls `taskfile.LastFailureReason`,
+scanning for `<!-- failure:` lines). A cycle-failed task has zero
+`<!-- failure:` markers — only `<!-- cycle-failure:` markers — so without
+changes it would render as `0/3 retries exhausted` with no reason displayed.
+
+The status rendering must be updated to:
+
+1. Detect cycle-failed tasks by checking for `<!-- cycle-failure:` markers
+   (add a `taskfile.ContainsCycleFailure(data []byte) bool` helper, or a
+   `CountCycleFailureMarkers` function).
+2. Render cycle-failed tasks with a distinct message, e.g.,
+   `circular dependency detected` instead of `N/M retries exhausted`.
+3. Extract the cycle-failure reason for display (analogous to
+   `lastFailureReason` but scanning `<!-- cycle-failure:` lines).
+
+This rendering change should be included in the status rendering work, not
+deferred.
 
 ## Reconcile Integration
 
@@ -369,8 +461,8 @@ ReconcileReadyQueue
 
 1. Move unparseable tasks to `failed/` (unchanged from today).
 2. Call `DiagnoseDependencies(tasksDir, idx)` — this internally builds
-   `safeCompleted`, `knownIDs`, and the `dag.Node` list, then calls
-   `dag.Analyze()`.
+   `safeCompleted`, `ambiguousIDs`, `knownIDs`, and the `dag.Node` list,
+   then calls `dag.Analyze()`.
 3. Move `diag.Analysis.Cycles` members to `failed/` using the cycle-to-failed
    sequence (append `<!-- cycle-failure:` record, then `AtomicMove`). Cycle
    failures do not consume retry budget.
@@ -380,7 +472,8 @@ ReconcileReadyQueue
     - self-dependencies (already moved to `failed/` in step 3, but logged),
     - cycles (already moved to `failed/` in step 3, but logged),
     - unknown dependencies,
-    - ambiguous IDs.
+    - ambiguous IDs,
+    - duplicate waiting IDs.
 
 The current helper functions (`dependsOnWaitingTask`, inline warning logic) can
 be removed only after their behavior is fully covered by tests.
@@ -397,14 +490,18 @@ from the `PollIndex`:
 
 - `safeCompleted`: copy of `idx.CompletedIDs()` with ambiguous IDs removed
   (same logic as current `resolvePromotableTasks`).
+- `ambiguousIDs`: IDs present in both `idx.CompletedIDs()` and
+  `idx.NonCompletedIDs()`.
 - `knownIDs`: `idx.AllIDs()`.
 - `waiting []dag.Node`: built from `idx.TasksByState(queue.DirWaiting)`.
 
-It also generates `DependencyIssue` entries for ambiguous IDs, which are a
-caller-side concern not visible to the DAG package (since they are excluded from
-`completedIDs` before the call). Self-cycle and cycle issues are derived from
-`Analysis.Cycles`: an SCC of size 1 with a self-edge produces a
-`DependencySelfCycle` issue, while an SCC of size > 1 produces a
+It also generates `DependencyIssue` entries for ambiguous IDs for warning
+output, complementing the `BlockedByAmbiguous` reason that `dag.Analyze()`
+now carries in `Analysis.Blocked`. The diagnostics-layer issue provides
+human-readable context (task filename, dependency reference) while the
+`BlockReason` makes the `Analysis` self-contained. Self-cycle and cycle issues
+are derived from `Analysis.Cycles`: an SCC of size 1 with a self-edge produces
+a `DependencySelfCycle` issue, while an SCC of size > 1 produces a
 `DependencyCycle` issue for each member. Unknown-dependency issues are derived
 from `Analysis.Blocked` entries with `BlockedByUnknown` reason.
 
@@ -412,10 +509,11 @@ from `Analysis.Blocked` entries with `BlockedByUnknown` reason.
 type DependencyIssueKind string
 
 const (
-	DependencyAmbiguousID DependencyIssueKind = "ambiguous_id"
-	DependencySelfCycle   DependencyIssueKind = "self_dependency"
-	DependencyCycle       DependencyIssueKind = "cycle"
-	DependencyUnknownID   DependencyIssueKind = "unknown_dependency"
+	DependencyAmbiguousID  DependencyIssueKind = "ambiguous_id"
+	DependencyDuplicateID  DependencyIssueKind = "duplicate_id"
+	DependencySelfCycle    DependencyIssueKind = "self_dependency"
+	DependencyCycle        DependencyIssueKind = "cycle"
+	DependencyUnknownID    DependencyIssueKind = "unknown_dependency"
 )
 
 type DependencyIssue struct {
@@ -467,15 +565,15 @@ This plan does **not** include that change by default.
 
 | File | Change |
 |------|--------|
-| `internal/dag/dag.go` | New shared analysis helper (`Analyze`, `BlockReason`, `BlockDetail`, `Analysis`, Tarjan's SCC) |
+| `internal/dag/dag.go` | New shared analysis helper (`Analyze`, `BlockReason` incl. `BlockedByAmbiguous`, `BlockDetail`, `Analysis`, Tarjan's SCC) |
 | `internal/dag/dag_test.go` | Unit tests for deps-satisfied/blocked/cycle analysis |
 | `internal/queue/reconcile.go` | Replace duplicated recursive dependency checks with `DiagnoseDependencies()`; add cycle-to-failed move logic |
 | `internal/queue/diagnostics.go` | New `DiagnoseDependencies()` wrapper that calls `dag.Analyze()` and exposes `Analysis` |
 | `internal/queue/diagnostics_test.go` | Unit tests for diagnostics wrapper |
 | `internal/queue/queue_test.go` | Preserve current promotion semantics + add cycle cases |
-| `internal/taskfile/metadata.go` | Add `AppendCycleFailureRecord` helper (or constant for cycle-failure prefix) |
+| `internal/taskfile/metadata.go` | Add `AppendCycleFailureRecord`, `ContainsCycleFailure`, and `CountCycleFailureMarkers` helpers |
 | `internal/status/status.go` | Add cycle-aware waiting-task summaries without removing existing state detail |
-| `internal/status/status_render.go` | Render cycle information clearly |
+| `internal/status/status_render.go` | Render cycle-failed tasks with distinct message instead of `N/M retries exhausted`; detect `<!-- cycle-failure:` markers |
 | `internal/runner/task.go` | No change in v1 unless transitive context is explicitly split into a follow-up |
 | `docs/architecture.md` | Document shared DAG analysis |
 | `docs/task-format.md` | Document user-visible cycle behavior if behavior changes |
@@ -496,10 +594,19 @@ This plan does **not** include that change by default.
 | `TestAnalyze_UnknownDependency` | Missing dep (not in `knownIDs`) blocks with `BlockedByUnknown` |
 | `TestAnalyze_ExternalDependency` | Dep in `knownIDs` but not in `completedIDs` or waiting blocks with `BlockedByExternal` |
 | `TestAnalyze_AmbiguousCompletedExcluded` | Caller-supplied `safeCompleted` behavior preserved |
+| `TestAnalyze_AmbiguousDependency` | Dep in `ambiguousIDs` blocks with `BlockedByAmbiguous`, not `BlockedByExternal` |
 | `TestAnalyze_CycleMembersOnly` | 2-node cycle: members identified without misclassifying downstream nodes |
 | `TestAnalyze_LongCycle` | 3+ node cycle (`A -> B -> C -> A`): all three are cycle members, downstream `D -> C` stays blocked |
-| `TestAnalyze_Deterministic` | Stable output ordering (`DepsSatisfied`, `Cycles` slices sorted) |
-| `TestAnalyze_BlockReasons` | `Blocked` entries carry correct `BlockReason` for each case (waiting, unknown, external) |
+| `TestAnalyze_Deterministic` | Stable output ordering: `DepsSatisfied` sorted, each `Cycles` slice sorted, outer `Cycles` sorted by first element, `BlockDetail` slices sorted by `DependencyID` |
+| `TestAnalyze_BlockReasons` | `Blocked` entries carry correct `BlockReason` for each case (waiting, unknown, external, ambiguous) |
+
+### Diagnostics tests (`internal/queue/diagnostics_test.go`)
+
+| Test | Coverage |
+|------|----------|
+| `TestDiagnoseDependencies_DuplicateWaitingID` | Two waiting files with same `meta.ID` produce `DependencyDuplicateID` issue; duplicate node is skipped |
+| `TestDiagnoseDependencies_StemAlias` | `depends_on` referencing a filename stem resolves for completed targets but not for waiting targets (asymmetry preserved) |
+| `TestDiagnoseDependencies_AmbiguousID` | Ambiguous ID produces both `DependencyAmbiguousID` issue and `BlockedByAmbiguous` in `Analysis.Blocked` |
 
 ### Queue tests
 
@@ -521,6 +628,8 @@ This plan does **not** include that change by default.
 | `TestWaitingTasksStatus_PreservesPerDependencyStates` | Existing state detail preserved |
 | `TestWaitingTasksStatus_CycleLabel` | Cyclic tasks surfaced clearly |
 | `TestWaitingTasksStatus_DownstreamOfCycleNotMarkedCyclic` | No false cycle labeling |
+| `TestFailedTaskRendering_CycleFailure` | Cycle-failed task renders `circular dependency detected` instead of `0/N retries exhausted` |
+| `TestFailedTaskRendering_MixedFailures` | Task with both `<!-- failure:` and `<!-- cycle-failure:` markers renders correctly (retry count from agent failures only, cycle reason displayed) |
 
 ### Integration tests
 
@@ -585,3 +694,8 @@ task in `failed/` rather than `waiting/`.
 3. **Consolidate status I/O onto `PollIndex`**: eliminate the duplicate
    filesystem scan in `internal/status/status.go` by exposing an
    `IDStates() map[string]string` method on `PollIndex`.
+4. **Unify stem and `meta.ID` resolution for waiting edges**: currently
+   waiting-edge resolution uses `meta.ID` only, while completed-dep resolution
+   uses both stem and `meta.ID`. Unifying requires alias-collision detection
+   (one task's stem can collide with another's explicit `id`) and should be
+   designed as a separate follow-up.
