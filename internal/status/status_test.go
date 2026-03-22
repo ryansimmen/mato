@@ -30,13 +30,13 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	}
 
 	files := map[string]string{
-		filepath.Join(tasksDir, queue.DirWaiting, "refactor-api.md"):      "---\nid: refactor-api\ndepends_on: [setup-models, add-auth]\n---\n# Refactor the API layer\n",
-		filepath.Join(tasksDir, queue.DirBacklog, "add-auth.md"):        "---\nid: add-auth\npriority: 10\n---\n# Add authentication\n",
-		filepath.Join(tasksDir, queue.DirInProgress, "agent-task.md"):    "<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: agent-task\n---\n# In progress task\n",
+		filepath.Join(tasksDir, queue.DirWaiting, "refactor-api.md"):       "---\nid: refactor-api\ndepends_on: [setup-models, add-auth]\n---\n# Refactor the API layer\n",
+		filepath.Join(tasksDir, queue.DirBacklog, "add-auth.md"):           "---\nid: add-auth\npriority: 10\n---\n# Add authentication\n",
+		filepath.Join(tasksDir, queue.DirInProgress, "agent-task.md"):      "<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: agent-task\n---\n# In progress task\n",
 		filepath.Join(tasksDir, queue.DirReadyReview, "review-feature.md"): "<!-- branch: task/review-feature -->\n---\npriority: 10\n---\n# Review this feature\n",
-		filepath.Join(tasksDir, queue.DirReadyMerge, "merge-me.md"):     "---\npriority: 5\n---\n# Ready to merge\n",
-		filepath.Join(tasksDir, queue.DirCompleted, "setup-models.md"):   "---\nid: setup-models\n---\n# Setup models\n",
-		filepath.Join(tasksDir, queue.DirFailed, "failed-task.md"):       "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — merge conflict in config.yaml -->\n---\nid: failed-task\nmax_retries: 2\n---\n# A failed task\n",
+		filepath.Join(tasksDir, queue.DirReadyMerge, "merge-me.md"):        "---\npriority: 5\n---\n# Ready to merge\n",
+		filepath.Join(tasksDir, queue.DirCompleted, "setup-models.md"):     "---\nid: setup-models\n---\n# Setup models\n",
+		filepath.Join(tasksDir, queue.DirFailed, "failed-task.md"):         "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — merge conflict in config.yaml -->\n---\nid: failed-task\nmax_retries: 2\n---\n# A failed task\n",
 	}
 	for path, content := range files {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -865,5 +865,63 @@ func TestWatch(t *testing.T) {
 	}
 	if !contains(output, "\033[J") {
 		t.Errorf("Watch output should contain clear-to-end-of-screen (\\033[J)")
+	}
+}
+
+func TestFailedTaskRendering_CycleFailure(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create a cycle-failed task — has cycle-failure marker but no regular failure markers.
+	content := "---\nid: cyclic-task\nmax_retries: 3\n---\n# Cyclic task\n\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "cyclic-task.md"), []byte(content), 0o644)
+
+	output := captureShow(t, repoRoot)
+
+	// Should show "circular dependency" instead of "0/3 retries exhausted".
+	if !contains(output, "circular dependency") {
+		t.Errorf("output should contain 'circular dependency' for cycle-failed task, got:\n%s", output)
+	}
+	if contains(output, "0/3 retries exhausted") {
+		t.Errorf("output should NOT show '0/3 retries exhausted' for cycle-failed task, got:\n%s", output)
+	}
+}
+
+func TestFailedTaskRendering_MixedFailures(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create a task with both regular failure and cycle-failure markers.
+	// In practice this is unusual, but the rendering should handle it.
+	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n<!-- cycle-failure: mato at 2026-01-02T00:00:00Z — circular dependency -->\n---\nid: mixed-task\nmax_retries: 3\n---\n# Mixed task\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "mixed-task.md"), []byte(content), 0o644)
+
+	output := captureShow(t, repoRoot)
+
+	// With both markers present, it should display the cycle reason.
+	if !contains(output, "circular dependency") {
+		t.Errorf("output should contain 'circular dependency' for mixed-failure task, got:\n%s", output)
+	}
+	// It should also show retry-budget info alongside the cycle reason.
+	if !contains(output, "1/3 retries used") {
+		t.Errorf("output should contain '1/3 retries used' for mixed-failure task, got:\n%s", output)
+	}
+	// It should show the last regular failure reason.
+	if !contains(output, "tests failed") {
+		t.Errorf("output should contain last regular failure reason 'tests failed', got:\n%s", output)
 	}
 }

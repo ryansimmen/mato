@@ -410,3 +410,105 @@ func TestStatusWithPopulatedQueue(t *testing.T) {
 		t.Fatalf("status.Show: %v", err)
 	}
 }
+
+func TestDAG_ChainPromotion(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// A is completed, B depends on A, C depends on B.
+	writeTask(t, tasksDir, queue.DirCompleted, "task-a.md", "---\nid: task-a\n---\n# A\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n")
+
+	// First reconcile: promotes B only.
+	promoted := queue.ReconcileReadyQueue(tasksDir, nil)
+	if promoted != 1 {
+		t.Fatalf("first reconcile: promoted = %d, want 1", promoted)
+	}
+	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"))
+	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-c.md"))
+
+	// C is still blocked by B (now in backlog, not completed).
+	promoted2 := queue.ReconcileReadyQueue(tasksDir, nil)
+	if promoted2 != 0 {
+		t.Fatalf("second reconcile: promoted = %d, want 0 (B not completed yet)", promoted2)
+	}
+}
+
+func TestDAG_CycleMovesToFailed(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// 2-node cycle: A -> B -> A. Downstream C -> A stays in waiting.
+	writeTask(t, tasksDir, queue.DirWaiting, "task-a.md", "---\nid: task-a\ndepends_on: [task-b]\n---\n# A\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-a]\n---\n# C (downstream)\n")
+
+	promoted := queue.ReconcileReadyQueue(tasksDir, nil)
+	if promoted != 0 {
+		t.Fatalf("promoted = %d, want 0", promoted)
+	}
+
+	// Cycle members should be in failed/ with cycle-failure markers.
+	for _, name := range []string{"task-a.md", "task-b.md"} {
+		failedPath := filepath.Join(tasksDir, queue.DirFailed, name)
+		mustExist(t, failedPath)
+		data := readFile(t, failedPath)
+		if !strings.Contains(data, "<!-- cycle-failure:") {
+			t.Fatalf("%s should contain cycle-failure marker", name)
+		}
+		mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, name))
+	}
+
+	// Downstream task should remain in waiting.
+	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-c.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirFailed, "task-c.md"))
+}
+
+func TestDAG_LongCycleMovesToFailed(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// 3-node cycle: A -> C, B -> A, C -> B. Downstream D -> C.
+	writeTask(t, tasksDir, queue.DirWaiting, "task-a.md", "---\nid: task-a\ndepends_on: [task-c]\n---\n# A\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "task-d.md", "---\nid: task-d\ndepends_on: [task-c]\n---\n# D\n")
+
+	promoted := queue.ReconcileReadyQueue(tasksDir, nil)
+	if promoted != 0 {
+		t.Fatalf("promoted = %d, want 0", promoted)
+	}
+
+	// All 3 cycle members should be in failed/.
+	for _, name := range []string{"task-a.md", "task-b.md", "task-c.md"} {
+		failedPath := filepath.Join(tasksDir, queue.DirFailed, name)
+		mustExist(t, failedPath)
+		data := readFile(t, failedPath)
+		if !strings.Contains(data, "<!-- cycle-failure:") {
+			t.Fatalf("%s should contain cycle-failure marker", name)
+		}
+	}
+
+	// Downstream D should stay in waiting.
+	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-d.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirFailed, "task-d.md"))
+}
+
+func TestDAG_AmbiguousID(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// ID "shared" in both completed and waiting — ambiguous.
+	writeTask(t, tasksDir, queue.DirCompleted, "shared-done.md", "---\nid: shared\n---\n# Done\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "shared-waiting.md", "---\nid: shared\n---\n# Still waiting\n")
+
+	// dependent task depends on the ambiguous ID.
+	writeTask(t, tasksDir, queue.DirWaiting, "dependent.md", "---\nid: dependent\ndepends_on: [shared]\n---\n# Dependent\n")
+
+	promoted := queue.ReconcileReadyQueue(tasksDir, nil)
+
+	// shared-waiting has no deps so it gets promoted. dependent stays blocked.
+	if promoted != 1 {
+		t.Fatalf("promoted = %d, want 1 (only shared-waiting)", promoted)
+	}
+
+	// dependent should remain in waiting (ambiguous ID not satisfied).
+	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "dependent.md"))
+}

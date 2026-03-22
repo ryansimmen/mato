@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"mato/internal/process"
+	"mato/internal/taskfile"
 )
 
 func captureStderr(t *testing.T, fn func()) string {
@@ -744,7 +745,7 @@ func TestReconcileReadyQueue_DoesNotOverwriteExistingBacklogTask(t *testing.T) {
 
 func TestReconcileReadyQueue_DetectsSelfDependency(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -760,14 +761,26 @@ func TestReconcileReadyQueue_DetectsSelfDependency(t *testing.T) {
 	if !strings.Contains(stderr, "task self-task depends on itself") {
 		t.Fatalf("expected self-dependency warning, got %q", stderr)
 	}
-	if _, err := os.Stat(waitingPath); err != nil {
-		t.Fatalf("self-dependent task should remain in waiting: %v", err)
+	// Self-dependent tasks are now moved to failed/ with a cycle-failure marker.
+	failedPath := filepath.Join(tasksDir, DirFailed, "self-task.md")
+	if _, err := os.Stat(failedPath); err != nil {
+		t.Fatalf("self-dependent task should be moved to failed/: %v", err)
+	}
+	if _, err := os.Stat(waitingPath); err == nil {
+		t.Fatal("self-dependent task should no longer be in waiting/")
+	}
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("read failed task: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- cycle-failure:") {
+		t.Fatalf("expected cycle-failure marker in failed task, got %q", string(data))
 	}
 }
 
 func TestReconcileReadyQueue_DetectsCircularDependency(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted} {
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -780,17 +793,30 @@ func TestReconcileReadyQueue_DetectsCircularDependency(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(stderr, "circular dependency detected between task-a and task-b") {
-		t.Fatalf("expected circular dependency warning, got %q", stderr)
+	// Both cycle members should have warnings.
+	if !strings.Contains(stderr, "task task-a is part of a circular dependency") {
+		t.Fatalf("expected circular dependency warning for task-a, got %q", stderr)
 	}
-	if strings.Count(stderr, "circular dependency detected between task-a and task-b") != 1 {
-		t.Fatalf("expected one circular dependency warning, got %q", stderr)
+	if !strings.Contains(stderr, "task task-b is part of a circular dependency") {
+		t.Fatalf("expected circular dependency warning for task-b, got %q", stderr)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-a.md")); err != nil {
-		t.Fatalf("task-a should remain in waiting: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-b.md")); err != nil {
-		t.Fatalf("task-b should remain in waiting: %v", err)
+	// Both cycle members should be moved to failed/ with cycle-failure markers.
+	for _, name := range []string{"task-a.md", "task-b.md"} {
+		failedPath := filepath.Join(tasksDir, DirFailed, name)
+		if _, err := os.Stat(failedPath); err != nil {
+			t.Fatalf("%s should be moved to failed/: %v", name, err)
+		}
+		waitingPath := filepath.Join(tasksDir, DirWaiting, name)
+		if _, err := os.Stat(waitingPath); err == nil {
+			t.Fatalf("%s should no longer be in waiting/", name)
+		}
+		data, err := os.ReadFile(failedPath)
+		if err != nil {
+			t.Fatalf("read failed task %s: %v", name, err)
+		}
+		if !strings.Contains(string(data), "<!-- cycle-failure:") {
+			t.Fatalf("expected cycle-failure marker in %s, got %q", name, string(data))
+		}
 	}
 }
 
@@ -1564,5 +1590,274 @@ func TestCleanStaleReviewLocks(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(locksDir, "agent.pid")); err != nil {
 		t.Error("non-review lock should not be touched")
+	}
+}
+
+func TestReconcileReadyQueue_ChainPromotionSemantics(t *testing.T) {
+	// A -> completed, B -> A, C -> B. First reconcile promotes B only.
+	// Second reconcile (after re-indexing) promotes C.
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "task-a.md"),
+		[]byte("---\nid: task-a\n---\n# A\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-b.md"),
+		[]byte("---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-c.md"),
+		[]byte("---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n"), 0o644)
+
+	captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir, nil)
+		if got != 1 {
+			t.Fatalf("first reconcile: promoted = %d, want 1 (only B)", got)
+		}
+	})
+
+	// B should be in backlog, C should still be in waiting.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task-b.md")); err != nil {
+		t.Fatal("task-b should be promoted to backlog")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-c.md")); err != nil {
+		t.Fatal("task-c should remain in waiting")
+	}
+}
+
+func TestReconcileReadyQueue_LongCycleMovesToFailed(t *testing.T) {
+	// 3-node cycle: A -> B -> C -> A. Downstream D -> C stays in waiting.
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-a.md"),
+		[]byte("---\nid: task-a\ndepends_on: [task-c]\n---\nA\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-b.md"),
+		[]byte("---\nid: task-b\ndepends_on: [task-a]\n---\nB\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-c.md"),
+		[]byte("---\nid: task-c\ndepends_on: [task-b]\n---\nC\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-d.md"),
+		[]byte("---\nid: task-d\ndepends_on: [task-c]\n---\nD\n"), 0o644)
+
+	captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir, nil)
+		if got != 0 {
+			t.Fatalf("promoted = %d, want 0", got)
+		}
+	})
+
+	// All cycle members should be in failed/ with cycle-failure markers.
+	for _, name := range []string{"task-a.md", "task-b.md", "task-c.md"} {
+		failedPath := filepath.Join(tasksDir, DirFailed, name)
+		data, err := os.ReadFile(failedPath)
+		if err != nil {
+			t.Fatalf("%s should be in failed/: %v", name, err)
+		}
+		if !strings.Contains(string(data), "<!-- cycle-failure:") {
+			t.Fatalf("expected cycle-failure marker in %s", name)
+		}
+	}
+
+	// Downstream task should remain in waiting.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-d.md")); err != nil {
+		t.Fatal("task-d (downstream) should remain in waiting")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "task-d.md")); err == nil {
+		t.Fatal("task-d should NOT be in failed/")
+	}
+}
+
+func TestReconcileReadyQueue_CycleDoesNotConsumeRetryBudget(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "cyclic.md"),
+		[]byte("---\nid: cyclic\ndepends_on: [cyclic]\n---\nSelf-cycle\n"), 0o644)
+
+	captureStderr(t, func() {
+		ReconcileReadyQueue(tasksDir, nil)
+	})
+
+	failedPath := filepath.Join(tasksDir, DirFailed, "cyclic.md")
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("cyclic task should be in failed/: %v", err)
+	}
+
+	// CountFailureMarkers should return 0 — cycle-failure records are excluded.
+	if count := taskfile.CountFailureMarkers(data); count != 0 {
+		t.Fatalf("CountFailureMarkers = %d, want 0 (cycle-failure should not consume retry budget)", count)
+	}
+	// But cycle-failure markers should be present.
+	if count := taskfile.CountCycleFailureMarkers(data); count != 1 {
+		t.Fatalf("CountCycleFailureMarkers = %d, want 1", count)
+	}
+}
+
+func TestReconcileReadyQueue_DownstreamOfCycleRemainsWaiting(t *testing.T) {
+	// B -> A (cycle: A -> B -> A). C -> A (downstream, not cycle member).
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-a.md"),
+		[]byte("---\nid: task-a\ndepends_on: [task-b]\n---\nA\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-b.md"),
+		[]byte("---\nid: task-b\ndepends_on: [task-a]\n---\nB\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-c.md"),
+		[]byte("---\nid: task-c\ndepends_on: [task-a]\n---\nC\n"), 0o644)
+
+	captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir, nil)
+		if got != 0 {
+			t.Fatalf("promoted = %d, want 0", got)
+		}
+	})
+
+	// Cycle members in failed/.
+	for _, name := range []string{"task-a.md", "task-b.md"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, name)); err != nil {
+			t.Fatalf("%s should be in failed/", name)
+		}
+	}
+	// Downstream stays in waiting.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "task-c.md")); err != nil {
+		t.Fatal("task-c should remain in waiting")
+	}
+}
+
+func TestReconcileReadyQueue_AmbiguousCompletedDoesNotSatisfy(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// ID "shared-id" in both completed and waiting (ambiguous).
+	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "shared-task.md"),
+		[]byte("---\nid: shared-id\n---\nDone\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "other-shared.md"),
+		[]byte("---\nid: shared-id\n---\nStill waiting\n"), 0o644)
+	// A task that depends on the ambiguous ID.
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "dependent.md"),
+		[]byte("---\nid: dependent\ndepends_on: [shared-id]\n---\nBlocked\n"), 0o644)
+
+	stderr := captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir, nil)
+		// other-shared.md has no deps and gets promoted; dependent stays blocked.
+		if got != 1 {
+			t.Fatalf("promoted = %d, want 1 (only other-shared)", got)
+		}
+	})
+
+	if !strings.Contains(stderr, "exists in both completed and non-completed") {
+		t.Fatalf("expected ambiguous ID warning, got %q", stderr)
+	}
+	// The dependent task should remain in waiting because the dependency
+	// is ambiguous.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "dependent.md")); err != nil {
+		t.Fatal("dependent task should remain in waiting")
+	}
+}
+
+func TestCountPromotableWaitingTasks_MatchesReconcile(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "dep-a.md"),
+		[]byte("---\nid: dep-a\n---\nDone\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "ready.md"),
+		[]byte("---\nid: ready\ndepends_on: [dep-a]\n---\nReady\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "blocked.md"),
+		[]byte("---\nid: blocked\ndepends_on: [missing]\n---\nBlocked\n"), 0o644)
+
+	count := CountPromotableWaitingTasks(tasksDir, nil)
+	if count != 1 {
+		t.Fatalf("CountPromotableWaitingTasks = %d, want 1", count)
+	}
+
+	captureStderr(t, func() {
+		promoted := ReconcileReadyQueue(tasksDir, nil)
+		if promoted != count {
+			t.Fatalf("ReconcileReadyQueue promoted %d, CountPromotableWaitingTasks returned %d", promoted, count)
+		}
+	})
+}
+
+func TestReconcileReadyQueue_DuplicateWaitingIDPromotesOnce(t *testing.T) {
+	// Two files in waiting/ share the same meta.ID and have no deps.
+	// Only the first (alphabetically) should be promoted; the duplicate
+	// must remain in waiting/.
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "aaa-dup.md"),
+		[]byte("---\nid: dup-id\n---\n# First\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "zzz-dup.md"),
+		[]byte("---\nid: dup-id\n---\n# Second\n"), 0o644)
+
+	promoted := 0
+	captureStderr(t, func() {
+		promoted = ReconcileReadyQueue(tasksDir, nil)
+	})
+
+	if promoted != 1 {
+		t.Fatalf("ReconcileReadyQueue promoted %d, want 1 (only the retained file)", promoted)
+	}
+
+	// First file (aaa-dup.md) should be promoted.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "aaa-dup.md")); err != nil {
+		t.Fatal("retained file aaa-dup.md should be promoted to backlog/")
+	}
+
+	// Duplicate file (zzz-dup.md) should remain in waiting/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "zzz-dup.md")); err != nil {
+		t.Fatal("duplicate file zzz-dup.md should remain in waiting/")
+	}
+}
+
+func TestReconcileReadyQueue_DuplicateWaitingIDCycleTargetsRetained(t *testing.T) {
+	// Two files share the same meta.ID and form a self-dependency (cycle).
+	// Only the retained file (first seen) should be moved to failed/; the
+	// duplicate should remain in waiting/ untouched.
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "aaa-self.md"),
+		[]byte("---\nid: self-id\ndepends_on: [self-id]\n---\n# Self dep\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "zzz-self.md"),
+		[]byte("---\nid: self-id\ndepends_on: [self-id]\n---\n# Self dep copy\n"), 0o644)
+
+	captureStderr(t, func() {
+		ReconcileReadyQueue(tasksDir, nil)
+	})
+
+	// Retained file (aaa-self.md) should be moved to failed/ with a cycle-failure marker.
+	failedPath := filepath.Join(tasksDir, DirFailed, "aaa-self.md")
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("retained file aaa-self.md should be in failed/: %v", err)
+	}
+	if !taskfile.ContainsCycleFailure(data) {
+		t.Fatal("retained file should have a cycle-failure marker")
+	}
+
+	// Duplicate file (zzz-self.md) should remain in waiting/ without a cycle-failure marker.
+	dupPath := filepath.Join(tasksDir, DirWaiting, "zzz-self.md")
+	dupData, err := os.ReadFile(dupPath)
+	if err != nil {
+		t.Fatalf("duplicate file zzz-self.md should remain in waiting/: %v", err)
+	}
+	if taskfile.ContainsCycleFailure(dupData) {
+		t.Fatal("duplicate file should NOT have a cycle-failure marker")
 	}
 }
