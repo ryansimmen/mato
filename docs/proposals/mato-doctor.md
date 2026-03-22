@@ -7,7 +7,7 @@ categories (git, host tools, Docker, queue layout, task parsing, locks/orphans,
 dependency integrity) and renders a text or JSON report with machine-usable exit
 codes. An optional `--fix` flag auto-repairs safe, idempotent issues.
 
-Estimated effort: ~2 days.
+Estimated effort: ~2.5 days.
 
 ## Goals
 
@@ -41,19 +41,60 @@ Flags:
 ```
 
 `--repo` and `--tasks-dir` mirror the existing root command and `mato status`
-for consistency. `--only` values are validated up front; unknown names are
-rejected with a usage error.
+for consistency.
 
 ### Exit Codes
 
 | Code | Meaning |
 |------|---------|
-| `0`  | No remaining warnings or errors (or all were fixed) |
-| `1`  | One or more warnings remain, no errors |
-| `2`  | One or more errors remain |
+| `0`  | No remaining warnings or errors after any fixes are applied |
+| `1`  | One or more warnings remain after fixes, no errors |
+| `2`  | One or more errors remain after fixes |
+
+Exit codes reflect the state **after** fixes are applied. If `--fix` repairs
+all issues, the exit code is `0` even though findings existed before the run.
+If `--fix` repairs some issues but warnings or errors remain, the exit code
+reflects the remaining severity.
 
 The command exits with a health status code without printing `mato error:` for a
-normal unhealthy report.
+normal unhealthy report. To achieve this, the doctor `RunE` returns a typed
+`ExitError` that carries the exit code:
+
+```go
+// cmd/mato/main.go
+
+type ExitError struct {
+	Code int
+}
+
+func (e ExitError) Error() string {
+	return fmt.Sprintf("exit %d", e.Code)
+}
+```
+
+`main()` checks for `ExitError` via `errors.As` and calls `os.Exit(e.Code)`
+without printing the `mato error:` prefix. All other errors continue to
+print the prefix and exit 1.
+
+### `--only` Validation
+
+Unknown `--only` values are rejected by `Run()` before any checks execute,
+returning a report with a single error finding. This keeps validation
+consistent for both text and JSON consumers — cobra usage output is not
+printed.
+
+### `--format` Validation
+
+Invalid `--format` values are rejected in the cobra `RunE` function (not in
+`Run()`), consistent with how `mato status` validates `--interval` in its
+`RunE`. This is a flag-parsing concern, not a domain concern, so a standard
+cobra error with usage output is appropriate:
+
+```go
+if format != "text" && format != "json" {
+	return fmt.Errorf("--format must be text or json, got %s", format)
+}
+```
 
 ## Design Decisions
 
@@ -68,6 +109,19 @@ only on success; other checks proceed regardless.
 Checks that need queue/task state share a single `queue.BuildIndex()` result
 via a lazily-built field on the shared context. This avoids re-parsing files
 and keeps doctor aligned with runtime behavior.
+
+The index is built once and reflects the filesystem state at build time. If
+`--fix` mutates the filesystem (e.g., `RecoverOrphanedTasks` moves tasks from
+in-progress to backlog), later checks use the pre-fix index. This is
+acceptable because:
+
+- `RecoverOrphanedTasks` moves tasks between non-waiting directories, so
+  dependency analysis (which only examines waiting and completed tasks) is
+  unaffected.
+- `CleanStaleLocks` and `CleanStaleReviewLocks` remove lock files, which are
+  not part of the index.
+- Created missing directories would be empty, contributing no tasks to the
+  index regardless.
 
 ### 3. Fix mode stays narrow
 
@@ -85,6 +139,14 @@ helper can be upgraded to use it — but doctor ships independently.
 Docker and tool inspection use package-level function variables in
 `internal/doctor/checks.go` for test injection, matching the existing
 `claimPrependFn` pattern in `internal/queue/claim.go`.
+
+### 6. Non-zero exit codes for health status
+
+`mato status` always exits 0 if it can successfully gather and display data,
+regardless of queue health — it is purely informational. `mato doctor`
+deliberately departs from this convention: exit code reflects remaining
+severity (0/1/2 for ok/warnings/errors). This is a diagnostic tool, not a
+dashboard, and CI consumers need machine-readable health signals.
 
 ## Output Format
 
@@ -144,11 +206,15 @@ separately.
 | Finding | Severity |
 |---------|----------|
 | Missing required tool: copilot, git, git-upload-pack, git-receive-pack, gh | ERROR |
-| Missing optional: git templates dir, system certs dir, gh config dir, `~/.copilot` | WARN |
+| Missing optional: git templates dir, system certs dir, gh config dir | WARN |
+| Missing optional: `~/.copilot` dir (net-new check, not in current `discoverHostTools()`) | WARN |
 | Resolved tool paths | INFO |
 
-Uses the new `InspectHostTools()` function, which checks all tools and returns
-structured findings instead of failing fast on the first missing tool.
+Uses the new `InspectHostTools()` function, which probes the same tools as
+`discoverHostTools()` but collects structured findings instead of failing fast.
+`InspectHostTools()` is a **parallel implementation**, not a refactor of
+`discoverHostTools()` — the existing function is left unchanged to avoid
+regressions in agent startup.
 
 ### C. Docker (`docker`)
 
@@ -177,9 +243,21 @@ var dockerProbe = func(ctx context.Context) error {
 |---------|----------|---------|
 | `.tasks` path unreadable | ERROR | No |
 | Missing queue directory (7 state dirs + `.locks/` + `messages/events/` + `messages/presence/` + `messages/completions/`) | ERROR | Yes |
+| Directory-level read error (e.g., permission denied) from `BuildWarnings()` | ERROR | No |
 | Per-directory task counts | INFO | — |
 
 Fix: `os.MkdirAll(dir, 0o755)` for each missing directory.
+
+The 7 state dirs come from `queue.AllDirs`. The messaging directory names
+(`messages/events`, `messages/presence`, `messages/completions`) are currently
+hardcoded strings in `internal/messaging/messaging.go` with no exported
+constant. Add an exported `MessagingDirs` slice to the `messaging` package
+(analogous to `queue.AllDirs`) so doctor doesn't duplicate the list.
+
+`BuildIndex()` records directory-level filesystem errors (e.g., permission
+denied when listing directory contents) as `BuildWarning` entries, separate
+from file-level `ParseFailure` entries. The queue check surfaces these via
+`idx.BuildWarnings()`.
 
 ### E. Task Parsing (`tasks`)
 
@@ -237,10 +315,12 @@ Uses `DiagnoseDependencies()` from `internal/queue/diagnostics.go`.
 
 ### Structured repair reporting
 
-The existing queue repair helpers (`CleanStaleLocks`, `CleanStaleReviewLocks`,
-`RecoverOrphanedTasks`) print to stdout/stderr and don't return structured
-results. For doctor, implement scan-and-fix helpers in
-`internal/doctor/checks.go` that:
+`CleanStaleLocks` and `CleanStaleReviewLocks` are completely silent — they
+return nothing and produce no output. `RecoverOrphanedTasks` prints progress
+messages to stdout (e.g., "Recovered orphaned task X back to backlog") and
+warnings to stderr. None of the three return structured results.
+
+For doctor, implement scan-and-fix helpers in `internal/doctor/checks.go` that:
 
 1. Detect the condition (scan lock files, check PID liveness) — this is the
    read-only diagnostic.
@@ -250,6 +330,25 @@ results. For doctor, implement scan-and-fix helpers in
 
 This avoids refactoring the existing repair helpers while giving doctor
 structured reporting. The diagnostic scan is independent of the repair action.
+
+**Stdout/stderr capture during `--fix`**: `RecoverOrphanedTasks()` prints
+directly to stdout and stderr, which would corrupt `--format json` output.
+During `--fix`, doctor temporarily redirects `os.Stdout` and `os.Stderr` to
+`os.DevNull` around calls to repair functions that produce output, then
+restores them. Since `os.Stdout` is `*os.File`, the redirect opens
+`os.DevNull` as a file rather than using `io.Writer`:
+
+```go
+devNull, _ := os.Open(os.DevNull)
+defer devNull.Close()
+saved := os.Stdout
+os.Stdout = devNull
+defer func() { os.Stdout = saved }()
+```
+
+The doctor report itself is written to the original stdout after all checks
+and fixes complete. `CleanStaleLocks` and `CleanStaleReviewLocks` produce no
+output, so no capture is needed for those.
 
 ## Data Model
 
@@ -272,7 +371,32 @@ type Finding struct {
 	Fixable  bool     `json:"fixable,omitempty"`
 	Fixed    bool     `json:"fixed,omitempty"`
 }
+```
 
+**Finding codes** follow the pattern `<category>.<issue>` using snake_case.
+These are stable identifiers for JSON consumers. Examples:
+
+| Code | Category | Meaning |
+|------|----------|---------|
+| `git.not_a_repo` | git | Path is not a git repository |
+| `git.repo_root` | git | Resolved repo root (INFO) |
+| `tools.missing_required` | tools | Required tool not found |
+| `tools.missing_optional` | tools | Optional directory not found |
+| `docker.cli_missing` | docker | Docker CLI not in PATH |
+| `docker.daemon_unreachable` | docker | Docker daemon timeout or error |
+| `queue.missing_dir` | queue | Expected directory does not exist |
+| `queue.read_error` | queue | Directory-level filesystem error |
+| `tasks.parse_error` | tasks | Malformed YAML frontmatter |
+| `locks.stale_pid` | locks | Agent PID file for dead process |
+| `locks.stale_review` | locks | Review lock for dead process |
+| `locks.orphaned_task` | locks | In-progress task with dead agent |
+| `locks.stale_duplicate` | locks | In-progress copy of later-state task |
+| `deps.ambiguous_id` | deps | Task ID in both completed and non-completed |
+| `deps.self_dependency` | deps | Task depends on itself |
+| `deps.cycle` | deps | Circular dependency between waiting tasks |
+| `deps.unknown_id` | deps | Dependency references non-existent task ID |
+
+```go
 type CheckReport struct {
 	Name     string    `json:"name"`
 	Findings []Finding `json:"findings"`
@@ -299,8 +423,10 @@ type Options struct {
 	Only   []string // optional check name filter
 }
 
-// Run executes all configured checks and returns a report.
-func Run(repoRoot, tasksDir string, opts Options) Report
+// Run executes all configured checks and returns a report. The context
+// is threaded to checks that perform external probes (e.g., Docker) so
+// that Ctrl+C cancellation works cleanly.
+func Run(ctx context.Context, repoRoot, tasksDir string, opts Options) Report
 ```
 
 ### Dependency diagnostics (`internal/queue/diagnostics.go`)
@@ -328,9 +454,11 @@ type DependencyDiagnostics struct {
 }
 
 // DiagnoseDependencies performs read-only dependency analysis. When idx
-// is nil, a temporary index is built internally. Uses the existing
-// dependsOnWaitingTask() logic for cycle detection; upgradeable to
-// internal/dag when that package lands.
+// is nil, a temporary index is built internally. Reuses the existing
+// resolvePromotableTasks() for the promotable count and
+// dependsOnWaitingTask() for cycle detection; both are unexported but
+// accessible within the queue package. Upgradeable to internal/dag
+// when that package lands.
 func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 ```
 
@@ -338,6 +466,12 @@ This extracts the warning logic from `ReconcileReadyQueue()` into structured
 return values. `ReconcileReadyQueue()` can then call `DiagnoseDependencies()`
 internally and emit warnings from the structured results, eliminating
 duplicated logic.
+
+**Cycle deduplication**: `logCircularDependency()` in `reconcile.go`
+deduplicates cycle warnings using a canonical-pair key (`min(a,b) + "\x00" +
+max(a,b)`). `DiagnoseDependencies()` uses the same canonical-pair pattern
+with its own `seen` map, appending to the issues slice instead of printing
+to stderr.
 
 ### Tool inspection (`internal/runner/tools.go`)
 
@@ -356,11 +490,12 @@ type ToolReport struct {
 
 // InspectHostTools probes all host tools and directories, returning
 // structured findings for every item regardless of success or failure.
+// This is a parallel implementation that mirrors the checks in
+// discoverHostTools() but collects findings instead of failing fast.
+// discoverHostTools() is NOT modified — it remains the production
+// code path for agent startup.
 func InspectHostTools() ToolReport
 ```
-
-`discoverHostTools()` is refactored to call `InspectHostTools()` and convert
-the result to the existing fail-fast error.
 
 ## Package Structure
 
@@ -370,11 +505,19 @@ the result to the existing fail-fast error.
 // internal/doctor/checks.go
 
 type checkContext struct {
+	ctx       context.Context
 	repoInput string
 	repoRoot  string // populated by checkGit on success
 	tasksDir  string
 	opts      Options
 	idx       *queue.PollIndex // lazily built, shared across checks
+}
+
+// hasRepo returns true if the git check resolved a valid repo root.
+// Checks that depend on a valid repo (queue, tasks, locks, deps) should
+// skip gracefully when this returns false.
+func (c *checkContext) hasRepo() bool {
+	return c.repoRoot != ""
 }
 
 type checkDef struct {
@@ -417,10 +560,14 @@ var dockerProbe = func(ctx context.Context) error {
 
 | File | Change |
 |------|--------|
-| `cmd/mato/main.go` | Add `newDoctorCmd()` as normal subcommand, exit code wiring |
-| `internal/runner/tools.go` | Add `InspectHostTools()` + `ToolReport`; refactor `discoverHostTools()` to use it |
+| `cmd/mato/main.go` | Add `ExitError` type, `newDoctorCmd()` as normal subcommand, exit code wiring |
 | `internal/queue/reconcile.go` | Refactor warning logic to call `DiagnoseDependencies()` |
+| `internal/messaging/messaging.go` | Add exported `MessagingDirs` slice; refactor `Init()` to use it |
 | `README.md` | Document `mato doctor` command |
+
+Note: `internal/runner/tools.go` gets the new `InspectHostTools()` function
+and types added alongside the existing code. `discoverHostTools()` is **not**
+modified.
 
 ## Existing Code Reuse
 
@@ -437,7 +584,8 @@ var dockerProbe = func(ctx context.Context) error {
 
 **Refactor for structured output** (small additions):
 
-- `internal/runner/tools.go` → new `InspectHostTools()` returning `ToolReport`
+- `internal/runner/tools.go` → new `InspectHostTools()` as a parallel
+  implementation alongside `discoverHostTools()` (existing function unchanged)
 - `internal/queue/reconcile.go` → extract dep warning logic into `DiagnoseDependencies()`
 
 **Do NOT reuse for read-only checks:**
@@ -466,7 +614,10 @@ var dockerProbe = func(ctx context.Context) error {
 | `TestDoctor_OnlyFilter_InvalidName` | Unknown check name rejected |
 | `TestDoctor_DockerTimeout` | 5-second timeout path covered |
 | `TestDoctor_FixReporting` | Fixed findings don't corrupt category severity |
+| `TestDoctor_FixJSONNotCorrupted` | `--fix` with `--format json` produces valid JSON (stdout capture works) |
+| `TestDoctor_BuildWarnings` | Directory-level read error surfaced in queue check |
 | `TestDoctor_JSONIncludesExitCode` | JSON shape includes exit_code field |
+| `TestDoctor_ContextCancellation` | Cancelled context stops checks cleanly |
 | `TestRenderText` | Text output format correct for all severity levels |
 | `TestRenderJSON` | Valid JSON, matches `Report` structure |
 | `TestExitCode` | Exit 0/1/2 for healthy/warnings/errors |
@@ -502,7 +653,7 @@ originals via `t.Cleanup()`. All tests use `t.TempDir()` and
 | 1 | `internal/doctor/doctor.go` — report model, `Options`, `Run()` skeleton | — |
 | 2 | `internal/doctor/render.go` — text and JSON rendering | Step 1 |
 | 3 | `internal/doctor/checks.go` — `checkDef`, `checkGit`, `checkQueueLayout` (with fix) | Step 1 |
-| 4 | `internal/runner/tools.go` — add `InspectHostTools()`, refactor `discoverHostTools()` | — |
+| 4 | `internal/runner/tools.go` — add `InspectHostTools()` alongside existing code | — |
 | 5 | `internal/doctor/checks.go` — `checkTools`, `checkDocker` (with 5s timeout) | Steps 3, 4 |
 | 6 | `internal/doctor/checks.go` — `checkTaskParsing`, `checkLocksAndOrphans` (with fix) | Step 3 |
 | 7 | `internal/queue/diagnostics.go` — `DiagnoseDependencies()`; refactor `ReconcileReadyQueue()` | — |
@@ -524,11 +675,12 @@ Steps 1–3, 4, and 7 can proceed in parallel.
 | Queue layout + Task parsing checks | 1.5 hours |
 | Locks/orphans check + fix mode | 1.5 hours |
 | Dependency diagnostics (`DiagnoseDependencies()`) | 2 hours |
+| `ReconcileReadyQueue()` refactor + regression testing | 2 hours |
 | CLI wiring + exit codes | 1 hour |
 | Unit tests | 3 hours |
 | Integration test | 1 hour |
 | Documentation | 30 min |
-| **Total** | **~2 days** |
+| **Total** | **~2.5 days** |
 
 ## Open Questions
 
