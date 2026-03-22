@@ -1,277 +1,282 @@
-# Glob Pattern Matching for `affects`
+# Glob Affects Matching — Implementation Plan
 
 ## Summary
 
-Add glob pattern support (`*`, `?`, `[...]`, `**`) to the `affects` frontmatter field, enabling tasks to declare file-scope conflicts using wildcards instead of enumerating every path. Uses the `doublestar` library for matching. Fully backward compatible — existing task files are unaffected.
+Extend `affects:` matching so task files can express glob patterns such as
+`internal/runner/*.go` and `internal/**/*_test.go`, while preserving the
+current exact-path and trailing-`/` directory-prefix semantics.
 
-## Motivation
+The implementation should centralize `affects` semantics in one shared helper
+so `frontmatter`, queue overlap detection, `PollIndex.HasActiveOverlap()`, and
+host-provided file-claim metadata all agree on the same rules.
 
-The `affects` field currently supports exact string matching and directory-prefix matching (trailing `/`). This forces users to either:
+Estimated effort: ~1-2 days.
 
-1. List every file individually — error-prone, stale as files are added/renamed.
-2. Use a directory prefix — too coarse; `internal/runner/` blocks any task touching that directory, even if only test files overlap.
+## Goals
 
-Glob patterns close the gap. `internal/runner/*.go` expresses "all Go files in runner" without blocking tasks that only affect `internal/runner/testdata/`. `internal/**/*_test.go` expresses "all test files under internal" — impossible today without listing every one.
+- Reduce false negatives in overlap detection without changing the task file
+  format.
+- Preserve the current O(n+m) fast path for exact-only `affects` lists.
+- Keep glob patterns stored as-is in task files; never expand them to concrete
+  file lists at parse time.
+- Document path semantics clearly enough that task authors can predict matches.
 
-## Design
+## Non-Goals
 
-### Library Choice
+- No regex support.
+- No glob negation (`!foo/**`) in v1.
+- No filesystem expansion or "show me everything this glob matches" feature in
+  `mato status` yet.
 
-**`github.com/bmatcuk/doublestar/v4`** — pure Go, zero transitive dependencies, MIT license. Supports `*`, `?`, `[...]`, and `**` (recursive directory matching). Go's stdlib `filepath.Match` lacks `**` support, which is the most useful pattern for multi-level directory trees.
+## Supported Syntax
 
-### Matching Rules
+`affects:` continues to support three forms:
 
-The `affectsMatch(a, b string) bool` function gains two new cases, evaluated after the existing exact and prefix checks:
+| Form | Meaning | Example |
+|------|---------|---------|
+| Exact path | One file path | `internal/runner/runner.go` |
+| Directory prefix | Entire subtree rooted at that directory | `internal/runner/` |
+| Glob pattern | Pattern match using glob metacharacters | `internal/runner/*.go` |
 
-| Case | Method | Example |
-|------|--------|---------|
-| Exact match | `a == b` | `foo.go` vs `foo.go` |
-| Directory prefix | `strings.HasPrefix` | `pkg/client/` vs `pkg/client/http.go` |
-| **Glob vs concrete** | `doublestar.Match(pattern, path)` | `internal/runner/*.go` vs `internal/runner/runner.go` |
-| **Glob vs glob** | Static prefix overlap check | `internal/*.go` vs `internal/r*.go` → conflict (prefixes overlap) |
+### Path semantics
 
-Glob-vs-glob matching is **conservative**: if the static prefixes of two patterns share a common ancestor, they are treated as conflicting. This avoids false negatives (merge conflicts) at the cost of occasional false positives (unnecessary deferral). Two globs with disjoint prefixes (`internal/runner/*.go` vs `pkg/client/*.go`) are correctly identified as non-conflicting.
+These rules should be documented in `docs/task-format.md` and enforced
+consistently in code:
 
-### `isGlob()` Gate
+- Paths are repo-relative and slash-separated (`internal/queue/overlap.go`),
+  even on Windows.
+- `*` matches within a single path segment.
+- `?` matches a single non-separator character.
+- `[abc]` and similar character classes are supported.
+- `**` matches across path separators.
+- A trailing `/` keeps its current meaning: directory-prefix claim, not a glob.
 
-A fast `isGlob()` check prevents glob processing unless metacharacters are present. If neither entry is a glob, all code paths are identical to today.
+## Library Choice
 
-**Brace expansion note:** `doublestar` supports `{a,b}` syntax (e.g., `internal/{runner,queue}/*.go`). The `isGlob()` function must check for `{` in addition to `*`, `?`, and `[` to correctly identify all patterns that `doublestar` will interpret.
+Use `github.com/bmatcuk/doublestar/v4` for glob matching. It covers `**`
+without introducing transitive dependencies, and it is small enough to justify
+the extra import for a correctness-sensitive feature.
 
-### Parse-Time Validation
+## Shared Implementation Boundary
 
-Invalid glob patterns (e.g., `internal/[bad`) are caught in `ParseTaskData()` before the task enters the queue. This matches the existing behavior for malformed YAML — the task fails to parse and is moved to `failed/`. At comparison time, `doublestar.Match` errors silently result in no-match as defense in depth.
+Do not duplicate `affects` logic across packages.
 
-### Fast-Path Preservation
-
-The current `overlappingAffects()` uses O(n+m) hash-map intersection when neither list contains prefix entries. The scan loop is extended to detect glob entries, and the fast path is used **only** when neither list has prefixes nor globs. Since most tasks use exact paths, the common case remains O(n+m).
-
-### `PollIndex` Changes
-
-`BuildIndex()` in `index.go` currently partitions active affects entries during the index build loop (lines 196-209) into two structures:
-
-- `activeAffects map[string][]string` — exact path entries, keyed for O(1) lookup.
-- `activeAffectsPrefixes []string` — directory prefix entries (trailing `/`), stored in a slice for linear scan.
-
-A third structure is added:
+Create a small shared helper package:
 
 ```go
-activeAffectsGlobs []string // glob patterns from active tasks
+// internal/affects/affects.go
+package affects
+
+func IsGlob(s string) bool
+func StaticPrefix(pattern string) string
+func Validate(pattern string) error
+func Match(a, b string) bool
+func Overlap(a, b []string) []string
 ```
 
-During the index build, the existing `isDirPrefix(af)` check is extended:
+Why this boundary:
+
+- `internal/frontmatter` needs validation but should not import `internal/queue`.
+- `internal/queue` needs matching and overlap checks.
+- `PollIndex.HasActiveOverlap()` and backlog deferral must share the same
+  matching rules.
+
+If the package feels too broad during implementation, `Validate` can stay in
+`internal/frontmatter`, but `Match` and `Overlap` must still have one canonical
+implementation.
+
+## Matching Rules
+
+`affects.Match(a, b)` should use conservative conflict detection:
+
+1. **Exact match**: unchanged.
+2. **Directory prefix match**: unchanged.
+3. **Glob vs concrete path**: use `doublestar.Match`.
+4. **Glob vs directory prefix**: compare the glob's static prefix with the
+   directory prefix. If the static prefix is empty, assume conflict. If one
+   prefix contains the other, assume conflict.
+5. **Glob vs glob**: if static prefixes are disjoint, return no match; if they
+   overlap or either static prefix is empty, assume conflict.
+
+### Why the conservative rules matter
+
+The important property is **no false negatives** for overlap detection. False
+positives only defer work; false negatives allow conflicting tasks to run.
+
+Examples:
+
+| A | B | Result | Reason |
+|---|---|--------|--------|
+| `main.go` | `main.go` | conflict | Exact match |
+| `internal/runner/` | `internal/runner/task.go` | conflict | Prefix |
+| `internal/runner/*.go` | `internal/runner/task.go` | conflict | Glob vs concrete |
+| `**/*.go` | `internal/` | conflict | Empty static prefix means "could match anywhere" |
+| `internal/**/*.go` | `pkg/client/` | no conflict | Static prefixes disjoint |
+| `internal/*.go` | `internal/r*.go` | conflict | Overlapping static prefix |
+
+## Validation and Error Handling
+
+Validate glob patterns at parse time in `frontmatter.ParseTaskData()`.
+
+- Valid glob pattern -> parse succeeds.
+- Malformed glob pattern -> parse failure, same as malformed YAML today.
+- At comparison time, any unexpected `doublestar` error should fall back to
+  "no match" as a defensive safety net.
+
+Prefer a dedicated pattern-validation helper over abusing a fake match against
+an empty path. The plan should use whatever validation entry point `doublestar`
+exposes cleanly; if none exists, a small wrapper can normalize that behavior in
+`internal/affects`.
+
+## Queue and Index Integration
+
+### `internal/queue/overlap.go`
+
+Replace the current local matching helpers with calls into `internal/affects`.
+
+- `DeferredOverlappingTasksDetailed()` should call `affects.Overlap()`.
+- `overlappingAffects()` can move into `internal/affects` entirely if that
+  simplifies reuse.
+
+### `internal/queue/index.go`
+
+Keep the current exact-match fast path, but make the index layout explicit.
+
+Add three active lookup buckets:
 
 ```go
-for _, af := range meta.Affects {
-    idx.activeAffects[af] = append(idx.activeAffects[af], name)
-    if isDirPrefix(af) {
-        if _, ok := activeAffectsPrefixSet[af]; !ok {
-            activeAffectsPrefixSet[af] = struct{}{}
-            idx.activeAffectsPrefixes = append(idx.activeAffectsPrefixes, af)
-        }
-    } else if isGlob(af) {
-        if _, ok := activeAffectsGlobSet[af]; !ok {
-            activeAffectsGlobSet[af] = struct{}{}
-            idx.activeAffectsGlobs = append(idx.activeAffectsGlobs, af)
-        }
-    }
-}
-```
-
-`HasActiveOverlap()` gains a third check phase after exact lookup and prefix scan:
-
-```go
-// Check if af matches any active glob pattern.
-for _, g := range idx.activeAffectsGlobs {
-    if affectsMatch(g, af) {
-        return true
-    }
-}
-```
-
-This is O(g) where g is the number of active glob entries — acceptable since globs are expected to be rare.
-
-## API Changes
-
-### New Functions in `internal/queue/overlap.go`
-
-```go
-// isGlob reports whether s contains glob metacharacters.
-func isGlob(s string) bool {
-    return strings.ContainsAny(s, "*?[{")
-}
-
-// staticPrefix returns the longest directory path before the first glob
-// metacharacter. Returns the full string if no metacharacters are present.
-func staticPrefix(pattern string) string {
-    for i, c := range pattern {
-        if c == '*' || c == '?' || c == '[' || c == '{' {
-            return pattern[:strings.LastIndex(pattern[:i], "/")+1]
-        }
-    }
-    return pattern
-}
-```
-
-### Modified `affectsMatch()`
-
-```go
-func affectsMatch(a, b string) bool {
-    if a == b {
-        return true
-    }
-    if strings.HasSuffix(a, "/") && strings.HasPrefix(b, a) {
-        return true
-    }
-    if strings.HasSuffix(b, "/") && strings.HasPrefix(a, b) {
-        return true
-    }
-
-    aGlob, bGlob := isGlob(a), isGlob(b)
-    if aGlob && bGlob {
-        pa, pb := staticPrefix(a), staticPrefix(b)
-        if pa == "" || pb == "" {
-            return true // empty prefix could match anything
-        }
-        return strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa)
-    }
-    if aGlob {
-        matched, _ := doublestar.Match(a, b)
-        return matched
-    }
-    if bGlob {
-        matched, _ := doublestar.Match(b, a)
-        return matched
-    }
-
-    return false
-}
-```
-
-### Modified `overlappingAffects()` Scan Loop
-
-```go
-aClean := make([]string, 0, len(a))
-hasPrefixA, hasGlobA := false, false
-for _, item := range a {
-    if item == "" {
-        continue
-    }
-    aClean = append(aClean, item)
-    if isDirPrefix(item) {
-        hasPrefixA = true
-    }
-    if isGlob(item) {
-        hasGlobA = true
-    }
-}
-// ... same for b ...
-
-if !hasPrefixA && !hasPrefixB && !hasGlobA && !hasGlobB {
-    // existing O(n+m) hash-map intersection
-}
-// else: pairwise comparison (unchanged)
-```
-
-### Modified `ParseTaskData()` in `internal/frontmatter/frontmatter.go`
-
-After the existing `filterEmpty(meta.Affects)` call:
-
-```go
-for _, af := range meta.Affects {
-    if isGlob(af) {
-        if _, err := doublestar.Match(af, ""); err != nil {
-            return TaskMeta{}, "", fmt.Errorf("invalid glob in affects %q: %w", af, err)
-        }
-    }
+type PollIndex struct {
+    activeAffectsExact    map[string][]string
+    activeAffectsPrefixes []string
+    activeAffectsGlobs    []string
+    // ...existing fields...
 }
 ```
 
-Note: `isGlob` is defined in `internal/queue/overlap.go`. Either expose it as an exported function, or extract a small shared helper (e.g., in a `internal/affects/` package or by adding the check inline in frontmatter). The simplest approach is to inline the `strings.ContainsAny(af, "*?[{")` check directly in `ParseTaskData()`.
+`HasActiveOverlap()` should check in this order:
+
+1. Exact match map lookup.
+2. Prefix comparisons.
+3. Glob comparisons against `activeAffectsGlobs` using the same shared matcher.
+
+This keeps glob logic opt-in. Exact-only repos should see the same fast path as
+today.
+
+### `ActiveAffects()` and file claims
+
+`ActiveAffects()` should continue returning the raw `affects` strings from task
+files. Glob entries must remain visible to downstream consumers rather than
+being expanded.
+
+That means `file-claims.json` can now contain:
+
+- exact paths,
+- directory prefixes ending in `/`, and
+- glob patterns.
+
+The host instructions must explain all three forms.
+
+## Files to Create or Modify
+
+| File | Change |
+|------|--------|
+| `go.mod` / `go.sum` | Add `github.com/bmatcuk/doublestar/v4` |
+| `internal/affects/affects.go` | New shared matching/validation helper |
+| `internal/affects/affects_test.go` | Unit tests for matching and validation |
+| `internal/frontmatter/frontmatter.go` | Validate glob patterns via shared helper |
+| `internal/frontmatter/frontmatter_test.go` | Valid/invalid glob parse tests |
+| `internal/queue/overlap.go` | Use shared overlap helper |
+| `internal/queue/overlap_test.go` | Extend overlap coverage for globs |
+| `internal/queue/index.go` | Add explicit active glob bucket + shared matching |
+| `internal/queue/index_test.go` | Add `HasActiveOverlap()` glob coverage |
+| `internal/queue/queue_test.go` | Add backlog deferral coverage for globs |
+| `internal/messaging/messaging.go` | Update comments or behavior assumptions around raw file claims if needed |
+| `internal/messaging/messaging_test.go` | Cover file-claims output containing glob entries |
+| `internal/runner/task-instructions.md` | Document exact, prefix, and glob file claims |
+| `internal/integration/prompt_test.go` | Validate prompt/docs stay in sync |
+| `docs/task-format.md` | Document syntax and path semantics |
+| `docs/architecture.md` | Briefly mention glob-aware overlap detection |
+| `docs/messaging.md` | Document raw file-claim keys, including globs |
+| `.github/skills/mato/SKILL.md` | Teach the planning skill when to use exact paths vs prefixes vs globs |
 
 ## Test Plan
 
-### Unit Tests — `internal/queue/overlap_test.go`
+### Unit tests (`internal/affects/affects_test.go` or `internal/queue/overlap_test.go`)
 
 | Test | Cases |
 |------|-------|
-| `TestIsGlob` | `foo.go` → false, `*.go` → true, `internal/**` → true, `pkg/client/` → false, `data[1].csv` → true, `internal/{runner,queue}/*.go` → true |
-| `TestStaticPrefix` | `internal/runner/*.go` → `internal/runner/`, `**/*.go` → `""`, `foo.go` → `foo.go`, `internal/{a,b}/*.go` → `internal/` |
-| `TestAffectsMatch` (new rows) | Glob vs exact match, glob vs exact no-match, `**` pattern, glob vs directory prefix (`internal/runner/*.go` vs `internal/runner/`), glob vs glob overlapping prefixes, glob vs glob disjoint prefixes |
-| `TestAffectsMatch_Symmetry` | Verify `affectsMatch(a, b) == affectsMatch(b, a)` for all test rows including new glob cases |
-| `TestOverlappingAffects` (new rows) | Mixed lists with globs, exact paths, and prefixes |
-| `TestAffectsMatch_GlobVsDirPrefix` | Explicit test: `affects: ["internal/runner/"]` vs `affects: ["internal/runner/*.go"]` — must conflict via the existing prefix check since `internal/runner/*.go` has prefix `internal/runner/` |
+| `TestIsGlob` | `foo.go` false, `*.go` true, `internal/**` true, `pkg/client/` false |
+| `TestStaticPrefix` | `internal/runner/*.go`, `**/*.go`, `foo.go`, `internal/**/x.go` |
+| `TestMatch` | exact/exact, prefix/file, glob/file, glob/prefix, glob/glob overlapping, glob/glob disjoint |
+| `TestMatch_Symmetric` | `Match(a, b) == Match(b, a)` for representative cases |
+| `TestOverlap` | mixed exact, prefix, and glob lists |
+| `TestValidate` | valid patterns accepted, malformed patterns rejected |
 
-### Unit Tests — `internal/frontmatter/frontmatter_test.go`
+Must include the previously missed cases:
 
-| Test | Cases |
-|------|-------|
-| `TestParseTaskData_ValidGlob` | `affects: ["internal/**/*.go"]` parses successfully |
-| `TestParseTaskData_InvalidGlob` | `affects: ["internal/[bad"]` returns descriptive error |
+- `**/*.go` vs `internal/` -> conflict
+- `internal/**/*.go` vs `internal/` -> conflict
+- `internal/**/*.go` vs `pkg/client/` -> no conflict
 
-### Index Tests — `internal/queue/index_test.go` or `queue_test.go`
+### Queue/index tests
 
-| Test | Cases |
-|------|-------|
-| `TestHasActiveOverlap_Globs` | Active task with glob affects, query with matching concrete path |
-| `TestDeferredOverlapping_Glob` | Two backlog tasks with glob-overlapping affects, verify correct deferral |
-
-### Integration Tests — `internal/integration/`
-
-| Test | Scenario |
+| Test | Coverage |
 |------|----------|
-| End-to-end glob deferral | Two tasks with glob affects, verify lower-priority task is deferred |
-| Mixed glob/exact overlap | One task with exact path, one with glob that matches it |
+| `TestHasActiveOverlap_GlobAgainstExact` | Active glob, incoming exact path |
+| `TestHasActiveOverlap_GlobAgainstPrefix` | Active glob, incoming directory prefix |
+| `TestDeferredOverlappingTasks_Glob` | Backlog deferral triggered by glob overlap |
+| `TestDeferredOverlappingTasks_ExactFastPath` | Exact-only behavior unchanged |
+
+### Frontmatter tests
+
+| Test | Coverage |
+|------|----------|
+| `TestParseTaskData_ValidGlob` | Valid glob parses successfully |
+| `TestParseTaskData_InvalidGlob` | Malformed glob produces parse failure |
+
+### Messaging/prompt tests
+
+| Test | Coverage |
+|------|----------|
+| `TestBuildAndWriteFileClaims_PreservesGlobs` | Raw claim keys include glob strings unchanged |
+| `TestPromptMentionsGlobClaims` | Embedded task instructions document glob claim semantics |
 
 ## Backward Compatibility
 
-- **Zero migration required.** Existing task files have no glob metacharacters → `isGlob()` returns false → all code paths identical to today.
-- **No format changes.** The `affects` field syntax is extended, not changed.
-- **Fast path preserved.** Exact-only lists still use O(n+m) hash-map intersection.
-- **Known limitation:** Paths containing literal `[`, `?`, `*`, or `{` characters are misinterpreted as globs. This is rare in source code paths and documented. A future version can add an escape mechanism if needed.
+This is **mostly backward compatible**, but not literally zero-risk.
 
-## Dependencies
+### Unchanged behavior
 
-**Add:** `github.com/bmatcuk/doublestar/v4` (latest stable)
+- Existing exact paths still behave the same.
+- Existing directory-prefix entries ending in `/` still behave the same.
+- Exact-only task files still use the same fast path.
 
-- Pure Go, zero transitive dependencies
-- MIT license
-- Used in `internal/queue/overlap.go` and `internal/frontmatter/frontmatter.go`
+### Intentional compatibility edge cases
 
-## Effort Estimate
+- Paths containing literal glob metacharacters such as `*`, `?`, or `[` will now
+  be interpreted as patterns.
+- Previously tolerated malformed patterns should now fail parse-time validation.
 
-| Task | Effort |
-|------|--------|
-| Add `doublestar` dependency | 10 min |
-| Implement `isGlob()`, `staticPrefix()` + tests | 45 min |
-| Extend `affectsMatch()` + `overlappingAffects()` + tests | 1.5 hours |
-| Extend `PollIndex` build + `HasActiveOverlap()` + tests | 1.5 hours |
-| Add glob validation to `ParseTaskData()` + tests | 45 min |
-| Integration tests | 1 hour |
-| Update documentation | 45 min |
-| Buffer for edge cases and review | 45 min |
-| **Total** | **~1 day** |
+These cases are rare for source-code repos, but they should be documented as a
+real behavior change rather than described as "fully backward compatible."
 
 ## Implementation Order
 
-1. **Add dependency.** `go get github.com/bmatcuk/doublestar/v4`. Verify build: `go build ./...`. Self-contained, no code changes.
+1. Add `doublestar` dependency.
+2. Create `internal/affects` with `IsGlob`, `StaticPrefix`, `Validate`, and
+   `Match`, plus unit tests.
+3. Update `internal/frontmatter/frontmatter.go` to validate patterns.
+4. Replace queue overlap logic with shared helper usage.
+5. Extend `PollIndex` with explicit exact/prefix/glob buckets.
+6. Add queue/index tests for active overlap and backlog deferral.
+7. Update file-claims messaging and embedded task instructions.
+8. Update docs and skill guidance.
 
-2. **Implement `isGlob()` and `staticPrefix()` with unit tests.** Add both functions to `internal/queue/overlap.go`. Add `TestIsGlob` and `TestStaticPrefix` table-driven tests. Verify: `go test -race ./internal/queue/...`. Self-contained — nothing calls these yet.
+## Deferred Questions
 
-3. **Extend `affectsMatch()` with glob matching.** Add the glob-vs-concrete and glob-vs-glob cases after the existing prefix checks. Add new rows to `TestAffectsMatch` covering glob-vs-exact, glob-vs-prefix, glob-vs-glob (overlapping and disjoint), and `**` patterns. Add explicit `TestAffectsMatch_GlobVsDirPrefix` test. Verify symmetry. Verify: `go test -race ./internal/queue/...`. Self-contained — `overlappingAffects` delegates to `affectsMatch`.
-
-4. **Update `overlappingAffects()` fast-path guard.** Extend the scan loop to detect glob entries via `isGlob()`. Gate the hash-map fast path on `!hasGlobA && !hasGlobB` in addition to the existing prefix check. Add new rows to `TestOverlappingAffects` with mixed glob/exact/prefix lists. Verify: `go test -race ./internal/queue/...`.
-
-5. **Extend `PollIndex` with `activeAffectsGlobs`.** Add the `activeAffectsGlobs []string` field to `PollIndex`. Update `BuildIndex()` to partition glob entries during the index build loop (alongside the existing prefix partitioning at `index.go:200-209`). Update `HasActiveOverlap()` to check incoming entries against active globs. Add index-level tests. Verify: `go test -race ./internal/queue/...`.
-
-6. **Add glob validation to `ParseTaskData()`.** Validate glob entries after `filterEmpty(meta.Affects)`. Invalid patterns cause a parse error. Add `TestParseTaskData_ValidGlob` and `TestParseTaskData_InvalidGlob`. Verify: `go test -race ./internal/frontmatter/...`.
-
-7. **Write integration tests.** Add end-to-end tests in `internal/integration/` covering glob-based deferral and mixed glob/exact overlap scenarios. Verify: `go test -race ./internal/integration/...`.
-
-8. **Update documentation.** Update `docs/task-format.md` to document glob syntax with examples and a pattern syntax table. Add brief mention in `docs/architecture.md`. Update `.github/skills/mato/SKILL.md` if task generation guidance changes. Full verification: `go build ./... && go vet ./... && go test -count=1 ./...`.
-
-## Open Questions
-
-1. **Glob negation.** `!internal/test_*.go` (exclude patterns) could be useful but adds complexity. Defer until a concrete use case arises.
-2. **Glob expansion in `mato status`.** Should `mato status` show which concrete files a glob would match? Useful for debugging but requires filesystem access at display time. Consider as a follow-up.
-3. **Literal escape mechanism.** For the rare case of paths containing `[`, `?`, `*`, or `{` characters. `doublestar` supports backslash escaping; a future version could document this convention.
+1. **Literal escaping**: if literal `[` or `?` paths ever become a real use
+   case, add an escaping convention in a later version.
+2. **Negated patterns**: useful, but too easy to make confusing in v1.
+3. **Pattern visualization**: `mato status` could someday show representative
+   matches for a glob, but that would require filesystem expansion and careful
+   UX.
