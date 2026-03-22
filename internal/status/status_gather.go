@@ -66,7 +66,7 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	data.waitingTasks = waitingTasks
 
 	// Deferred (conflict-blocked) tasks.
-	data.deferredDetail = queue.DeferredOverlappingTasksDetailed(tasksDir)
+	data.deferredDetail = queue.DeferredOverlappingTasksDetailed(tasksDir, nil)
 	deferred := make(map[string]struct{}, len(data.deferredDetail))
 	for name := range data.deferredDetail {
 		deferred[name] = struct{}{}

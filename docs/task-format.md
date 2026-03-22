@@ -49,7 +49,7 @@ Arrays may be written as inline lists (`[a, b]`) or block lists.
 | `id` | string | filename without `.md` | Stable task ID. If omitted, `my-task.md` becomes `my-task`. Use this in `depends_on`. Completed deps match either explicit `id` or filename stem. |
 | `priority` | int | `50` | Lower numbers are higher priority. `.queue` is generated from `backlog/` sorted by priority ascending, then filename ascending. |
 | `depends_on` | string array | empty | IDs that must be completed before a waiting task can be promoted into `backlog/`. No dependencies means the task is immediately ready. |
-| `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries by exact string match and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). |
+| `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). Exact strings are compared literally; an entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). |
 | `tags` | string array | empty | Free-form categorization labels. Parsed today, but not used by queue reconciliation. |
 | `estimated_complexity` | string | empty | Human hint for task size. Use `simple`, `medium`, or `complex` by convention; current parsing does not enforce these values. |
 | `max_retries` | int | `3` | Maximum number of `<!-- failure: ... -->` records before the task moves to `failed/`. A task with `max_retries: 3` is moved to `failed/` once it accumulates 3 failure records (i.e. `failures >= max_retries`). The host merge queue reads this per-task from frontmatter (authoritative). The agent uses a global default via `MATO_MAX_RETRIES` env var (safety net). |
@@ -65,6 +65,11 @@ Block arrays:
 affects:
   - pkg/client/http.go
   - pkg/client/retry.go
+```
+Directory prefix (trailing `/` matches any file under the path):
+```yaml
+affects:
+  - pkg/client/
 ```
 Scalars:
 ```yaml

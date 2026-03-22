@@ -153,7 +153,7 @@ func TestConcurrentReconcileReadyQueue(t *testing.T) {
 			}()
 
 			<-start
-			promoted[idx] = queue.ReconcileReadyQueue(tasksDir)
+			promoted[idx] = queue.ReconcileReadyQueue(tasksDir, nil)
 		}(i)
 	}
 
@@ -462,7 +462,7 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 	mustGitOutput(t, clone1, "push", "origin", "task/fix-bug")
 
 	// Agent 2 claims fix_bug.md; SelectAndClaimTask should disambiguate the branch.
-	claimed, err := queue.SelectAndClaimTask(tasksDir, "agent-2", nil)
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "agent-2", nil, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -689,7 +689,7 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 	highPath := writeTask(t, tasksDir, queue.DirBacklog, "task-high.md", "---\npriority: 5\naffects: [main.go]\n---\n# Task High\n")
 	writeTask(t, tasksDir, queue.DirBacklog, "task-low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Task Low\n")
 
-	deferred := queue.DeferredOverlappingTasks(tasksDir)
+	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
 
 	if len(deferred) != 1 {
 		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
@@ -701,7 +701,7 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-low.md"))
 	mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-low.md"))
 
-	if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, deferred, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest first pass: %v", err)
 	}
 	if got := readFile(t, filepath.Join(tasksDir, ".queue")); got != "task-high.md\n" {
@@ -710,11 +710,11 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 
 	mustRename(t, highPath, filepath.Join(tasksDir, queue.DirCompleted, "task-high.md"))
 
-	if got := queue.ReconcileReadyQueue(tasksDir); got != 0 {
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 0 {
 		t.Fatalf("queue.ReconcileReadyQueue() = %d, want 0", got)
 	}
 
-	deferred = queue.DeferredOverlappingTasks(tasksDir)
+	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
 	if len(deferred) != 0 {
 		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
 	}
@@ -723,7 +723,7 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 	mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-low.md"))
 	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-high.md"))
 
-	if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, deferred, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest second pass: %v", err)
 	}
 	if got := readFile(t, filepath.Join(tasksDir, ".queue")); got != "task-low.md\n" {
@@ -747,13 +747,13 @@ func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
 		"---\nid: blocked\npriority: 10\naffects: [main.go]\n---\n# Blocked task\n")
 
 	// Compute deferred set
-	deferred := queue.DeferredOverlappingTasks(tasksDir)
+	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
 	if _, ok := deferred["blocked.md"]; !ok {
 		t.Fatal("blocked.md should be in deferred set")
 	}
 
 	// Write manifest excluding deferred
-	if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, deferred, nil); err != nil {
 		t.Fatalf("WriteQueueManifest: %v", err)
 	}
 
@@ -786,7 +786,7 @@ func TestConcurrentSelectAndClaimTask(t *testing.T) {
 			fmt.Sprintf("# Claim task %d\nDo something.\n", i))
 	}
 
-	if err := queue.WriteQueueManifest(tasksDir, nil); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, nil, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest: %v", err)
 	}
 
@@ -808,7 +808,7 @@ func TestConcurrentSelectAndClaimTask(t *testing.T) {
 			}()
 
 			<-start
-			ct, err := queue.SelectAndClaimTask(tasksDir, fmt.Sprintf("agent-%d", id), nil)
+			ct, err := queue.SelectAndClaimTask(tasksDir, fmt.Sprintf("agent-%d", id), nil, nil)
 			results[id] = ct
 			errs[id] = err
 		}(g)

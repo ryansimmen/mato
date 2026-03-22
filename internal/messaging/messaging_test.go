@@ -1228,6 +1228,45 @@ func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 	}
 }
 
+func TestBuildAndWriteFileClaims_PreservesDirectoryPrefixes(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"),
+		[]byte("---\naffects:\n  - pkg/client/\n---\n# Task A\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "task-b.md"),
+		[]byte("---\naffects:\n  - pkg/server/main.go\n---\n# Task B\n"), 0o644)
+
+	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if len(claims) != 2 {
+		t.Fatalf("expected 2 claims, got %d: %v", len(claims), claims)
+	}
+	if c, ok := claims["pkg/client/"]; !ok || c.Task != "task-a.md" || c.Status != queue.DirInProgress {
+		t.Fatalf("unexpected claim for pkg/client/: %+v", c)
+	}
+	if c, ok := claims["pkg/server/main.go"]; !ok || c.Task != "task-b.md" || c.Status != queue.DirReadyMerge {
+		t.Fatalf("unexpected claim for pkg/server/main.go: %+v", c)
+	}
+}
+
 func TestBuildAndWriteFileClaims_ExcludeTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {

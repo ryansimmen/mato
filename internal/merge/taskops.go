@@ -11,6 +11,7 @@ import (
 	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/queue"
+	"mato/internal/taskfile"
 )
 
 func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr error) error {
@@ -48,10 +49,7 @@ func shouldFailTask(taskPath string) bool {
 }
 
 func failMergeTask(src, dst, reason string) error {
-	reason = strings.TrimSpace(reason)
-	reason = strings.ReplaceAll(reason, "\r", " ")
-	reason = strings.ReplaceAll(reason, "\n", " ")
-	reason = strings.ReplaceAll(reason, "--", "—")
+	reason = taskfile.SanitizeCommentText(reason)
 	if reason == "" {
 		reason = "merge queue failure"
 	}

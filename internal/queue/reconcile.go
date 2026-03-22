@@ -18,56 +18,49 @@ type promotableTask struct {
 // resolvePromotableTasks determines which waiting tasks have all dependencies
 // met and are not blocked by active overlap. It is a pure read-only function:
 // no file moves, no warnings to stderr.
-func resolvePromotableTasks(tasksDir string) []promotableTask {
-	completedIDs := completedTaskIDs(tasksDir)
-	nonCompletedIDs := nonCompletedTaskIDs(tasksDir)
+//
+// When idx is nil, a temporary index is built internally.
+func resolvePromotableTasks(tasksDir string, idx *PollIndex) []promotableTask {
+	idx = ensureIndex(tasksDir, idx)
+
+	completedIDs := idx.CompletedIDs()
+	nonCompletedIDs := idx.NonCompletedIDs()
+
+	// Copy completedIDs so we can remove ambiguous entries without
+	// mutating the index's map.
+	safeCompleted := make(map[string]struct{}, len(completedIDs))
+	for id := range completedIDs {
+		safeCompleted[id] = struct{}{}
+	}
 
 	// Remove ambiguous IDs: if an ID appears in both completed and
 	// non-completed directories, we cannot safely assume the dependency
 	// is satisfied — it may refer to the non-completed copy.
 	for id := range nonCompletedIDs {
-		if _, dup := completedIDs[id]; dup {
-			delete(completedIDs, id)
+		if _, dup := safeCompleted[id]; dup {
+			delete(safeCompleted, id)
 		}
 	}
 
-	waitingDir := filepath.Join(tasksDir, DirWaiting)
-	names, err := ListTaskFiles(waitingDir)
-	if err != nil {
-		return nil
-	}
-
-	type parsedWaiting struct {
-		name string
-		path string
-		meta frontmatter.TaskMeta
-	}
-
-	var parsed []parsedWaiting
-	waitingDeps := make(map[string][]string, len(names))
-	for _, name := range names {
-		path := filepath.Join(waitingDir, name)
-		meta, _, err := frontmatter.ParseTaskFile(path)
-		if err != nil {
-			continue
-		}
-		parsed = append(parsed, parsedWaiting{name: name, path: path, meta: meta})
-		waitingDeps[meta.ID] = meta.DependsOn
+	waitingTasks := idx.TasksByState(DirWaiting)
+	waitingDeps := make(map[string][]string, len(waitingTasks))
+	for _, snap := range waitingTasks {
+		waitingDeps[snap.Meta.ID] = snap.Meta.DependsOn
 	}
 
 	var result []promotableTask
-	for _, task := range parsed {
+	for _, snap := range waitingTasks {
 		ready := true
-		for _, dep := range task.meta.DependsOn {
-			if dep == task.meta.ID {
+		for _, dep := range snap.Meta.DependsOn {
+			if dep == snap.Meta.ID {
 				ready = false
 				continue
 			}
-			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, task.meta.ID, waitingDeps, map[string]struct{}{}) {
+			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, snap.Meta.ID, waitingDeps, map[string]struct{}{}) {
 				ready = false
 				continue
 			}
-			if _, ok := completedIDs[dep]; ok {
+			if _, ok := safeCompleted[dep]; ok {
 				continue
 			}
 			ready = false
@@ -75,79 +68,75 @@ func resolvePromotableTasks(tasksDir string) []promotableTask {
 		if !ready {
 			continue
 		}
-		if hasActiveOverlap(tasksDir, task.meta.Affects) {
+		if idx.HasActiveOverlap(snap.Meta.Affects) {
 			continue
 		}
-		result = append(result, promotableTask{name: task.name, path: task.path, meta: task.meta})
+		result = append(result, promotableTask{name: snap.Filename, path: snap.Path, meta: snap.Meta})
 	}
 	return result
 }
 
-func ReconcileReadyQueue(tasksDir string) int {
-	// Move unparseable waiting tasks to failed/ before resolving promotions.
-	waitingDir := filepath.Join(tasksDir, DirWaiting)
-	names, err := ListTaskFiles(waitingDir)
-	if err == nil {
-		for _, name := range names {
-			path := filepath.Join(waitingDir, name)
-			if _, _, parseErr := frontmatter.ParseTaskFile(path); parseErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", name, parseErr)
-				failedPath := filepath.Join(tasksDir, DirFailed, name)
-				if moveErr := AtomicMove(path, failedPath); moveErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", name, moveErr)
-				}
-			}
+// ReconcileReadyQueue promotes waiting tasks whose dependencies are satisfied
+// to backlog/. It also moves unparseable waiting/backlog tasks to failed/.
+//
+// When idx is nil, a temporary index is built internally.
+func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
+	idx = ensureIndex(tasksDir, idx)
+
+	// Move unparseable waiting/backlog tasks to failed/ using index parse failures.
+	for _, pf := range idx.WaitingParseFailures() {
+		fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", pf.Filename, pf.Err)
+		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
+		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
+		}
+	}
+	for _, pf := range idx.BacklogParseFailures() {
+		fmt.Fprintf(os.Stderr, "warning: moving unparseable backlog task %s to failed/: %v\n", pf.Filename, pf.Err)
+		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
+		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
 		}
 	}
 
 	// Emit warnings for ambiguous IDs, self-dependencies, circular
 	// dependencies, and unknown dependency IDs.
-	completedIDs := completedTaskIDs(tasksDir)
-	nonCompletedIDs := nonCompletedTaskIDs(tasksDir)
+	completedIDs := idx.CompletedIDs()
+	nonCompletedIDs := idx.NonCompletedIDs()
 	for id := range nonCompletedIDs {
 		if _, dup := completedIDs[id]; dup {
 			fmt.Fprintf(os.Stderr, "warning: task ID %q exists in both completed and non-completed directories; dependency on it will not be satisfied\n", id)
 		}
 	}
 
-	knownIDs := allKnownTaskIDs(tasksDir)
-	waitingNames, _ := ListTaskFiles(waitingDir)
-	waitingDeps := make(map[string][]string)
-	type waitingInfo struct {
-		name string
-		meta frontmatter.TaskMeta
-	}
-	var waitingInfos []waitingInfo
-	for _, name := range waitingNames {
-		meta, _, parseErr := frontmatter.ParseTaskFile(filepath.Join(waitingDir, name))
-		if parseErr != nil {
-			continue
-		}
-		waitingDeps[meta.ID] = meta.DependsOn
-		waitingInfos = append(waitingInfos, waitingInfo{name: name, meta: meta})
+	knownIDs := idx.AllIDs()
+	waitingTasks := idx.TasksByState(DirWaiting)
+	waitingDeps := make(map[string][]string, len(waitingTasks))
+	for _, snap := range waitingTasks {
+		waitingDeps[snap.Meta.ID] = snap.Meta.DependsOn
 	}
 
 	loggedCircularDeps := make(map[string]struct{})
-	for _, task := range waitingInfos {
-		for _, dep := range task.meta.DependsOn {
-			if dep == task.meta.ID {
-				fmt.Fprintf(os.Stderr, "warning: task %s depends on itself\n", task.meta.ID)
+	for _, snap := range waitingTasks {
+		for _, dep := range snap.Meta.DependsOn {
+			if dep == snap.Meta.ID {
+				fmt.Fprintf(os.Stderr, "warning: task %s depends on itself\n", snap.Meta.ID)
 				continue
 			}
-			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, task.meta.ID, waitingDeps, map[string]struct{}{}) {
-				logCircularDependency(loggedCircularDeps, task.meta.ID, dep)
+			if _, ok := waitingDeps[dep]; ok && dependsOnWaitingTask(dep, snap.Meta.ID, waitingDeps, map[string]struct{}{}) {
+				logCircularDependency(loggedCircularDeps, snap.Meta.ID, dep)
 				continue
 			}
 			if _, ok := completedIDs[dep]; ok {
 				continue
 			}
 			if _, ok := knownIDs[dep]; !ok {
-				fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", task.name, dep)
+				fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", snap.Filename, dep)
 			}
 		}
 	}
 
-	promotable := resolvePromotableTasks(tasksDir)
+	promotable := resolvePromotableTasks(tasksDir, idx)
 	promoted := 0
 	for _, task := range promotable {
 		dst := filepath.Join(tasksDir, DirBacklog, task.name)
@@ -164,60 +153,10 @@ func ReconcileReadyQueue(tasksDir string) int {
 // CountPromotableWaitingTasks is a read-only variant of ReconcileReadyQueue.
 // It returns the number of waiting tasks whose dependencies are satisfied and
 // would be promoted, without actually moving any files.
-func CountPromotableWaitingTasks(tasksDir string) int {
-	return len(resolvePromotableTasks(tasksDir))
-}
-
-func completedTaskIDs(tasksDir string) map[string]struct{} {
-	completedDir := filepath.Join(tasksDir, DirCompleted)
-	names, err := ListTaskFiles(completedDir)
-	if err != nil {
-		return map[string]struct{}{}
-	}
-
-	ids := make(map[string]struct{}, len(names)*2)
-	for _, name := range names {
-		stem := frontmatter.TaskFileStem(name)
-		ids[stem] = struct{}{}
-		path := filepath.Join(completedDir, name)
-		meta, _, err := frontmatter.ParseTaskFile(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse completed task %s: %v\n", name, err)
-			continue
-		}
-		ids[meta.ID] = struct{}{}
-	}
-	return ids
-}
-
-// collectTaskIDs scans the given subdirectories under tasksDir and returns the
-// set of task IDs found (both filename stems and frontmatter IDs).
-func collectTaskIDs(tasksDir string, dirs []string) map[string]struct{} {
-	ids := make(map[string]struct{})
-	for _, dir := range dirs {
-		names, err := ListTaskFiles(filepath.Join(tasksDir, dir))
-		if err != nil {
-			continue
-		}
-		for _, name := range names {
-			ids[frontmatter.TaskFileStem(name)] = struct{}{}
-			path := filepath.Join(tasksDir, dir, name)
-			if meta, _, err := frontmatter.ParseTaskFile(path); err == nil {
-				ids[meta.ID] = struct{}{}
-			}
-		}
-	}
-	return ids
-}
-
-// nonCompletedTaskIDs returns the set of task IDs found in all directories except completed/.
-func nonCompletedTaskIDs(tasksDir string) map[string]struct{} {
-	return collectTaskIDs(tasksDir, []string{DirWaiting, DirBacklog, DirInProgress, DirReadyReview, DirReadyMerge, DirFailed})
-}
-
-// allKnownTaskIDs returns the set of task IDs found across all queue directories.
-func allKnownTaskIDs(tasksDir string) map[string]struct{} {
-	return collectTaskIDs(tasksDir, AllDirs)
+//
+// When idx is nil, a temporary index is built internally.
+func CountPromotableWaitingTasks(tasksDir string, idx *PollIndex) int {
+	return len(resolvePromotableTasks(tasksDir, idx))
 }
 
 func dependsOnWaitingTask(taskID, targetID string, waitingDeps map[string][]string, visited map[string]struct{}) bool {

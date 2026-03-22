@@ -94,10 +94,10 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 
 	backlogTask := writeTask(t, tasksDir, queue.DirBacklog, "add-hello.md", "# Add hello\nCreate hello.txt with \"hello world\"\n")
 
-	if got := queue.ReconcileReadyQueue(tasksDir); got != 0 {
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 0 {
 		t.Fatalf("queue.ReconcileReadyQueue() = %d, want 0", got)
 	}
-	if err := queue.WriteQueueManifest(tasksDir, nil); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, nil, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest: %v", err)
 	}
 	if !queue.HasAvailableTasks(tasksDir, nil) {
@@ -163,7 +163,7 @@ func TestDependencyChainPromotion(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\npriority: 2\ndepends_on: [task-a]\n---\n# Task B\n")
 	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\npriority: 3\ndepends_on: [task-b]\n---\n# Task C\n")
 
-	if got := queue.ReconcileReadyQueue(tasksDir); got != 1 {
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 1 {
 		t.Fatalf("first queue.ReconcileReadyQueue() = %d, want 1", got)
 	}
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"))
@@ -176,7 +176,7 @@ func TestDependencyChainPromotion(t *testing.T) {
 		filepath.Join(tasksDir, queue.DirCompleted, "task-a.md"),
 	)
 
-	if got := queue.ReconcileReadyQueue(tasksDir); got != 1 {
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 1 {
 		t.Fatalf("second queue.ReconcileReadyQueue() = %d, want 1", got)
 	}
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"))
@@ -187,7 +187,7 @@ func TestDependencyChainPromotion(t *testing.T) {
 		filepath.Join(tasksDir, queue.DirCompleted, "task-b.md"),
 	)
 
-	if got := queue.ReconcileReadyQueue(tasksDir); got != 1 {
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 1 {
 		t.Fatalf("third queue.ReconcileReadyQueue() = %d, want 1", got)
 	}
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"))
@@ -200,7 +200,7 @@ func TestOverlapPrevention(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirBacklog, "low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Low\n")
 	writeTask(t, tasksDir, queue.DirBacklog, "other.md", "---\npriority: 10\naffects: [README.md]\n---\n# Other\n")
 
-	deferred := queue.DeferredOverlappingTasks(tasksDir)
+	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
 
 	if len(deferred) != 1 {
 		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
@@ -218,11 +218,11 @@ func TestOverlapPrevention(t *testing.T) {
 		filepath.Join(tasksDir, queue.DirCompleted, "high.md"),
 	)
 
-	if got := queue.ReconcileReadyQueue(tasksDir); got != 0 {
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 0 {
 		t.Fatalf("queue.ReconcileReadyQueue() after completion = %d, want 0", got)
 	}
 
-	deferred = queue.DeferredOverlappingTasks(tasksDir)
+	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
 	if len(deferred) != 0 {
 		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
 	}
@@ -246,7 +246,7 @@ func TestOrphanRecoveryAndRequeue(t *testing.T) {
 		t.Fatalf("recovered task missing failure record: %q", contents)
 	}
 
-	if err := queue.WriteQueueManifest(tasksDir, nil); err != nil {
+	if err := queue.WriteQueueManifest(tasksDir, nil, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest: %v", err)
 	}
 	if manifest := readFile(t, filepath.Join(tasksDir, ".queue")); !strings.Contains(manifest, "recover-me.md") {

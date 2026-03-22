@@ -1,13 +1,8 @@
 package queue
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
-
-	"mato/internal/frontmatter"
-	"mato/internal/taskfile"
+	"strings"
 )
 
 type backlogTask struct {
@@ -18,49 +13,21 @@ type backlogTask struct {
 	affects  []string
 }
 
-func hasActiveOverlap(tasksDir string, affects []string) bool {
-	if len(affects) == 0 {
-		return false
-	}
-	// Only check in-progress, ready-for-review, and ready-to-merge — these represent
-	// tasks that are actively being worked on, under review, or awaiting merge.
-	// We intentionally exclude backlog/
-	// because DeferredOverlappingTasks handles backlog-vs-backlog conflicts with
-	// proper priority ordering. Including backlog here would cause priority
-	// inversion: a high-priority waiting task would be blocked by a lower-priority
-	// backlog task that hasn't even been claimed yet.
-	for _, dir := range []string{DirInProgress, DirReadyReview, DirReadyMerge} {
-		dirPath := filepath.Join(tasksDir, dir)
-		names, err := ListTaskFiles(dirPath)
-		if err != nil {
-			continue
-		}
-		for _, name := range names {
-			meta, _, err := frontmatter.ParseTaskFile(filepath.Join(dirPath, name))
-			if err != nil {
-				continue
-			}
-			if len(overlappingAffects(affects, meta.Affects)) > 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // DeferralInfo describes why a task was excluded from the runnable queue.
 type DeferralInfo struct {
-	BlockedBy    string   // name of the conflicting task
-	BlockedByDir string   // directory of the conflicting task (e.g., "in-progress", "backlog")
-	OverlapFiles []string // files both tasks claim in affects
+	BlockedBy          string   // name of the conflicting task
+	BlockedByDir       string   // directory of the conflicting task (e.g., "in-progress", "backlog")
+	ConflictingAffects []string // affects entries from either task that overlap
 }
 
 // DeferredOverlappingTasks returns the set of backlog task filenames that should
 // be excluded from the queue because they conflict with higher-priority backlog
 // tasks or active tasks in in-progress/ready-for-review/ready-to-merge. Tasks remain in backlog/
 // (no file movement) to avoid churn between waiting/ and backlog/.
-func DeferredOverlappingTasks(tasksDir string) map[string]struct{} {
-	detailed := DeferredOverlappingTasksDetailed(tasksDir)
+//
+// When idx is nil, a temporary index is built internally.
+func DeferredOverlappingTasks(tasksDir string, idx *PollIndex) map[string]struct{} {
+	detailed := DeferredOverlappingTasksDetailed(tasksDir, idx)
 	simple := make(map[string]struct{}, len(detailed))
 	for name := range detailed {
 		simple[name] = struct{}{}
@@ -69,27 +36,22 @@ func DeferredOverlappingTasks(tasksDir string) map[string]struct{} {
 }
 
 // DeferredOverlappingTasksDetailed returns deferred tasks with the reason for deferral.
-func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
-	deferred := make(map[string]DeferralInfo)
-	backlogDir := filepath.Join(tasksDir, DirBacklog)
-	names, err := ListTaskFiles(backlogDir)
-	if err != nil {
-		return deferred
-	}
+//
+// When idx is nil, a temporary index is built internally.
+func DeferredOverlappingTasksDetailed(tasksDir string, idx *PollIndex) map[string]DeferralInfo {
+	idx = ensureIndex(tasksDir, idx)
 
-	tasks := make([]backlogTask, 0, len(names))
-	for _, name := range names {
-		path := filepath.Join(backlogDir, name)
-		meta, _, err := frontmatter.ParseTaskFile(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for overlap detection: %v\n", name, err)
-			continue
-		}
+	deferred := make(map[string]DeferralInfo)
+
+	// Build sorted backlog tasks from the index.
+	backlogSnaps := idx.TasksByState(DirBacklog)
+	tasks := make([]backlogTask, 0, len(backlogSnaps))
+	for _, snap := range backlogSnaps {
 		tasks = append(tasks, backlogTask{
-			name:     name,
-			path:     path,
-			priority: meta.Priority,
-			affects:  meta.Affects,
+			name:     snap.Filename,
+			path:     snap.Path,
+			priority: snap.Meta.Priority,
+			affects:  snap.Meta.Affects,
 		})
 	}
 
@@ -100,7 +62,8 @@ func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
 		return tasks[i].name < tasks[j].name
 	})
 
-	active := taskfile.CollectActiveAffects(tasksDir)
+	// Use index-derived active affects instead of rescanning filesystem.
+	active := idx.ActiveAffects()
 	kept := make([]backlogTask, 0, len(tasks)+len(active))
 	for _, at := range active {
 		kept = append(kept, backlogTask{
@@ -119,9 +82,9 @@ func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
 					blockedByDir = DirBacklog
 				}
 				deferred[task.name] = DeferralInfo{
-					BlockedBy:    other.name,
-					BlockedByDir: blockedByDir,
-					OverlapFiles: overlap,
+					BlockedBy:          other.name,
+					BlockedByDir:       blockedByDir,
+					ConflictingAffects: overlap,
 				}
 				isDef = true
 				break
@@ -136,30 +99,98 @@ func DeferredOverlappingTasksDetailed(tasksDir string) map[string]DeferralInfo {
 	return deferred
 }
 
+// affectsMatch reports whether two affects entries conflict. An entry ending
+// with "/" is treated as a directory prefix that matches any path underneath
+// it. Two prefix entries conflict if one contains the other.
+func affectsMatch(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if strings.HasSuffix(a, "/") && strings.HasPrefix(b, a) {
+		return true
+	}
+	if strings.HasSuffix(b, "/") && strings.HasPrefix(a, b) {
+		return true
+	}
+	return false
+}
+
+// isDirPrefix reports whether s is a directory-prefix affects entry.
+func isDirPrefix(s string) bool {
+	return strings.HasSuffix(s, "/")
+}
+
 func overlappingAffects(a, b []string) []string {
 	if len(a) == 0 || len(b) == 0 {
 		return nil
 	}
 
-	seen := make(map[string]struct{}, len(a))
+	// Filter empty strings and detect whether either list has prefix entries.
+	aClean := make([]string, 0, len(a))
+	hasPrefixA := false
 	for _, item := range a {
 		if item == "" {
 			continue
 		}
-		seen[item] = struct{}{}
+		aClean = append(aClean, item)
+		if isDirPrefix(item) {
+			hasPrefixA = true
+		}
+	}
+	bClean := make([]string, 0, len(b))
+	hasPrefixB := false
+	for _, item := range b {
+		if item == "" {
+			continue
+		}
+		bClean = append(bClean, item)
+		if isDirPrefix(item) {
+			hasPrefixB = true
+		}
 	}
 
+	if len(aClean) == 0 || len(bClean) == 0 {
+		return nil
+	}
+
+	// Fast path: no prefix entries, use exact-match map lookup.
+	if !hasPrefixA && !hasPrefixB {
+		seen := make(map[string]struct{}, len(aClean))
+		for _, item := range aClean {
+			seen[item] = struct{}{}
+		}
+		overlap := make([]string, 0)
+		added := make(map[string]struct{})
+		for _, item := range bClean {
+			if _, ok := seen[item]; !ok {
+				continue
+			}
+			if _, ok := added[item]; ok {
+				continue
+			}
+			added[item] = struct{}{}
+			overlap = append(overlap, item)
+		}
+		sort.Strings(overlap)
+		return overlap
+	}
+
+	// Slow path: at least one side has prefix entries, do pairwise comparison.
 	overlap := make([]string, 0)
 	added := make(map[string]struct{})
-	for _, item := range b {
-		if _, ok := seen[item]; !ok {
-			continue
+	for _, ai := range aClean {
+		for _, bi := range bClean {
+			if affectsMatch(ai, bi) {
+				if _, ok := added[ai]; !ok {
+					added[ai] = struct{}{}
+					overlap = append(overlap, ai)
+				}
+				if _, ok := added[bi]; !ok {
+					added[bi] = struct{}{}
+					overlap = append(overlap, bi)
+				}
+			}
 		}
-		if _, ok := added[item]; ok {
-			continue
-		}
-		added[item] = struct{}{}
-		overlap = append(overlap, item)
 	}
 	sort.Strings(overlap)
 	return overlap

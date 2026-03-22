@@ -316,17 +316,19 @@ func ReadAllCompletionDetails(tasksDir string) ([]CompletionDetail, error) {
 	return details, nil
 }
 
-// FileClaim describes which task is actively modifying a given file.
+// FileClaim describes which task is actively modifying a given file or
+// directory prefix declared in affects: metadata.
 type FileClaim struct {
 	Task   string `json:"task"`
 	Status string `json:"status"`
 }
 
 // BuildAndWriteFileClaims builds a file-claims.json index from tasks in
-// in-progress/ and ready-to-merge/ that have affects: metadata, then writes
-// it atomically to .tasks/messages/file-claims.json.
+// in-progress/, ready-for-review/, and ready-to-merge/ that have affects:
+// metadata, then writes it atomically to .tasks/messages/file-claims.json.
 // If excludeTask is non-empty, skip the task with that filename so the
-// just-claimed task does not see its own files as conflicting.
+// just-claimed task does not see its own files as conflicting. Entries ending
+// with "/" are preserved as directory-prefix claims.
 func BuildAndWriteFileClaims(tasksDir, excludeTask string) error {
 	active := taskfile.CollectActiveAffects(tasksDir)
 	claims := make(map[string]FileClaim, len(active)*2)
