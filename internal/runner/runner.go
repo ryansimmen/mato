@@ -125,7 +125,7 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 
 	// Run dependency reconciliation (read-only: report what would be promoted)
 	fmt.Println("\n=== Dependency Resolution ===")
-	promotable := queue.CountPromotableWaitingTasks(tasksDir)
+	promotable := queue.CountPromotableWaitingTasks(tasksDir, nil)
 	if promotable > 0 {
 		fmt.Printf("  %d task(s) in waiting/ would be promoted to backlog/\n", promotable)
 	} else {
@@ -134,7 +134,7 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 
 	// Detect affects conflicts
 	fmt.Println("\n=== Affects Conflict Detection ===")
-	detailed := queue.DeferredOverlappingTasksDetailed(tasksDir)
+	detailed := queue.DeferredOverlappingTasksDetailed(tasksDir, nil)
 	if len(detailed) > 0 {
 		// Sort deferred task names for stable output.
 		names := make([]string, 0, len(detailed))
@@ -144,8 +144,8 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 		sort.Strings(names)
 		for _, name := range names {
 			info := detailed[name]
-			fmt.Printf("  DEFERRED %s (blocked by %s in %s/, overlap: %v)\n",
-				name, info.BlockedBy, info.BlockedByDir, info.OverlapFiles)
+			fmt.Printf("  DEFERRED %s (blocked by %s in %s/, conflicting affects: %v)\n",
+				name, info.BlockedBy, info.BlockedByDir, info.ConflictingAffects)
 		}
 	} else {
 		fmt.Println("  No affects conflicts detected")
@@ -157,7 +157,7 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 	for name := range detailed {
 		deferredSimple[name] = struct{}{}
 	}
-	manifest, manifestErr := queue.ComputeQueueManifest(tasksDir, deferredSimple)
+	manifest, manifestErr := queue.ComputeQueueManifest(tasksDir, deferredSimple, nil)
 	if manifestErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not compute queue manifest: %v\n", manifestErr)
 	}
@@ -376,19 +376,31 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		messaging.CleanStalePresence(tasksDir)
 		messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 
-		queue.ReconcileReadyQueue(tasksDir)
-		deferred := queue.DeferredOverlappingTasks(tasksDir)
+		// Build the poll index once per cycle. All consumers below use
+		// this snapshot instead of independently scanning directories
+		// and parsing files.
+		idx := queue.BuildIndex(tasksDir)
+
+		queue.ReconcileReadyQueue(tasksDir, idx)
+
+		// Rebuild the index after reconcile since it may have moved
+		// tasks from waiting/ to backlog/ or failed/. The rebuild cost
+		// (~7 dir scans + N parses) is minimal compared to the redundant
+		// work that was previously done.
+		idx = queue.BuildIndex(tasksDir)
+
+		deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
 		// Merge in tasks excluded due to failed/ being unavailable so they
 		// are not re-selected on each poll, preventing livelock.
 		for name := range failedDirExcluded {
 			deferred[name] = struct{}{}
 		}
-		if err := queue.WriteQueueManifest(tasksDir, deferred); err != nil {
+		if err := queue.WriteQueueManifest(tasksDir, deferred, idx); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 			pollHadError = true
 		}
 
-		claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred)
+		claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, idx)
 		var fdErr *queue.FailedDirUnavailableError
 		if errors.As(claimErr, &fdErr) {
 			failedDirExcluded[fdErr.TaskFilename] = struct{}{}
@@ -420,7 +432,7 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			recoverStuckTask(tasksDir, agentID, claimed)
 		}
 
-		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir); reviewTask != nil {
+		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx); reviewTask != nil {
 			// Verify the task branch exists before launching the review agent.
 			if _, err := git.Output(env.repoRoot, "rev-parse", "--verify", "refs/heads/"+reviewTask.Branch); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: task branch %s missing from host repo, recording review failure for %s\n", reviewTask.Branch, reviewTask.Filename)
@@ -445,7 +457,7 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			}()
 		}
 
-		hasReviewTasks := selectTaskForReview(tasksDir) != nil
+		hasReviewTasks := selectTaskForReview(tasksDir, idx) != nil
 		isIdle := !claimedTask && !hasReviewTasks && !merge.HasReadyTasks(tasksDir)
 		if checkIdleTransition(isIdle, &wasIdle) {
 			fmt.Println("No tasks found in backlog, ready-for-review, or ready-to-merge. Waiting...")

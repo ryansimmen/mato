@@ -37,13 +37,10 @@ type reviewVerdict struct {
 // reviewCandidates scans ready-for-review/ and returns all review candidates
 // sorted by priority (ascending) then filename. Tasks whose review retry
 // budget is exhausted are moved to failed/ and excluded from the result.
-func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	names, err := queue.ListTaskFiles(reviewDir)
-	if err != nil {
-		return nil
-	}
-
+//
+// When idx is non-nil, pre-parsed metadata from the index is used instead of
+// re-parsing each file from disk.
+func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTask {
 	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 
 	type candidate struct {
@@ -52,57 +49,101 @@ func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 	}
 
 	var candidates []candidate
-	for _, name := range names {
-		path := filepath.Join(reviewDir, name)
-		meta, body, err := frontmatter.ParseTaskFile(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse review candidate %s: %v\n", name, err)
-			continue
-		}
 
-		// Check review retry budget before including as a candidate.
-		// Only count review-specific failures (<!-- review-failure: -->),
-		// not task agent failures (<!-- failure: -->).
-		maxRetries := meta.MaxRetries
-		failures, failErr := queue.CountReviewFailureLines(path)
-		if failErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not count failures for review candidate %s, skipping: %v\n", name, failErr)
-			continue
-		}
-		if failures >= maxRetries {
-			dst := filepath.Join(failedDir, name)
-			if err := os.MkdirAll(failedDir, 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", name, err)
+	// Use index if available; otherwise fall back to filesystem scan.
+	if idx != nil {
+		snaps := idx.TasksByState(queue.DirReadyReview)
+		for _, snap := range snaps {
+			maxRetries := snap.Meta.MaxRetries
+			failures := snap.ReviewFailureCount
+			if failures >= maxRetries {
+				if err := os.MkdirAll(failedDir, 0o755); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", snap.Filename, err)
+					continue
+				}
+				if moveErr := queue.AtomicMove(snap.Path, filepath.Join(failedDir, snap.Filename)); moveErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
+				} else {
+					fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
+						snap.Filename, failures, maxRetries)
+				}
 				continue
 			}
-			// Use AtomicMove to prevent silently overwriting an existing
-			// file (TOCTOU race defense).
-			if moveErr := queue.AtomicMove(path, dst); moveErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", name, moveErr)
-			} else {
-				fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
-					name, failures, maxRetries)
+
+			branch := snap.Branch
+			if branch == "" {
+				branch = "task/" + frontmatter.SanitizeBranchName(snap.Filename)
+				activeBranches := idx.ActiveBranches()
+				if _, taken := activeBranches[branch]; taken {
+					branch = branch + "-" + frontmatter.BranchDisambiguator(snap.Filename)
+				}
 			}
-			continue
+			title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
+			candidates = append(candidates, candidate{
+				task: &queue.ClaimedTask{
+					Filename: snap.Filename,
+					Branch:   branch,
+					Title:    title,
+					TaskPath: snap.Path,
+				},
+				priority: snap.Meta.Priority,
+			})
+		}
+	} else {
+		// Fallback: scan filesystem.
+		reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+		names, err := queue.ListTaskFiles(reviewDir)
+		if err != nil {
+			return nil
 		}
 
-		branch := taskfile.ParseBranch(path)
-		if branch == "" {
-			branch = "task/" + frontmatter.SanitizeBranchName(name)
-			if _, taken := queue.CollectActiveBranches(tasksDir)[branch]; taken {
-				branch = branch + "-" + frontmatter.BranchDisambiguator(name)
+		for _, name := range names {
+			path := filepath.Join(reviewDir, name)
+			meta, body, err := frontmatter.ParseTaskFile(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not parse review candidate %s: %v\n", name, err)
+				continue
 			}
+
+			maxRetries := meta.MaxRetries
+			failures, failErr := queue.CountReviewFailureLines(path)
+			if failErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not count failures for review candidate %s, skipping: %v\n", name, failErr)
+				continue
+			}
+			if failures >= maxRetries {
+				dst := filepath.Join(failedDir, name)
+				if err := os.MkdirAll(failedDir, 0o755); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", name, err)
+					continue
+				}
+				if moveErr := queue.AtomicMove(path, dst); moveErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", name, moveErr)
+				} else {
+					fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
+						name, failures, maxRetries)
+				}
+				continue
+			}
+
+			branch := taskfile.ParseBranch(path)
+			if branch == "" {
+				branch = "task/" + frontmatter.SanitizeBranchName(name)
+				if _, taken := queue.CollectActiveBranches(tasksDir, nil)[branch]; taken {
+					branch = branch + "-" + frontmatter.BranchDisambiguator(name)
+				}
+			}
+			title := frontmatter.ExtractTitle(name, body)
+			candidates = append(candidates, candidate{
+				task: &queue.ClaimedTask{
+					Filename: name,
+					Branch:   branch,
+					Title:    title,
+					TaskPath: path,
+				},
+				priority: meta.Priority,
+			})
 		}
-		title := frontmatter.ExtractTitle(name, body)
-		candidates = append(candidates, candidate{
-			task: &queue.ClaimedTask{
-				Filename: name,
-				Branch:   branch,
-				Title:    title,
-				TaskPath: path,
-			},
-			priority: meta.Priority,
-		})
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
@@ -122,8 +163,10 @@ func reviewCandidates(tasksDir string) []*queue.ClaimedTask {
 // selectTaskForReview scans ready-for-review/ and returns the highest-priority
 // task that needs review. Returns nil if no tasks need review.
 // This does not acquire a lock; use selectAndLockReview for mutual exclusion.
-func selectTaskForReview(tasksDir string) *queue.ClaimedTask {
-	candidates := reviewCandidates(tasksDir)
+//
+// When idx is nil, the filesystem is scanned directly.
+func selectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTask {
+	candidates := reviewCandidates(tasksDir, idx)
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -133,8 +176,10 @@ func selectTaskForReview(tasksDir string) *queue.ClaimedTask {
 // selectAndLockReview returns the highest-priority review candidate that this
 // agent can exclusively lock, along with a cleanup function to release the
 // lock. Returns (nil, nil) when no unlocked review task is available.
-func selectAndLockReview(tasksDir string) (*queue.ClaimedTask, func()) {
-	for _, task := range reviewCandidates(tasksDir) {
+//
+// When idx is nil, the filesystem is scanned directly.
+func selectAndLockReview(tasksDir string, idx *queue.PollIndex) (*queue.ClaimedTask, func()) {
+	for _, task := range reviewCandidates(tasksDir, idx) {
 		cleanup, ok := queue.AcquireReviewLock(tasksDir, task.Filename)
 		if ok {
 			return task, cleanup
@@ -254,16 +299,16 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		case "reject":
 			moveReviewedTask(tasksDir, agentID, task, rejectDisposition)
 		default:
-			appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
-			fmt.Printf("Review incomplete: recorded review-failure for %s\n", task.Filename)
+			recorded := appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
+			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
 		}
 		return
 	}
 
 	var verdict reviewVerdict
 	if err := json.Unmarshal(data, &verdict); err != nil {
-		appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not parse verdict file: %v", err))
-		fmt.Printf("Review incomplete: malformed verdict file for %s\n", task.Filename)
+		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not parse verdict file: %v", err))
+		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "malformed verdict file")
 		return
 	}
 
@@ -273,31 +318,37 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	case "approve":
 		// Write approval marker to task file.
 		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now)); err != nil {
+			recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not write approval marker: %v", err))
 			fmt.Fprintf(os.Stderr, "warning: could not write approval marker: %v\n", err)
+			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
+			return
 		}
 		moveReviewedTask(tasksDir, agentID, task, approveDisposition)
 
 	case "reject":
-		reason := strings.TrimSpace(verdict.Reason)
+		reason := taskfile.SanitizeCommentText(verdict.Reason)
 		if reason == "" {
 			reason = "no reason provided"
 		}
 		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason)); err != nil {
+			recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not write rejection marker: %v", err))
 			fmt.Fprintf(os.Stderr, "warning: could not write rejection marker: %v\n", err)
+			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
+			return
 		}
 		moveReviewedTask(tasksDir, agentID, task, rejectDisposition)
 
 	case "error":
-		reason := strings.TrimSpace(verdict.Reason)
+		reason := taskfile.SanitizeCommentText(verdict.Reason)
 		if reason == "" {
 			reason = "review agent reported an error"
 		}
-		appendReviewFailure(task.TaskPath, agentID, reason)
-		fmt.Printf("Review error: recorded review-failure for %s: %s\n", task.Filename, reason)
+		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
+		logReviewFailureOutcome("Review error", task.Filename, recorded, reason)
 
 	default:
-		appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
-		fmt.Printf("Review incomplete: unknown verdict %q for %s\n", verdict.Verdict, task.Filename)
+		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
+		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, fmt.Sprintf("unknown verdict %q", verdict.Verdict))
 	}
 }
 
@@ -323,10 +374,28 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 
 // appendReviewFailure writes a review-failure comment to the task file.
 // The task stays in ready-for-review/ for a future review attempt.
-func appendReviewFailure(taskPath, agentID, reason string) {
+func appendReviewFailure(taskPath, agentID, reason string) bool {
 	if err := taskfile.AppendReviewFailure(taskPath, agentID, reason); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		return false
 	}
+	return true
+}
+
+func logReviewFailureOutcome(prefix, filename string, recorded bool, detail string) {
+	if detail != "" {
+		if recorded {
+			fmt.Printf("%s: recorded review-failure for %s: %s\n", prefix, filename, detail)
+			return
+		}
+		fmt.Printf("%s: could not record review-failure for %s: %s\n", prefix, filename, detail)
+		return
+	}
+	if recorded {
+		fmt.Printf("%s: recorded review-failure for %s\n", prefix, filename)
+		return
+	}
+	fmt.Printf("%s: could not record review-failure for %s\n", prefix, filename)
 }
 
 // extractReviewRejections reads review-rejection comments from the task file,

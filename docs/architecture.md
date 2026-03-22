@@ -53,26 +53,31 @@ The loop in `Run()` polls every 10 seconds. The exact order is:
 ```text
 queue.RecoverOrphanedTasks(tasksDir)
 queue.CleanStaleLocks(tasksDir)
+queue.CleanStaleReviewLocks(tasksDir)
 messaging.CleanStalePresence(tasksDir)
 messaging.CleanOldMessages(tasksDir, 24*time.Hour)
-queue.ReconcileReadyQueue(tasksDir)
-deferred := queue.DeferredOverlappingTasks(tasksDir)
+
+idx := queue.BuildIndex(tasksDir)          // build poll index once
+queue.ReconcileReadyQueue(tasksDir, idx)
+idx = queue.BuildIndex(tasksDir)           // rebuild after reconcile
+
+deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
 // merge failedDirExcluded into deferred
-queue.WriteQueueManifest(tasksDir, deferred)
-claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred)
+queue.WriteQueueManifest(tasksDir, deferred, idx)
+claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, idx)
 if FailedDirUnavailableError → add task to failedDirExcluded
 if claimed != nil:
     messaging.WriteMessage(...) intent
     runOnce(...)
     recoverStuckTask(...)
-reviewTask := selectTaskForReview(tasksDir)
-if reviewTask != "":
+if reviewTask, cleanup := selectAndLockReview(tasksDir, idx); reviewTask != nil:
     runReview(reviewTask, ...)
 merge.AcquireLock(tasksDir) + merge.ProcessQueue(...)
 if no claimed task and no ready-to-merge: print idle message
 wait for signal or 10 seconds
 ```
 Important details from the implementation:
+- The poll loop builds a `PollIndex` (`queue.BuildIndex(tasksDir)`) at the start of each cycle. The index reads every task file once and provides O(1) lookups for task IDs, active branches, `affects` metadata, and state. All consumers in the cycle share this snapshot instead of independently scanning directories and parsing YAML frontmatter. The index is rebuilt after `ReconcileReadyQueue` since it may promote tasks from `waiting/` to `backlog/`. Functions that accept a `*PollIndex` parameter treat `nil` as "build a temporary index internally", preserving backward compatibility for callers outside the poll loop (e.g., `DryRun`, `status`, integration tests).
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
 - `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifest()`. Conflict-deferred tasks are excluded from the manifest so agents will not select them.
@@ -183,13 +188,12 @@ State meanings:
 | `failed/` | failure record budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
 Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
 ## 5. Dependency Resolution
-`queue.ReconcileReadyQueue(tasksDir)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied.
+`queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied.
 How it works:
-1. `completedTaskIDs(tasksDir)` (in `reconcile.go`) scans `completed/*.md`.
-2. For each completed task, it records both the filename stem and `TaskMeta.ID` in a set.
-3. `queue.ReconcileReadyQueue(...)` scans `waiting/*.md` and parses each file with `frontmatter.ParseTaskFile(...)`.
-4. Every entry in `meta.DependsOn` must exist in the completed-ID set.
-5. If all dependencies are present, the task moves `waiting/ -> backlog/`; otherwise it stays in `waiting/`.
+1. The `PollIndex` provides `CompletedIDs()` — a set of both filename stems and explicit `id:` values for every task in `completed/`.
+2. `queue.ReconcileReadyQueue(...)` iterates waiting tasks (from the index or by scanning `waiting/*.md` when no index is provided) and parses each file's frontmatter.
+3. Every entry in `meta.DependsOn` must exist in the completed-ID set.
+4. If all dependencies are present, the task moves `waiting/ -> backlog/`; otherwise it stays in `waiting/`.
 What “ready” means in the current code:
 - A dependency is satisfied only if it matches a task already in `completed/`.
 - Matching can happen by file stem or explicit `id:` frontmatter.
@@ -275,21 +279,23 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 - The review verdict is communicated via a JSON verdict file. The host writes the HTML comment markers to the task file for state tracking after reading the verdict.
 
 ## 8. Conflict Prevention
-`queue.DeferredOverlappingTasks(tasksDir)` (in `queue/overlap.go`) prevents multiple backlog tasks from claiming the same files simultaneously.
+`queue.DeferredOverlappingTasks(tasksDir, idx)` (in `queue/overlap.go`) prevents multiple backlog tasks from claiming the same files simultaneously.
 Algorithm:
-1. Scan `backlog/*.md` and `in-progress/*.md` + `ready-to-merge/*.md` (active tasks).
+1. Collect active tasks (`in-progress/`, `ready-for-review/`, `ready-to-merge/`) and backlog tasks from the `PollIndex` (or by scanning the filesystem when no index is provided).
 2. Parse each task's `priority` and `affects`.
 3. Sort backlog tasks by ascending priority, then filename.
-4. Seed the "kept" set with active tasks (immovable — already being worked on or awaiting merge).
+4. Seed the "kept" set with active tasks (immovable — already being worked on or awaiting merge/review).
 5. For each backlog task, compare its `affects` list with every kept task.
 6. If there is overlap, add the task to the deferred exclusion set (it stays in `backlog/` but is excluded from `.queue` — agents won't see it).
 7. The exclusion set is passed to `WriteQueueManifest` and `SelectAndClaimTask`.
-`overlappingAffects(a, b)` (in `overlap.go`) is an exact intersection test:
+`overlappingAffects(a, b)` (in `overlap.go`) detects conflicts between two affects lists:
 - no overlap if either list is empty
-- values must match by exact string equality
+- exact strings are compared literally
+- an entry ending with `/` is treated as a directory prefix: it matches any entry that starts with that prefix (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Two prefix entries conflict if one contains the other.
+- when no prefix entries are present, a fast-path map lookup is used (O(n+m)); otherwise pairwise comparison is applied
 - duplicates are removed from the overlap report
 - the overlap list is sorted before logging
-Important consequence: `affects` is metadata, not a live diff. `mato` does not interpret it as globs or path prefixes.
+Important consequence: `affects` is metadata, not a live diff. `mato` does not interpret it as globs.
 ## 9. Code Structure
 
 The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypoint, `internal/` for library packages.
@@ -309,6 +315,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Review lifecycle: `selectTaskForReview`, `runReview`, `postReviewAction` (`review.go`).
 
 ### `internal/queue/`
+- Poll index — `BuildIndex`, `PollIndex`, `TaskSnapshot` (`index.go`).
 - Task claiming and failure-record counting (`claim.go`).
 - Queue directory constants (`dirs.go`).
 - Agent registration — `RegisterAgent` (`queue.go`).
@@ -351,7 +358,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `internal/frontmatter/`
 - `TaskMeta` schema.
-- YAML-like frontmatter parsing (stdlib only).
+- YAML-like frontmatter parsing (stdlib only) — `ParseTaskFile` (from disk) and `ParseTaskData` (from raw bytes).
 - Default metadata values and task-body extraction.
 - Strips comment-only HTML metadata lines from the body.
 - Branch-name sanitization — `SanitizeBranchName`, `BranchDisambiguator`.
@@ -375,7 +382,7 @@ The host acts as a knowledge broker between agents, following an agent → host 
 
 Concrete examples:
 - **Failure context**: When an agent fails, it appends a `<!-- failure: ... -->` comment to the task file. On the next attempt, the host reads these lines via `extractFailureLines(...)` and injects them as `MATO_PREVIOUS_FAILURES`, so the new agent can learn from prior mistakes without parsing the task file itself.
-- **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
+- **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Entries are stored as the literal `affects:` keys, including directory prefixes ending with `/`. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
 - **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records, writes them to a file, and injects the file path as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
 - **Review feedback**: When the review agent rejects a task, it appends `<!-- review-rejection: ... -->` to the task file. On the next attempt, the host reads these lines and injects them as `MATO_REVIEW_FEEDBACK`, so the implementing agent can address the reviewer's concerns.
 

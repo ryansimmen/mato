@@ -27,12 +27,21 @@ type TaskMeta struct {
 	MaxRetries          int    `yaml:"max_retries"`
 }
 
+// ParseTaskFile reads a task file from disk and parses its YAML frontmatter
+// and body. It is a convenience wrapper around ParseTaskData.
 func ParseTaskFile(path string) (TaskMeta, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return TaskMeta{}, "", fmt.Errorf("read task file %s: %w", path, err)
 	}
+	return ParseTaskData(data, path)
+}
 
+// ParseTaskData parses YAML frontmatter and body from raw file bytes. The path
+// argument is used only for the default task ID (filename stem) and error
+// messages. This allows callers that already hold the file contents (e.g.
+// PollIndex) to avoid a redundant os.ReadFile.
+func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 	meta := TaskMeta{
 		ID:         TaskFileStem(path),
@@ -67,20 +76,26 @@ func ParseTaskFile(path string) (TaskMeta, string, error) {
 			return TaskMeta{}, "", fmt.Errorf("unterminated frontmatter in %s", path)
 		}
 		block := strings.Join(lines[startLine+1:end], "\n")
+		blockKeys := map[string]struct{}{}
 		if strings.TrimSpace(block) != "" {
 			if err := yaml.Unmarshal([]byte(block), &meta); err != nil {
 				return TaskMeta{}, "", fmt.Errorf("parse frontmatter in %s: %w", path, err)
 			}
+			blockKeys = topLevelKeys(block)
 		}
 		// Restore defaults for zero-value fields that weren't set
 		if meta.ID == "" {
 			meta.ID = TaskFileStem(path)
 		}
-		if meta.Priority == 0 && !strings.Contains(block, "priority:") {
-			meta.Priority = 50
+		if meta.Priority == 0 {
+			if _, ok := blockKeys["priority"]; !ok {
+				meta.Priority = 50
+			}
 		}
-		if meta.MaxRetries == 0 && !strings.Contains(block, "max_retries:") {
-			meta.MaxRetries = 3
+		if meta.MaxRetries == 0 {
+			if _, ok := blockKeys["max_retries"]; !ok {
+				meta.MaxRetries = 3
+			}
 		}
 		// Filter empty strings from arrays (YAML can produce them from ["", x])
 		meta.DependsOn = filterEmpty(meta.DependsOn)
@@ -90,6 +105,29 @@ func ParseTaskFile(path string) (TaskMeta, string, error) {
 	}
 
 	return meta, stripHTMLCommentLines(body), nil
+}
+
+func topLevelKeys(block string) map[string]struct{} {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(block), &doc); err != nil {
+		return nil
+	}
+	if len(doc.Content) == 0 {
+		return nil
+	}
+	mapping := doc.Content[0]
+	if mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	keys := make(map[string]struct{}, len(mapping.Content)/2)
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		keyNode := mapping.Content[i]
+		if keyNode.Kind != yaml.ScalarNode {
+			continue
+		}
+		keys[keyNode.Value] = struct{}{}
+	}
+	return keys
 }
 
 func TaskFileStem(path string) string {

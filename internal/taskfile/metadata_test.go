@@ -217,6 +217,8 @@ func TestLastFailureReason(t *testing.T) {
 		{"none", "# Task\nNo failures.", ""},
 		{"single", "<!-- failure: a at T — tests failed -->", "tests failed"},
 		{"multiple returns last", "<!-- failure: a at T1 — first error -->\n<!-- failure: b at T2 — second error -->", "second error"},
+		{"step error format", "<!-- failure: a at T1 step=WORK error=tests_failed -->", "tests_failed"},
+		{"step error with files changed", "<!-- failure: a at T1 step=WORK error=tests_failed files_changed=main.go -->", "tests_failed"},
 		{"empty", "", ""},
 	}
 	for _, tt := range tests {
@@ -267,6 +269,29 @@ func TestAppendFailureRecord(t *testing.T) {
 	if !strings.Contains(string(data), "step=WORK error=build_failed") {
 		t.Fatalf("failure details not found in file: %s", data)
 	}
+}
+
+func TestSanitizeCommentText(t *testing.T) {
+	got := SanitizeCommentText("  line one\nline two -->  ")
+	if got != "line one line two —>" {
+		t.Fatalf("got %q, want %q", got, "line one line two —>")
+	}
+}
+
+func TestAppendReviewFailure_SanitizesReason(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := AppendReviewFailure(path, "review-abc", "bad\nreason -->"); err != nil {
+		t.Fatalf("AppendReviewFailure: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "\n<!-- review-failure: review-abc at") && strings.Contains(string(data), "error=bad reason —>") {
+		return
+	}
+	t.Fatalf("sanitized review-failure not found in file: %s", data)
 }
 
 func TestAppendFailureRecord_NonexistentFile(t *testing.T) {
