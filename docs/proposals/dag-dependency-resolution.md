@@ -14,7 +14,22 @@ duplicated recursive checks with one deterministic analysis pass that:
 - explains blocked tasks more clearly, and
 - creates a foundation for future graph tooling.
 
-Estimated effort: ~3-5 days.
+Estimated effort: ~3 days.
+
+## Effort Breakdown
+
+| Task | Effort |
+|------|--------|
+| `internal/dag/dag.go` — Kahn's + SCC + `Analyze()` | 3 hours |
+| `internal/dag/dag_test.go` — unit tests (ready, blocked, cycles, determinism) | 3 hours |
+| `internal/queue/reconcile.go` — refactor to use `dag.Analyze()`, add cycle-to-failed | 3 hours |
+| `internal/queue/diagnostics.go` — `DiagnoseDependencies()` wrapper | 2 hours |
+| `internal/queue/diagnostics_test.go` + reconcile test updates | 3 hours |
+| `internal/status/status.go` — cycle-aware summaries | 2 hours |
+| Status rendering + tests | 2 hours |
+| Integration tests | 2 hours |
+| Documentation updates | 1 hour |
+| **Total** | **~3 days** |
 
 ## Current State
 
@@ -123,32 +138,33 @@ The caller is responsible for passing `safeCompleted`, not raw `completedIDs`.
 
 ## Cycle Handling
 
-### v1 recommendation: detect and report first, fail later only if desired
+Cycles are unsolvable — a cycle in `waiting/` will never self-resolve. Leaving
+cyclic tasks in `waiting/` forever is worse than failing them, because they
+silently block downstream dependents with no signal to the user.
 
-The safest first step is to centralize detection and expose cycle information in
-status and diagnostics. That alone is a meaningful improvement.
+v1 moves true cycle members to `failed/` during reconcile. The key constraint
+is precision: **only actual cycle members fail, not downstream nodes.**
 
-If we do choose to move cyclic tasks to `failed/`, the plan must be more
-precise than the earlier draft:
+### Classification
 
-- only actual cycle members should fail,
-- downstream tasks blocked by a cycle should remain blocked, not be marked
-  cyclic,
-- failure records must not consume normal retry budget unless the retry model is
-  updated explicitly.
+After Kahn's algorithm, nodes remaining in the residual graph are **not**
+automatically all cycle members. Some may simply be downstream of a cycle.
+Exact classification requires SCC (strongly connected component) detection on
+the residual waiting-only subgraph:
 
-Because of that nuance, this plan recommends a phased rollout:
+- SCC of size > 1 → all members are cycle participants → fail them.
+- SCC of size 1 with a self-edge → self-cycle → fail it.
+- SCC of size 1 without a self-edge → downstream of a cycle → leave blocked.
 
-### Phase 1
+### Failure semantics
 
-- Add explicit cycle detection.
-- Surface cycles in `mato status` and dependency diagnostics.
-- Keep reconcile behavior read-only with respect to cycles.
-
-### Phase 2
-
-- Optionally move true cycle members to `failed/` once classification and
-  failure-record semantics are fully specified and tested.
+- Cycle failures use a dedicated failure reason (`"circular dependency"`) in the
+  failure record appended to the task file.
+- Cycle failures do **not** consume normal retry budget. They are a structural
+  problem, not a transient agent failure.
+- Downstream tasks remain in `waiting/` with their existing `depends_on`. Once
+  the cycle is broken (user edits or removes the cyclic dependency), downstream
+  tasks become promotable through normal reconciliation.
 
 ## Algorithm Notes
 
@@ -168,10 +184,11 @@ on the residual waiting-only subgraph.
 1. Build waiting-task adjacency and indegree.
 2. Run Kahn to determine which nodes are not blocked by waiting-task edges.
 3. Use readiness rules plus `safeCompleted` to populate `Ready` and `Blocked`.
-4. If exact cycle groups are needed, run SCC detection on the waiting subgraph
-   and keep only SCCs that are truly cyclic:
+4. Run SCC detection on the residual waiting subgraph and keep only SCCs that
+   are truly cyclic:
    - size > 1, or
    - size == 1 with a self-edge.
+5. Classify remaining residual nodes (downstream of cycles) as blocked.
 
 This avoids misclassifying nodes that are only downstream of a cycle.
 
@@ -201,10 +218,12 @@ Recommended shape:
 1. Build `safeCompleted` exactly as today.
 2. Build waiting-task `dag.Node` list.
 3. Call `dag.Analyze(nodes, safeCompleted)`.
-4. Promote only `analysis.Ready` tasks that also pass `idx.HasActiveOverlap()`.
-5. Reuse the same analysis results to emit structured warnings for:
+4. Move `analysis.Cycles` members to `failed/` with `"circular dependency"`
+   failure records. Cycle failures do not consume retry budget.
+5. Promote only `analysis.Ready` tasks that also pass `idx.HasActiveOverlap()`.
+6. Reuse `DiagnoseDependencies()` to emit structured warnings for:
    - self-dependencies,
-   - cycles,
+   - cycles (already handled, but logged),
    - unknown dependencies,
    - ambiguous IDs.
 
@@ -213,25 +232,40 @@ covered by tests.
 
 ## Dependency Diagnostics
 
-To keep status and reconcile aligned, ambiguous-ID and dependency diagnostics
-should share a single read-only helper, likely in `internal/queue/`.
-
-Example:
+To keep status and reconcile aligned, dependency diagnostics should share a
+single read-only helper in `internal/queue/diagnostics.go`. This helper wraps
+`dag.Analyze()` and translates graph results into a flat issue list usable by
+both `ReconcileReadyQueue()` warnings and `mato doctor`.
 
 ```go
+type DependencyIssueKind string
+
+const (
+	DependencyAmbiguousID DependencyIssueKind = "ambiguous_id"
+	DependencySelfCycle   DependencyIssueKind = "self_dependency"
+	DependencyCycle       DependencyIssueKind = "cycle"
+	DependencyUnknownID   DependencyIssueKind = "unknown_dependency"
+)
+
+type DependencyIssue struct {
+	Kind      DependencyIssueKind
+	TaskID    string
+	Filename  string
+	DependsOn string // the problematic dependency reference
+}
+
 type DependencyDiagnostics struct {
-    Ready         []string
-    CycleMembers  map[string][]string
-    UnknownDeps   map[string][]string
-    SelfDependent map[string]bool
-    AmbiguousIDs  []string
+	Issues     []DependencyIssue
+	Promotable int // number of waiting tasks with all deps satisfied
 }
 
 func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 ```
 
-`ReconcileReadyQueue()` and any future `mato doctor` dependency checks should
-reuse this logic instead of drifting apart.
+`ReconcileReadyQueue()` calls `DiagnoseDependencies()` internally and emits
+warnings from the structured results, replacing the current inline warning
+logic. `mato doctor` calls `DiagnoseDependencies()` and converts issues into
+`Finding` objects. Both share the same underlying `dag.Analyze()` call.
 
 ## Runner Dependency Context
 
@@ -290,7 +324,9 @@ This plan does **not** include that change by default.
 |------|----------|
 | `TestReconcileReadyQueue_ChainPromotionSemantics` | One-hop promotion preserved |
 | `TestReconcileReadyQueue_AmbiguousCompletedDoesNotSatisfy` | Existing safety preserved |
-| `TestReconcileReadyQueue_CycleWarningOrClassification` | Cycle surfaced consistently |
+| `TestReconcileReadyQueue_CycleMovesToFailed` | Cycle members moved to `failed/` with correct failure reason |
+| `TestReconcileReadyQueue_CycleDoesNotConsumeRetryBudget` | Cycle failure records don't count as agent retries |
+| `TestReconcileReadyQueue_DownstreamOfCycleRemainsWaiting` | Non-cycle nodes blocked by cycle stay in `waiting/` |
 | `TestCountPromotableWaitingTasks_MatchesAnalyze` | Reconcile/count alignment |
 
 ### Status tests
@@ -306,11 +342,9 @@ This plan does **not** include that change by default.
 | Test | Coverage |
 |------|----------|
 | `TestDAG_ChainPromotion` | `A -> B -> C` promotes one hop at a time |
+| `TestDAG_CycleMovesToFailed` | Cycle members in `failed/`, downstream stays in `waiting/` |
 | `TestDAG_CycleStatus` | Cycle visible in status output |
 | `TestDAG_AmbiguousID` | Ambiguous completed/non-completed ID remains blocked |
-
-If the project later chooses cycle-to-failed behavior, add dedicated
-integration tests for retry counting, failure records, and downstream tasks.
 
 ## Backward Compatibility
 
@@ -324,25 +358,29 @@ integration tests for retry counting, failure records, and downstream tasks.
 ### Intentional improvements
 
 - Cycles become visible in status/diagnostics instead of stderr-only warnings.
+- Cyclic tasks are moved to `failed/` with dedicated failure records that do not
+  consume retry budget.
 - Internal dependency logic becomes shared rather than duplicated.
 
-### Possible later behavioral change
+### Behavioral change: cycle-to-failed
 
-If a later phase moves cycle members to `failed/`, that should be documented as
-an explicit behavior change with retry semantics spelled out.
+Previously, cyclic waiting tasks remained in `waiting/` indefinitely with only
+a stderr warning. Now they are moved to `failed/` during reconcile. This is a
+deliberate improvement: cycles cannot self-resolve, and silent indefinite
+blocking is worse than explicit failure. Users can fix the cycle by editing the
+task's `depends_on` and moving it back to `waiting/`.
 
 ## Implementation Order
 
-1. Create `internal/dag` with deterministic analysis tests.
-2. Refactor `internal/queue/reconcile.go` to use shared analysis while keeping
-   existing promotion behavior.
-3. Add or refactor dependency diagnostics in `internal/queue/` so status and
-   doctor can reuse the same reasoning.
+1. Create `internal/dag` with deterministic analysis + SCC-based cycle
+   detection, fully covered by unit tests.
+2. Refactor `internal/queue/reconcile.go` to use `dag.Analyze()` for promotion
+   and cycle-to-failed behavior while preserving existing acyclic semantics.
+3. Add `DiagnoseDependencies()` in `internal/queue/diagnostics.go` so status
+   and doctor can reuse the same reasoning.
 4. Update `internal/status/` to surface cycle information while preserving
    current dependency state detail.
 5. Update docs.
-6. Consider cycle-to-failed only as a separate follow-up once exact cycle
-   classification is proven.
 
 ## Deferred Follow-Ups
 
@@ -350,5 +388,3 @@ an explicit behavior change with retry semantics spelled out.
    analysis layer exists.
 2. **Transitive dependency context**: useful, but separate from the core DAG
    refactor.
-3. **Cycle-to-failed behavior**: only after SCC-based classification and retry
-   semantics are fully specified.
