@@ -33,13 +33,34 @@ Estimated effort: ~3.5 days.
 
 ## Current State
 
+As of current HEAD, `internal/dag/` and `DiagnoseDependencies()` do not exist.
+Reconcile still uses `dependsOnWaitingTask()` for transitive dependency checks.
+
 Today `internal/queue/reconcile.go` already does more than a simple direct-dep
 check:
 
-- it removes ambiguous completed IDs via `safeCompleted`,
+- it removes ambiguous completed IDs via `safeCompleted` (local variable in
+  `resolvePromotableTasks`),
 - it checks transitive waiting-task dependencies via `dependsOnWaitingTask()`,
 - it promotes every currently promotable waiting task in one reconcile pass,
-- and it logs cycle warnings.
+- it logs cycle warnings,
+- and it quarantines tasks with invalid glob syntax to `failed/` (backlog tasks
+  unconditionally, waiting tasks only when they are otherwise promotable).
+
+`PollIndex` (`internal/queue/index.go`) centralizes task indexing and provides
+the overlap-detection surface used by reconcile and status:
+
+- `BuildIndex` registers both filename stems and `meta.ID` values in
+  `completedIDs`, `nonCompletedIDs`, and `allIDs`.
+- `BuildIndex` validates glob syntax in `affects` fields and records invalid
+  globs as `BuildWarning` entries (non-fatal — the task remains indexed so its
+  affects are still visible to overlap detection).
+- `HasActiveOverlap` detects conflicts using exact-match, directory-prefix, and
+  glob-pattern matching (via `doublestar`). It handles invalid-glob entries
+  conservatively using static-prefix comparison to avoid false negatives.
+
+`internal/queue/overlap.go` provides the `affectsMatch` helper and
+`DeferredOverlappingTasksDetailed`, both of which are glob-aware.
 
 So the proposal is **not** starting from zero. The plan should build on this
 rather than replacing it with looser semantics.
@@ -186,11 +207,11 @@ This matches current queue behavior and avoids blurring "waiting blocker" with
 
 The DAG package operates in task-ID space: `Node.ID` is the value from
 `meta.ID`, and `depends_on` references resolve against these IDs. This matches
-the current behavior in `reconcile.go:48` where `waitingDeps` is keyed by
+the current behavior in `resolvePromotableTasks` (`reconcile.go:48`) where `waitingDeps` is keyed by
 `snap.Meta.ID`.
 
 **Stem-vs-ID asymmetry.** `PollIndex` registers both the filename stem and
-`meta.ID` in `completedIDs` and `allIDs` (`index.go:141-189`), so a
+`meta.ID` in `completedIDs` and `allIDs` (`BuildIndex` in `index.go:140-209`), so a
 `depends_on` reference matching either value resolves against completed tasks.
 But the waiting graph only keys by `meta.ID` — a `depends_on` reference to a
 filename stem that differs from `meta.ID` would not find the waiting task as a
@@ -296,8 +317,10 @@ succeeds:
    continue. The idempotency check in step 1 prevents duplicate records on the
    next reconcile pass.
 
-This matches the pattern used by `recoverStuckTask` in `internal/runner/task.go`,
-which appends a failure record before moving to `failed/`.
+This differs from the pattern used by `recoverStuckTask` in
+`internal/runner/task.go`, which moves to `backlog/` first and appends the
+failure record after the move. The cycle-to-failed sequence intentionally
+appends **before** the move so the reason is preserved even if the move fails.
 
 - Downstream tasks remain in `waiting/` with their existing `depends_on`. Once
   the cycle is broken (user edits or removes the cyclic dependency), downstream
@@ -378,12 +401,32 @@ Specific ordering requirements:
 
 ## Status Integration
 
-`internal/status/status.go` already shows useful per-dependency state, so the
-plan should extend that behavior rather than replace it.
+`internal/status/` already shows useful per-dependency state and backlog
+overlap analysis, so the plan should extend that behavior rather than replace
+it.
+
+### Current status rendering
+
+The status dashboard (via `status_gather.go` and `status_render.go`) already
+renders three distinct blocking dimensions:
+
+- **Runnable** (`renderQueueOverview`): backlog count minus conflict-deferred
+  tasks (`gatherStatus` in `status_gather.go:76`).
+- **Conflict-Deferred** (`renderConflictDeferred` at `status_render.go:188`):
+  backlog tasks blocked by active-affects overlap, computed via
+  `queue.DeferredOverlappingTasksDetailed` (`gatherStatus` in `status_gather.go:69`). This is
+  glob-aware after the glob-affects feature.
+- **Dependency-Blocked** (`renderDependencyBlocked` at `status_render.go:170`):
+  waiting tasks with their dependency lists.
+
+The DAG refactor must preserve all three dimensions. Cycle information extends
+the dependency-blocked section; it does not replace the conflict-deferred or
+runnable reporting.
 
 ### Recommendation
 
 - Keep the current dependency list with each dependency's actual state.
+- Keep the runnable/deferred/conflict-deferred reporting unchanged.
 - Add explicit cycle labeling for tasks identified by the DAG analysis.
 - Optionally add a short blocked summary such as `blocked by waiting: task-b` or
   `cycle: task-a -> task-b -> task-a`.
@@ -412,7 +455,7 @@ limitation.
 
 ### Cycle-failed task rendering
 
-`status_render.go:218-224` renders failed tasks using `countFailureRecords`
+`renderFailedTasks` (`status_render.go:218-224`) renders failed tasks using `countFailureRecords`
 (which calls `taskfile.CountFailureMarkers`, counting only `<!-- failure:`
 lines) and `lastFailureReason` (which calls `taskfile.LastFailureReason`,
 scanning for `<!-- failure:` lines). A cycle-failed task has zero
@@ -455,22 +498,31 @@ ReconcileReadyQueue
   └─ use diag.Issues               → emit structured warnings
 ```
 
-`CountPromotableWaitingTasks` follows the same path for consistency.
+`CountPromotableWaitingTasks` follows the same path for consistency. It
+filters out tasks with invalid glob syntax after readiness resolution
+(matching the reconcile behavior where invalid-glob waiting tasks are only
+quarantined when otherwise promotable).
 
 ### Recommended shape
 
 1. Move unparseable tasks to `failed/` (unchanged from today).
-2. Call `DiagnoseDependencies(tasksDir, idx)` — this internally builds
+2. Quarantine backlog tasks with invalid glob syntax to `failed/`
+   unconditionally (unchanged from today — added by the glob-affects feature).
+3. Call `DiagnoseDependencies(tasksDir, idx)` — this internally builds
    `safeCompleted`, `ambiguousIDs`, `knownIDs`, and the `dag.Node` list,
    then calls `dag.Analyze()`.
-3. Move `diag.Analysis.Cycles` members to `failed/` using the cycle-to-failed
+4. Move `diag.Analysis.Cycles` members to `failed/` using the cycle-to-failed
    sequence (append `<!-- cycle-failure:` record, then `AtomicMove`). Cycle
    failures do not consume retry budget.
-4. Promote `diag.Analysis.DepsSatisfied` tasks where
-   `!idx.HasActiveOverlap(snap.Meta.Affects)` (no overlap with in-flight tasks).
-5. Emit structured warnings from `diag.Issues` for:
-    - self-dependencies (already moved to `failed/` in step 3, but logged),
-    - cycles (already moved to `failed/` in step 3, but logged),
+5. Promote `diag.Analysis.DepsSatisfied` tasks where
+   `!idx.HasActiveOverlap(snap.Meta.Affects)` (no overlap with in-flight tasks)
+   and `ValidateAffectsGlobs` passes. Waiting tasks with invalid glob syntax
+   are quarantined to `failed/` only at this point — they must be otherwise
+   promotable first (deps satisfied, no active overlap) before being
+   quarantined.
+6. Emit structured warnings from `diag.Issues` for:
+    - self-dependencies (already moved to `failed/` in step 4, but logged),
+    - cycles (already moved to `failed/` in step 4, but logged),
     - unknown dependencies,
     - ambiguous IDs,
     - duplicate waiting IDs.
@@ -550,7 +602,7 @@ risk than value to the DAG work.
 ### Recommendation for v1
 
 Keep the existing dependency-context file format in
-`internal/runner/task.go:243` unchanged.
+`writeDependencyContextFile` (`internal/runner/task.go:243`) unchanged.
 
 If transitive dependency context is added later, use one of these approaches as
 a separate follow-up:
@@ -567,13 +619,16 @@ This plan does **not** include that change by default.
 |------|--------|
 | `internal/dag/dag.go` | New shared analysis helper (`Analyze`, `BlockReason` incl. `BlockedByAmbiguous`, `BlockDetail`, `Analysis`, Tarjan's SCC) |
 | `internal/dag/dag_test.go` | Unit tests for deps-satisfied/blocked/cycle analysis |
-| `internal/queue/reconcile.go` | Replace duplicated recursive dependency checks with `DiagnoseDependencies()`; add cycle-to-failed move logic |
+| `internal/queue/reconcile.go` | Replace duplicated recursive dependency checks with `DiagnoseDependencies()`; add cycle-to-failed move logic; preserve invalid-glob quarantine behavior |
 | `internal/queue/diagnostics.go` | New `DiagnoseDependencies()` wrapper that calls `dag.Analyze()` and exposes `Analysis` |
 | `internal/queue/diagnostics_test.go` | Unit tests for diagnostics wrapper |
-| `internal/queue/queue_test.go` | Preserve current promotion semantics + add cycle cases |
+| `internal/queue/index.go` | No structural change; `HasActiveOverlap` (glob/prefix-aware) and `BuildWarning` already exist — verify DAG refactor does not regress overlap detection |
+| `internal/queue/overlap.go` | No structural change; `affectsMatch` and `DeferredOverlappingTasksDetailed` (glob-aware) already exist — verify DAG refactor does not regress glob/prefix matching |
+| `internal/queue/queue_test.go` | Preserve current promotion semantics + add cycle cases; update `TestReconcileReadyQueue_DetectsSelfDependency` and `TestReconcileReadyQueue_DetectsCircularDependency` for cycle-to-failed behavior |
 | `internal/taskfile/metadata.go` | Add `AppendCycleFailureRecord`, `ContainsCycleFailure`, and `CountCycleFailureMarkers` helpers |
 | `internal/status/status.go` | Add cycle-aware waiting-task summaries without removing existing state detail |
-| `internal/status/status_render.go` | Render cycle-failed tasks with distinct message instead of `N/M retries exhausted`; detect `<!-- cycle-failure:` markers |
+| `internal/status/status_gather.go` | No structural change; already computes runnable/deferred counts — verify DAG refactor does not regress runnable or conflict-deferred reporting |
+| `internal/status/status_render.go` | Render cycle-failed tasks with distinct message instead of `N/M retries exhausted`; detect `<!-- cycle-failure:` markers; preserve `renderConflictDeferred` and `renderQueueOverview` (runnable count) |
 | `internal/runner/task.go` | No change in v1 unless transitive context is explicitly split into a follow-up |
 | `docs/architecture.md` | Document shared DAG analysis |
 | `docs/task-format.md` | Document user-visible cycle behavior if behavior changes |
@@ -620,6 +675,18 @@ This plan does **not** include that change by default.
 | `TestReconcileReadyQueue_DownstreamOfCycleRemainsWaiting` | Non-cycle nodes blocked by cycle stay in `waiting/` |
 | `TestReconcileReadyQueue_PartialCycleMoveIdempotent` | If `AtomicMove` fails for one cycle member, cycle-failure record is still present and task stays in `waiting/` blocked |
 | `TestCountPromotableWaitingTasks_MatchesAnalyze` | Reconcile/count alignment |
+| `TestReconcileReadyQueue_InvalidGlobBacklogQuarantine` | Backlog tasks with invalid glob syntax still quarantined to `failed/` after refactor (regression for `queue_test.go:1380`) |
+| `TestReconcileReadyQueue_InvalidGlobWaitingOnlyWhenPromotable` | Waiting tasks with invalid glob syntax quarantined only when deps satisfied + no active overlap (regression for current behavior) |
+| `TestReconcileReadyQueue_GlobActiveOverlap` | Glob-aware `HasActiveOverlap` still prevents promotion when glob patterns conflict (regression for glob-affects feature) |
+
+**Existing tests requiring update for cycle-to-failed:**
+
+- `TestReconcileReadyQueue_DetectsSelfDependency` (`queue_test.go:745`):
+  currently expects self-dependent task to remain in `waiting/` — must be
+  updated to expect `failed/` with a `<!-- cycle-failure:` marker.
+- `TestReconcileReadyQueue_DetectsCircularDependency` (`queue_test.go:768`):
+  currently expects circular-dependent tasks to remain in `waiting/` — must be
+  updated to expect `failed/` with `<!-- cycle-failure:` markers.
 
 ### Status tests
 
@@ -630,6 +697,7 @@ This plan does **not** include that change by default.
 | `TestWaitingTasksStatus_DownstreamOfCycleNotMarkedCyclic` | No false cycle labeling |
 | `TestFailedTaskRendering_CycleFailure` | Cycle-failed task renders `circular dependency detected` instead of `0/N retries exhausted` |
 | `TestFailedTaskRendering_MixedFailures` | Task with both `<!-- failure:` and `<!-- cycle-failure:` markers renders correctly (retry count from agent failures only, cycle reason displayed) |
+| `TestStatusRendering_RunnableAndDeferredPreserved` | `renderQueueOverview` still shows correct runnable count (backlog minus deferred); `renderConflictDeferred` still shows glob-aware deferred tasks |
 
 ### Integration tests
 
@@ -640,6 +708,8 @@ This plan does **not** include that change by default.
 | `TestDAG_LongCycleMovesToFailed` | 3+ node cycle (`A -> B -> C -> A`): all cycle members in `failed/`, downstream `D -> C` in `waiting/` |
 | `TestDAG_CycleStatus` | Cycle visible in status output |
 | `TestDAG_AmbiguousID` | Ambiguous completed/non-completed ID remains blocked |
+| `TestGlobDeferral` | Existing glob deferral test (`integration_test.go:339`) still passes — glob-aware overlap detection not regressed by DAG refactor |
+| `TestMixedGlobExactOverlap` | Existing mixed glob/exact overlap test still passes |
 
 ## Backward Compatibility
 
@@ -649,6 +719,11 @@ This plan does **not** include that change by default.
 - Acyclic promotion semantics unchanged.
 - Existing dependency-context JSON unchanged in v1.
 - Existing per-dependency state reporting in status preserved.
+- Glob-aware overlap detection (`HasActiveOverlap`, `affectsMatch`,
+  `DeferredOverlappingTasksDetailed`) unchanged.
+- Invalid-glob quarantine behavior unchanged (backlog unconditional, waiting
+  only when otherwise promotable).
+- Status runnable/deferred/conflict-deferred reporting unchanged.
 
 ### Intentional improvements
 
