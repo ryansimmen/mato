@@ -152,6 +152,20 @@ func TestPromptFileClaimsMentionDirectoryPrefixes(t *testing.T) {
 	}
 }
 
+func TestPromptFileClaimsMentionGlobPatterns(t *testing.T) {
+	data, err := os.ReadFile(taskInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(task instructions): %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "glob pattern") {
+		t.Fatal("task instructions should explain that file claims may include glob patterns")
+	}
+	if !strings.Contains(text, "matches a glob") {
+		t.Fatal("task instructions should explain how glob-pattern claims affect planned edits")
+	}
+}
+
 func createPromptClone(t *testing.T, repoRoot, tasksDir string) string {
 	t.Helper()
 

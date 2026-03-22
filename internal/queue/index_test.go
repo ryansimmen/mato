@@ -642,6 +642,201 @@ func TestHasActiveOverlap_PrefixMatch(t *testing.T) {
 	}
 }
 
+func TestHasActiveOverlap_GlobVsExact(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// Active task with a glob pattern.
+	writeTask(t, tasksDir, DirInProgress, "refactor-runner.md",
+		"---\naffects:\n  - internal/runner/*.go\n---\n# Refactor\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"matching file", []string{"internal/runner/task.go"}, true},
+		{"non-matching file", []string{"internal/queue/queue.go"}, false},
+		{"nested file not matched by single star", []string{"internal/runner/sub/deep.go"}, false},
+		{"different extension", []string{"internal/runner/task.md"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasActiveOverlap_GlobVsPrefix(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	writeTask(t, tasksDir, DirInProgress, "glob-task.md",
+		"---\naffects:\n  - internal/runner/*.go\n---\n# Glob\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"overlapping prefix", []string{"internal/runner/"}, true},
+		{"parent prefix", []string{"internal/"}, true},
+		{"disjoint prefix", []string{"pkg/"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasActiveOverlap_IncomingGlobVsExact(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// Active task with exact file path.
+	writeTask(t, tasksDir, DirInProgress, "fix-file.md",
+		"---\naffects:\n  - internal/runner/task.go\n---\n# Fix\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"matching glob", []string{"internal/runner/*.go"}, true},
+		{"non-matching glob", []string{"pkg/*.go"}, false},
+		{"doublestar matching", []string{"**/*.go"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasActiveOverlap_IncomingGlobVsPrefix(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// Active task with directory prefix.
+	writeTask(t, tasksDir, DirInProgress, "refactor-client.md",
+		"---\naffects:\n  - pkg/client/\n---\n# Refactor\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"glob under prefix", []string{"pkg/client/*.go"}, true},
+		{"glob outside prefix", []string{"internal/*.go"}, false},
+		{"doublestar matches everything", []string{"**/*.go"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasActiveOverlap_GlobVsGlob(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	writeTask(t, tasksDir, DirInProgress, "glob-task.md",
+		"---\naffects:\n  - internal/runner/*.go\n---\n# Glob\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"overlapping static prefix", []string{"internal/runner/*_test.go"}, true},
+		{"disjoint static prefix", []string{"pkg/client/*.go"}, false},
+		{"doublestar vs single star", []string{"internal/**/*.go"}, true},
+		{"identical glob", []string{"internal/runner/*.go"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasActiveOverlap_IncomingDoublestar(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	writeTask(t, tasksDir, DirInProgress, "fix-task.md",
+		"---\naffects:\n  - internal/runner/task.go\n---\n# Fix\n")
+	writeTask(t, tasksDir, DirReadyReview, "prefix-task.md",
+		"---\naffects:\n  - pkg/client/\n---\n# Prefix\n")
+
+	idx := BuildIndex(tasksDir)
+
+	// **/*.go has empty static prefix, so it should conflict with everything.
+	if !idx.HasActiveOverlap([]string{"**/*.go"}) {
+		t.Error("HasActiveOverlap(**/*.go) = false, want true (empty static prefix = always conflicts)")
+	}
+}
+
+func TestHasActiveOverlap_ExactFastPath(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// No globs or prefixes — pure exact paths, fast path should work.
+	writeTask(t, tasksDir, DirInProgress, "exact-task.md",
+		"---\naffects:\n  - main.go\n  - internal/foo.go\n---\n# Exact\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"exact match", []string{"main.go"}, true},
+		{"no match", []string{"other.go"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildIndex_ActiveAffectsGlobsDeduplicated(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	writeTask(t, tasksDir, DirInProgress, "task-a.md",
+		"---\naffects:\n  - internal/runner/*.go\n---\n# A\n")
+	writeTask(t, tasksDir, DirReadyReview, "task-b.md",
+		"---\naffects:\n  - internal/runner/*.go\n  - pkg/**/*.go\n---\n# B\n")
+
+	idx := BuildIndex(tasksDir)
+	want := []string{"internal/runner/*.go", "pkg/**/*.go"}
+	got := append([]string(nil), idx.activeAffectsGlobs...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("activeAffectsGlobs = %v, want %v", got, want)
+	}
+}
+
 func TestBuildIndex_ActiveAffectsPrefixesDeduplicated(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
@@ -656,5 +851,164 @@ func TestBuildIndex_ActiveAffectsPrefixesDeduplicated(t *testing.T) {
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("activeAffectsPrefixes = %v, want %v", got, want)
+	}
+}
+
+func TestBuildIndex_InvalidGlobStillIndexedWithWarning(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// Active task with an invalid glob (unclosed bracket) and a valid
+	// exact path. The task should be fully indexed (NOT a parse failure)
+	// so its affects remain visible to overlap detection.
+	writeTask(t, tasksDir, DirInProgress, "bad-glob.md",
+		"---\naffects:\n  - \"internal/[bad\"\n  - main.go\n---\n# Bad glob\n")
+
+	idx := BuildIndex(tasksDir)
+
+	// Task must be indexed.
+	snap := idx.Snapshot(DirInProgress, "bad-glob.md")
+	if snap == nil {
+		t.Fatal("expected bad-glob.md to be indexed, got nil")
+	}
+	if !reflect.DeepEqual(snap.Meta.Affects, []string{"internal/[bad", "main.go"}) {
+		t.Fatalf("Affects = %v, want [internal/[bad main.go]", snap.Meta.Affects)
+	}
+
+	// The invalid glob should appear in activeAffects for exact-match
+	// lookup (literal string).
+	if len(idx.activeAffects["internal/[bad"]) == 0 {
+		t.Error("expected invalid glob string in activeAffects map")
+	}
+	if len(idx.activeAffects["main.go"]) == 0 {
+		t.Error("expected main.go in activeAffects map")
+	}
+
+	// Must NOT be a parse failure.
+	for _, pf := range idx.ParseFailures() {
+		if pf.Filename == "bad-glob.md" {
+			t.Fatal("bad-glob.md should not be in ParseFailures")
+		}
+	}
+
+	// Must emit a build warning about the invalid glob.
+	warnings := idx.BuildWarnings()
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w.Err.Error(), "invalid glob in affects") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected build warning about invalid glob, got %v", warnings)
+	}
+}
+
+func TestBuildIndex_GlobTrailingSlashStillIndexedWithWarning(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	writeTask(t, tasksDir, DirInProgress, "glob-slash.md",
+		"---\naffects:\n  - \"internal/*/\"\n---\n# Glob slash\n")
+
+	idx := BuildIndex(tasksDir)
+
+	snap := idx.Snapshot(DirInProgress, "glob-slash.md")
+	if snap == nil {
+		t.Fatal("expected glob-slash.md to be indexed")
+	}
+
+	warnings := idx.BuildWarnings()
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w.Err.Error(), "combines glob syntax with trailing /") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected build warning about glob with trailing /, got %v", warnings)
+	}
+}
+
+func TestHasActiveOverlap_InvalidGlobBlocksOverlapping(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// Active task with invalid glob syntax. Should conservatively block
+	// any incoming task whose affects share the static prefix.
+	writeTask(t, tasksDir, DirInProgress, "bad-glob.md",
+		"---\naffects:\n  - \"internal/[bad\"\n---\n# Bad glob\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"file under same prefix", []string{"internal/runner/task.go"}, true},
+		{"file under different prefix", []string{"pkg/client/http.go"}, false},
+		{"exact prefix match", []string{"internal/foo.go"}, true},
+		{"disjoint file", []string{"main.go"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasActiveOverlap_GlobTrailingSlashBlocksOverlapping(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// Active task with glob + trailing slash (invalid combination).
+	// Should conservatively block files under the static prefix.
+	writeTask(t, tasksDir, DirInProgress, "glob-slash.md",
+		"---\naffects:\n  - \"internal/*/\"\n---\n# Glob slash\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"file under prefix", []string{"internal/runner/task.go"}, true},
+		{"disjoint file", []string{"pkg/client.go"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasActiveOverlap_InvalidGlobVsValidGlob(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	// Active task with invalid glob syntax.
+	writeTask(t, tasksDir, DirInProgress, "bad-glob.md",
+		"---\naffects:\n  - \"internal/[bad\"\n---\n# Bad glob\n")
+
+	idx := BuildIndex(tasksDir)
+
+	tests := []struct {
+		name    string
+		affects []string
+		want    bool
+	}{
+		{"doublestar matches everything", []string{"**/*.go"}, true},
+		{"overlapping glob prefix", []string{"internal/runner/*.go"}, true},
+		{"disjoint glob prefix", []string{"pkg/client/*.go"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idx.HasActiveOverlap(tt.affects); got != tt.want {
+				t.Errorf("HasActiveOverlap(%v) = %v, want %v", tt.affects, got, tt.want)
+			}
+		})
 	}
 }

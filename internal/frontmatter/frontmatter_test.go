@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -574,6 +575,124 @@ func TestExtractTitle(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ExtractTitle(tt.filename, tt.body); got != tt.want {
 				t.Errorf("ExtractTitle(%q, %q) = %q, want %q", tt.filename, tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsGlob(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want bool
+	}{
+		{"plain file", "foo.go", false},
+		{"directory prefix", "pkg/client/", false},
+		{"star", "*.go", true},
+		{"doublestar", "internal/**", true},
+		{"question mark", "file?.go", true},
+		{"char class", "data[1].csv", true},
+		{"brace expansion", "internal/{a,b}/*.go", true},
+		{"star in middle", "internal/runner/*.go", true},
+		{"empty string", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsGlob(tt.s); got != tt.want {
+				t.Errorf("IsGlob(%q) = %v, want %v", tt.s, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseTaskData_ValidGlob(t *testing.T) {
+	tests := []struct {
+		name    string
+		affects string
+	}{
+		{"single star", "internal/runner/*.go"},
+		{"doublestar", "internal/**/*.go"},
+		{"question mark", "internal/runner/task?.go"},
+		{"char class", "data/file[0-9].csv"},
+		{"brace expansion", "internal/{runner,queue}/*.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := "---\naffects:\n  - " + tt.affects + "\n---\nBody.\n"
+			meta, _, err := ParseTaskData([]byte(content), "valid-glob.md")
+			if err != nil {
+				t.Fatalf("ParseTaskData returned error for valid glob %q: %v", tt.affects, err)
+			}
+			if len(meta.Affects) != 1 || meta.Affects[0] != tt.affects {
+				t.Fatalf("Affects = %v, want [%s]", meta.Affects, tt.affects)
+			}
+		})
+	}
+}
+
+func TestParseTaskData_InvalidGlob(t *testing.T) {
+	// ParseTaskData should succeed even with invalid glob syntax —
+	// glob validation is done separately by ValidateAffectsGlobs.
+	content := "---\naffects:\n  - \"internal/[bad\"\n---\nBody.\n"
+	meta, _, err := ParseTaskData([]byte(content), "invalid-glob.md")
+	if err != nil {
+		t.Fatalf("ParseTaskData should not reject invalid globs: %v", err)
+	}
+	if len(meta.Affects) != 1 || meta.Affects[0] != "internal/[bad" {
+		t.Fatalf("Affects = %v, want [internal/[bad]", meta.Affects)
+	}
+}
+
+func TestParseTaskData_GlobWithTrailingSlash(t *testing.T) {
+	// ParseTaskData should succeed even with glob+trailing-slash —
+	// glob validation is done separately by ValidateAffectsGlobs.
+	content := "---\naffects:\n  - \"internal/*/\"\n---\nBody.\n"
+	meta, _, err := ParseTaskData([]byte(content), "glob-slash.md")
+	if err != nil {
+		t.Fatalf("ParseTaskData should not reject glob with trailing /: %v", err)
+	}
+	if len(meta.Affects) != 1 || meta.Affects[0] != "internal/*/" {
+		t.Fatalf("Affects = %v, want [internal/*/]", meta.Affects)
+	}
+}
+
+func TestValidateAffectsGlobs_InvalidGlob(t *testing.T) {
+	err := ValidateAffectsGlobs([]string{"internal/[bad"})
+	if err == nil {
+		t.Fatal("expected error for invalid glob, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid glob in affects") {
+		t.Fatalf("error = %q, want it to contain %q", err.Error(), "invalid glob in affects")
+	}
+}
+
+func TestValidateAffectsGlobs_GlobWithTrailingSlash(t *testing.T) {
+	err := ValidateAffectsGlobs([]string{"internal/*/"})
+	if err == nil {
+		t.Fatal("expected error for glob with trailing /, got nil")
+	}
+	if !strings.Contains(err.Error(), "combines glob syntax with trailing /") {
+		t.Fatalf("error = %q, want it to contain %q", err.Error(), "combines glob syntax with trailing /")
+	}
+}
+
+func TestValidateAffectsGlobs_ValidEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		affects []string
+	}{
+		{"nil", nil},
+		{"empty", []string{}},
+		{"exact paths", []string{"main.go", "pkg/util.go"}},
+		{"directory prefix", []string{"pkg/client/"}},
+		{"valid glob", []string{"internal/runner/*.go"}},
+		{"doublestar", []string{"internal/**/*.go"}},
+		{"mixed", []string{"main.go", "pkg/client/", "internal/runner/*.go"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateAffectsGlobs(tt.affects); err != nil {
+				t.Fatalf("ValidateAffectsGlobs(%v) = %v, want nil", tt.affects, err)
 			}
 		})
 	}

@@ -26,12 +26,106 @@ func TestAffectsMatch(t *testing.T) {
 		{"empty a", "", "foo.go", false},
 		{"empty b", "foo.go", "", false},
 		{"both empty", "", "", true},
+		// Glob vs concrete path cases
+		{"glob matches file", "internal/runner/*.go", "internal/runner/task.go", true},
+		{"glob no match file", "internal/runner/*.go", "internal/queue/queue.go", false},
+		{"doublestar matches nested", "**/*.go", "internal/runner/task.go", true},
+		{"doublestar matches top-level", "**/*.go", "main.go", true},
+		{"glob no match extension", "internal/runner/*.go", "internal/runner/task.txt", false},
+		{"glob matches reverse", "internal/runner/task.go", "internal/runner/*.go", true},
+		// Glob vs directory prefix cases
+		{"glob vs dir prefix overlapping", "internal/runner/*.go", "internal/runner/", true},
+		{"glob vs dir prefix parent", "internal/runner/*.go", "internal/", true},
+		{"glob vs dir prefix disjoint", "internal/runner/*.go", "pkg/", false},
+		{"dir prefix vs glob overlapping", "internal/runner/", "internal/runner/*.go", true},
+		{"doublestar vs any dir prefix", "**/*.go", "internal/", true},
+		{"dir prefix vs doublestar", "internal/", "**/*.go", true},
+		// Glob vs glob cases
+		{"glob vs glob overlapping prefix", "internal/runner/*.go", "internal/runner/*_test.go", true},
+		{"glob vs glob disjoint prefix", "internal/runner/*.go", "pkg/client/*.go", false},
+		{"glob vs glob one doublestar", "**/*.go", "internal/runner/*.go", true},
+		{"glob vs glob both doublestar", "**/*.go", "**/*_test.go", true},
+		// Malformed glob conservatively conflicts via static prefix comparison.
+		{"malformed glob same prefix", "internal/[bad", "internal/runner/task.go", true},
+		{"malformed glob disjoint prefix", "internal/[bad", "pkg/client/http.go", false},
+		{"malformed glob empty prefix", "[bad", "anything.go", true},
+		// Glob with trailing slash is an invalid-glob entry.
+		{"glob trailing slash vs file under", "internal/*/", "internal/runner/task.go", true},
+		{"glob trailing slash vs disjoint", "internal/*/", "pkg/client.go", false},
+		// Invalid glob vs valid glob: valid side also reduced to static prefix.
+		{"malformed glob vs doublestar", "internal/[bad", "**/*.go", true},
+		{"malformed glob vs overlapping glob", "internal/[bad", "internal/runner/*.go", true},
+		{"malformed glob vs disjoint glob", "internal/[bad", "pkg/client/*.go", false},
+		{"malformed glob vs brace glob", "internal/[bad", "{internal,pkg}/**/*.go", true},
+		{"glob slash vs doublestar", "internal/*/", "**/*.go", true},
+		{"glob slash vs overlapping glob", "internal/*/", "internal/runner/*.go", true},
+		{"glob slash vs disjoint glob", "internal/*/", "pkg/client/*.go", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := affectsMatch(tt.a, tt.b)
 			if got != tt.want {
 				t.Errorf("affectsMatch(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAffectsMatch_Symmetry(t *testing.T) {
+	pairs := [][2]string{
+		{"foo.go", "bar.go"},
+		{"pkg/client/", "pkg/client/http.go"},
+		{"internal/runner/*.go", "internal/runner/task.go"},
+		{"**/*.go", "internal/runner/task.go"},
+		{"internal/runner/*.go", "internal/runner/"},
+		{"**/*.go", "internal/"},
+		{"internal/runner/*.go", "pkg/client/*.go"},
+		{"internal/runner/*.go", "internal/runner/*_test.go"},
+		{"**/*.go", "**/*_test.go"},
+		{"internal/*.go", "internal/r*.go"},
+		// Invalid glob entries
+		{"internal/[bad", "internal/runner/task.go"},
+		{"internal/[bad", "pkg/client.go"},
+		{"[bad", "anything.go"},
+		{"internal/*/", "internal/runner/task.go"},
+		{"internal/*/", "pkg/client.go"},
+		// Invalid glob vs valid glob
+		{"internal/[bad", "**/*.go"},
+		{"internal/[bad", "internal/runner/*.go"},
+		{"internal/[bad", "pkg/client/*.go"},
+		{"internal/*/", "**/*.go"},
+		{"internal/*/", "internal/runner/*.go"},
+		{"internal/*/", "pkg/client/*.go"},
+	}
+	for _, p := range pairs {
+		ab := affectsMatch(p[0], p[1])
+		ba := affectsMatch(p[1], p[0])
+		if ab != ba {
+			t.Errorf("asymmetric: affectsMatch(%q, %q)=%v but affectsMatch(%q, %q)=%v",
+				p[0], p[1], ab, p[1], p[0], ba)
+		}
+	}
+}
+
+func TestStaticPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		want    string
+	}{
+		{"file glob", "internal/runner/*.go", "internal/runner/"},
+		{"doublestar", "**/*.go", ""},
+		{"no glob", "foo.go", "foo.go"},
+		{"brace expansion", "internal/{a,b}/*.go", "internal/"},
+		{"glob at root", "*.go", ""},
+		{"nested doublestar", "internal/**/*_test.go", "internal/"},
+		{"question mark", "internal/runner/task?.go", "internal/runner/"},
+		{"char class", "data[1].csv", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := staticPrefix(tt.pattern); got != tt.want {
+				t.Errorf("staticPrefix(%q) = %q, want %q", tt.pattern, got, tt.want)
 			}
 		})
 	}
@@ -126,6 +220,48 @@ func TestOverlappingAffects(t *testing.T) {
 			a:    []string{"internal/"},
 			b:    []string{"internal/queue/queue.go", "internal/merge/merge.go", "docs/readme.md"},
 			want: []string{"internal/", "internal/merge/merge.go", "internal/queue/queue.go"},
+		},
+		{
+			name: "glob matches exact file",
+			a:    []string{"internal/runner/*.go"},
+			b:    []string{"internal/runner/task.go"},
+			want: []string{"internal/runner/*.go", "internal/runner/task.go"},
+		},
+		{
+			name: "glob no match",
+			a:    []string{"internal/runner/*.go"},
+			b:    []string{"pkg/client/http.go"},
+			want: nil,
+		},
+		{
+			name: "glob vs prefix",
+			a:    []string{"internal/runner/*.go"},
+			b:    []string{"internal/runner/"},
+			want: []string{"internal/runner/", "internal/runner/*.go"},
+		},
+		{
+			name: "glob vs glob overlapping",
+			a:    []string{"internal/runner/*.go"},
+			b:    []string{"internal/runner/*_test.go"},
+			want: []string{"internal/runner/*.go", "internal/runner/*_test.go"},
+		},
+		{
+			name: "glob vs glob disjoint",
+			a:    []string{"internal/runner/*.go"},
+			b:    []string{"pkg/client/*.go"},
+			want: nil,
+		},
+		{
+			name: "doublestar matches everything",
+			a:    []string{"**/*.go"},
+			b:    []string{"internal/runner/task.go"},
+			want: []string{"**/*.go", "internal/runner/task.go"},
+		},
+		{
+			name: "mixed exact glob and prefix",
+			a:    []string{"README.md", "internal/runner/*.go"},
+			b:    []string{"internal/runner/task.go", "README.md"},
+			want: []string{"README.md", "internal/runner/*.go", "internal/runner/task.go"},
 		},
 	}
 	for _, tt := range tests {

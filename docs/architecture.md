@@ -292,10 +292,10 @@ Algorithm:
 - no overlap if either list is empty
 - exact strings are compared literally
 - an entry ending with `/` is treated as a directory prefix: it matches any entry that starts with that prefix (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Two prefix entries conflict if one contains the other.
-- when no prefix entries are present, a fast-path map lookup is used (O(n+m)); otherwise pairwise comparison is applied
+- when no prefix or glob entries are present, a fast-path map lookup is used (O(n+m)); otherwise pairwise comparison is applied
 - duplicates are removed from the overlap report
 - the overlap list is sorted before logging
-Important consequence: `affects` is metadata, not a live diff. `mato` does not interpret it as globs.
+- entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched using `doublestar` pattern syntax. Glob vs concrete path uses `doublestar.Match`; glob vs directory prefix and glob vs glob use static-prefix comparison for conservative conflict detection (no false negatives, possible false positives).
 ## 9. Code Structure
 
 The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypoint, `internal/` for library packages.

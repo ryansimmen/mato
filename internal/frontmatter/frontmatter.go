@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -178,6 +180,31 @@ func SanitizeBranchName(name string) string {
 		name = "unnamed"
 	}
 	return name
+}
+
+// IsGlob reports whether s contains glob metacharacters.
+// Checks for *, ?, [, and { because doublestar supports brace expansion.
+func IsGlob(s string) bool {
+	return strings.ContainsAny(s, "*?[{")
+}
+
+// ValidateAffectsGlobs checks glob entries in an affects list for semantic
+// errors: trailing "/" combined with glob syntax (ambiguous intent) and
+// invalid glob syntax that doublestar cannot compile. Returns nil if all
+// entries are valid or non-glob.
+func ValidateAffectsGlobs(affects []string) error {
+	for _, af := range affects {
+		if !IsGlob(af) {
+			continue
+		}
+		if strings.HasSuffix(af, "/") {
+			return fmt.Errorf("affects %q combines glob syntax with trailing /; use a glob pattern without trailing / or a plain directory prefix", af)
+		}
+		if _, err := doublestar.Match(af, ""); err != nil {
+			return fmt.Errorf("invalid glob in affects %q: %w", af, err)
+		}
+	}
+	return nil
 }
 
 func filterEmpty(ss []string) []string {
