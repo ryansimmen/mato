@@ -673,9 +673,8 @@ func TestIsFailedDirUnavailable(t *testing.T) {
 	}
 }
 
-func TestSelectAndClaimTask_InvalidYAML_WarnsAndUsesDefaults(t *testing.T) {
+func TestSelectAndClaimTask_InvalidYAML_Skipped(t *testing.T) {
 	dir := setupClaimTestDir(t)
-	// Task with invalid YAML frontmatter
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "bad-yaml.md"), strings.Join([]string{
 		"---",
 		"priority: [invalid",
@@ -706,29 +705,20 @@ func TestSelectAndClaimTask_InvalidYAML_WarnsAndUsesDefaults(t *testing.T) {
 	if claimErr != nil {
 		t.Fatalf("SelectAndClaimTask: %v", claimErr)
 	}
-	if task == nil {
-		t.Fatal("expected a claimed task, got nil")
+	if task != nil {
+		t.Fatalf("expected nil claimed task for malformed backlog task, got %+v", task)
 	}
-
-	// Default maxRetries (3) should be used, so the task should be claimed
-	// since there are 0 failures.
-	if task.Filename != "bad-yaml.md" {
-		t.Fatalf("Filename = %q, want %q", task.Filename, "bad-yaml.md")
-	}
-
-	// Verify the warning was printed to stderr.
 	stderrOutput := string(captured)
 	if !strings.Contains(stderrOutput, "warning: could not parse task metadata for bad-yaml.md") {
 		t.Fatalf("expected parse-error warning on stderr, got: %q", stderrOutput)
 	}
-	if !strings.Contains(stderrOutput, "using defaults") {
-		t.Fatalf("expected 'using defaults' in warning, got: %q", stderrOutput)
+	if _, err := os.Stat(filepath.Join(dir, DirBacklog, "bad-yaml.md")); err != nil {
+		t.Fatalf("malformed task should remain in backlog until reconciled: %v", err)
 	}
 }
 
-func TestSelectAndClaimTask_InvalidYAML_ExhaustedRetries_UsesDefault(t *testing.T) {
+func TestSelectAndClaimTask_InvalidYAML_ExhaustedRetries_Skipped(t *testing.T) {
 	dir := setupClaimTestDir(t)
-	// Task with invalid YAML and 3 failures (matching default max_retries=3).
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "bad-exhausted.md"), strings.Join([]string{
 		"---",
 		"max_retries: !!invalid",
@@ -758,13 +748,14 @@ func TestSelectAndClaimTask_InvalidYAML_ExhaustedRetries_UsesDefault(t *testing.
 	if claimErr != nil {
 		t.Fatalf("SelectAndClaimTask: %v", claimErr)
 	}
-	// With default maxRetries=3 and 3 failures, the task should be exhausted
-	// and moved to failed/.
 	if task != nil {
-		t.Fatalf("expected nil (default max_retries=3 exhausted), got %+v", task)
+		t.Fatalf("expected nil claimed task for malformed backlog task, got %+v", task)
 	}
-	if _, err := os.Stat(filepath.Join(dir, DirFailed, "bad-exhausted.md")); err != nil {
-		t.Fatalf("bad-exhausted.md not in failed: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, DirFailed, "bad-exhausted.md")); !os.IsNotExist(err) {
+		t.Fatalf("malformed task should not be moved to failed by claim path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, DirBacklog, "bad-exhausted.md")); err != nil {
+		t.Fatalf("malformed task should remain in backlog until reconciled: %v", err)
 	}
 }
 
@@ -939,7 +930,7 @@ func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 	}
 
 	stderrStr := string(stderrBytes)
-	if !strings.Contains(stderrStr, "could not count failures") {
+	if !strings.Contains(stderrStr, "could not parse task metadata for unreadable.md") {
 		t.Fatalf("expected warning about unreadable file in stderr, got: %s", stderrStr)
 	}
 }
@@ -986,6 +977,33 @@ func TestSelectAndClaimTask_BranchCollisionAddsDisambiguator(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- branch: "+task.Branch+" -->") {
 		t.Fatalf("branch comment not found in claimed task:\n%s", string(data))
+	}
+}
+
+func TestSelectAndClaimTask_BranchCollisionFromMalformedActiveTask(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	broken := strings.Join([]string{
+		"<!-- branch: task/add-feature -->",
+		"---",
+		"priority: [broken",
+		"---",
+		"# Broken Active",
+		"",
+	}, "\n")
+	testutil.WriteFile(t, filepath.Join(dir, DirReadyReview, "broken.md"), broken)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "add feature.md"), "# Add Feature (v2)\n")
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "add feature.md\n")
+
+	idx := BuildIndex(dir)
+	task, err := SelectAndClaimTask(dir, "agent-coll2", nil, idx)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task, got nil")
+	}
+	if task.Branch == "task/add-feature" {
+		t.Fatalf("Branch should have been disambiguated, got %q", task.Branch)
 	}
 }
 

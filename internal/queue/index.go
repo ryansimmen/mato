@@ -32,6 +32,14 @@ type ParseFailure struct {
 	Err      error
 }
 
+// BuildWarning records a non-fatal filesystem warning encountered while
+// scanning a queue directory.
+type BuildWarning struct {
+	State string
+	Path  string
+	Err   error
+}
+
 // PollIndex is an in-memory snapshot of all task files across the queue
 // directories. It is built once per poll cycle by scanning each directory
 // and reading each file exactly once. All consumers query the index instead
@@ -74,6 +82,10 @@ type PollIndex struct {
 
 	// parseFailures records files that failed to parse during build.
 	parseFailures []ParseFailure
+
+	// buildWarnings records non-fatal filesystem issues encountered while
+	// scanning directories.
+	buildWarnings []BuildWarning
 }
 
 // activeDirs are the directories representing tasks actively being worked on.
@@ -110,7 +122,11 @@ func BuildIndex(tasksDir string) *PollIndex {
 		dirPath := filepath.Join(tasksDir, dir)
 		names, err := ListTaskFiles(dirPath)
 		if err != nil {
-			// Directory may not exist yet (e.g. first run). Skip.
+			if os.IsNotExist(err) {
+				// Directory may not exist yet (e.g. first run). Skip.
+				continue
+			}
+			idx.buildWarnings = append(idx.buildWarnings, BuildWarning{State: dir, Path: dirPath, Err: err})
 			continue
 		}
 
@@ -139,15 +155,18 @@ func BuildIndex(tasksDir string) *PollIndex {
 				continue
 			}
 
+			branch, _ := taskfile.ParseBranchComment(data)
+
 			meta, body, err := frontmatter.ParseTaskData(data, path)
 			if err != nil {
 				idx.parseFailures = append(idx.parseFailures, ParseFailure{
 					Filename: name, State: dir, Path: path, Err: err,
 				})
+				if isActive[dir] && branch != "" {
+					idx.activeBranches[branch] = struct{}{}
+				}
 				continue
 			}
-
-			branch, _ := taskfile.ParseBranchComment(data)
 
 			snap := &TaskSnapshot{
 				Filename:           name,
@@ -195,6 +214,14 @@ func BuildIndex(tasksDir string) *PollIndex {
 	}
 
 	return idx
+}
+
+// BuildWarnings returns non-fatal filesystem warnings captured during index build.
+func (idx *PollIndex) BuildWarnings() []BuildWarning {
+	if idx == nil {
+		return nil
+	}
+	return idx.buildWarnings
 }
 
 // TasksByState returns all snapshots in the given directory. Returns nil if
@@ -354,6 +381,20 @@ func (idx *PollIndex) WaitingParseFailures() []ParseFailure {
 	var result []ParseFailure
 	for _, pf := range idx.parseFailures {
 		if pf.State == DirWaiting {
+			result = append(result, pf)
+		}
+	}
+	return result
+}
+
+// BacklogParseFailures returns parse failures from the backlog/ directory.
+func (idx *PollIndex) BacklogParseFailures() []ParseFailure {
+	if idx == nil {
+		return nil
+	}
+	var result []ParseFailure
+	for _, pf := range idx.parseFailures {
+		if pf.State == DirBacklog {
 			result = append(result, pf)
 		}
 	}

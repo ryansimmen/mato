@@ -211,12 +211,11 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 			// Fallback: parse from disk.
 			var parseErr error
 			meta, body, parseErr = frontmatter.ParseTaskFile(src)
-			maxRetries = 3
 			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, using defaults: %v\n", name, parseErr)
-			} else {
-				maxRetries = meta.MaxRetries
+				fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, parseErr)
+				continue
 			}
+			maxRetries = meta.MaxRetries
 			var failErr error
 			failures, failErr = CountFailureLines(src)
 			if failErr != nil {

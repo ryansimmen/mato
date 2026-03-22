@@ -299,16 +299,16 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		case "reject":
 			moveReviewedTask(tasksDir, agentID, task, rejectDisposition)
 		default:
-			appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
-			fmt.Printf("Review incomplete: recorded review-failure for %s\n", task.Filename)
+			recorded := appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
+			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
 		}
 		return
 	}
 
 	var verdict reviewVerdict
 	if err := json.Unmarshal(data, &verdict); err != nil {
-		appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not parse verdict file: %v", err))
-		fmt.Printf("Review incomplete: malformed verdict file for %s\n", task.Filename)
+		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not parse verdict file: %v", err))
+		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "malformed verdict file")
 		return
 	}
 
@@ -318,31 +318,37 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	case "approve":
 		// Write approval marker to task file.
 		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now)); err != nil {
+			recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not write approval marker: %v", err))
 			fmt.Fprintf(os.Stderr, "warning: could not write approval marker: %v\n", err)
+			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
+			return
 		}
 		moveReviewedTask(tasksDir, agentID, task, approveDisposition)
 
 	case "reject":
-		reason := strings.TrimSpace(verdict.Reason)
+		reason := taskfile.SanitizeCommentText(verdict.Reason)
 		if reason == "" {
 			reason = "no reason provided"
 		}
 		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason)); err != nil {
+			recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not write rejection marker: %v", err))
 			fmt.Fprintf(os.Stderr, "warning: could not write rejection marker: %v\n", err)
+			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
+			return
 		}
 		moveReviewedTask(tasksDir, agentID, task, rejectDisposition)
 
 	case "error":
-		reason := strings.TrimSpace(verdict.Reason)
+		reason := taskfile.SanitizeCommentText(verdict.Reason)
 		if reason == "" {
 			reason = "review agent reported an error"
 		}
-		appendReviewFailure(task.TaskPath, agentID, reason)
-		fmt.Printf("Review error: recorded review-failure for %s: %s\n", task.Filename, reason)
+		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
+		logReviewFailureOutcome("Review error", task.Filename, recorded, reason)
 
 	default:
-		appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
-		fmt.Printf("Review incomplete: unknown verdict %q for %s\n", verdict.Verdict, task.Filename)
+		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
+		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, fmt.Sprintf("unknown verdict %q", verdict.Verdict))
 	}
 }
 
@@ -368,10 +374,28 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 
 // appendReviewFailure writes a review-failure comment to the task file.
 // The task stays in ready-for-review/ for a future review attempt.
-func appendReviewFailure(taskPath, agentID, reason string) {
+func appendReviewFailure(taskPath, agentID, reason string) bool {
 	if err := taskfile.AppendReviewFailure(taskPath, agentID, reason); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		return false
 	}
+	return true
+}
+
+func logReviewFailureOutcome(prefix, filename string, recorded bool, detail string) {
+	if detail != "" {
+		if recorded {
+			fmt.Printf("%s: recorded review-failure for %s: %s\n", prefix, filename, detail)
+			return
+		}
+		fmt.Printf("%s: could not record review-failure for %s: %s\n", prefix, filename, detail)
+		return
+	}
+	if recorded {
+		fmt.Printf("%s: recorded review-failure for %s\n", prefix, filename)
+		return
+	}
+	fmt.Printf("%s: could not record review-failure for %s\n", prefix, filename)
 }
 
 // extractReviewRejections reads review-rejection comments from the task file,

@@ -872,6 +872,55 @@ func TestWriteQueueManifest_SkipsMalformedFiles(t *testing.T) {
 	}
 }
 
+func TestWriteQueueManifest_WithIndexSkipsMalformedBacklogFiles(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tasksDir, DirBacklog), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "good.md"), []byte("---\npriority: 10\n---\nGood\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "bad.md"), []byte("---\npriority: nope\n---\nBad\n"), 0o644)
+
+	idx := BuildIndex(tasksDir)
+	stderr := captureStderr(t, func() {
+		if err := WriteQueueManifest(tasksDir, nil, idx); err != nil {
+			t.Fatalf("WriteQueueManifest: %v", err)
+		}
+	})
+
+	if !strings.Contains(stderr, "could not parse backlog task bad.md for queue manifest") {
+		t.Fatalf("expected malformed file warning, got %q", stderr)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, ".queue"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if string(data) != "good.md\n" {
+		t.Fatalf("manifest = %q, want %q", string(data), "good.md\n")
+	}
+}
+
+func TestWriteQueueManifest_WithIndexFailsWhenBacklogUnreadable(t *testing.T) {
+	tasksDir := t.TempDir()
+	idx := &PollIndex{buildWarnings: []BuildWarning{{State: DirBacklog, Path: filepath.Join(tasksDir, DirBacklog), Err: os.ErrPermission}}}
+
+	stderr := captureStderr(t, func() {
+		err := WriteQueueManifest(tasksDir, nil, idx)
+		if err == nil {
+			t.Fatal("expected WriteQueueManifest to fail when backlog dir could not be read")
+		}
+		if !strings.Contains(err.Error(), "read backlog dir") {
+			t.Fatalf("error = %v, want backlog read failure", err)
+		}
+	})
+
+	if !strings.Contains(stderr, "could not build queue index cleanly") {
+		t.Fatalf("expected warning about partial index, got %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, ".queue")); !os.IsNotExist(err) {
+		t.Fatalf(".queue should not be written when backlog cannot be read: %v", err)
+	}
+}
+
 func TestDeferredOverlappingTasks_DefersLowerPriorityTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{DirWaiting, DirBacklog} {
@@ -1242,6 +1291,32 @@ func TestReconcileReadyQueue_MovesUnparseableToFailed(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "moving unparseable waiting task") {
 		t.Errorf("expected warning about moving unparseable task, got: %s", stderr)
+	}
+}
+
+func TestReconcileReadyQueue_MovesMalformedBacklogTaskToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirWaiting, DirBacklog, DirCompleted, DirFailed} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "bad-backlog.md"), []byte("---\npriority: [oops\n---\n# Bad\n"), 0o644)
+
+	stderr := captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir, nil)
+		if got != 0 {
+			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		}
+	})
+
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-backlog.md")); err != nil {
+		t.Fatalf("malformed backlog task should be moved to failed/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "bad-backlog.md")); !os.IsNotExist(err) {
+		t.Fatal("malformed backlog task should no longer be in backlog/")
+	}
+	if !strings.Contains(stderr, "moving unparseable backlog task") {
+		t.Errorf("expected warning about moving malformed backlog task, got: %s", stderr)
 	}
 }
 

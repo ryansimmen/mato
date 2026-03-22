@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"mato/internal/frontmatter"
@@ -380,11 +381,17 @@ func TestBuildIndex_NilIndexMethods(t *testing.T) {
 	if idx.BacklogByPriority(nil) != nil {
 		t.Error("nil index BacklogByPriority should return nil")
 	}
+	if idx.BuildWarnings() != nil {
+		t.Error("nil index BuildWarnings should return nil")
+	}
 	if idx.ParseFailures() != nil {
 		t.Error("nil index ParseFailures should return nil")
 	}
 	if idx.WaitingParseFailures() != nil {
 		t.Error("nil index WaitingParseFailures should return nil")
+	}
+	if idx.BacklogParseFailures() != nil {
+		t.Error("nil index BacklogParseFailures should return nil")
 	}
 	if idx.Snapshot(DirBacklog, "x.md") != nil {
 		t.Error("nil index Snapshot should return nil")
@@ -399,6 +406,36 @@ func TestBuildIndex_MissingDirectories(t *testing.T) {
 	idx := BuildIndex(tasksDir)
 	if len(idx.tasks) != 0 {
 		t.Fatalf("expected 0 tasks for missing dirs, got %d", len(idx.tasks))
+	}
+}
+
+func TestBuildIndex_ActiveBranchTrackedForMalformedActiveTask(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirReadyReview, "broken.md", strings.Join([]string{
+		"<!-- branch: task/broken -->",
+		"---",
+		"priority: [oops",
+		"---",
+		"# Broken",
+		"",
+	}, "\n"))
+
+	idx := BuildIndex(tasksDir)
+	if _, ok := idx.ActiveBranches()["task/broken"]; !ok {
+		t.Fatal("expected malformed active task branch to be tracked")
+	}
+}
+
+func TestBuildIndex_BacklogParseFailures(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirBacklog, "bad.md", "---\npriority: [oops\n---\n# Bad\n")
+	idx := BuildIndex(tasksDir)
+	failures := idx.BacklogParseFailures()
+	if len(failures) != 1 {
+		t.Fatalf("expected 1 backlog parse failure, got %d", len(failures))
+	}
+	if failures[0].Filename != "bad.md" {
+		t.Fatalf("failure filename = %q, want bad.md", failures[0].Filename)
 	}
 }
 

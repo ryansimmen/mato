@@ -466,6 +466,33 @@ priority: high
 	}
 }
 
+func TestParseTaskFile_DefaultsNotSuppressedBySimilarKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "similar-keys.md")
+	content := `---
+not_priority: 7
+custom_max_retries: 9
+---
+Body
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+	if meta.Priority != 50 {
+		t.Fatalf("meta.Priority = %d, want 50", meta.Priority)
+	}
+	if meta.MaxRetries != 3 {
+		t.Fatalf("meta.MaxRetries = %d, want 3", meta.MaxRetries)
+	}
+	if body != "Body\n" {
+		t.Fatalf("body = %q, want %q", body, "Body\n")
+	}
+}
+
 func TestSanitizeBranchName(t *testing.T) {
 	tests := []struct {
 		name  string

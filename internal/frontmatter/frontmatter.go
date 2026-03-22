@@ -76,20 +76,26 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 			return TaskMeta{}, "", fmt.Errorf("unterminated frontmatter in %s", path)
 		}
 		block := strings.Join(lines[startLine+1:end], "\n")
+		blockKeys := map[string]struct{}{}
 		if strings.TrimSpace(block) != "" {
 			if err := yaml.Unmarshal([]byte(block), &meta); err != nil {
 				return TaskMeta{}, "", fmt.Errorf("parse frontmatter in %s: %w", path, err)
 			}
+			blockKeys = topLevelKeys(block)
 		}
 		// Restore defaults for zero-value fields that weren't set
 		if meta.ID == "" {
 			meta.ID = TaskFileStem(path)
 		}
-		if meta.Priority == 0 && !strings.Contains(block, "priority:") {
-			meta.Priority = 50
+		if meta.Priority == 0 {
+			if _, ok := blockKeys["priority"]; !ok {
+				meta.Priority = 50
+			}
 		}
-		if meta.MaxRetries == 0 && !strings.Contains(block, "max_retries:") {
-			meta.MaxRetries = 3
+		if meta.MaxRetries == 0 {
+			if _, ok := blockKeys["max_retries"]; !ok {
+				meta.MaxRetries = 3
+			}
 		}
 		// Filter empty strings from arrays (YAML can produce them from ["", x])
 		meta.DependsOn = filterEmpty(meta.DependsOn)
@@ -99,6 +105,29 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 	}
 
 	return meta, stripHTMLCommentLines(body), nil
+}
+
+func topLevelKeys(block string) map[string]struct{} {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(block), &doc); err != nil {
+		return nil
+	}
+	if len(doc.Content) == 0 {
+		return nil
+	}
+	mapping := doc.Content[0]
+	if mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	keys := make(map[string]struct{}, len(mapping.Content)/2)
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		keyNode := mapping.Content[i]
+		if keyNode.Kind != yaml.ScalarNode {
+			continue
+		}
+		keys[keyNode.Value] = struct{}{}
+	}
+	return keys
 }
 
 func TaskFileStem(path string) string {
