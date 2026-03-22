@@ -90,7 +90,7 @@ fi
 | `$TASK_PATH` file missing | Another agent may have taken it; report and exit. |
 | Reading messages fails | Continue anyway. Messaging is non-blocking. |
 | `MATO_DEPENDENCY_CONTEXT` file exists | Read it for details about completed dependency tasks (files changed, commit SHAs, titles). Use this context to understand what prerequisite work was done. |
-| `MATO_FILE_CLAIMS` file exists | Read it for a JSON map of active file claims. Keys may be exact file paths or directory prefixes ending with `/`. If any file you plan to modify appears directly in the claims, or falls under a claimed directory prefix, note the potential conflict in your commit message and take extra care with those files. |
+| `MATO_FILE_CLAIMS` file exists | Read it for a JSON map of active file claims. Keys may be exact file paths, directory prefixes ending with `/`, or glob patterns (e.g., `internal/runner/*.go`, `**/*_test.go`). If any file you plan to modify appears directly in the claims, falls under a claimed directory prefix, or matches a glob-pattern key, note the potential conflict in your commit message and take extra care with those files. |
 | `MATO_PREVIOUS_FAILURES` is set | Read it carefully. Each line is a previous failure record showing the step, error, and files changed. Learn from these failures: do NOT repeat the same approach that already failed. Try a different strategy or fix the specific error mentioned. |
 | `MATO_REVIEW_FEEDBACK` is set | Read it carefully. Each line is a previous review rejection explaining what the reviewer found wrong. Address these specific issues in your implementation. |
 ---

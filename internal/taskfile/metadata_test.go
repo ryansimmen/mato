@@ -325,3 +325,92 @@ func TestAppendReviewFailure_NonexistentFile(t *testing.T) {
 		t.Fatal("expected error for nonexistent file")
 	}
 }
+
+func TestAppendCycleFailureRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(path, []byte("# Task\n"), 0o644)
+
+	if err := AppendCycleFailureRecord(path); err != nil {
+		t.Fatalf("AppendCycleFailureRecord: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "<!-- cycle-failure: mato at") {
+		t.Fatalf("cycle-failure record not found in file: %s", data)
+	}
+	if !strings.Contains(string(data), "circular dependency") {
+		t.Fatalf("cycle-failure reason not found in file: %s", data)
+	}
+}
+
+func TestAppendCycleFailureRecord_NonexistentFile(t *testing.T) {
+	err := AppendCycleFailureRecord(filepath.Join(t.TempDir(), "missing.md"))
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+func TestContainsCycleFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"present", "# Task\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n", true},
+		{"absent", "# Task\n<!-- failure: agent at 2026-01-01T00:00:00Z step=WORK error=fail -->\n", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsCycleFailure([]byte(tt.data)); got != tt.want {
+				t.Fatalf("ContainsCycleFailure() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountCycleFailureMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want int
+	}{
+		{"none", "# Task\n", 0},
+		{"one", "# Task\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n", 1},
+		{"two", "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n<!-- cycle-failure: mato at 2026-01-02T00:00:00Z — circular dependency -->\n", 2},
+		{"mixed with failure", "<!-- failure: agent at T step=WORK error=e -->\n<!-- cycle-failure: mato at T — circular dependency -->\n", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CountCycleFailureMarkers([]byte(tt.data)); got != tt.want {
+				t.Fatalf("CountCycleFailureMarkers() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLastCycleFailureReason(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{"present", "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n", "circular dependency"},
+		{"absent", "<!-- failure: agent at T step=WORK error=fail -->\n", ""},
+		{"multiple", "<!-- cycle-failure: mato at T — first -->\n<!-- cycle-failure: mato at T — circular dependency -->\n", "circular dependency"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LastCycleFailureReason([]byte(tt.data)); got != tt.want {
+				t.Fatalf("LastCycleFailureReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountFailureMarkers_ExcludesCycleFailure(t *testing.T) {
+	// Cycle-failure markers should NOT be counted by CountFailureMarkers.
+	data := []byte("<!-- failure: agent at T step=WORK error=e -->\n<!-- cycle-failure: mato at T — circular dependency -->\n")
+	if got := CountFailureMarkers(data); got != 1 {
+		t.Fatalf("CountFailureMarkers() = %d, want 1 (should exclude cycle-failure)", got)
+	}
+}

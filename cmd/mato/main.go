@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/doctor"
 	"mato/internal/runner"
 	"mato/internal/status"
 
@@ -167,6 +169,7 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 	root.Flags().Bool("dry-run", false, "Validate queue setup without launching Docker containers")
 
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newDoctorCmd())
 	return root
 }
 
@@ -207,8 +210,84 @@ func newStatusCmd() *cobra.Command {
 	return cmd
 }
 
+// ExitError carries a non-zero exit code without printing "mato error:".
+type ExitError struct {
+	Code int
+}
+
+func (e ExitError) Error() string {
+	return fmt.Sprintf("exit %d", e.Code)
+}
+
+func newDoctorCmd() *cobra.Command {
+	var doctorRepo string
+	var doctorTasksDir string
+	var fix bool
+	var format string
+	var only []string
+
+	cmd := &cobra.Command{
+		Use:           "doctor",
+		Short:         "Run health checks on the repository and task queue",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if format != "text" && format != "json" {
+				return fmt.Errorf("--format must be text or json, got %s", format)
+			}
+
+			repoInput := doctorRepo
+			if repoInput == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("get working directory: %w", err)
+				}
+				repoInput = wd
+			}
+
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer stop()
+
+			report, err := doctor.Run(ctx, repoInput, doctorTasksDir, doctor.Options{
+				Fix:    fix,
+				Format: format,
+				Only:   only,
+			})
+			if err != nil {
+				return err // hard failure -> "mato error: ..." + exit 1
+			}
+
+			if format == "json" {
+				if renderErr := doctor.RenderJSON(os.Stdout, report); renderErr != nil {
+					return renderErr
+				}
+			} else {
+				doctor.RenderText(os.Stdout, report)
+			}
+
+			if report.ExitCode != 0 {
+				return ExitError{Code: report.ExitCode} // health status -> silent exit 1 or 2
+			}
+			return nil // healthy -> exit 0
+		},
+	}
+
+	cmd.Flags().StringVar(&doctorRepo, "repo", "", "Path to git repository (default: current directory)")
+	cmd.Flags().StringVar(&doctorTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
+	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, deps)")
+
+	return cmd
+}
+
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
+		var exitErr ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
 		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
 		os.Exit(1)
 	}

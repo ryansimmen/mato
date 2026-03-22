@@ -321,6 +321,16 @@ func lastFailureReason(path string) string {
 	return taskfile.LastFailureReason(data)
 }
 
+// lastCycleFailureReason extracts the reason from the last <!-- cycle-failure: ... -->
+// comment. Returns "" if no cycle-failure markers are found.
+func lastCycleFailureReason(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return taskfile.LastCycleFailureReason(data)
+}
+
 // reverseDependencies scans waiting/ tasks and returns a map from dependency ID
 // to the list of task filenames that depend on it.
 func reverseDependencies(tasksDir string) map[string][]string {
