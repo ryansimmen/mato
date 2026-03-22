@@ -84,13 +84,13 @@ The file is a JSON object mapping active `affects:` entries to claim records:
 }
 ```
 
-Each key is a literal entry from a task's `affects:` metadata. Most keys are file paths; keys ending with `/` are directory-prefix claims and apply to any file underneath that path. Each value is a `FileClaim` with the task filename and its current queue status (`in-progress`, `ready-for-review`, or `ready-to-merge`).
+Each key is a literal entry from a task's `affects:` metadata. Keys may be exact file paths, directory prefixes ending with `/`, or glob patterns containing metacharacters (`*`, `?`, `[`, `{`). Directory-prefix keys apply to any file underneath that path. Glob-pattern keys apply to any file that matches the pattern (e.g., `internal/runner/*.go` claims all `.go` files directly under `internal/runner/`). Each value is a `FileClaim` with the task filename and its current queue status (`in-progress`, `ready-for-review`, or `ready-to-merge`).
 
 ### How it is built
 `BuildAndWriteFileClaims` scans tasks in `in-progress/`, `ready-for-review/`, and `ready-to-merge/` via `taskfile.CollectActiveAffects(...)`, then builds a map of affects entry → claim. Directory-prefix entries are preserved as-is. First writer wins: if multiple tasks claim the same literal entry, only the first is recorded.
 
 ### How agents use it
-The host injects `MATO_FILE_CLAIMS` pointing to the file-claims path inside the container. Agents can read this file during `VERIFY_CLAIM` to detect potential conflicts with other active tasks and adjust their approach accordingly. When a key ends with `/`, agents should treat it as a claim on every file under that directory.
+The host injects `MATO_FILE_CLAIMS` pointing to the file-claims path inside the container. Agents can read this file during `VERIFY_CLAIM` to detect potential conflicts with other active tasks and adjust their approach accordingly. When a key ends with `/`, agents should treat it as a claim on every file under that directory. When a key contains glob metacharacters, agents should treat any file that matches the pattern as claimed.
 
 ## Agent Checkpoints
 

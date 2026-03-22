@@ -1,5 +1,5 @@
 # Mato Architecture
-This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `queue/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
+This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.tasks/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
@@ -185,20 +185,34 @@ State meanings:
 | `ready-for-review/` | branch pushed, waiting for AI review | host `postAgentPush` | host `postReviewAction` moves to `ready-to-merge/` on approval, or to `backlog/` on rejection |
 | `ready-to-merge/` | reviewed and approved, waiting for host merge | host `postReviewAction` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
-| `failed/` | failure record budget exhausted or merge blocked by a missing task branch | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), or merge-queue missing-branch handling | no normal exit |
+| `failed/` | failure record budget exhausted, merge blocked by a missing task branch, or circular dependency detected | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), merge-queue missing-branch handling, or `ReconcileReadyQueue` moves cycle members from `waiting/` to `failed/` with `<!-- cycle-failure: ... -->` markers | no normal exit |
 Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
 ## 5. Dependency Resolution
-`queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied.
-How it works:
-1. The `PollIndex` provides `CompletedIDs()` — a set of both filename stems and explicit `id:` values for every task in `completed/`.
-2. `queue.ReconcileReadyQueue(...)` iterates waiting tasks (from the index or by scanning `waiting/*.md` when no index is provided) and parses each file's frontmatter.
-3. Every entry in `meta.DependsOn` must exist in the completed-ID set.
-4. If all dependencies are present, the task moves `waiting/ -> backlog/`; otherwise it stays in `waiting/`.
-What “ready” means in the current code:
+`queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied and moves cyclic tasks to `failed/`.
+### DAG Analysis
+Dependency resolution is built on a shared analysis pass in `internal/dag/`. `dag.Analyze(nodes, completedIDs, ambiguousIDs, knownIDs)` constructs a dependency graph from the waiting tasks and classifies each node:
+- **DepsSatisfied**: all `depends_on` entries are in the completed-ID set (unambiguously).
+- **Blocked**: at least one dependency is not yet completed. `BlockDetail` records the reason — `BlockedByWaiting` (dependency is itself in `waiting/`), `BlockedByUnknown` (dependency ID not found in any queue directory), `BlockedByExternal` (dependency exists in a non-completed, non-waiting state such as `failed/` or `in-progress/`), or `BlockedByAmbiguous` (dependency ID maps to multiple completed tasks via stem/explicit-ID aliasing, so it is unsafe to promote). Cycle members do not appear in `Blocked` — they are tracked separately in `Cycles`.
+- **Cycles**: strongly connected components with more than one member, or self-edges, detected via Tarjan's SCC algorithm. Only actual cycle members are failed — downstream tasks that depend on a cycle member remain in `Blocked` with `BlockedByWaiting` referencing the cycle member.
+The analysis produces deterministic, sorted output for all three categories.
+### Diagnostics Wrapper
+`queue.DiagnoseDependencies(tasksDir, idx)` in `queue/diagnostics.go` bridges the `PollIndex` and `dag.Analyze()`. It builds the `completedIDs` (safe, unambiguous completions), `ambiguousIDs` (IDs that map to multiple completed tasks via stem/explicit-ID aliasing), and `knownIDs` (IDs present in any queue directory) sets from the index, constructs the node list from waiting tasks, runs `dag.Analyze()`, and produces sorted `DependencyIssue` entries for structured warning output.
+### Reconcile Flow
+`ReconcileReadyQueue(tasksDir, idx)` calls `DiagnoseDependencies()` once per reconcile cycle, then:
+1. Emits structured warnings from `diag.Issues` (duplicate waiting IDs, unknown dependencies, ambiguous completed IDs, cycles).
+2. Moves cycle members to `failed/` with `<!-- cycle-failure: mato at <timestamp> — circular dependency -->` markers. These markers do **not** consume the task's normal `max_retries` budget (only `<!-- failure: ... -->` records are counted).
+3. Promotes deps-satisfied tasks from `waiting/` to `backlog/` if they also pass the `HasActiveOverlap` filter (no conflicting active tasks).
+### One-Hop Promotion Semantics
+Promotion is intentionally one-hop per reconcile cycle. If A is completed, B depends on A, and C depends on B, then one reconcile pass promotes B to `backlog/` but leaves C in `waiting/`. C becomes promotable on the next reconcile cycle after B completes. This preserves the existing behavior and avoids premature promotion of deeply chained tasks.
+### Cycle-to-Failed Behavior
+Previously, cyclic waiting tasks (including self-dependent tasks) remained in `waiting/` indefinitely with only a stderr warning. Now they are moved to `failed/` during reconcile. This is a deliberate improvement: cycles cannot self-resolve, and silent indefinite blocking is worse than explicit failure. Users can fix the cycle by editing the task's `depends_on` and moving it back to `waiting/`.
+The cycle-to-failed sequence is idempotent: it checks for an existing `<!-- cycle-failure: -->` marker before appending, then atomically moves the task to `failed/`.
+### Dependency Matching
 - A dependency is satisfied only if it matches a task already in `completed/`.
 - Matching can happen by file stem or explicit `id:` frontmatter.
-- Dependencies on tasks that exist elsewhere in `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, or `failed/` but are not completed remain blocked silently.
-- The function warns only for truly unknown dependency IDs, meaning IDs not found in any queue directory.
+- Dependencies on tasks that exist elsewhere in `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, or `failed/` but are not completed remain blocked.
+- Truly unknown dependency IDs (not found in any queue directory) produce structured warnings.
+- Ambiguous completed IDs (where multiple completed tasks share the same ID via stem/explicit-ID aliasing) block promotion with a structured warning rather than silently satisfying the dependency.
 Relevant frontmatter defaults from `frontmatter.go`:
 - `ID` defaults to the filename stem.
 - `Priority` defaults to `50`.
@@ -292,10 +306,10 @@ Algorithm:
 - no overlap if either list is empty
 - exact strings are compared literally
 - an entry ending with `/` is treated as a directory prefix: it matches any entry that starts with that prefix (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Two prefix entries conflict if one contains the other.
-- when no prefix entries are present, a fast-path map lookup is used (O(n+m)); otherwise pairwise comparison is applied
+- when no prefix or glob entries are present, a fast-path map lookup is used (O(n+m)); otherwise pairwise comparison is applied
 - duplicates are removed from the overlap report
 - the overlap list is sorted before logging
-Important consequence: `affects` is metadata, not a live diff. `mato` does not interpret it as globs.
+- entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched using `doublestar` pattern syntax. Glob vs concrete path uses `doublestar.Match`; glob vs directory prefix and glob vs glob use static-prefix comparison for conservative conflict detection (no false negatives, possible false positives).
 ## 9. Code Structure
 
 The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypoint, `internal/` for library packages.
@@ -323,9 +337,15 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Queue manifest writing (`manifest.go`).
 - Overlap deferral — `DeferredOverlappingTasks` (`overlap.go`).
 - Dependency promotion — `ReconcileReadyQueue` (`reconcile.go`).
+- Dependency diagnostics — `DiagnoseDependencies` (`diagnostics.go`).
 - Orphan recovery — `RecoverOrphanedTasks` (`queue.go`).
 - Task file enumeration — `ListTaskFiles` (`taskfiles.go`).
 - Atomic file moves — `AtomicMove` (`queue.go`).
+
+### `internal/dag/`
+- Shared dependency graph analysis — `Analyze` builds a DAG from waiting tasks, classifies nodes as deps-satisfied, blocked (with reason), or cyclic (`dag.go`).
+- Uses Kahn's algorithm for topological ordering and Tarjan's SCC for cycle detection.
+- Deterministic sorted output for all categories.
 
 ### `internal/identity/`
 - Agent ID generation (`GenerateAgentID`) and liveness checks (`IsAgentActive`) via `.locks/*.pid`.
@@ -354,6 +374,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `internal/taskfile/`
 - Branch comment parsing — `ParseBranch`, `ParseBranchComment`, `ParseClaimedBy`, `ParseClaimedAt` (`taskfile.go`, `metadata.go`).
 - Failure/review-failure tracking — `CountFailureMarkers`, `ExtractFailureLines`, `AppendFailureRecord`, etc. (`metadata.go`).
+- Cycle-failure tracking — `AppendCycleFailureRecord`, `ContainsCycleFailure`, `CountCycleFailureMarkers`, `LastCycleFailureReason` (`metadata.go`). Cycle-failure markers use `<!-- cycle-failure: ... -->` and do not count against the task's `max_retries` budget.
 - Active task collection — `CollectActiveAffects` scans in-progress/review/merge directories (`active.go`).
 
 ### `internal/frontmatter/`

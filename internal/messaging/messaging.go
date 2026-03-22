@@ -56,12 +56,18 @@ var ValidMessageTypes = map[string]bool{
 
 var safeMessageFilePart = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
+// MessagingDirs lists the relative paths (from tasksDir) of the messaging
+// subdirectories created by Init(). Exported so that doctor can check for
+// their existence without duplicating the list.
+var MessagingDirs = []string{
+	"messages/events",
+	"messages/presence",
+	"messages/completions",
+}
+
 func Init(tasksDir string) error {
-	for _, dir := range []string{
-		filepath.Join(tasksDir, "messages", "events"),
-		filepath.Join(tasksDir, "messages", "presence"),
-		filepath.Join(tasksDir, "messages", "completions"),
-	} {
+	for _, relDir := range MessagingDirs {
+		dir := filepath.Join(tasksDir, relDir)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create messaging directory %s: %w", dir, err)
 		}

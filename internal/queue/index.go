@@ -76,6 +76,11 @@ type PollIndex struct {
 	// the full activeAffects map on every call.
 	activeAffectsPrefixes []string
 
+	// activeAffectsGlobs holds affects entries from active dirs that
+	// contain glob metacharacters. Stored separately so HasActiveOverlap
+	// can match incoming entries against active glob patterns.
+	activeAffectsGlobs []string
+
 	// activeBranches is the set of branch names in active directories
 	// (in-progress, ready-for-review, ready-to-merge).
 	activeBranches map[string]struct{}
@@ -108,6 +113,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 		activeBranches:  make(map[string]struct{}),
 	}
 	activeAffectsPrefixSet := make(map[string]struct{})
+	activeAffectsGlobSet := make(map[string]struct{})
 
 	isActive := make(map[string]bool, len(activeDirs))
 	for _, d := range activeDirs {
@@ -179,6 +185,16 @@ func BuildIndex(tasksDir string) *PollIndex {
 				ReviewFailureCount: taskfile.CountReviewFailureMarkers(data),
 			}
 
+			// Validate glob syntax in affects. Invalid globs are
+			// logged as build warnings but the task is still fully
+			// indexed so its affects remain visible to overlap
+			// detection.
+			if err := frontmatter.ValidateAffectsGlobs(meta.Affects); err != nil {
+				idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
+					State: dir, Path: path, Err: err,
+				})
+			}
+
 			key := dir + "/" + name
 			idx.tasks[key] = snap
 			snapshots = append(snapshots, snap)
@@ -205,6 +221,11 @@ func BuildIndex(tasksDir string) *PollIndex {
 						}
 						activeAffectsPrefixSet[af] = struct{}{}
 						idx.activeAffectsPrefixes = append(idx.activeAffectsPrefixes, af)
+					} else if isGlob(af) {
+						if _, ok := activeAffectsGlobSet[af]; !ok {
+							activeAffectsGlobSet[af] = struct{}{}
+							idx.activeAffectsGlobs = append(idx.activeAffectsGlobs, af)
+						}
 					}
 				}
 			}
@@ -262,7 +283,9 @@ func (idx *PollIndex) AllIDs() map[string]struct{} {
 // HasActiveOverlap reports whether any task in the active directories
 // (in-progress, ready-for-review, ready-to-merge) declares an affects path
 // that overlaps with the given list. An entry ending with "/" is treated as
-// a directory prefix that matches any path underneath it.
+// a directory prefix that matches any path underneath it. Entries containing
+// glob metacharacters (*, ?, [, {) are matched using doublestar pattern
+// matching.
 func (idx *PollIndex) HasActiveOverlap(affects []string) bool {
 	if idx == nil || len(affects) == 0 {
 		return false
@@ -288,8 +311,34 @@ func (idx *PollIndex) HasActiveOverlap(affects []string) bool {
 		}
 		// Check if af falls under any active prefix entry.
 		for _, prefix := range idx.activeAffectsPrefixes {
+			if isInvalidGlob(prefix) {
+				// Invalid-glob prefixes (e.g. "internal/*/") cannot
+				// match via string comparison; delegate to affectsMatch
+				// which uses conservative static-prefix comparison.
+				if affectsMatch(prefix, af) {
+					return true
+				}
+				continue
+			}
 			if strings.HasPrefix(af, prefix) {
 				return true
+			}
+		}
+		// Check if af matches any active glob pattern.
+		for _, g := range idx.activeAffectsGlobs {
+			if affectsMatch(g, af) {
+				return true
+			}
+		}
+		// If af is a glob, the exact-match lookup above only catches the
+		// literal string; we must also test it against every active key.
+		// No separate activeAffectsPrefixes loop is needed here because
+		// prefix entries are already stored in activeAffects.
+		if isGlob(af) {
+			for key := range idx.activeAffects {
+				if affectsMatch(af, key) {
+					return true
+				}
 			}
 		}
 	}

@@ -215,17 +215,34 @@ func renderFailedTasks(w io.Writer, c colorSet, tasksDir string, data statusData
 	fmt.Fprintln(w, c.bold("────────────"))
 	for _, task := range data.failedTasks {
 		taskPath := filepath.Join(tasksDir, queue.DirFailed, task.name)
-		failCount := countFailureRecords(taskPath)
 		label := c.red(task.name)
 		if task.title != "" {
 			label = fmt.Sprintf("%s — %s", c.red(task.name), task.title)
 		}
-		reason := lastFailureReason(taskPath)
-		info := fmt.Sprintf("%d/%d retries exhausted", failCount, task.maxRetries)
-		if reason != "" {
-			info += fmt.Sprintf(", last: %s", reason)
+
+		cycleReason := lastCycleFailureReason(taskPath)
+		failCount := countFailureRecords(taskPath)
+
+		if cycleReason != "" && failCount > 0 {
+			// Mixed: both cycle-failure and regular failure markers.
+			// Show cycle reason and retry budget info.
+			reason := lastFailureReason(taskPath)
+			info := fmt.Sprintf("%s; %d/%d retries used", cycleReason, failCount, task.maxRetries)
+			if reason != "" {
+				info += fmt.Sprintf(", last: %s", reason)
+			}
+			fmt.Fprintf(w, "  %s  (%s)\n", label, info)
+		} else if cycleReason != "" {
+			// Cycle-failed task: show cycle reason instead of retry budget.
+			fmt.Fprintf(w, "  %s  (%s)\n", label, cycleReason)
+		} else {
+			reason := lastFailureReason(taskPath)
+			info := fmt.Sprintf("%d/%d retries exhausted", failCount, task.maxRetries)
+			if reason != "" {
+				info += fmt.Sprintf(", last: %s", reason)
+			}
+			fmt.Fprintf(w, "  %s  (%s)\n", label, info)
 		}
-		fmt.Fprintf(w, "  %s  (%s)\n", label, info)
 	}
 }
 

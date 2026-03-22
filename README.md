@@ -40,6 +40,9 @@ mato
 
 # In a separate terminal, inspect queue health
 mato status
+
+# Check system prerequisites and queue integrity
+mato doctor
 ```
 
 Useful flags:
@@ -124,6 +127,25 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag
 sets the refresh period (default `2s`). The interval must be a positive duration;
 zero or negative values are rejected with an error.
+
+## Doctor Command
+
+`mato doctor` runs a structured health check across the repository and task queue:
+
+- git repository detection and configuration
+- host tool availability (git, docker, gh, copilot)
+- Docker daemon connectivity
+- queue directory layout (missing or unexpected directories)
+- task file parsing (frontmatter errors, invalid globs)
+- lock and orphan detection (stale PID locks, orphaned in-progress tasks)
+- dependency integrity (cycles, unknown IDs, ambiguous prefixes, duplicates)
+
+Use `--fix` to auto-repair safe, idempotent issues such as missing directories,
+stale locks, and orphaned tasks. Use `--format json` for machine-readable output.
+The `--only` flag accepts a comma-separated list of check categories to run
+(`git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `deps`);
+non-selected checks appear as skipped. Exit code 0 means healthy, 1 means
+warnings only, and 2 means errors were found.
 
 ## Docker
 

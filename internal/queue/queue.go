@@ -72,12 +72,12 @@ func RecoverOrphanedTasks(tasksDir string) {
 				}
 				continue
 			}
-			fmt.Printf("Removing stale in-progress copy of %s (already in %s/)\n", name, laterDir)
+			fmt.Fprintf(os.Stderr, "Removing stale in-progress copy of %s (already in %s/)\n", name, laterDir)
 			continue
 		}
 
 		if agent := ParseClaimedBy(src); agent != "" && identity.IsAgentActive(tasksDir, agent) {
-			fmt.Printf("Skipping in-progress task %s (agent %s still active)\n", name, agent)
+			fmt.Fprintf(os.Stderr, "Skipping in-progress task %s (agent %s still active)\n", name, agent)
 			continue
 		}
 
@@ -101,7 +101,7 @@ func RecoverOrphanedTasks(tasksDir string) {
 			}
 		}
 
-		fmt.Printf("Recovered orphaned task %s back to backlog\n", name)
+		fmt.Fprintf(os.Stderr, "Recovered orphaned task %s back to backlog\n", name)
 	}
 }
 
