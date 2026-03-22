@@ -1,257 +1,90 @@
-# DAG Dependency Resolution — Multi-Agent Debate & Consensus Plan
+# DAG-Based Dependency Resolution
 
-## Participants
+## Summary
 
-- **Claude Opus 4.6** — Emphasizes separation of concerns and pure graph algorithms
-- **GPT-5.4** — Emphasizes practical integration and backward compatibility
-- **Gemini 3.1 Pro** — Emphasizes operator experience and status visibility
+Replace the ad-hoc recursive DFS in `internal/queue/reconcile.go` with a proper DAG resolver using Kahn's algorithm in a new `internal/dag/` package. This gives O(V+E) promotion resolution (down from O(N²)), definitive cycle detection that moves cyclic tasks to `failed/`, transitive dependency context for agents, and actionable dependency status in `mato status`.
 
----
+## Motivation
 
-## Round 1: Graph Representation & Architecture
+Three problems with the current implementation:
 
-### Claude Opus 4.6
+1. **Performance.** `dependsOnWaitingTask()` does recursive DFS with a fresh `visited` set per call per dependency per waiting task. For N waiting tasks with M deps each, this is O(N·M·N) worst case.
 
-The current implementation in `reconcile.go` is fragile. It mixes file I/O, policy logic, and ad-hoc graph traversal. I propose a dedicated **`internal/dag/`** package. This package should define a `Graph` struct that accepts a list of tasks and their dependencies. It should be pure (no file I/O), testable in isolation, and responsible solely for graph theory operations: topological sorting, cycle detection, and transitive closure.
+2. **Silent cycles.** `logCircularDependency()` prints to stderr, but cyclic tasks sit in `waiting/` forever. In unattended CI/CD, the warning is invisible and the tasks never resolve.
 
-### GPT-5.4
+3. **Opaque blocking.** `mato status` lists waiting tasks with their dependencies and per-dep state indicators, but cannot distinguish "blocked by an in-progress task" from "part of a cycle" — the information needed to take action.
 
-I understand the desire for purity, but is a new package necessary? We already have `PollIndex` in `internal/queue` which acts as our state cache. We could just add a `BuildDependencyGraph()` method to `PollIndex`. Creating `internal/dag` might force us to duplicate state or map back and forth between "DAG nodes" and "task structs." Let's keep it close to the data in `internal/queue`.
+## Design
 
-### Gemini 3.1 Pro
+### New package: `internal/dag/`
 
-I agree with Opus on separation. `queue` is already heavy with filesystem management and locking. However, GPT has a point about data duplication. The `dag` package shouldn't own the *tasks*, just the *relationships*. It should take a lightweight input (map of `ID → []DependsOn`) and return actionable insights. Crucially, we need this structure to be exportable or queryable by `internal/status`. Currently, `mato status` is blind to *why* a task is waiting. If we bury the logic in `queue` private methods, the CLI can't report "Blocked by X."
+A pure graph logic package. No file I/O, no mato-specific types, no imports from `internal/queue` or `internal/frontmatter`. Both `internal/queue` and `internal/status` import it.
 
-### Claude Opus 4.6 (response)
+Input is a lightweight list of `Node{ID, DependsOn}` plus a `completedIDs` set. Output is an `Analysis` struct with three partitions of the waiting task set: ready, blocked, and cyclic.
 
-Precisely. `internal/dag` will allow `internal/status` to import the logic without importing the heavy `queue` mutation logic. The `Graph` struct can be initialized with a simple map — no need to pass full `TaskMeta` objects.
+### Graph scope
 
-### **Round 1 Consensus**: Create a new `internal/dag/` package for pure graph operations. It takes lightweight input (ID → dependency list), not full task objects. Both `internal/queue` and `internal/status` consume it.
+The graph contains **only waiting tasks**. Completed dependencies are pre-resolved: they are checked against the `completedIDs` set before graph construction. A waiting task whose `DependsOn` entries are all in `completedIDs` (or reference unknown/non-waiting IDs) has in-degree zero and is immediately ready — it never participates in Kahn's traversal.
 
----
+Only waiting-to-waiting edges appear in the graph. Dependencies on tasks in other states (in-progress, ready-for-review, etc.) are "in flight" — they make a task blocked, not cyclic.
 
-## Round 2: Algorithm Choice
+### Cycle handling
 
-### Claude Opus 4.6
+Kahn's algorithm identifies cycles definitively: any nodes remaining after the topological sort terminates are in cycles. Cyclic tasks are moved to `failed/` with a descriptive failure record:
 
-I advocate for **Kahn's algorithm**. It naturally produces a topological sort and clearly identifies cycles — if the algorithm terminates without processing all nodes, the remaining nodes are in cycles. It's O(V+E), straightforward to implement, and widely understood.
+```
+<!-- failure: circular dependency detected with [task-a, task-b] -->
+```
 
-### GPT-5.4
+This is analogous to how malformed task files are already moved to `failed/`. Cycle failures are **not** counted against `max_retries` — they are a structural error, not a runtime failure.
 
-Kahn's is the right choice. The current `dependsOnWaitingTask()` function does recursive DFS with a visited set — it's O(N²) in the worst case because it's called per-dependency per-task with fresh visited sets. Kahn's processes the entire graph in one pass.
+### Cascade failure policy (v1)
 
-One important clarification: "batch promotion" is **not** about promoting an entire chain at once. If A→B→C and A completes, only B becomes promotable (C still waits for B). But if A and B both completed, then C is immediately promotable. Kahn's handles this correctly — it finds all nodes whose in-degree drops to zero.
+**Decision: NO cascade failure in v1.** If task A fails (moved to `failed/`), tasks that depend on A remain in `waiting/`. Since A will never reach `completed/`, its dependents will never promote. This is correct behavior — the dependency is unsatisfied, and the operator must fix A or remove the dependency. Cascade failure (auto-failing dependents of a failed task) is deferred to a future version.
 
-### Gemini 3.1 Pro
+### Transitive dependency context
 
-Agreed on Kahn's. One advantage: Kahn's gives us the cycle detection for free. Any nodes remaining in the graph after Kahn's terminates are part of cycles. We can extract the strongly connected components (SCCs) from the remaining nodes to report the exact cycle paths.
+`dag.Ancestors()` computes the full transitive closure for a task. The dependency context JSON file adds a `transitive` field alongside the existing flat array, preserving backward compatibility:
 
-For SCC extraction: a simple DFS on the residual graph is sufficient — we don't need the full Tarjan's algorithm since Kahn's has already partitioned the graph.
+```json
+[
+  {"task_id": "B", "branch": "task/B", ...},
+  {"task_id": "A", "branch": "task/A", ...}
+]
+```
 
-### **Round 2 Consensus**: Use Kahn's algorithm for topological sort + cycle detection. O(V+E) complexity. Extract cycle paths from residual graph after Kahn's terminates.
+becomes:
 
----
+```json
+[
+  {"task_id": "B", "branch": "task/B", ...},
+  {"task_id": "A", "branch": "task/A", ...}
+],
+"transitive": [
+  {"task_id": "A", "branch": "task/A", ...}
+]
+```
 
-## Round 3: Batch Promotion
+Wait — that's not valid JSON at the top level. The correct approach: the existing format is a JSON array. We keep it as-is (all deps, direct first, then transitive appended) and write a **separate companion field**. Since the current format is a bare array consumed by agent prompts, changing it to an object would break existing prompts. Instead:
 
-### GPT-5.4
+**Option chosen: additive separate file.** The existing array at `dependency-context-<task>.json` remains a flat array of `CompletionDetail` objects (direct deps only, unchanged). A new file `dependency-context-<task>-transitive.json` contains transitive-only deps. This avoids any format break. Agents that don't know about transitive deps continue working. Agents that do can read both files.
 
-Should all promotable tasks be promoted in one pass, or keep the current iterative (one-poll-cycle-at-a-time) approach?
-
-The current system promotes tasks one poll cycle at a time. In a chain A→B→C, if A completes in cycle 1, B gets promoted in cycle 2 (~10s later), not immediately. For a 5-task chain, that's 50 seconds of promotion latency.
-
-I propose: `resolvePromotableTasks()` should use the DAG to compute the **complete set of promotable tasks** in one pass. This means all tasks whose dependencies are satisfied get promoted in the same `ReconcileReadyQueue()` call.
-
-### Claude Opus 4.6
-
-This is already how it works, actually. `resolvePromotableTasks()` iterates all waiting tasks and checks if all their deps are in `completedIDs`. The issue is that it only checks direct deps against the completed set — it doesn't "cascade" within waiting tasks. If B just got promoted (moved to backlog, not yet completed), C still can't be promoted because B isn't in `completedIDs` yet.
-
-The real improvement from Kahn's is that we avoid the O(N²) `dependsOnWaitingTask()` calls and get clearer cycle detection. The promotion frontier (tasks with all deps completed) is computed correctly in one pass.
-
-### Gemini 3.1 Pro
-
-Right. The "batch" improvement is about efficiency and clarity, not about promoting chains faster. The actual promotion speed is bounded by execution time, not promotion latency.
-
-### **Round 3 Consensus**: Use Kahn's to compute the complete promotion frontier in one pass. This is an efficiency and clarity improvement, not a behavioral change. Promotion is still bounded by actual task completion.
-
----
-
-## Round 4: Cycle Handling
-
-### Gemini 3.1 Pro
-
-Currently, cycles are only logged to stderr via `logCircularDependency()`. In an unattended CI/CD run, that warning is invisible. Cyclic tasks sit in `waiting/` forever.
-
-I propose:
-1. **Detection**: Kahn's residual graph identifies all cyclic nodes
-2. **Action**: Move cyclic tasks to `failed/` immediately with a failure record: `<!-- failure: circular dependency detected with [list of cycle members] -->`
-3. **Status**: If not moved, `mato status` must show them as "BLOCKED (Cycle)"
-
-### Claude Opus 4.6
-
-Moving to `failed/` is aggressive but correct. A cycle cannot resolve itself — no amount of waiting will help. The task author must fix the dependency graph. This is analogous to how malformed task files are already moved to `failed/`.
-
-However, we should add a specific failure message format so tasks can potentially be recovered after the cycle is fixed. The `max_retries` logic should not count cycle failures as retries — they're a different class of error.
-
-### GPT-5.4
-
-I agree with moving to `failed/`, but let's be careful: we should only move tasks if we're confident the cycle is real. Since we're processing all waiting tasks at once with the DAG, the cycle detection is definitive — it's not a heuristic.
-
-One edge case: what if task A depends on B, B is in `in-progress/`, and A depends on C which depends on A? The cycle is A→C→A, not involving B. We need to make sure we only flag the cycle members, not tasks with legitimate pending deps.
-
-### Claude Opus 4.6
-
-Correct. The DAG should be built only from `waiting` tasks. Tasks in other states are either "satisfied" (completed) or "in flight" (in-progress, ready-for-review, ready-to-merge) — neither belongs in the cycle analysis. A waiting task depending on an in-flight task is simply "blocked," not cyclic.
-
-### **Round 4 Consensus**: Move cycle members to `failed/` with descriptive failure record. Only analyze cycles within `waiting/` tasks. Cycle failures are not counted against `max_retries`. Cycle paths are reported in both the failure record and `mato status`.
-
----
-
-## Round 5: Transitive Dependency Context
-
-### Gemini 3.1 Pro
-
-Agents currently only see direct dependencies via `MATO_DEPENDENCY_CONTEXT`. If Task C depends on B, which depends on A, C only gets B's completion info — not A's. This means C can't see foundational changes from A.
-
-I propose computing the **transitive closure** of dependencies and including all ancestors in the context file.
-
-### GPT-5.4
-
-That's useful but the JSON could get large for deep chains. I'd support this with a practical limit: include transitive deps up to some reasonable depth (e.g., 10 levels), or include all but cap the JSON file size.
-
-### Claude Opus 4.6
-
-The `dag.Ancestors()` function makes this trivial. The context file is typically small (a few KB per dep), so even a 10-task chain would be ~50KB — well within reason. I'd include all transitive deps without artificial limits. If it ever becomes a problem, we can add a cap later.
-
-The more important question is: should we change the JSON format? Currently, `writeDependencyContextFile()` produces an array of direct dep info. For transitive deps, we should distinguish direct vs. transitive:
+Alternatively, if we prefer a single file: wrap in an object with `"direct"` and `"transitive"` keys, and update the agent prompt instructions to parse the new format. Since the prompt is embedded in `internal/runner/` and shipped with mato (not user-maintained), this is also safe. **Recommend single-file object format** since we control the prompt:
 
 ```json
 {
-  "direct": [{"id": "B", "branch": "task/B", ...}],
-  "transitive": [{"id": "A", "branch": "task/A", ...}]
+  "direct": [
+    {"task_id": "B", "branch": "task/B", "commit_sha": "abc123", ...}
+  ],
+  "transitive": [
+    {"task_id": "A", "branch": "task/A", "commit_sha": "def456", ...}
+  ]
 }
 ```
 
-### GPT-5.4
+The task instructions prompt (`internal/runner/task-instructions.md`) must be updated to document the new shape.
 
-Good point. Backward compatibility matters here — if any agent code already parses the current format, we shouldn't break it. But since `MATO_DEPENDENCY_CONTEXT` is consumed by the agent's prompt instructions (not by mato's own code), the format change should be safe as long as the prompt is updated.
-
-### **Round 5 Consensus**: Include transitive dependencies in context file. Use `dag.Ancestors()`. Separate `direct` and `transitive` arrays in JSON. No artificial depth limit.
-
----
-
-## Round 6: Status Integration
-
-### Gemini 3.1 Pro
-
-`mato status` is currently blind to dependency state. It lists tasks by directory but doesn't explain *why* a task is in `waiting/`. With the DAG, we can categorize waiting tasks:
-
-| Category | Meaning | Display |
-|----------|---------|---------|
-| **Ready** | All deps satisfied | "Ready for promotion" |
-| **Blocked** | Unsatisfied deps | "Blocked by: [list]" |
-| **Cyclic** | Part of a cycle | "Circular dependency: [cycle path]" |
-
-### Claude Opus 4.6
-
-`internal/status` should import `internal/dag` to build the graph and categorize tasks. The status command already reads task files — it just needs to run the DAG analysis and annotate the output.
-
-### GPT-5.4
-
-This is the most user-visible improvement. Someone running `mato status` and seeing "Blocked by: setup-database, init-config" is far more useful than just seeing a count of waiting tasks.
-
-### **Round 6 Consensus**: `mato status` categorizes waiting tasks as Ready/Blocked/Cyclic using the DAG. Shows specific blocking dependency IDs.
-
----
-
-## Round 7: Backward Compatibility
-
-### GPT-5.4
-
-The YAML `depends_on` format is unchanged. The DAG is purely an internal optimization. Key compatibility requirements:
-
-1. Tasks with no dependencies still promote immediately
-2. Tasks with satisfied dependencies promote on the next reconcile call
-3. Self-dependencies are still detected and warned about
-4. Unknown dependency IDs are still warned about
-5. The `dependsOnWaitingTask()` function can be removed once the DAG replaces it
-
-### Claude Opus 4.6
-
-One behavioral change: cyclic tasks will now be moved to `failed/` instead of silently sitting in `waiting/`. This is intentional and correct, but it's a change. We should document it in the changelog.
-
-### Gemini 3.1 Pro
-
-Another minor change: warning messages to stderr will have slightly different wording since they'll come from the DAG analysis rather than the ad-hoc DFS. Tests that match on stderr output need updating.
-
-### **Round 7 Consensus**: No YAML format changes. Behavioral change: cyclic tasks → `failed/` (documented). Warning message wording may change. Remove `dependsOnWaitingTask()` after DAG integration.
-
----
-
-## Round 8: Testing Strategy
-
-### Claude Opus 4.6
-
-The `internal/dag/` package should be exhaustively tested since it's pure logic with no I/O. Test topologies:
-
-| Topology | Description |
-|----------|-------------|
-| Empty graph | No tasks |
-| Single node, no deps | Trivially ready |
-| A→B | Simple chain |
-| A→B→C | Deep chain |
-| A→C, B→C | Fan-in |
-| A→B, A→C | Fan-out |
-| A→B→C, A→C | Diamond |
-| A→A | Self-cycle |
-| A→B→A | Two-node cycle |
-| A→B→C→A | Three-node cycle |
-| Mixed: some cyclic, some ready | Partial graph failure |
-| A→? | Dependency on unknown ID |
-| Large graph (100+ nodes) | Performance/correctness at scale |
-
-### GPT-5.4
-
-Integration tests in `internal/integration/`:
-- 3-task chain: create A, B (depends A), C (depends B). Verify promotion order.
-- Cycle: create A→B→A. Verify both move to `failed/`.
-- Diamond: create A→C, B→C. Verify C waits for both.
-
-### Gemini 3.1 Pro
-
-Status integration test: create waiting tasks with various dep states, verify `mato status` output shows correct categorization (Ready/Blocked/Cyclic).
-
-### **Round 8 Consensus**: 13+ unit test topologies in `internal/dag/`, 3+ integration tests in `internal/integration/`, status display test.
-
----
-
-## Round 9: Performance
-
-### GPT-5.4
-
-The current `dependsOnWaitingTask()` is O(N²) because it's called for every dep of every waiting task with a fresh visited set. Kahn's algorithm is O(V+E) where V is the number of waiting tasks and E is the number of dependency edges.
-
-For typical mato usage (10-50 tasks), both are negligible. For large campaigns (100+ tasks), the DAG is significantly better. But the main win is correctness and clarity, not performance.
-
-### Claude Opus 4.6
-
-Agreed. The DAG is built once per reconcile call from the `PollIndex`, which is already cached. No additional file I/O beyond what already happens.
-
-### Gemini 3.1 Pro
-
-One note: `Ancestors()` for transitive context is O(V+E) per call (one BFS/DFS traversal). Called once per task claim, not per poll cycle — acceptable.
-
-### **Round 9 Consensus**: Kahn's is O(V+E), replacing O(N²) DFS. Main win is correctness, not performance. Acceptable for all realistic workloads.
-
----
-
-## CONSENSUS PLAN
-
-All three agents agree on the following implementation plan.
-
-### 1. New Package: `internal/dag/`
-
-A pure graph logic package with no file I/O or mato-specific types.
+## API Surface
 
 **File:** `internal/dag/dag.go`
 
@@ -260,235 +93,389 @@ package dag
 
 // Node represents a task in the dependency graph.
 type Node struct {
-    ID        string
-    DependsOn []string
+	ID        string
+	DependsOn []string
 }
-
-// Graph holds the dependency graph and analysis results.
-type Graph struct {
-    nodes    map[string]Node
-    inDegree map[string]int
-    adjList  map[string][]string // reverse edges: dep → dependents
-}
-
-// New creates a dependency graph from waiting tasks.
-// completedIDs are dependencies considered satisfied.
-// Returns a Graph ready for analysis.
-func New(tasks []Node, completedIDs map[string]struct{}) *Graph
-
-// Ready returns task IDs with all dependencies satisfied
-// (all DependsOn entries are in completedIDs or not in the graph).
-// Results are sorted lexicographically for determinism.
-func (g *Graph) Ready() []string
-
-// Blocked returns a map of task ID → list of unsatisfied dependency IDs.
-// Only includes tasks that are not ready and not in a cycle.
-func (g *Graph) Blocked() map[string][]string
-
-// Cycles returns groups of task IDs involved in circular dependencies.
-// Each group is a cycle (e.g., ["A", "B", "C"] for A→B→C→A).
-// Uses Kahn's algorithm: nodes remaining after topological sort are cyclic.
-func (g *Graph) Cycles() [][]string
-
-// Ancestors returns all transitive dependency IDs for a given task,
-// traversing the full dependency chain. Results sorted lexicographically.
-func (g *Graph) Ancestors(id string) []string
-
-// Analyze runs the full DAG analysis and returns a structured result.
-func (g *Graph) Analyze() Analysis
 
 // Analysis holds the complete DAG analysis results.
 type Analysis struct {
-    Ready   []string            // Task IDs ready for promotion
-    Blocked map[string][]string // Task ID → unsatisfied deps
-    Cycles  [][]string          // Groups of cyclic task IDs
+	// Ready contains task IDs with all dependencies satisfied.
+	// Sorted lexicographically for determinism.
+	Ready []string
+
+	// Blocked maps task ID to its list of unsatisfied dependency IDs.
+	// Excludes tasks that are ready or cyclic.
+	Blocked map[string][]string
+
+	// Cycles contains groups of task IDs involved in circular
+	// dependencies. Each group is one cycle.
+	Cycles [][]string
 }
+
+// Analyze builds a dependency graph from waiting tasks and runs Kahn's
+// algorithm to partition them into ready, blocked, and cyclic sets.
+// completedIDs are dependencies considered already satisfied.
+func Analyze(tasks []Node, completedIDs map[string]struct{}) Analysis
+
+// Ancestors returns all transitive dependency IDs for the given task,
+// traversing the full dependency chain through the provided task set.
+// Results are sorted lexicographically. Returns nil if id is not found.
+func Ancestors(tasks []Node, id string) []string
 ```
 
-### 2. Files to Create
+`Analyze` is the primary API. Callers should not need to compute ready, blocked, and cyclic sets separately. `Ancestors` is a standalone function used only by `writeDependencyContextFile()` at claim time, not during reconciliation.
 
-| File | Purpose |
-|------|---------|
-| `internal/dag/dag.go` | Graph struct, `New()`, `Ready()`, `Blocked()`, `Cycles()`, `Ancestors()`, `Analyze()` |
-| `internal/dag/dag_test.go` | Exhaustive topology tests (13+ test cases) |
+Note: `Analyze` and `Ancestors` are package-level functions, not methods on a struct. The graph is an internal implementation detail — callers pass inputs and get results. If future needs require caching the graph (e.g., calling `Ancestors` for multiple tasks), we can introduce a `Graph` struct then.
 
-### 3. Files to Modify
-
-| File | Change |
-|------|--------|
-| `internal/queue/reconcile.go` | Replace `resolvePromotableTasks()` internals with `dag.New()` + `dag.Ready()`. Replace cycle detection with `dag.Cycles()`. Move cyclic tasks to `failed/`. Remove `dependsOnWaitingTask()` and `logCircularDependency()`. |
-| `internal/queue/reconcile_test.go` | Update tests for new cycle-to-failed behavior, remove tests for removed functions |
-| `internal/runner/task.go` | Update `writeDependencyContextFile()` to use `dag.Ancestors()` for transitive context. Update JSON format to separate direct/transitive. |
-| `internal/status/status_gather.go` | Import `internal/dag`, categorize waiting tasks as Ready/Blocked/Cyclic |
-| `docs/task-format.md` | Document cycle-to-failed behavior |
-| `docs/architecture.md` | Document DAG-based dependency resolution |
-
-### 4. Algorithm Pseudocode
+## Algorithm
 
 ```
-function AnalyzeDAG(waitingTasks, completedIDs):
-    // Build graph
+function Analyze(waitingTasks, completedIDs):
+    // Phase 1: Build adjacency list and in-degree map.
+    // Only add edges for waiting-to-waiting dependencies.
+    waitingIDs = set of all task IDs in waitingTasks
+    adjList    = map[string][]string{}   // dep → dependents (reverse edges)
+    inDegree   = map[string]int{}
+    depsOf     = map[string][]string{}   // task → its DependsOn list
+
+    for each task in waitingTasks:
+        inDegree[task.ID] = 0
+        depsOf[task.ID] = task.DependsOn
+
     for each task in waitingTasks:
         for each dep in task.DependsOn:
-            if dep not in completedIDs and dep in waitingTasks:
-                add edge dep → task
-                increment inDegree[task]
+            if dep in completedIDs:
+                continue                 // already satisfied
+            if dep not in waitingIDs:
+                continue                 // in-flight or unknown — makes task blocked, not graphed
+            adjList[dep] = append(adjList[dep], task.ID)
+            inDegree[task.ID]++
 
-    // Kahn's algorithm
-    queue = all nodes with inDegree == 0
-    ready = []
+    // Phase 2: Kahn's topological sort.
+    queue = all task IDs where inDegree == 0
+    sorted = []
+
     while queue not empty:
         node = dequeue()
-        if all node.DependsOn in completedIDs or already processed:
-            ready.append(node)
-        for each dependent of node:
-            decrement inDegree[dependent]
+        sorted = append(sorted, node)
+        for each dependent in adjList[node]:
+            inDegree[dependent]--
             if inDegree[dependent] == 0:
                 enqueue(dependent)
 
-    // Remaining nodes are cyclic
-    cycles = extract SCCs from unprocessed nodes
+    // Phase 3: Classify results.
+    ready   = []
+    blocked = map[string][]string{}
 
-    // Blocked = not ready, not cyclic, has unsatisfied deps
-    blocked = {}
-    for each unprocessed non-cyclic node:
-        blocked[node] = list of unsatisfied deps
+    for each node in sorted:
+        allSatisfied = true
+        for each dep in depsOf[node]:
+            if dep not in completedIDs and dep not in waitingIDs:
+                allSatisfied = false     // dep is in-flight or unknown
+        if allSatisfied:
+            ready = append(ready, node)
+        else:
+            unsatisfied = [dep for dep in depsOf[node] if dep not in completedIDs]
+            blocked[node] = unsatisfied
+
+    // Nodes not in sorted are cyclic.
+    processedSet = set(sorted)
+    cycleMembers = [id for id in waitingIDs if id not in processedSet]
+    cycles = extractCycles(cycleMembers, depsOf)
 
     return Analysis{ready, blocked, cycles}
 ```
 
-### 5. Integration Points
+Cycle extraction: walk the residual subgraph (only cycle members and their mutual edges) with iterative DFS to find connected components. Full Tarjan's is unnecessary since Kahn's already isolated the cyclic partition.
 
-#### In `ReconcileReadyQueue()` (`internal/queue/reconcile.go`):
+**Complexity:** O(V+E) where V = number of waiting tasks, E = number of dependency edges between them.
+
+## Integration Points
+
+### `internal/queue/reconcile.go`
+
+Replace the body of `resolvePromotableTasks()`:
+
 ```go
-// Build DAG from waiting tasks
-waitingTasks := idx.TasksByState(DirWaiting)
-dagNodes := make([]dag.Node, 0, len(waitingTasks))
-for _, snap := range waitingTasks {
-    dagNodes = append(dagNodes, dag.Node{
-        ID:        snap.Meta.ID,
-        DependsOn: snap.Meta.DependsOn,
-    })
-}
-g := dag.New(dagNodes, safeCompleted)
-analysis := g.Analyze()
+import "mato/internal/dag"
 
-// Move cyclic tasks to failed/
+func resolvePromotableTasks(tasksDir string, idx *PollIndex) []promotableTask {
+	idx = ensureIndex(tasksDir, idx)
+
+	completedIDs := idx.CompletedIDs()
+	nonCompletedIDs := idx.NonCompletedIDs()
+
+	safeCompleted := make(map[string]struct{}, len(completedIDs))
+	for id := range completedIDs {
+		safeCompleted[id] = struct{}{}
+	}
+	for id := range nonCompletedIDs {
+		delete(safeCompleted, id)
+	}
+
+	waitingTasks := idx.TasksByState(DirWaiting)
+	nodes := make([]dag.Node, 0, len(waitingTasks))
+	snapByID := make(map[string]*TaskSnapshot, len(waitingTasks))
+	for _, snap := range waitingTasks {
+		nodes = append(nodes, dag.Node{
+			ID:        snap.Meta.ID,
+			DependsOn: snap.Meta.DependsOn,
+		})
+		snapByID[snap.Meta.ID] = snap
+	}
+
+	analysis := dag.Analyze(nodes, safeCompleted)
+
+	var result []promotableTask
+	for _, id := range analysis.Ready {
+		snap := snapByID[id]
+		if snap == nil {
+			continue
+		}
+		if idx.HasActiveOverlap(snap.Meta.Affects) {
+			continue
+		}
+		result = append(result, promotableTask{
+			name: snap.Filename, path: snap.Path, meta: snap.Meta,
+		})
+	}
+	return result
+}
+```
+
+Replace cycle handling in `ReconcileReadyQueue()`:
+
+```go
+// Replace the logCircularDependency/dependsOnWaitingTask block with:
+analysis := dag.Analyze(nodes, safeCompleted)
+
 for _, cycle := range analysis.Cycles {
-    for _, taskID := range cycle {
-        // find task file, append failure record, move to failed/
-    }
+	cycleDesc := strings.Join(cycle, ", ")
+	for _, taskID := range cycle {
+		snap := snapByID[taskID]
+		if snap == nil {
+			continue
+		}
+		failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+		if err := AtomicMove(snap.Path, failedPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move cyclic task %s to failed/: %v\n",
+				snap.Filename, err)
+			continue
+		}
+		record := fmt.Sprintf("\n<!-- failure: circular dependency detected with [%s] -->\n", cycleDesc)
+		appendFailureRecord(failedPath, record)
+	}
 }
 
-// Promote ready tasks (filtered by active overlap)
-for _, taskID := range analysis.Ready {
-    // existing overlap check + AtomicMove to backlog/
-}
-
-// Log blocked tasks (optional, for debugging)
 for taskID, deps := range analysis.Blocked {
-    // stderr warning for unknown deps
+	snap := snapByID[taskID]
+	if snap == nil {
+		continue
+	}
+	for _, dep := range deps {
+		if _, ok := knownIDs[dep]; !ok {
+			fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on unknown task ID %q\n",
+				snap.Filename, dep)
+		}
+	}
 }
 ```
 
-#### In `writeDependencyContextFile()` (`internal/runner/task.go`):
+**Remove entirely:** `dependsOnWaitingTask()` and `logCircularDependency()`. These are replaced by `dag.Analyze()` and are not called from anywhere else.
+
+### `internal/runner/task.go`
+
+Update `writeDependencyContextFile()` to include transitive deps:
+
 ```go
-// Build DAG to find transitive ancestors
-g := dag.New(allWaitingNodes, completedIDs)
-ancestors := g.Ancestors(taskID)
+import "mato/internal/dag"
 
-// Write context with direct + transitive separation
-context := DependencyContext{
-    Direct:     directDepInfo,
-    Transitive: transitiveDepInfo,
+func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) string {
+	meta, _, err := frontmatter.ParseTaskFile(claimed.TaskPath)
+	if err != nil || len(meta.DependsOn) == 0 {
+		return ""
+	}
+
+	// Collect all waiting tasks to build the dependency graph for ancestors.
+	// (In practice, most deps are already completed at claim time.)
+	directSet := make(map[string]struct{}, len(meta.DependsOn))
+	for _, dep := range meta.DependsOn {
+		directSet[dep] = struct{}{}
+	}
+
+	var directDetails, transitiveDetails []messaging.CompletionDetail
+	for _, dep := range meta.DependsOn {
+		detail, err := messaging.ReadCompletionDetail(tasksDir, dep)
+		if err != nil {
+			continue
+		}
+		directDetails = append(directDetails, *detail)
+	}
+
+	// Compute transitive ancestors beyond direct deps.
+	// Build nodes from all completed tasks that have completion details.
+	// For v1, only include transitive deps that have completion details.
+	ancestors := dag.Ancestors(buildNodeList(tasksDir, meta), meta.ID)
+	for _, anc := range ancestors {
+		if _, isDirect := directSet[anc]; isDirect {
+			continue
+		}
+		detail, err := messaging.ReadCompletionDetail(tasksDir, anc)
+		if err != nil {
+			continue
+		}
+		transitiveDetails = append(transitiveDetails, *detail)
+	}
+
+	if len(directDetails) == 0 && len(transitiveDetails) == 0 {
+		return ""
+	}
+
+	type depContext struct {
+		Direct     []messaging.CompletionDetail `json:"direct"`
+		Transitive []messaging.CompletionDetail `json:"transitive,omitempty"`
+	}
+	ctx := depContext{Direct: directDetails, Transitive: transitiveDetails}
+	data, err := json.Marshal(ctx)
+	if err != nil {
+		return ""
+	}
+
+	depCtxPath := filepath.Join(tasksDir, "messages",
+		"dependency-context-"+claimed.Filename+".json")
+	if err := os.WriteFile(depCtxPath, data, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write dependency context file: %v\n", err)
+		return ""
+	}
+	return depCtxPath
 }
 ```
 
-#### In status gathering (`internal/status/`):
+The embedded task instructions (`internal/runner/task-instructions.md`) must document the `{"direct": [...], "transitive": [...]}` format.
+
+### `internal/status/status.go`
+
+Update `waitingTasksStatus()` to categorize tasks using the DAG:
+
 ```go
-// Build DAG for waiting task categorization
-g := dag.New(waitingNodes, completedIDs)
-analysis := g.Analyze()
+import "mato/internal/dag"
 
-// Annotate waiting tasks in status output
-for _, id := range analysis.Ready {
-    // mark as "Ready for promotion"
-}
-for id, deps := range analysis.Blocked {
-    // mark as "Blocked by: [deps]"
-}
-for _, cycle := range analysis.Cycles {
-    // mark as "Circular dependency"
+func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
+	idx := queue.BuildIndex(tasksDir)
+	completedIDs := idx.CompletedIDs()
+	waitingTasks := idx.TasksByState(queue.DirWaiting)
+
+	nodes := make([]dag.Node, 0, len(waitingTasks))
+	for _, snap := range waitingTasks {
+		nodes = append(nodes, dag.Node{
+			ID:        snap.Meta.ID,
+			DependsOn: snap.Meta.DependsOn,
+		})
+	}
+
+	analysis := dag.Analyze(nodes, completedIDs)
+
+	// Build categorized output using analysis.Ready, analysis.Blocked, analysis.Cycles
+	// ... annotate each waiting task as Ready/Blocked/Cyclic with specific dep info
 }
 ```
 
-### 6. Test Plan
+The `renderDependencyBlocked()` function in `status_render.go` should display three categories:
 
-**Unit tests** (`internal/dag/dag_test.go`):
+| Category    | Display                                      |
+|-------------|----------------------------------------------|
+| Ready       | "Ready for promotion"                        |
+| Blocked     | "Blocked by: setup-database, init-config"    |
+| Cyclic      | "Circular dependency: [task-a, task-b]"      |
 
-| Test | Topology | Assertion |
-|------|----------|-----------|
-| `TestNew_EmptyGraph` | No tasks | Ready=[], Blocked={}, Cycles=[] |
-| `TestReady_NoDeps` | A (no deps) | Ready=[A] |
-| `TestReady_SimpleChain` | A→B, A completed | Ready=[B] |
-| `TestReady_DeepChain` | A→B→C, A completed | Ready=[B], Blocked={C: [B]} |
-| `TestReady_FanIn` | A→C, B→C, both completed | Ready=[C] |
-| `TestReady_FanOut` | A→B, A→C, A completed | Ready=[B, C] |
-| `TestReady_Diamond` | A→C, B→C, A→B, A completed | Ready=[B], Blocked={C: [B]} |
-| `TestCycles_SelfDep` | A→A | Cycles=[[A]] |
-| `TestCycles_TwoNode` | A→B→A | Cycles=[[A, B]] |
-| `TestCycles_ThreeNode` | A→B→C→A | Cycles=[[A, B, C]] |
-| `TestCycles_Mixed` | A→B→A, C (no deps) | Cycles=[[A, B]], Ready=[C] |
-| `TestBlocked_UnknownDep` | A→? | Blocked={A: [?]} |
-| `TestAncestors_Chain` | A→B→C | Ancestors(C)=[A, B] |
-| `TestAncestors_Diamond` | A→C, B→C | Ancestors(C)=[A, B] |
-| `TestDeterministic` | Multiple runs | Same output each time |
+## Test Plan
 
-**Integration tests** (`internal/integration/`):
+### Unit tests (`internal/dag/dag_test.go`)
 
-| Test | Scenario |
-|------|----------|
-| `TestDAG_ChainPromotion` | 3-task chain: A, B→A, C→B. Verify promotion order matches completion order. |
-| `TestDAG_CycleToFailed` | 2 tasks: A→B, B→A. Verify both moved to `failed/` with failure record. |
-| `TestDAG_DiamondFanIn` | A→C, B→C. Verify C waits for both A and B. |
+Table-driven tests with `t.Run`:
 
-### 7. Migration / Compatibility Notes
+| Test                             | Topology              | Expected                                       |
+|----------------------------------|-----------------------|------------------------------------------------|
+| `TestAnalyze_EmptyGraph`         | No tasks              | Ready=[], Blocked={}, Cycles=[]                |
+| `TestAnalyze_NoDeps`             | A (no deps)           | Ready=[A]                                      |
+| `TestAnalyze_SingleDepCompleted` | A→B, B completed      | Ready=[A]                                      |
+| `TestAnalyze_SimpleChain`        | A→B→C, A completed    | Ready=[B], Blocked={C: [B]}                    |
+| `TestAnalyze_FanIn`              | A→C, B→C, both done   | Ready=[C]                                      |
+| `TestAnalyze_FanOut`             | A→B, A→C, A completed | Ready=[B, C]                                   |
+| `TestAnalyze_Diamond`            | A→C, B→C, A→B, A done | Ready=[B], Blocked={C: [B]}                    |
+| `TestAnalyze_SelfCycle`          | A→A                   | Cycles=[[A]]                                   |
+| `TestAnalyze_TwoNodeCycle`       | A→B, B→A              | Cycles=[[A, B]]                                |
+| `TestAnalyze_ThreeNodeCycle`     | A→B→C→A               | Cycles=[[A, B, C]]                             |
+| `TestAnalyze_MixedCycleAndReady` | A→B→A, C (no deps)    | Cycles=[[A, B]], Ready=[C]                     |
+| `TestAnalyze_UnknownDep`         | A→X (X absent)        | Blocked={A: [X]}                               |
+| `TestAnalyze_InFlightDep`        | A→B, B in-progress    | Blocked={A: [B]} (B not in waiting or completed)|
+| `TestAnalyze_Deterministic`      | Multiple nodes        | Same output across 100 runs                    |
+| `TestAnalyze_LargeGraph`         | 100+ nodes, chain     | Correct ready/blocked sets, runs in <10ms      |
+| `TestAncestors_Chain`            | A→B→C                 | Ancestors(C)=[A, B]                            |
+| `TestAncestors_Diamond`          | A→C, B→C, A→B        | Ancestors(C)=[A, B]                            |
+| `TestAncestors_NotFound`         | A→B                   | Ancestors(X)=nil                               |
 
-- **No YAML format changes.** `depends_on` syntax is unchanged.
-- **Behavioral change:** Cyclic tasks now move to `failed/` instead of sitting in `waiting/` forever with a stderr warning. This is intentional — cycles cannot self-resolve.
-- **Cycle failures are not counted against `max_retries`.** The failure record uses a distinct format: `<!-- failure: circular dependency detected with [IDs] -->`.
-- **Dependency context JSON format change:** Adds `direct` and `transitive` arrays. Since this is consumed by agent prompts (not mato code), the change is safe.
-- **Removed functions:** `dependsOnWaitingTask()` and `logCircularDependency()` are replaced by DAG analysis.
-- **Warning message wording:** May change slightly due to different analysis path. Tests matching on exact stderr strings need updating.
+### Integration tests (`internal/integration/`)
 
-### 8. Effort Estimate
+| Test                           | Scenario                                                                 |
+|--------------------------------|--------------------------------------------------------------------------|
+| `TestDAG_ChainPromotion`       | 3-task chain: A, B→A, C→B. Complete A, verify B promotes. Complete B, verify C promotes. |
+| `TestDAG_CycleToFailed`        | A→B, B→A. Run reconcile, verify both moved to `failed/` with failure record. |
+| `TestDAG_DiamondFanIn`         | A→C, B→C. Complete A only, verify C stays in waiting. Complete B, verify C promotes. |
+| `TestDAG_StatusCategorization` | Mix of ready/blocked/cyclic waiting tasks. Verify `mato status` output. |
 
-| Task | Effort |
-|------|--------|
-| `internal/dag/dag.go` — Graph struct + Kahn's algorithm | 3 hours |
-| `internal/dag/dag.go` — `Ancestors()` + `Analyze()` | 1.5 hours |
-| `internal/dag/dag_test.go` — 15+ test cases | 3 hours |
-| Refactor `internal/queue/reconcile.go` to use DAG | 2 hours |
-| Update `internal/runner/task.go` for transitive context | 1.5 hours |
-| Update `internal/status/` for task categorization | 1.5 hours |
-| Update existing tests | 1.5 hours |
-| Integration tests | 2 hours |
-| Documentation updates | 1 hour |
-| **Total** | **~3-4 days** |
+### Prompt validation
 
-### 9. Open Questions (Deferred)
+The updated `task-instructions.md` format for dependency context must be validated by an integration test that asserts the JSON structure matches the documented schema.
 
-1. **`mato graph` command**: Export dependency graph as DOT format for Graphviz visualization. Natural extension of the DAG package.
-2. **Priority-aware ordering**: Within the ready set, should tasks be ordered by priority? Currently handled by `DeferredOverlappingTasksDetailed()` — may need coordination.
-3. **Cross-state dependency tracking**: Should dependencies on `in-progress` tasks be reported differently than dependencies on `waiting` tasks? Currently both block, but the distinction could be useful in status output.
-4. **Cascade failure**: If task A fails, should all tasks transitively depending on A be automatically moved to `failed/`? Aggressive but potentially useful. Defer to v2.
-5. **`depends_on` with completion conditions**: Currently, a dependency is satisfied when the task reaches `completed/`. Should there be a way to specify "depends on A being in ready-to-merge" for review coordination? Defer — adds complexity.
+## Backward Compatibility
 
-### 10. Step-by-Step Implementation Order
+| Area                    | Change                                                                 | Impact   |
+|-------------------------|------------------------------------------------------------------------|----------|
+| `depends_on` YAML       | No change                                                              | None     |
+| Promotion behavior      | Identical for acyclic graphs                                           | None     |
+| Cyclic tasks            | Moved to `failed/` instead of sitting in `waiting/` forever            | Intentional behavioral change |
+| `max_retries`           | Cycle failures not counted                                             | None     |
+| Dependency context JSON | Changes from flat array to `{"direct": [...], "transitive": [...]}` object | Breaking for agents parsing old format; mitigated by updating embedded prompt |
+| stderr warnings         | Different wording from DAG analysis path                               | Tests matching exact stderr strings need updating |
+| Removed functions       | `dependsOnWaitingTask()`, `logCircularDependency()` deleted entirely   | Internal only; no public API |
 
-1. **Create `internal/dag/`**: Implement pure graph logic and exhaustive tests. No integration yet.
-2. **Refactor `internal/queue/reconcile.go`**: Switch to DAG-based promotion and cycle detection. Update existing reconcile tests.
-3. **Update `internal/runner/task.go`**: Enable transitive dependency context with direct/transitive separation.
-4. **Update `internal/status/`**: Categorize waiting tasks as Ready/Blocked/Cyclic in status output.
-5. **Integration tests**: End-to-end verification of chain promotion, cycle-to-failed, and diamond fan-in.
-6. **Documentation**: Update task-format.md and architecture.md.
+## Effort Estimate
+
+| Task                                                    | Effort   |
+|---------------------------------------------------------|----------|
+| `internal/dag/dag.go` — `Analyze()` with Kahn's        | 3 hours  |
+| `internal/dag/dag.go` — `Ancestors()`                   | 1 hour   |
+| `internal/dag/dag_test.go` — 17+ test cases             | 3 hours  |
+| Refactor `internal/queue/reconcile.go`                  | 2 hours  |
+| Update `internal/runner/task.go` for transitive context | 1.5 hours|
+| Update `internal/status/` for categorization            | 1.5 hours|
+| Update existing tests in `queue` and `status`           | 1.5 hours|
+| Integration tests                                       | 2 hours  |
+| Documentation (`task-format.md`, `architecture.md`)     | 1 hour   |
+| Update `task-instructions.md` prompt                    | 0.5 hours|
+| **Total**                                               | **~3-4 days** |
+
+## Implementation Order
+
+1. **Create `internal/dag/dag.go` and `internal/dag/dag_test.go`.** Implement `Analyze()` and `Ancestors()` with exhaustive unit tests. No integration yet — this is pure logic.
+
+2. **Refactor `internal/queue/reconcile.go`.** Replace `resolvePromotableTasks()` internals with `dag.Analyze()`. Add cycle-to-failed logic in `ReconcileReadyQueue()`. Delete `dependsOnWaitingTask()` and `logCircularDependency()`. Update `reconcile_test.go`.
+
+3. **Update `internal/runner/task.go`.** Change `writeDependencyContextFile()` to use `dag.Ancestors()` and emit the `{"direct", "transitive"}` JSON format. Update `task-instructions.md`.
+
+4. **Update `internal/status/`.** Use `dag.Analyze()` in `waitingTasksStatus()` to categorize tasks as Ready/Blocked/Cyclic. Update `renderDependencyBlocked()` to display categories.
+
+5. **Integration tests.** Chain promotion, cycle-to-failed, diamond fan-in, status categorization.
+
+6. **Documentation.** Update `docs/task-format.md` (cycle-to-failed behavior) and `docs/architecture.md` (DAG-based resolution).
+
+## Open Questions
+
+1. **`mato graph` command.** Export dependency graph as DOT format for Graphviz visualization. Natural extension of `internal/dag/`.
+
+2. **Priority-aware ready ordering.** Within the ready set from `Analyze()`, should tasks be ordered by priority? Currently handled downstream by `BacklogByPriority()` after promotion — may not need DAG involvement.
+
+3. **In-flight vs. waiting distinction in status.** Should `mato status` differentiate "blocked by in-progress task" from "blocked by another waiting task"? The information is available from `PollIndex` state lookups. Low effort to add.
+
+4. **`depends_on` with completion conditions.** Specifying "depends on A being in ready-to-merge" for review coordination. Deferred — adds significant complexity.
