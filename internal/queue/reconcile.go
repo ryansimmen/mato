@@ -99,6 +99,17 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 		}
 	}
 
+	// Move backlog tasks with invalid glob syntax to failed/.
+	for _, snap := range idx.TasksByState(DirBacklog) {
+		if err := frontmatter.ValidateAffectsGlobs(snap.Meta.Affects); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: moving backlog task %s with invalid glob to failed/: %v\n", snap.Filename, err)
+			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+			}
+		}
+	}
+
 	// Emit warnings for ambiguous IDs, self-dependencies, circular
 	// dependencies, and unknown dependency IDs.
 	completedIDs := idx.CompletedIDs()
@@ -139,6 +150,15 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 	promotable := resolvePromotableTasks(tasksDir, idx)
 	promoted := 0
 	for _, task := range promotable {
+		// Quarantine tasks with invalid glob syntax instead of promoting.
+		if err := frontmatter.ValidateAffectsGlobs(task.meta.Affects); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: moving waiting task %s with invalid glob to failed/: %v\n", task.name, err)
+			failedPath := filepath.Join(tasksDir, DirFailed, task.name)
+			if moveErr := AtomicMove(task.path, failedPath); moveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", task.name, moveErr)
+			}
+			continue
+		}
 		dst := filepath.Join(tasksDir, DirBacklog, task.name)
 		if err := AtomicMove(task.path, dst); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not promote waiting task %s: %v\n", task.name, err)
@@ -152,11 +172,19 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 
 // CountPromotableWaitingTasks is a read-only variant of ReconcileReadyQueue.
 // It returns the number of waiting tasks whose dependencies are satisfied and
-// would be promoted, without actually moving any files.
+// would be promoted, without actually moving any files. Tasks with invalid
+// glob syntax are excluded (they would be quarantined, not promoted).
 //
 // When idx is nil, a temporary index is built internally.
 func CountPromotableWaitingTasks(tasksDir string, idx *PollIndex) int {
-	return len(resolvePromotableTasks(tasksDir, idx))
+	promotable := resolvePromotableTasks(tasksDir, idx)
+	count := 0
+	for _, task := range promotable {
+		if frontmatter.ValidateAffectsGlobs(task.meta.Affects) == nil {
+			count++
+		}
+	}
+	return count
 }
 
 func dependsOnWaitingTask(taskID, targetID string, waitingDeps map[string][]string, visited map[string]struct{}) bool {

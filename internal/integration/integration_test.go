@@ -336,6 +336,51 @@ func TestMessagingLifecycle(t *testing.T) {
 	}
 }
 
+func TestGlobDeferral(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// High-priority task with glob affects.
+	writeTask(t, tasksDir, queue.DirBacklog, "high.md", "---\npriority: 5\naffects:\n  - internal/runner/*.go\n---\n# High\n")
+	// Low-priority task with overlapping glob.
+	writeTask(t, tasksDir, queue.DirBacklog, "low.md", "---\npriority: 20\naffects:\n  - internal/runner/*_test.go\n---\n# Low\n")
+	// Non-overlapping task.
+	writeTask(t, tasksDir, queue.DirBacklog, "other.md", "---\npriority: 10\naffects:\n  - pkg/client/*.go\n---\n# Other\n")
+
+	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+
+	if len(deferred) != 1 {
+		t.Fatalf("len(deferred) = %d, want 1; deferred = %v", len(deferred), deferred)
+	}
+	if _, ok := deferred["low.md"]; !ok {
+		t.Fatalf("deferred set missing %q: %v", "low.md", deferred)
+	}
+	// All tasks stay in backlog (deferred tasks are skipped, not moved).
+	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "high.md"))
+	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "low.md"))
+	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "other.md"))
+}
+
+func TestMixedGlobExactOverlap(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Active task with exact file path.
+	writeTask(t, tasksDir, queue.DirInProgress, "active.md",
+		"<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: 1\naffects:\n  - internal/runner/task.go\n---\n# Active\n")
+	// Backlog task with glob that matches the active task's exact path.
+	writeTask(t, tasksDir, queue.DirBacklog, "glob-task.md", "---\npriority: 10\naffects:\n  - internal/runner/*.go\n---\n# Glob Task\n")
+	// Backlog task with non-overlapping glob.
+	writeTask(t, tasksDir, queue.DirBacklog, "safe-task.md", "---\npriority: 10\naffects:\n  - pkg/**/*.go\n---\n# Safe\n")
+
+	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+
+	if _, ok := deferred["glob-task.md"]; !ok {
+		t.Fatalf("expected glob-task.md to be deferred (overlaps with active exact path), got deferred = %v", deferred)
+	}
+	if _, ok := deferred["safe-task.md"]; ok {
+		t.Fatalf("safe-task.md should not be deferred (no overlap), got deferred = %v", deferred)
+	}
+}
+
 func TestStatusWithPopulatedQueue(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 

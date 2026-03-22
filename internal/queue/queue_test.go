@@ -1377,6 +1377,95 @@ func TestReconcileReadyQueue_ValidTasksStillPromotedAlongsideUnparseable(t *test
 	}
 }
 
+func TestReconcileReadyQueue_QuarantinesWaitingTaskWithInvalidGlob(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Waiting task with invalid glob syntax (unclosed bracket).
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "bad-glob.md"),
+		[]byte("---\naffects:\n  - \"internal/[bad\"\n---\n# Bad glob\n"), 0o644)
+
+	// Waiting task with valid glob (should be promoted normally).
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "good-glob.md"),
+		[]byte("---\naffects:\n  - \"internal/runner/*.go\"\n---\n# Good glob\n"), 0o644)
+
+	stderr := captureStderr(t, func() {
+		got := ReconcileReadyQueue(tasksDir, nil)
+		if got != 1 {
+			t.Fatalf("ReconcileReadyQueue() = %d, want 1 (only good-glob should promote)", got)
+		}
+	})
+
+	// bad-glob should be quarantined to failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-glob.md")); err != nil {
+		t.Fatal("task with invalid glob should be moved to failed/")
+	}
+	// good-glob should be promoted to backlog/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "good-glob.md")); err != nil {
+		t.Fatal("task with valid glob should be promoted to backlog/")
+	}
+	if !strings.Contains(stderr, "invalid glob") {
+		t.Fatalf("stderr = %q, want it to contain %q", stderr, "invalid glob")
+	}
+}
+
+func TestReconcileReadyQueue_QuarantinesBacklogTaskWithInvalidGlob(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Backlog task with glob+trailing-slash (invalid combination).
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "glob-slash.md"),
+		[]byte("---\naffects:\n  - \"internal/*/\"\n---\n# Glob slash\n"), 0o644)
+
+	// Backlog task with valid glob (should remain in backlog).
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "valid.md"),
+		[]byte("---\naffects:\n  - \"internal/runner/*.go\"\n---\n# Valid\n"), 0o644)
+
+	stderr := captureStderr(t, func() {
+		ReconcileReadyQueue(tasksDir, nil)
+	})
+
+	// glob-slash should be quarantined to failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "glob-slash.md")); err != nil {
+		t.Fatal("backlog task with invalid glob should be moved to failed/")
+	}
+	// valid task should remain in backlog/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "valid.md")); err != nil {
+		t.Fatal("backlog task with valid glob should remain in backlog/")
+	}
+	if !strings.Contains(stderr, "combines glob syntax with trailing /") {
+		t.Fatalf("stderr = %q, want it to contain %q", stderr, "combines glob syntax with trailing /")
+	}
+}
+
+func TestCountPromotableWaitingTasks_ExcludesInvalidGlobs(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Waiting task with invalid glob (should not be counted).
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "bad-glob.md"),
+		[]byte("---\naffects:\n  - \"internal/[bad\"\n---\n# Bad glob\n"), 0o644)
+
+	// Waiting task with valid affects (should be counted).
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "good-task.md"),
+		[]byte("---\naffects:\n  - main.go\n---\n# Good task\n"), 0o644)
+
+	// Waiting task with glob+trailing-slash (should not be counted).
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "glob-slash.md"),
+		[]byte("---\naffects:\n  - \"internal/*/\"\n---\n# Glob slash\n"), 0o644)
+
+	got := CountPromotableWaitingTasks(tasksDir, nil)
+	if got != 1 {
+		t.Fatalf("CountPromotableWaitingTasks() = %d, want 1 (only good-task)", got)
+	}
+}
+
 func TestAcquireReviewLock_Success(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
