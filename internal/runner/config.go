@@ -7,11 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"mato/internal/git"
+
+	"golang.org/x/term"
 )
 
 // parseAgentTimeout parses a duration string for the agent timeout.
@@ -80,14 +80,10 @@ type runContext struct {
 }
 
 // isTerminal reports whether f is connected to a terminal (not just any
-// character device). Uses the TCGETS ioctl which succeeds only on real
-// terminal file descriptors.
+// character device). Uses golang.org/x/term which performs the TCGETS
+// ioctl safely without requiring unsafe.Pointer.
 func isTerminal(f *os.File) bool {
-	// syscall.Termios is the Linux termios struct; TCGETS retrieves it and
-	// fails with ENOTTY on non-terminal fds (including /dev/null).
-	var t syscall.Termios
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&t)))
-	return errno == 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVolumes []string) []string {
