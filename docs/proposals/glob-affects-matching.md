@@ -1,5 +1,9 @@
 # Glob Affects Matching — Implementation Plan
 
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for
+> the current implementation.
+
 ## Summary
 
 Extend `affects:` matching so task files can express glob patterns such as

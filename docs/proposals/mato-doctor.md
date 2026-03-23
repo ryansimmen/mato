@@ -1,5 +1,9 @@
 # `mato doctor` — Implementation Plan
 
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for
+> the current implementation.
+
 ## Summary
 
 Add a `mato doctor` command that performs structured health checks across 7

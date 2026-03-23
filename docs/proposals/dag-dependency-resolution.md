@@ -1,5 +1,9 @@
 # DAG-Based Dependency Resolution — Implementation Plan
 
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for
+> the current implementation.
+
 ## Summary
 
 Introduce a shared dependency-analysis helper that centralizes waiting-task
@@ -33,8 +37,9 @@ Estimated effort: ~3.5 days.
 
 ## Current State
 
-As of current HEAD, `internal/dag/` and `DiagnoseDependencies()` do not exist.
-Reconcile still uses `dependsOnWaitingTask()` for transitive dependency checks.
+*Note: The following described the state before implementation.* `internal/dag/`
+and `DiagnoseDependencies()` have since been implemented. Reconcile previously
+used `dependsOnWaitingTask()` for transitive dependency checks.
 
 Today `internal/queue/reconcile.go` already does more than a simple direct-dep
 check:
