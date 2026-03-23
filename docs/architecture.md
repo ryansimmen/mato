@@ -242,7 +242,7 @@ For each task:
 9. `git merge --squash origin/<task-branch>`
 10. `git commit -m <formatted message with trailers>`
 11. `git push origin <target-branch>`
-12. After a successful push, write a completion detail file to `.tasks/messages/completions/<task-id>.json` with the commit SHA, changed files, branch, title, and merge timestamp (see `docs/messaging.md` for the full schema). This file is used by `runner.writeDependencyContextFile(...)` to create the dependency context file referenced by `MATO_DEPENDENCY_CONTEXT` when a dependent task runs.
+12. After a successful push, write a completion detail file to `.tasks/messages/completions/` (using a collision-resistant encoding of the task ID; see `docs/messaging.md` for the filename encoding and full schema) with the commit SHA, changed files, branch, title, and merge timestamp. This file is used by `runner.writeDependencyContextFile(...)` to create the dependency context file referenced by `MATO_DEPENDENCY_CONTEXT` when a dependent task runs.
 13. Append `<!-- merged: merge-queue at ... -->` and rename the task file `ready-to-merge/ -> completed/`
 ### Squash commit message format
 `formatSquashCommitMessage(task, agentLog)` builds the squash-merge commit message from the agent's commit and the task metadata. The format is:

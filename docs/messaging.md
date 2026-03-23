@@ -126,7 +126,7 @@ Treat messages as coordination hints, not as locks, leases, or durable state.
 
 ## Completion Details
 
-When the host merge queue successfully squash-merges a task branch, it writes a completion detail file to `.tasks/messages/completions/<task-id>.json`. These files capture what happened during the merge so that dependent tasks can benefit from the context.
+When the host merge queue successfully squash-merges a task branch, it writes a completion detail file to `.tasks/messages/completions/` using a collision-resistant encoding of the task ID. These files capture what happened during the merge so that dependent tasks can benefit from the context.
 
 ### Who writes it
 
@@ -161,10 +161,16 @@ Field meanings:
 
 When the host claims a task that has `depends_on` entries, `runner.writeDependencyContextFile(...)` reads the completion detail file for each resolved dependency and writes them as a JSON array to `.tasks/messages/dependency-context-<filename>.json`. If any completion files are found, the host injects the file path as the `MATO_DEPENDENCY_CONTEXT` environment variable. The agent prompt reads this file during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks. The context file is cleaned up after the agent container exits.
 
+### Filename encoding
+
+Completion detail filenames are derived from the task ID using a collision-resistant encoding: characters matching `[a-zA-Z0-9-]` pass through unchanged; all other bytes are encoded as `_XX` (lowercase hex). For example, `foo/bar` becomes `foo_2fbar.json` and `foo-bar` becomes `foo-bar.json` — two distinct files, preventing the overwrite that the old lossy sanitization caused.
+
+For backward compatibility, `ReadCompletionDetail` tries the new encoded filename first, then falls back to the legacy sanitized name (where all non-`[a-zA-Z0-9._-]` characters were replaced with `-`). This means pre-existing completion files written before the encoding change are still readable without migration.
+
 ### Write and read helpers
 
-- `messaging.WriteCompletionDetail(tasksDir, detail)` atomically writes the JSON file. It sets `merged_at` to the current UTC time if not already provided and validates that `task_id` is non-empty.
-- `messaging.ReadCompletionDetail(tasksDir, taskID)` reads and parses the JSON file, returning `os.ErrNotExist` if the file is not found.
+- `messaging.WriteCompletionDetail(tasksDir, detail)` atomically writes the JSON file using the collision-resistant filename encoding. It sets `merged_at` to the current UTC time if not already provided and validates that `task_id` is non-empty.
+- `messaging.ReadCompletionDetail(tasksDir, taskID)` reads and parses the JSON file. It tries the collision-resistant filename first, then falls back to the legacy sanitized name. Returns `os.ErrNotExist` if neither file is found.
 
 ## Presence
 Presence files live in `.tasks/messages/presence/` and are host-managed.

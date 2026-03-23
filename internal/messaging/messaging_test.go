@@ -995,11 +995,10 @@ func TestWriteCompletionDetail_SanitizesPathTraversal(t *testing.T) {
 	}
 
 	// The file must be written inside completions/, not outside it.
-	sanitized := "--evil"
-	sanitized = strings.Trim(sanitized, "-_. ")
-	expectedPath := filepath.Join(tasksDir, "messages", "completions", "evil.json")
+	// With collision-resistant encoding: ../evil → _2e_2e_2fevil
+	expectedPath := filepath.Join(tasksDir, "messages", "completions", "_2e_2e_2fevil.json")
 	if _, err := os.Stat(expectedPath); err != nil {
-		t.Fatalf("expected sanitized file at %s, got error: %v", expectedPath, err)
+		t.Fatalf("expected encoded file at %s, got error: %v", expectedPath, err)
 	}
 
 	// Verify we can read it back using the same TaskID.
@@ -1027,10 +1026,10 @@ func TestWriteCompletionDetail_SanitizesSlashes(t *testing.T) {
 		t.Fatalf("WriteCompletionDetail: %v", err)
 	}
 
-	// File should be foo-bar.json, not foo/bar.json
-	expectedPath := filepath.Join(tasksDir, "messages", "completions", "foo-bar.json")
+	// With collision-resistant encoding: foo/bar → foo_2fbar
+	expectedPath := filepath.Join(tasksDir, "messages", "completions", "foo_2fbar.json")
 	if _, err := os.Stat(expectedPath); err != nil {
-		t.Fatalf("expected sanitized file at %s, got error: %v", expectedPath, err)
+		t.Fatalf("expected encoded file at %s, got error: %v", expectedPath, err)
 	}
 
 	got, err := ReadCompletionDetail(tasksDir, "foo/bar")
@@ -1039,6 +1038,123 @@ func TestWriteCompletionDetail_SanitizesSlashes(t *testing.T) {
 	}
 	if got.TaskID != "foo/bar" {
 		t.Fatalf("TaskID = %q, want %q", got.TaskID, "foo/bar")
+	}
+}
+
+func TestCompletionDetail_CollisionResistance(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// foo/bar and foo-bar previously collided; they must coexist now.
+	slashDetail := CompletionDetail{
+		TaskID:   "foo/bar",
+		TaskFile: "foo-bar-slash.md",
+		Title:    "Foo slash bar",
+	}
+	hyphenDetail := CompletionDetail{
+		TaskID:   "foo-bar",
+		TaskFile: "foo-bar.md",
+		Title:    "Foo hyphen bar",
+	}
+	if err := WriteCompletionDetail(tasksDir, slashDetail); err != nil {
+		t.Fatalf("WriteCompletionDetail foo/bar: %v", err)
+	}
+	if err := WriteCompletionDetail(tasksDir, hyphenDetail); err != nil {
+		t.Fatalf("WriteCompletionDetail foo-bar: %v", err)
+	}
+
+	// Read each back and verify they are distinct.
+	gotSlash, err := ReadCompletionDetail(tasksDir, "foo/bar")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail foo/bar: %v", err)
+	}
+	if gotSlash.Title != "Foo slash bar" {
+		t.Fatalf("foo/bar Title = %q, want %q", gotSlash.Title, "Foo slash bar")
+	}
+
+	gotHyphen, err := ReadCompletionDetail(tasksDir, "foo-bar")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail foo-bar: %v", err)
+	}
+	if gotHyphen.Title != "Foo hyphen bar" {
+		t.Fatalf("foo-bar Title = %q, want %q", gotHyphen.Title, "Foo hyphen bar")
+	}
+
+	// ReadAllCompletionDetails must return both records.
+	all, err := ReadAllCompletionDetails(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllCompletionDetails: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 completion details, got %d", len(all))
+	}
+}
+
+func TestCompletionDetail_TraversalIDsResolveInsideCompletions(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Traversal-like IDs must resolve inside messages/completions/.
+	for _, id := range []string{"../../etc/passwd", "../evil", "a/../b"} {
+		detail := CompletionDetail{TaskID: id, TaskFile: "test.md", Title: id}
+		if err := WriteCompletionDetail(tasksDir, detail); err != nil {
+			t.Fatalf("WriteCompletionDetail(%q): %v", id, err)
+		}
+		completionsDir := filepath.Join(tasksDir, "messages", "completions")
+		entries, err := os.ReadDir(completionsDir)
+		if err != nil {
+			t.Fatalf("ReadDir: %v", err)
+		}
+		for _, e := range entries {
+			full := filepath.Join(completionsDir, e.Name())
+			rel, _ := filepath.Rel(completionsDir, full)
+			if strings.Contains(rel, "..") {
+				t.Fatalf("file %q escaped completions dir", e.Name())
+			}
+		}
+		got, err := ReadCompletionDetail(tasksDir, id)
+		if err != nil {
+			t.Fatalf("ReadCompletionDetail(%q): %v", id, err)
+		}
+		if got.TaskID != id {
+			t.Fatalf("TaskID = %q, want %q", got.TaskID, id)
+		}
+	}
+}
+
+func TestReadCompletionDetail_LegacyFallback(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Simulate a pre-existing file written with the old lossy sanitization.
+	// "foo/bar" was previously written as "foo-bar.json".
+	legacy := CompletionDetail{
+		TaskID:   "foo/bar",
+		TaskFile: "foo-bar.md",
+		Title:    "Legacy record",
+	}
+	legacyPath := filepath.Join(tasksDir, "messages", "completions", "foo-bar.json")
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(legacyPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// ReadCompletionDetail should fall back to the legacy filename.
+	got, err := ReadCompletionDetail(tasksDir, "foo/bar")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if got.Title != "Legacy record" {
+		t.Fatalf("Title = %q, want %q", got.Title, "Legacy record")
 	}
 }
 
