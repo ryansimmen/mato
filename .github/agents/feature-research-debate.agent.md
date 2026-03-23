@@ -61,11 +61,23 @@ Give each participant agent the round 2 synthesis and surviving candidates. Ask 
 
 Synthesize the final result into a ranked recommendation set.
 
+## Debate Lenses
+
+Each participant must be assigned a distinct analytical lens in every round prompt. Use these default assignments (keep them stable across all three rounds so arguments build coherently):
+
+| Agent | Lens | Focus |
+|---|---|---|
+| `feature-debate-gpt54` | **Simplicity & Scope Discipline** | Challenge whether a feature should exist at all. Ask: can users solve this with existing primitives? Does adding this make the tool harder to learn, maintain, or explain? Favor doing less, doing it well, and keeping the surface area small. Push back on features that add complexity without proportional value. |
+| `feature-debate-claude-opus46` | **Architecture & Technical Risk** | Maintainability, correctness, long-term technical health. Evaluate how proposals interact with existing abstractions, error handling, concurrency, and test coverage. Challenge quick user wins that underestimate implementation cost. |
+| `feature-debate-gemini31-pro-preview` | **User Value & Product Direction** | User-facing impact, adoption friction, product-market fit. Ask: who benefits, how much, and how soon? Challenge architecturally elegant ideas that real users wouldn't notice. |
+
+Include the full lens name and focus description in each subagent prompt so the participant knows its role.
+
 ## Execution Guidance
 
-1. Read the relevant local files before asking participants to debate.
-2. Invoke all three participant agents in every round.
-3. If parallel subagent execution is available, use it. Otherwise run them back to back without skipping anyone.
+1. Before the first round, read these files for grounding: `AGENTS.md`, `README.md`, `docs/architecture.md`, `docs/task-format.md`, and any files in `docs/proposals/`. Summarize the key project context that participants need.
+2. In every round, invoke all three participant agents **in parallel** — make all three `runSubagent` calls in the same tool-call block so they execute concurrently.
+3. Every subagent prompt must include: the assigned debate lens (from the table above), the user's original query, the current round number (e.g., "Round 2 of 3"), each prior participant's full response labeled by lens (so they can critique specific claims), and your synthesis. This is their only context — do not assume they remember earlier rounds.
 4. After each round, write a short synthesis before moving to the next round.
 5. If a participant fails because its model is unavailable, stop and clearly report which participant failed so the model label can be corrected.
 
@@ -86,6 +98,15 @@ Provide a numbered list of the best feature candidates in priority order. For ea
 ### Debate Highlights
 
 Summarize the most important disagreements, what changed between rounds, and why the top recommendation won.
+
+### Consensus vs. Dissent
+
+For each ranked feature, show the Round 3 vote: which lenses ranked it in their top position and which did not. Use a compact format, e.g.:
+
+- **Feature X** — supported by User Value, Architecture; opposed by Simplicity
+- **Feature Y** — unanimous
+
+This lets the reader immediately distinguish strong consensus from split decisions.
 
 ### Validation Gaps
 
