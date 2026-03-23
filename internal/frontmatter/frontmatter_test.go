@@ -698,6 +698,72 @@ func TestValidateAffectsGlobs_ValidEntries(t *testing.T) {
 	}
 }
 
+func TestParseTaskData_AffectsPathTraversal(t *testing.T) {
+	tests := []struct {
+		name        string
+		affects     string
+		wantAffects []string
+	}{
+		{
+			name:        "dotdot escape",
+			affects:     "../../etc/passwd",
+			wantAffects: nil,
+		},
+		{
+			name:        "absolute path",
+			affects:     "/absolute/path",
+			wantAffects: nil,
+		},
+		{
+			name:        "sibling traversal",
+			affects:     "../sibling/file.go",
+			wantAffects: nil,
+		},
+		{
+			name:        "internal dotdot cleaned",
+			affects:     "internal/../internal/foo.go",
+			wantAffects: []string{"internal/foo.go"},
+		},
+		{
+			name:        "normal path unchanged",
+			affects:     "src/main.go",
+			wantAffects: []string{"src/main.go"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := "---\naffects:\n  - " + tt.affects + "\n---\nBody.\n"
+			meta, _, err := ParseTaskData([]byte(content), "traversal-test.md")
+			if err != nil {
+				t.Fatalf("ParseTaskData returned error: %v", err)
+			}
+			if !reflect.DeepEqual(meta.Affects, tt.wantAffects) {
+				t.Fatalf("Affects = %v, want %v", meta.Affects, tt.wantAffects)
+			}
+		})
+	}
+}
+
+func TestParseTaskData_AffectsPathTraversal_MixedValid(t *testing.T) {
+	content := `---
+affects:
+  - ../../etc/passwd
+  - src/main.go
+  - /absolute/path
+  - internal/foo.go
+---
+Body.
+`
+	meta, _, err := ParseTaskData([]byte(content), "mixed-test.md")
+	if err != nil {
+		t.Fatalf("ParseTaskData returned error: %v", err)
+	}
+	want := []string{"src/main.go", "internal/foo.go"}
+	if !reflect.DeepEqual(meta.Affects, want) {
+		t.Fatalf("Affects = %v, want %v", meta.Affects, want)
+	}
+}
+
 func TestBranchDisambiguator(t *testing.T) {
 	// Deterministic: same input always produces the same suffix.
 	s1 := BranchDisambiguator("add-feature.md")
