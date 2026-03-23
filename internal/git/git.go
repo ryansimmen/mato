@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,10 @@ import (
 	"mato/internal/atomicwrite"
 )
 
+// Output runs a git command and returns only its stdout. Stderr is captured
+// separately so that git warnings (e.g. detached HEAD, fsmonitor) never
+// pollute the parsed output. On error, the returned message includes both
+// stdout and stderr for diagnostics.
 func Output(dir string, args ...string) (string, error) {
 	cmdArgs := make([]string, 0, len(args)+2)
 	if dir != "" {
@@ -18,11 +23,15 @@ func Output(dir string, args ...string) (string, error) {
 	}
 	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.Command("git", cmdArgs...)
-	out, err := cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		combined := strings.TrimSpace(stdout.String() + "\n" + stderr.String())
+		return "", fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, combined)
 	}
-	return string(out), nil
+	return stdout.String(), nil
 }
 
 func CreateClone(repoRoot string) (string, error) {
