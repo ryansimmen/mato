@@ -255,6 +255,63 @@ func TestRenderText_ParseFailure(t *testing.T) {
 	}
 }
 
+func TestRenderText_RecursiveDepTree(t *testing.T) {
+	// C depends on B, B depends on A. Text output should nest A under B
+	// under C, not just show B under C.
+	g := GraphData{
+		Nodes: []GraphNode{
+			{
+				Key: "waiting/task-c.md", ID: "task-c",
+				Filename: "task-c.md", Title: "Task C",
+				State: StateWaiting, Priority: 30,
+				DependsOn: []string{"task-b"},
+			},
+			{
+				Key: "waiting/task-b.md", ID: "task-b",
+				Filename: "task-b.md", Title: "Task B",
+				State: StateWaiting, Priority: 20,
+				DependsOn: []string{"task-a"},
+			},
+			{
+				Key: "backlog/task-a.md", ID: "task-a",
+				Filename: "task-a.md", Title: "Task A",
+				State: StateBacklog, Priority: 10,
+			},
+		},
+		Edges: []Edge{
+			{From: "backlog/task-a.md", To: "waiting/task-b.md", Satisfied: false},
+			{From: "waiting/task-b.md", To: "waiting/task-c.md", Satisfied: false},
+		},
+	}
+
+	var buf bytes.Buffer
+	RenderText(&buf, g)
+	got := buf.String()
+
+	// Under task-c, task-b should appear, and under task-b, task-a should
+	// appear nested one level deeper.
+	lines := strings.Split(got, "\n")
+	foundB := -1
+	foundAUnderB := false
+	for i, line := range lines {
+		// Find task-b as a dependency of task-c (indented).
+		if strings.Contains(line, "└── task-b") || strings.Contains(line, "├── task-b") {
+			foundB = i
+		}
+		// After finding task-b, look for task-a nested deeper.
+		if foundB >= 0 && i > foundB && strings.Contains(line, "task-a") {
+			// task-a should be indented further than task-b.
+			foundAUnderB = true
+		}
+	}
+	if foundB < 0 {
+		t.Errorf("task-b not found as dependency of task-c:\n%s", got)
+	}
+	if !foundAUnderB {
+		t.Errorf("task-a not found nested under task-b (recursive dep tree missing):\n%s", got)
+	}
+}
+
 // --- DOT renderer tests ---
 
 func TestRenderDOT_EmptyGraph(t *testing.T) {

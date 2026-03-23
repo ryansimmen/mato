@@ -81,7 +81,8 @@ func RenderText(w io.Writer, data GraphData) {
 	}
 }
 
-// renderTextNode renders a single primary node with its dependency tree.
+// renderTextNode renders a single primary node with its recursive
+// dependency tree.
 func renderTextNode(w io.Writer, node *GraphNode, nodeByKey map[string]*GraphNode, edgesByTo map[string][]Edge, cycleSCCs map[string][]int) {
 	// Build annotation.
 	annotation := fmt.Sprintf("priority: %d", node.Priority)
@@ -94,54 +95,86 @@ func renderTextNode(w io.Writer, node *GraphNode, nodeByKey map[string]*GraphNod
 
 	fmt.Fprintf(w, "  %s (%s)\n", node.ID, annotation)
 
+	// Render the recursive dependency tree starting from this node.
+	visited := map[string]struct{}{node.Key: {}}
+	renderDepTree(w, node.Key, "    ", nodeByKey, edgesByTo, cycleSCCs, visited)
+}
+
+// renderDepTree recursively renders the dependency tree for a node.
+// prefix is the indentation string for the current nesting level.
+// visited prevents infinite recursion in the presence of cycles.
+func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*GraphNode, edgesByTo map[string][]Edge, cycleSCCs map[string][]int, visited map[string]struct{}) {
+	node := nodeByKey[nodeKey]
+	if node == nil {
+		return
+	}
+
 	// Collect dependency entries: edges + hidden deps.
 	type depEntry struct {
-		label string
-		sort  string
+		label   string
+		fromKey string // empty for hidden deps
+		sort    string
 	}
 	var deps []depEntry
 
 	// Edges pointing to this node (these are the node's dependencies).
-	edges := edgesByTo[node.Key]
-	sort.Slice(edges, func(i, j int) bool {
-		return edges[i].From < edges[j].From
+	edges := edgesByTo[nodeKey]
+	sorted := make([]Edge, len(edges))
+	copy(sorted, edges)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].From < sorted[j].From
 	})
 
-	for _, e := range edges {
+	for _, e := range sorted {
 		fromNode := nodeByKey[e.From]
 		if fromNode == nil {
 			continue
 		}
-		// Check if this is a self-dependency.
-		if e.From == node.Key {
+		if e.From == nodeKey {
 			deps = append(deps, depEntry{
-				label: fmt.Sprintf("%s (self-dependency)", fromNode.ID),
-				sort:  fromNode.ID,
+				label:   fmt.Sprintf("%s (self-dependency)", fromNode.ID),
+				fromKey: "",
+				sort:    fromNode.ID,
 			})
 			continue
 		}
+		_, alreadyVisited := visited[e.From]
+		ann := depStateAnnotation(fromNode, e.Satisfied, cycleSCCs)
 		deps = append(deps, depEntry{
-			label: fmt.Sprintf("%s (%s)", fromNode.ID, depStateAnnotation(fromNode, e.Satisfied, cycleSCCs)),
-			sort:  fromNode.ID,
+			label:   fmt.Sprintf("%s (%s)", fromNode.ID, ann),
+			fromKey: e.From,
+			sort:    fromNode.ID,
 		})
+		_ = alreadyVisited // used below
 	}
 
 	// Hidden deps.
 	for _, hd := range node.HiddenDeps {
 		deps = append(deps, depEntry{
-			label: fmt.Sprintf("%s (%s)", hd.DependencyID, hiddenDepAnnotation(hd.Status)),
-			sort:  hd.DependencyID,
+			label:   fmt.Sprintf("%s (%s)", hd.DependencyID, hiddenDepAnnotation(hd.Status)),
+			fromKey: "",
+			sort:    hd.DependencyID,
 		})
 	}
 
-	// Render the dependency tree.
 	for i, d := range deps {
 		isLast := i == len(deps)-1
-		prefix := "├── "
+		connector := "├── "
+		childPrefix := prefix + "│   "
 		if isLast {
-			prefix = "└── "
+			connector = "└── "
+			childPrefix = prefix + "    "
 		}
-		fmt.Fprintf(w, "    %s%s\n", prefix, d.label)
+		fmt.Fprintf(w, "%s%s%s\n", prefix, connector, d.label)
+
+		// Recurse into the dependency's own dependencies if it has an
+		// in-graph node and hasn't been visited yet (short-form dedup).
+		if d.fromKey != "" {
+			if _, seen := visited[d.fromKey]; !seen {
+				visited[d.fromKey] = struct{}{}
+				renderDepTree(w, d.fromKey, childPrefix, nodeByKey, edgesByTo, cycleSCCs, visited)
+			}
+		}
 	}
 }
 

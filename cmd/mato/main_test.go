@@ -813,6 +813,8 @@ func TestGraphCmd_EndToEnd(t *testing.T) {
 	// Initialize a git repo so graph.Show can resolve the repo root.
 	for _, args := range [][]string{
 		{"git", "init", dir},
+		{"git", "-C", dir, "config", "user.name", "test"},
+		{"git", "-C", dir, "config", "user.email", "test@test"},
 		{"git", "-C", dir, "commit", "--allow-empty", "-m", "init"},
 	} {
 		out, err := runCmd(args...)
