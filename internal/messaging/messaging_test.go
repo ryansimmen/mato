@@ -1245,9 +1245,10 @@ func TestReadCompletionDetail_LegacyFallbackOnlyOnNotExist(t *testing.T) {
 	newName := completionFilename(taskID)
 	newPath := filepath.Join(tasksDir, "messages", "completions", newName+".json")
 
-	// Write the new file with mode 0000 so it exists but is unreadable.
-	if err := os.WriteFile(newPath, []byte(`{"task_id":"foo/bar"}`), 0o000); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	// Create the new-format path as a directory so os.ReadFile returns a
+	// portable non-ENOENT error even under root/containerized test environments.
+	if err := os.Mkdir(newPath, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
 	}
 
 	// Also place a valid legacy file that would be consulted under the old code.
@@ -1257,17 +1258,17 @@ func TestReadCompletionDetail_LegacyFallbackOnlyOnNotExist(t *testing.T) {
 		t.Fatalf("WriteFile legacy: %v", err)
 	}
 
-	// ReadCompletionDetail must return the real read error, not silently
-	// fall back to the legacy file.
+	// ReadCompletionDetail must return the real non-ENOENT read error, not
+	// silently fall back to the legacy file.
 	_, err := ReadCompletionDetail(tasksDir, taskID)
 	if err == nil {
-		t.Fatal("expected error when new file is unreadable, got nil")
+		t.Fatal("expected error when new-format path is unreadable as a file, got nil")
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("error should not be ErrNotExist; got %v", err)
 	}
-	if !errors.Is(err, os.ErrPermission) {
-		t.Fatalf("expected os.ErrPermission wrapped in error, got %v", err)
+	if !strings.Contains(err.Error(), taskID) {
+		t.Fatalf("error should mention task ID %q, got %v", taskID, err)
 	}
 }
 
