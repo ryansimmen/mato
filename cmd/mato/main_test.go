@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"mato/internal/doctor"
@@ -734,5 +736,105 @@ func TestDoctorCmd_FlagParsing(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// --- Graph subcommand tests ---
+
+// runCmd executes an external command and returns its combined output.
+func runCmd(args ...string) (string, error) {
+	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	return string(out), err
+}
+
+func TestGraphCmd_InvalidFormat(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"graph", "--format", "invalid"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format invalid, got nil")
+	}
+	want := "--format must be text, dot, or json, got invalid"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestGraphCmd_NoExtraArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"graph", "extra-arg"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for extra positional args on graph, got nil")
+	}
+}
+
+func TestGraphCmd_Help(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"graph", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error from graph --help: %v", err)
+	}
+}
+
+func TestGraphCmd_FlagParsing(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"graph with repo", []string{"graph", "--repo=/tmp/repo"}},
+		{"graph with tasks-dir", []string{"graph", "--tasks-dir=/tmp/tasks"}},
+		{"graph with text format", []string{"graph", "--format=text"}},
+		{"graph with dot format", []string{"graph", "--format=dot"}},
+		{"graph with json format", []string{"graph", "--format=json"}},
+		{"graph with all flag", []string{"graph", "--all"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			// Override graph RunE to avoid hitting real filesystem.
+			for _, sub := range cmd.Commands() {
+				if sub.Name() == "graph" {
+					sub.RunE = func(cmd *cobra.Command, args []string) error { return nil }
+				}
+			}
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestGraphCmd_EndToEnd(t *testing.T) {
+	dir := t.TempDir()
+
+	// Initialize a git repo so graph.Show can resolve the repo root.
+	for _, args := range [][]string{
+		{"git", "init", dir},
+		{"git", "-C", dir, "commit", "--allow-empty", "-m", "init"},
+	} {
+		out, err := runCmd(args...)
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+	}
+
+	// Create a minimal tasks directory with one task.
+	tasksDir := filepath.Join(dir, ".tasks")
+	backlog := filepath.Join(tasksDir, "backlog")
+	if err := os.MkdirAll(backlog, 0o755); err != nil {
+		t.Fatalf("mkdir backlog: %v", err)
+	}
+	task := filepath.Join(backlog, "sample.md")
+	if err := os.WriteFile(task, []byte("---\nid: sample\npriority: 10\n---\n# Sample task\n"), 0o644); err != nil {
+		t.Fatalf("write task: %v", err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"graph", "--repo", dir, "--format", "text"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("graph end-to-end failed: %v", err)
 	}
 }
