@@ -101,7 +101,7 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 		}
 		// Filter empty strings from arrays (YAML can produce them from ["", x])
 		meta.DependsOn = filterEmpty(meta.DependsOn)
-		meta.Affects = filterEmpty(meta.Affects)
+		meta.Affects = sanitizeAffects(filterEmpty(meta.Affects))
 		meta.Tags = filterEmpty(meta.Tags)
 		body = strings.Join(lines[end+1:], "\n")
 	}
@@ -205,6 +205,40 @@ func ValidateAffectsGlobs(affects []string) error {
 		}
 	}
 	return nil
+}
+
+// sanitizeAffects validates affects entries against path traversal. Entries
+// containing ".." path components that escape the repository root or absolute
+// paths are stripped with a warning to stderr. Non-glob, non-directory-prefix
+// entries are cleaned via filepath.Clean so redundant components like
+// "internal/../internal/foo.go" resolve to "internal/foo.go".
+func sanitizeAffects(affects []string) []string {
+	if affects == nil {
+		return nil
+	}
+	out := make([]string, 0, len(affects))
+	for _, af := range affects {
+		cleaned := filepath.Clean(af)
+		if filepath.IsAbs(cleaned) {
+			fmt.Fprintf(os.Stderr, "warning: stripping affects entry %q: absolute path\n", af)
+			continue
+		}
+		if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			fmt.Fprintf(os.Stderr, "warning: stripping affects entry %q: path traversal\n", af)
+			continue
+		}
+		// Preserve original value for globs and directory prefixes so their
+		// semantic meaning is retained. Clean plain paths only.
+		if !IsGlob(af) && !strings.HasSuffix(af, "/") {
+			out = append(out, cleaned)
+		} else {
+			out = append(out, af)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func filterEmpty(ss []string) []string {
