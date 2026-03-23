@@ -452,9 +452,8 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 
 		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx); reviewTask != nil {
 			// Verify the task branch exists before launching the review agent.
-			if _, err := git.Output(env.repoRoot, "rev-parse", "--verify", "refs/heads/"+reviewTask.Branch); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: task branch %s missing from host repo, recording review failure for %s\n", reviewTask.Branch, reviewTask.Filename)
-				appendReviewFailure(reviewTask.TaskPath, agentID, "task branch "+reviewTask.Branch+" not found in host repo")
+			if !VerifyReviewBranch(env.repoRoot, reviewTask, agentID) {
+				// Branch missing — failure already recorded.
 			} else {
 				fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
 				if err := runReview(ctx, env, run, reviewTask, branch); err != nil {

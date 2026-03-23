@@ -256,14 +256,13 @@ func TestReviewLifecycle_MissingVerdictFile(t *testing.T) {
 }
 
 func TestReviewLifecycle_MissingTaskBranch(t *testing.T) {
-	_, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "no-branch-task.md"
 	reviewPath := writeTask(t, tasksDir, queue.DirReadyReview, taskFile,
-		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# No Branch Task\n")
-
-	// When the task branch is missing, the review agent would fail to run and
-	// exit without producing a verdict file. Simulate that outcome.
+		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"<!-- branch: task/nonexistent-branch -->\n"+
+			"# No Branch Task\n")
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -272,17 +271,26 @@ func TestReviewLifecycle_MissingTaskBranch(t *testing.T) {
 		TaskPath: reviewPath,
 	}
 
-	runner.PostReviewAction(tasksDir, "review-host", task)
+	// Exercise the real host pre-check that runs inside pollLoop before
+	// any review agent is launched.  The branch does not exist in the
+	// test repo, so VerifyReviewBranch must return false.
+	ok := runner.VerifyReviewBranch(repoRoot, task, "review-host")
+	if ok {
+		t.Fatal("VerifyReviewBranch returned true for a branch that does not exist")
+	}
 
 	// Task should stay in ready-for-review/ — no transition occurs.
 	mustExist(t, reviewPath)
 	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
 	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
 
-	// A review-failure record should be appended.
+	// A review-failure record should be appended with the host-side reason.
 	data := readFile(t, reviewPath)
 	if !strings.Contains(data, "<!-- review-failure:") {
 		t.Fatal("review-failure marker not written for missing task branch scenario")
+	}
+	if !strings.Contains(data, "not found in host repo") {
+		t.Fatal("review-failure should mention that the branch was not found in host repo")
 	}
 
 	// No completion messages — the task was not transitioned.

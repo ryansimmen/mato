@@ -276,6 +276,19 @@ func resolveReviewVerdict(task *queue.ClaimedTask) string {
 	return ""
 }
 
+// VerifyReviewBranch checks whether the task branch exists in the host repo
+// before launching a review agent. If the branch is missing it records a
+// review-failure marker and returns false. Returns true when the branch
+// exists and the review may proceed.
+func VerifyReviewBranch(repoRoot string, task *queue.ClaimedTask, agentID string) bool {
+	if _, err := git.Output(repoRoot, "rev-parse", "--verify", "refs/heads/"+task.Branch); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: task branch %s missing from host repo, recording review failure for %s\n", task.Branch, task.Filename)
+		appendReviewFailure(task.TaskPath, agentID, "task branch "+task.Branch+" not found in host repo")
+		return false
+	}
+	return true
+}
+
 // PostReviewAction is the exported entry point for the host-side review
 // handoff after a review agent exits. It delegates to the internal
 // postReviewAction implementation.
