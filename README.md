@@ -78,7 +78,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 - `depends_on` entries refer to task IDs.
 - On each loop, completed dependencies promote a task from `waiting/` to `backlog/`.
 - Lower numbers mean higher priority.
-- `affects` is used for simple conflict prevention: if two backlog tasks list the exact same path, the lower-priority task is excluded from the `.queue` manifest until the conflict clears. Conflict-deferred tasks remain in `backlog/` (they are not moved to `waiting/`).
+- `affects` is used for simple conflict prevention: if two backlog tasks have overlapping entries, the lower-priority task is excluded from the `.queue` manifest until the conflict clears. Entries are compared using three matching modes — exact strings are compared literally, entries ending with `/` are treated as directory prefixes that match any path underneath them (e.g. `pkg/client/` conflicts with `pkg/client/http.go`), and entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Conflict-deferred tasks remain in `backlog/` (they are not moved to `waiting/`).
 
 ## Queue Layout
 
@@ -93,6 +93,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 ├── failed/          # exceeded retry limit
 ├── messages/
 │   ├── events/      # coordination events and status updates
+│   ├── completions/ # host-written completion details for merged tasks
 │   └── presence/    # host-managed agent presence tracking
 └── .locks/          # PID locks for agents and merge queue
 ```
@@ -102,7 +103,7 @@ Tasks that accumulate `max_retries` failure records (default 3) are moved to `fa
 ## How It Works
 
 1. Add tasks to `waiting/` or `backlog/`.
-2. Mato promotes ready tasks into `backlog/`, orders them by priority, and defers exact `affects` conflicts.
+2. Mato promotes ready tasks into `backlog/`, orders them by priority, and defers overlapping `affects` conflicts (exact paths, directory prefixes, and glob patterns).
 3. An agent claims a backlog task, works in an isolated clone on a host-created `task/<name>` branch, and commits. The host pushes the branch after the agent exits.
 4. Agents communicate through `.tasks/messages/` so concurrent runs can share intent and completion events.
 5. A review agent automatically evaluates each completed task branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with feedback for the next attempt.
