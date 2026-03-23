@@ -364,6 +364,66 @@ func TestAnalyze_CompletedDepSatisfies(t *testing.T) {
 	}
 }
 
+func TestAnalyze_EmptyStringDependencyIgnored(t *testing.T) {
+	// A node with DependsOn: [""] should be treated as having no dependencies.
+	waiting := []Node{
+		{ID: "task-a", DependsOn: []string{""}},
+	}
+	known := map[string]struct{}{"task-a": {}}
+
+	result := Analyze(waiting, nil, known, nil)
+
+	if !reflect.DeepEqual(result.DepsSatisfied, []string{"task-a"}) {
+		t.Fatalf("DepsSatisfied = %v, want [task-a]", result.DepsSatisfied)
+	}
+	if len(result.Blocked) != 0 {
+		t.Fatalf("Blocked = %v, want empty", result.Blocked)
+	}
+	if len(result.Cycles) != 0 {
+		t.Fatalf("Cycles = %v, want empty", result.Cycles)
+	}
+}
+
+func TestAnalyze_EmptyStringMixedWithValidDep(t *testing.T) {
+	// A node with DependsOn: ["", "valid-dep"] should only consider "valid-dep".
+	waiting := []Node{
+		{ID: "task-a", DependsOn: []string{"", "valid-dep"}},
+	}
+	completed := map[string]struct{}{"valid-dep": {}}
+	known := map[string]struct{}{"task-a": {}, "valid-dep": {}}
+
+	result := Analyze(waiting, completed, known, nil)
+
+	if !reflect.DeepEqual(result.DepsSatisfied, []string{"task-a"}) {
+		t.Fatalf("DepsSatisfied = %v, want [task-a]", result.DepsSatisfied)
+	}
+	if len(result.Blocked) != 0 {
+		t.Fatalf("Blocked = %v, want empty", result.Blocked)
+	}
+}
+
+func TestAnalyze_EmptyStringMixedWithUnsatisfiedDep(t *testing.T) {
+	// A node with DependsOn: ["", "waiting-dep"] — empty string ignored, still
+	// blocked by the real waiting dependency.
+	waiting := []Node{
+		{ID: "blocker"},
+		{ID: "task-a", DependsOn: []string{"", "blocker"}},
+	}
+	known := map[string]struct{}{"task-a": {}, "blocker": {}}
+
+	result := Analyze(waiting, nil, known, nil)
+
+	if !reflect.DeepEqual(result.DepsSatisfied, []string{"blocker"}) {
+		t.Fatalf("DepsSatisfied = %v, want [blocker]", result.DepsSatisfied)
+	}
+	wantBlocked := map[string][]BlockDetail{
+		"task-a": {{DependencyID: "blocker", Reason: BlockedByWaiting}},
+	}
+	if !reflect.DeepEqual(result.Blocked, wantBlocked) {
+		t.Fatalf("Blocked = %v, want %v", result.Blocked, wantBlocked)
+	}
+}
+
 func TestAnalyze_CompletedAndWaitingOverlapIsAmbiguous(t *testing.T) {
 	// When a dependency ID exists in both completed/ and waiting/
 	// (and is therefore in ambiguousIDs), it should be classified as

@@ -86,6 +86,9 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 			inDeg[n.ID] = 0
 		}
 		for _, dep := range n.DependsOn {
+			if dep == "" {
+				continue
+			}
 			if _, isWaiting := waitingSet[dep]; isWaiting {
 				// dep -> n.ID edge: n.ID depends on dep (which is also waiting)
 				adj[dep] = append(adj[dep], n.ID)
@@ -136,6 +139,9 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 		satisfied := true
 		var details []BlockDetail
 		for _, dep := range n.DependsOn {
+			if dep == "" {
+				continue
+			}
 			if _, ok := completedIDs[dep]; ok {
 				continue
 			}
@@ -223,6 +229,9 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 			}
 			if nodeIdx >= 0 {
 				for _, dep := range waiting[nodeIdx].DependsOn {
+					if dep == "" {
+						continue
+					}
 					if _, isWaiting := waitingSet[dep]; isWaiting {
 						continue // already handled above
 					}
