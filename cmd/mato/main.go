@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mato/internal/doctor"
+	"mato/internal/graph"
 	"mato/internal/runner"
 	"mato/internal/status"
 
@@ -170,6 +171,7 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newGraphCmd())
 	return root
 }
 
@@ -293,6 +295,38 @@ func newDoctorCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, deps)")
+
+	return cmd
+}
+
+func newGraphCmd() *cobra.Command {
+	var graphRepo string
+	var graphTasksDir string
+	var format string
+	var showAll bool
+
+	cmd := &cobra.Command{
+		Use:           "graph",
+		Short:         "Visualize task dependency topology",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if format != "text" && format != "dot" && format != "json" {
+				return fmt.Errorf("--format must be text, dot, or json, got %s", format)
+			}
+			repo, err := resolveRepo(graphRepo)
+			if err != nil {
+				return err
+			}
+			return graph.Show(repo, graphTasksDir, format, showAll)
+		},
+	}
+
+	cmd.Flags().StringVar(&graphRepo, "repo", "", "Path to the git repository (default: current directory)")
+	cmd.Flags().StringVar(&graphTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, dot, or json")
+	cmd.Flags().BoolVar(&showAll, "all", false, "Include completed and failed tasks")
 
 	return cmd
 }

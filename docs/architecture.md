@@ -401,6 +401,13 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - 7 checks: git, tools, docker, queue layout, task parsing, locks & orphans, dependencies.
 - Fix mode for repairable issues — `--fix` flag.
 
+### `internal/graph/`
+- `mato graph` visualization command — `Show`, `ShowTo`, `Build` (`graph.go`).
+- Reuses `PollIndex` and `DiagnoseDependencies` to build a read-only `GraphData` structure from the task queue.
+- Three renderers: human-readable text grouped by state (`render_text.go`), Graphviz DOT with color-coded nodes and edge styles (`render_dot.go`), and JSON serialization (`render_json.go`).
+- Alias resolution via both filename stems and `meta.ID`, with cycle key mapping scoped to waiting tasks.
+- `--all` flag controls whether completed and failed tasks appear in the output.
+
 ### Test files
 Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignoreContains` and `CommitGitignore`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
 ## 10. Host-Curated Knowledge Flow
