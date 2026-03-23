@@ -178,6 +178,7 @@ func newStatusCmd() *cobra.Command {
 	var statusTasksDir string
 	var watch bool
 	var interval time.Duration
+	var format string
 
 	cmd := &cobra.Command{
 		Use:           "status",
@@ -186,9 +187,18 @@ func newStatusCmd() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if format != "text" && format != "json" {
+				return fmt.Errorf("--format must be text or json, got %s", format)
+			}
 			repo, err := resolveRepo(statusRepo)
 			if err != nil {
 				return err
+			}
+			if format == "json" {
+				if watch {
+					return fmt.Errorf("--format json and --watch cannot be used together")
+				}
+				return status.ShowJSON(os.Stdout, repo, statusTasksDir)
 			}
 			if watch {
 				if interval <= 0 {
@@ -206,6 +216,7 @@ func newStatusCmd() *cobra.Command {
 	cmd.Flags().StringVar(&statusTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Continuously refresh the status display")
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "Refresh interval for watch mode")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd
 }
