@@ -3,6 +3,8 @@ package status
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -923,5 +925,106 @@ func TestFailedTaskRendering_MixedFailures(t *testing.T) {
 	// It should show the last regular failure reason.
 	if !contains(output, "tests failed") {
 		t.Errorf("output should contain last regular failure reason 'tests failed', got:\n%s", output)
+	}
+}
+
+// failWriter fails every Write call with the given error.
+type failWriter struct {
+	err error
+}
+
+func (w *failWriter) Write(p []byte) (int, error) {
+	return 0, w.err
+}
+
+func TestWatchTo_RedrawWriteError(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeErr := errors.New("stdout closed")
+	fw := &failWriter{err: writeErr}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- WatchTo(ctx, fw, repoRoot, tasksDir, 100*time.Millisecond)
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("WatchTo should return an error when writes fail")
+		}
+		if !errors.Is(err, writeErr) {
+			t.Errorf("WatchTo error should wrap the write error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "redraw") {
+			t.Errorf("WatchTo error should contain 'redraw' context, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WatchTo did not exit after write failure")
+	}
+}
+
+// failAfterNWriter succeeds for the first n writes, then fails.
+type failAfterNWriter struct {
+	n      int
+	count  int
+	err    error
+	buf    bytes.Buffer
+}
+
+func (w *failAfterNWriter) Write(p []byte) (int, error) {
+	w.count++
+	if w.count > w.n {
+		return 0, w.err
+	}
+	return w.buf.Write(p)
+}
+
+func TestWatchTo_PartialRedrawFailure(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Succeed on the cursor-home write (first), fail on content write (second).
+	writeErr := fmt.Errorf("broken pipe")
+	fw := &failAfterNWriter{n: 1, err: writeErr}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- WatchTo(ctx, fw, repoRoot, tasksDir, 100*time.Millisecond)
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("WatchTo should return an error on partial write failure")
+		}
+		if !strings.Contains(err.Error(), "redraw content") {
+			t.Errorf("error should mention 'redraw content', got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WatchTo did not exit after partial write failure")
 	}
 }

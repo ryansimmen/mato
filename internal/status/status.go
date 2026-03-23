@@ -359,10 +359,16 @@ func pluralize(n int, singular, plural string) string {
 }
 
 // Watch calls Show in a loop, redrawing the terminal without flicker.
-// It buffers all output, then writes it atomically: cursor-home, single write,
-// clear remaining lines. It runs until the context is cancelled (e.g. via
-// Ctrl+C signal).
+// It writes to os.Stdout; use WatchTo to write to a different writer.
 func Watch(ctx context.Context, repoRoot, tasksDir string, interval time.Duration) error {
+	return WatchTo(ctx, os.Stdout, repoRoot, tasksDir, interval)
+}
+
+// WatchTo calls ShowTo in a loop, redrawing the given writer without flicker.
+// It buffers all output, then writes it atomically: cursor-home, single write,
+// clear remaining lines. It runs until the context is cancelled or a write
+// error occurs (e.g. stdout closed by a pager or pipe).
+func WatchTo(ctx context.Context, w io.Writer, repoRoot, tasksDir string, interval time.Duration) error {
 	dim := color.New(color.Faint).SprintFunc()
 	for {
 		var buf bytes.Buffer
@@ -373,9 +379,15 @@ func Watch(ctx context.Context, repoRoot, tasksDir string, interval time.Duratio
 
 		// Atomic redraw: move cursor home, write content, clear any leftover
 		// lines below the new output.
-		os.Stdout.Write([]byte("\033[H"))
-		os.Stdout.Write(buf.Bytes())
-		os.Stdout.Write([]byte("\033[J"))
+		if _, err := w.Write([]byte("\033[H")); err != nil {
+			return fmt.Errorf("redraw cursor-home: %w", err)
+		}
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			return fmt.Errorf("redraw content: %w", err)
+		}
+		if _, err := w.Write([]byte("\033[J")); err != nil {
+			return fmt.Errorf("redraw clear-tail: %w", err)
+		}
 
 		select {
 		case <-ctx.Done():
