@@ -1207,3 +1207,108 @@ func TestSelectAndClaimTask_RollbackDestinationExists(t *testing.T) {
 		t.Fatal("backlog/race.md should contain the reappeared copy")
 	}
 }
+
+func TestSelectAndClaimTask_StaleManifestOmitsBacklogTask(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	// backlog has two tasks, but .queue only lists one
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "listed.md"), "# Listed\n")
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "unlisted.md"), "# Unlisted\n")
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "listed.md\n")
+
+	// First claim should get the manifest-listed task.
+	task, err := SelectAndClaimTask(dir, "agent-s1", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil || task.Filename != "listed.md" {
+		t.Fatalf("expected listed.md first, got %v", task)
+	}
+
+	// Second claim should fall back to the unlisted backlog task.
+	task2, err := SelectAndClaimTask(dir, "agent-s2", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task2 == nil {
+		t.Fatal("expected unlisted.md to be claimable despite missing from .queue, got nil")
+	}
+	if task2.Filename != "unlisted.md" {
+		t.Fatalf("Filename = %q, want %q", task2.Filename, "unlisted.md")
+	}
+}
+
+func TestSelectAndClaimTask_ManifestAllMissing(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	// .queue references tasks that don't exist in backlog/
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "real.md"), "# Real\n")
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "ghost-a.md\nghost-b.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-m1", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected real.md to be claimable despite manifest listing only missing files, got nil")
+	}
+	if task.Filename != "real.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "real.md")
+	}
+}
+
+func TestSelectAndClaimTask_MixedManifestPreservesOrder(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	// Backlog has three tasks; manifest lists two in reverse-alpha order.
+	// The third is not in the manifest and should be appended.
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "a-first.md"), "# A\n")
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "b-second.md"), "# B\n")
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "c-third.md"), "# C\n")
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "b-second.md\na-first.md\n")
+
+	// Claim order should be: b-second (manifest 1st), a-first (manifest 2nd), c-third (appended).
+	want := []string{"b-second.md", "a-first.md", "c-third.md"}
+	for i, wantName := range want {
+		task, err := SelectAndClaimTask(dir, fmt.Sprintf("agent-x%d", i), nil, nil)
+		if err != nil {
+			t.Fatalf("claim %d: %v", i, err)
+		}
+		if task == nil {
+			t.Fatalf("claim %d: expected %s, got nil", i, wantName)
+		}
+		if task.Filename != wantName {
+			t.Fatalf("claim %d: Filename = %q, want %q", i, task.Filename, wantName)
+		}
+	}
+
+	// No more tasks should be claimable.
+	task, err := SelectAndClaimTask(dir, "agent-x3", nil, nil)
+	if err != nil {
+		t.Fatalf("final claim: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected nil after all tasks claimed, got %+v", task)
+	}
+}
+
+func TestSelectAndClaimTask_DuplicateManifestEntries(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "dup.md"), "# Dup\n")
+	// .queue lists the same task three times
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "dup.md\ndup.md\ndup.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-d1", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil || task.Filename != "dup.md" {
+		t.Fatalf("expected dup.md, got %v", task)
+	}
+
+	// After claiming, no more candidates should exist.
+	task2, err := SelectAndClaimTask(dir, "agent-d2", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task2 != nil {
+		t.Fatalf("expected nil (duplicate should not produce extra candidates), got %+v", task2)
+	}
+}
