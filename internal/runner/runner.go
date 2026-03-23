@@ -382,15 +382,13 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			pollHadError = true
 		}
 
-		queue.ReconcileReadyQueue(tasksDir, idx)
-
-		// Rebuild the index after reconcile since it may have moved
-		// tasks from waiting/ to backlog/ or failed/. The rebuild cost
-		// (~7 dir scans + N parses) is minimal compared to the redundant
-		// work that was previously done.
-		idx = queue.BuildIndex(tasksDir)
-		if surfaceBuildWarnings(idx) {
-			pollHadError = true
+		if queue.ReconcileReadyQueue(tasksDir, idx) {
+			// Rebuild the index only when reconciliation moved tasks
+			// (promoted to backlog/ or quarantined to failed/).
+			idx = queue.BuildIndex(tasksDir)
+			if surfaceBuildWarnings(idx) {
+				pollHadError = true
+			}
 		}
 
 		deferred := queue.DeferredOverlappingTasks(tasksDir, idx)

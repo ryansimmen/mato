@@ -139,7 +139,7 @@ func TestConcurrentReconcileReadyQueue(t *testing.T) {
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	promoted := make([]int, 5)
+	promoted := make([]bool, 5)
 	var panics atomic.Int32
 
 	for i := 0; i < 5; i++ {
@@ -165,11 +165,13 @@ func TestConcurrentReconcileReadyQueue(t *testing.T) {
 	}
 
 	totalPromoted := 0
-	for _, count := range promoted {
-		totalPromoted += count
+	for _, moved := range promoted {
+		if moved {
+			totalPromoted++
+		}
 	}
-	if totalPromoted != 5 {
-		t.Fatalf("expected 5 total promotions, got %d (%v)", totalPromoted, promoted)
+	if totalPromoted == 0 {
+		t.Fatalf("expected at least one goroutine to report moves, got 0 (%v)", promoted)
 	}
 
 	backlog := markdownFileNames(t, backlogDir)
@@ -710,8 +712,8 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 
 	mustRename(t, highPath, filepath.Join(tasksDir, queue.DirCompleted, "task-high.md"))
 
-	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 0 {
-		t.Fatalf("queue.ReconcileReadyQueue() = %d, want 0", got)
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got {
+		t.Fatalf("queue.ReconcileReadyQueue() = %v, want false", got)
 	}
 
 	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
