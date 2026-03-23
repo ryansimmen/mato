@@ -1173,3 +1173,131 @@ func TestDoctor_UnreadableLocksDir(t *testing.T) {
 		t.Error("expected locks.unreadable finding when .locks is not readable")
 	}
 }
+
+func TestDoctor_ToolsMissingCopilotDir(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	stubTools(t, func() runner.ToolReport {
+		return runner.ToolReport{Findings: []runner.ToolFinding{
+			{Name: ".copilot", Path: "", Required: true, Found: false, Message: ".copilot directory not found"},
+			{Name: "git", Path: "/usr/bin/git", Required: true, Found: true, Message: "git: /usr/bin/git"},
+		}}
+	})
+	stubDocker(t, func(ctx context.Context) error { return nil })
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var foundCopilot, foundGit bool
+	for _, cr := range report.Checks {
+		if cr.Name != "tools" {
+			continue
+		}
+		for _, f := range cr.Findings {
+			switch f.Code {
+			case "tools.missing_copilot_dir":
+				foundCopilot = true
+				if f.Severity != SeverityError {
+					t.Errorf("missing_copilot_dir severity: got %q, want %q", f.Severity, SeverityError)
+				}
+			case "tools.found":
+				if f.Message == "git: /usr/bin/git" {
+					foundGit = true
+					if f.Severity != SeverityInfo {
+						t.Errorf("found tool severity: got %q, want %q", f.Severity, SeverityInfo)
+					}
+				}
+			}
+		}
+	}
+	if !foundCopilot {
+		t.Error("expected tools.missing_copilot_dir finding for missing .copilot")
+	}
+	if !foundGit {
+		t.Error("expected tools.found finding for git")
+	}
+}
+
+func TestDoctor_ToolsMissingOptionalAndRequired(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	stubTools(t, func() runner.ToolReport {
+		return runner.ToolReport{Findings: []runner.ToolFinding{
+			{Name: "copilot", Path: "", Required: true, Found: false, Message: "copilot not found"},
+			{Name: "gh", Path: "", Required: false, Found: false, Message: "gh not found"},
+			{Name: "git", Path: "/usr/bin/git", Required: true, Found: true, Message: "git: /usr/bin/git"},
+		}}
+	})
+	stubDocker(t, func(ctx context.Context) error { return nil })
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var foundRequired, foundOptional, foundInfo bool
+	for _, cr := range report.Checks {
+		if cr.Name != "tools" {
+			continue
+		}
+		for _, f := range cr.Findings {
+			switch f.Code {
+			case "tools.missing_required":
+				foundRequired = true
+				if f.Severity != SeverityError {
+					t.Errorf("missing_required severity: got %q, want %q", f.Severity, SeverityError)
+				}
+			case "tools.missing_optional":
+				foundOptional = true
+				if f.Severity != SeverityWarning {
+					t.Errorf("missing_optional severity: got %q, want %q", f.Severity, SeverityWarning)
+				}
+			case "tools.found":
+				foundInfo = true
+				if f.Severity != SeverityInfo {
+					t.Errorf("found tool severity: got %q, want %q", f.Severity, SeverityInfo)
+				}
+			}
+		}
+	}
+	if !foundRequired {
+		t.Error("expected tools.missing_required finding for missing copilot")
+	}
+	if !foundOptional {
+		t.Error("expected tools.missing_optional finding for missing gh")
+	}
+	if !foundInfo {
+		t.Error("expected tools.found finding for git")
+	}
+}
+
+func TestDoctor_ToolsAllFound(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	stubTools(t, func() runner.ToolReport {
+		return runner.ToolReport{Findings: []runner.ToolFinding{
+			{Name: "copilot", Path: "/usr/bin/copilot", Required: true, Found: true, Message: "copilot: /usr/bin/copilot"},
+			{Name: "git", Path: "/usr/bin/git", Required: true, Found: true, Message: "git: /usr/bin/git"},
+			{Name: "gh", Path: "/usr/bin/gh", Required: false, Found: true, Message: "gh: /usr/bin/gh"},
+		}}
+	})
+	stubDocker(t, func(ctx context.Context) error { return nil })
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, cr := range report.Checks {
+		if cr.Name != "tools" {
+			continue
+		}
+		for _, f := range cr.Findings {
+			if f.Code != "tools.found" {
+				t.Errorf("expected all findings to be tools.found, got %q", f.Code)
+			}
+			if f.Severity != SeverityInfo {
+				t.Errorf("expected info severity for found tools, got %q for %q", f.Severity, f.Message)
+			}
+		}
+	}
+}
