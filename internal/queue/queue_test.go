@@ -192,6 +192,27 @@ func withLinkFn(t *testing.T, fn func(string, string) error) {
 	t.Cleanup(func() { linkFn = orig })
 }
 
+func withReadFileFn(t *testing.T, fn func(string) ([]byte, error)) {
+	t.Helper()
+	orig := readFileFn
+	readFileFn = fn
+	t.Cleanup(func() { readFileFn = orig })
+}
+
+func withOpenFileFn(t *testing.T, fn func(string, int, os.FileMode) (*os.File, error)) {
+	t.Helper()
+	orig := openFileFn
+	openFileFn = fn
+	t.Cleanup(func() { openFileFn = orig })
+}
+
+func withWriteFileFn(t *testing.T, fn func(*os.File, []byte) error) {
+	t.Helper()
+	orig := writeFileFn
+	writeFileFn = fn
+	t.Cleanup(func() { writeFileFn = orig })
+}
+
 func TestAtomicMove_CrossDeviceSuccess(t *testing.T) {
 	withLinkFn(t, func(_, _ string) error {
 		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
@@ -264,16 +285,14 @@ func TestAtomicMove_CrossDeviceDestinationExists(t *testing.T) {
 	}
 }
 
-func TestAtomicMove_CrossDeviceWriteFailCleansUp(t *testing.T) {
-	// Simulate EXDEV on link so crossDeviceMove is used, then make the
-	// destination directory read-only after the exclusive create so that
-	// the write (or close/sync) fails. We achieve this by using a
-	// two-level directory where we revoke write on the parent after
-	// open. Instead, we use a simpler approach: make source unreadable
-	// so that os.ReadFile inside crossDeviceMove fails, and verify the
-	// source remains intact.
+func TestAtomicMove_CrossDeviceReadFailSourceIntact(t *testing.T) {
+	// Inject EXDEV on link and a read error via the readFileFn seam.
+	// Verify the source remains intact and no destination is created.
 	withLinkFn(t, func(_, _ string) error {
 		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+	withReadFileFn(t, func(name string) ([]byte, error) {
+		return nil, fmt.Errorf("injected read error")
 	})
 
 	dir := t.TempDir()
@@ -284,60 +303,52 @@ func TestAtomicMove_CrossDeviceWriteFailCleansUp(t *testing.T) {
 	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	// Make source unreadable so crossDeviceMove's ReadFile fails.
-	if err := os.Chmod(src, 0o000); err != nil {
-		t.Fatalf("chmod source: %v", err)
-	}
-	t.Cleanup(func() { os.Chmod(src, 0o644) })
 
 	err := AtomicMove(src, dst)
 	if err == nil {
-		t.Fatal("AtomicMove should fail when source is unreadable")
+		t.Fatal("AtomicMove should fail when source read fails")
 	}
 
-	// Source must remain on disk (unchanged).
-	os.Chmod(src, 0o644) // restore so we can read it
+	// Source must remain on disk unchanged.
 	got, err := os.ReadFile(src)
 	if err != nil {
-		t.Fatalf("source should still exist after failed cross-device move: %v", err)
+		t.Fatalf("source should still exist after failed read: %v", err)
 	}
 	if string(got) != content {
 		t.Fatalf("source content changed: got %q, want %q", got, content)
 	}
 
-	// Destination must not exist (no partial file left behind).
+	// Destination must not exist.
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
 		t.Fatalf("destination should not exist after failed move, got err: %v", err)
 	}
 }
 
-func TestAtomicMove_CrossDeviceCreateFailCleansUp(t *testing.T) {
-	// Force EXDEV, then make the destination directory unwritable so that
-	// the O_CREATE|O_EXCL open fails.
+func TestAtomicMove_CrossDeviceCreateFailSourceIntact(t *testing.T) {
+	// Inject EXDEV on link and a create error via the openFileFn seam.
+	// Verify the source remains intact and the error is not ErrDestinationExists.
 	withLinkFn(t, func(_, _ string) error {
 		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+	withOpenFileFn(t, func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		return nil, fmt.Errorf("injected create error")
 	})
 
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.md")
-	dstDir := filepath.Join(dir, "readonly")
+	dst := filepath.Join(dir, "dst.md")
 	content := "safe content\n"
 
 	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	if err := os.MkdirAll(dstDir, 0o555); err != nil {
-		t.Fatalf("mkdir readonly: %v", err)
-	}
-	t.Cleanup(func() { os.Chmod(dstDir, 0o755) })
 
-	dst := filepath.Join(dstDir, "dst.md")
 	err := AtomicMove(src, dst)
 	if err == nil {
-		t.Fatal("AtomicMove should fail when destination dir is unwritable")
+		t.Fatal("AtomicMove should fail when destination create fails")
 	}
 	if errors.Is(err, ErrDestinationExists) {
-		t.Fatal("error should not be ErrDestinationExists for permission failure")
+		t.Fatal("error should not be ErrDestinationExists for create failure")
 	}
 
 	// Source must remain intact.
@@ -347,6 +358,45 @@ func TestAtomicMove_CrossDeviceCreateFailCleansUp(t *testing.T) {
 	}
 	if string(got) != content {
 		t.Fatalf("source content changed: got %q, want %q", got, content)
+	}
+}
+
+func TestAtomicMove_CrossDeviceWriteFailCleansUp(t *testing.T) {
+	// Inject EXDEV on link and a write error via the writeFileFn seam.
+	// Verify the partial destination is removed and source remains intact.
+	withLinkFn(t, func(_, _ string) error {
+		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+	withWriteFileFn(t, func(f *os.File, data []byte) error {
+		return fmt.Errorf("injected write error")
+	})
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+	content := "precious content\n"
+
+	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	err := AtomicMove(src, dst)
+	if err == nil {
+		t.Fatal("AtomicMove should fail when write fails")
+	}
+
+	// Source must remain on disk unchanged.
+	got, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("source should still exist after failed write: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("source content changed: got %q, want %q", got, content)
+	}
+
+	// Destination must not exist (partial file should be cleaned up).
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("partial destination should be cleaned up, got err: %v", err)
 	}
 }
 
