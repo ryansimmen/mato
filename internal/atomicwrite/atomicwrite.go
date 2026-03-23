@@ -20,6 +20,26 @@ func WriteFile(path string, data []byte) error {
 	})
 }
 
+// AppendToFile appends content to the file at path using O_APPEND|O_WRONLY.
+// It checks both write and close errors, returning a context-wrapped error on
+// failure. This is intentionally non-atomic (no temp-file rename) because
+// append operations need to preserve existing file content.
+func AppendToFile(path, content string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open %s for append: %w", path, err)
+	}
+	_, writeErr := f.WriteString(content)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("append to %s: %w", path, writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %s after append: %w", path, closeErr)
+	}
+	return nil
+}
+
 // WriteFunc atomically writes to path using a caller-supplied write callback.
 // The callback receives the open temp file and may write to it in any way
 // (e.g., JSON encoding, fmt.Fprintf). If fn returns an error the temp file is

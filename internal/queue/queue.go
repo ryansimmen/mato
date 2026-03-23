@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"mato/internal/atomicwrite"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
 	"mato/internal/taskfile"
@@ -87,18 +88,10 @@ func RecoverOrphanedTasks(tasksDir string) {
 			continue
 		}
 
-		f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not open task file to append failure record for %s: %v\n", name, err)
-		} else {
-			_, writeErr := fmt.Fprintf(f, "\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
-				time.Now().UTC().Format(time.RFC3339))
-			closeErr := f.Close()
-			if writeErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", name, writeErr)
-			} else if closeErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", name, closeErr)
-			}
+		content := fmt.Sprintf("\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
+			time.Now().UTC().Format(time.RFC3339))
+		if err := atomicwrite.AppendToFile(dst, content); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", name, err)
 		}
 
 		fmt.Fprintf(os.Stderr, "Recovered orphaned task %s back to backlog\n", name)

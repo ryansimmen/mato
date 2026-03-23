@@ -169,3 +169,78 @@ func TestWriteFile_AtomicNoConcurrentPartialRead(t *testing.T) {
 		t.Errorf("concurrent error: %v", err)
 	}
 }
+
+func TestAppendToFile_Success(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "append.txt")
+
+	if err := os.WriteFile(path, []byte("first line\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := AppendToFile(path, "second line\n"); err != nil {
+		t.Fatalf("AppendToFile: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	want := "first line\nsecond line\n"
+	if string(got) != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+func TestAppendToFile_FileNotFound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nonexistent", "file.txt")
+
+	err := AppendToFile(path, "data")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file, got nil")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got: %v", err)
+	}
+}
+
+func TestAppendToFile_PermissionDenied(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readonly.txt")
+
+	if err := os.WriteFile(path, []byte("initial"), 0o444); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err := AppendToFile(path, "more data")
+	if err == nil {
+		t.Fatal("expected error for read-only file, got nil")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Errorf("expected os.ErrPermission, got: %v", err)
+	}
+}
+
+func TestAppendToFile_ContentVerification(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "multi.txt")
+
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	lines := []string{"alpha\n", "beta\n", "gamma\n"}
+	for _, line := range lines {
+		if err := AppendToFile(path, line); err != nil {
+			t.Fatalf("AppendToFile(%q): %v", line, err)
+		}
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	want := "alpha\nbeta\ngamma\n"
+	if string(got) != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}

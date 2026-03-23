@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/identity"
@@ -536,21 +537,4 @@ func checkIdleTransition(isIdle bool, wasIdle *bool) bool {
 
 // appendToFileFn is the function used to append text to files in post-agent
 // and review flows. It is a variable so tests can inject failures.
-var appendToFileFn = appendToFile
-
-// appendToFile appends text to a file. Returns an error on failure.
-func appendToFile(path, text string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open %s for append: %w", path, err)
-	}
-	_, writeErr := f.WriteString(text)
-	closeErr := f.Close()
-	if writeErr != nil {
-		return fmt.Errorf("append to %s: %w", path, writeErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close %s after append: %w", path, closeErr)
-	}
-	return nil
-}
+var appendToFileFn = atomicwrite.AppendToFile
