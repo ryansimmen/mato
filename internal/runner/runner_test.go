@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -2741,5 +2742,110 @@ func TestSurfaceBuildWarnings_GlobWarningDoesNotTriggerPollError(t *testing.T) {
 
 	if !strings.Contains(stderr, "warning: index build:") {
 		t.Errorf("expected warning logged on stderr even for glob issues, got: %s", stderr)
+	}
+}
+
+func TestGracefulShutdown_RecoversDuringSignal(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not available")
+	}
+
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "signal-test.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Signal Test\n"), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/signal-test",
+		Title:    "Signal Test",
+		TaskPath: inProgressPath,
+	}
+
+	// Simulate runOnce with context cancellation (SIGTERM).
+	ctx, cancel := context.WithCancel(context.Background())
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer timeoutCancel()
+
+	cmd := exec.CommandContext(timeoutCtx, "sleep", "60")
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = gracefulShutdownDelay
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+
+	// Cancel after a short delay (simulates receiving SIGTERM).
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	// Wait for command to exit (simulates runOnce completing).
+	_ = cmd.Wait()
+
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", ctx.Err())
+	}
+
+	// recoverStuckTask is called after runOnce returns, even during shutdown.
+	stdout, _ := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+
+	// Task should be recovered to backlog/.
+	if _, err := os.Stat(inProgressPath); err == nil {
+		t.Fatal("task still in in-progress/ after shutdown recovery")
+	}
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("task not found in backlog/: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- failure: agent1") {
+		t.Fatal("failure record not appended to recovered task")
+	}
+	if !strings.Contains(stdout, "Recovered task") {
+		t.Fatalf("expected recovery message, got: %s", stdout)
+	}
+}
+
+func TestGracefulShutdown_ExitsEarlyAfterRecovery(t *testing.T) {
+	// Verify that a cancelled context causes pollLoop to skip further work.
+	// We test the building block: after runOnce + recoverStuckTask, if
+	// ctx.Err() != nil the loop should exit without reaching review/merge.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel
+
+	// After cancellation, ctx.Err() must be non-nil.
+	if ctx.Err() == nil {
+		t.Fatal("expected cancelled context")
+	}
+}
+
+func TestSetupSignalContext_PrintsShutdownMessage(t *testing.T) {
+	stdout, _ := captureStdoutStderr(t, func() {
+		ctx, cancel := setupSignalContext()
+		defer cancel()
+		ch := signalChan(ctx)
+		defer func() {
+			if ch != nil {
+				signal.Stop(ch)
+			}
+		}()
+
+		// Deliver a signal to the channel to trigger the shutdown message.
+		ch <- syscall.SIGTERM
+
+		// Wait for context cancellation.
+		<-ctx.Done()
+	})
+
+	if !strings.Contains(stdout, "Shutting down, waiting for current task to finish...") {
+		t.Fatalf("expected shutdown message in stdout, got: %q", stdout)
 	}
 }

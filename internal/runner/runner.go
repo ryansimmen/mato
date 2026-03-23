@@ -341,6 +341,7 @@ func setupSignalContext() (context.Context, context.CancelFunc) {
 	go func() {
 		select {
 		case <-sigCh:
+			fmt.Println("\nShutting down, waiting for current task to finish...")
 			cancel()
 		case <-ctx.Done():
 		}
@@ -369,6 +370,11 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 	failedDirExcluded := make(map[string]struct{})
 	consecutiveErrors := 0
 	for {
+		// Check for shutdown before starting new work.
+		if ctx.Err() != nil {
+			return nil
+		}
+
 		pollHadError := false
 
 		queue.RecoverOrphanedTasks(tasksDir)
@@ -437,6 +443,13 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			}
 
 			recoverStuckTask(tasksDir, agentID, claimed)
+
+			// If a shutdown signal was received during the task run, exit
+			// now that the task has been properly recovered. This avoids
+			// starting review or merge work with a cancelled context.
+			if ctx.Err() != nil {
+				return nil
+			}
 		}
 
 		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx); reviewTask != nil {
