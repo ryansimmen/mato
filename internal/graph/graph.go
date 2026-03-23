@@ -34,17 +34,17 @@ const (
 
 // GraphNode represents a single task in the dependency graph.
 type GraphNode struct {
-	Key          string        `json:"key"`
-	ID           string        `json:"id"`
-	Filename     string        `json:"filename"`
-	Title        string        `json:"title,omitempty"`
-	State        NodeState     `json:"state"`
-	Priority     int           `json:"priority"`
-	DependsOn    []string      `json:"depends_on,omitempty"`
-	FailureCount int           `json:"failure_count,omitempty"`
-	BlockDetails []BlockDetail `json:"block_details,omitempty"`
-	IsCycleMember bool         `json:"is_cycle_member,omitempty"`
-	HiddenDeps   []HiddenDep   `json:"hidden_deps,omitempty"`
+	Key           string        `json:"key"`
+	ID            string        `json:"id"`
+	Filename      string        `json:"filename"`
+	Title         string        `json:"title,omitempty"`
+	State         NodeState     `json:"state"`
+	Priority      int           `json:"priority"`
+	DependsOn     []string      `json:"depends_on,omitempty"`
+	FailureCount  int           `json:"failure_count,omitempty"`
+	BlockDetails  []BlockDetail `json:"block_details,omitempty"`
+	IsCycleMember bool          `json:"is_cycle_member,omitempty"`
+	HiddenDeps    []HiddenDep   `json:"hidden_deps,omitempty"`
 }
 
 // BlockDetail describes why a specific dependency blocks a waiting task.
@@ -146,7 +146,7 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 	}
 
 	var data GraphData
-	aliasMap := make(map[string][]string)   // ref → []nodeKey
+	aliasMap := make(map[string][]string)    // ref → []nodeKey
 	nodeByKey := make(map[string]*GraphNode) // key → node pointer
 
 	// Track which waiting IDs are retained (for duplicate detection).
@@ -199,11 +199,9 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 						DuplicateOf: seenWaitingIDs[snap.Meta.ID],
 						SharedID:    snap.Meta.ID,
 					})
-					// Do NOT add to aliasMap — only retained file is aliased.
-					// But add the stem if it differs from the meta.ID.
-					if stem != snap.Meta.ID {
-						aliasMap[stem] = appendUnique(aliasMap[stem], key)
-					}
+					// Do NOT add to aliasMap — only retained file is
+					// aliased. The duplicate is a node but should not be
+					// a target for dependency resolution.
 				} else {
 					// First time seeing this ID in waiting (retained).
 					aliasMap[snap.Meta.ID] = appendUnique(aliasMap[snap.Meta.ID], key)
@@ -239,8 +237,8 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 						// Self-edge handled by cycles; still create the edge.
 					}
 					data.Edges = append(data.Edges, Edge{
-						From: target,
-						To:   node.Key,
+						From:      target,
+						To:        node.Key,
 						Satisfied: satisfied,
 					})
 				}
