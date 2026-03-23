@@ -43,6 +43,7 @@ internal/          All library packages:
   dag/             Dependency graph analysis (Kahn + Tarjan)
   doctor/          Health checks for repo and task queue
   frontmatter/     YAML frontmatter parser
+  graph/           Dependency graph visualization
   git/             Git helpers (clone, checkout, commit, push)
   identity/        Agent ID generation (8-char hex)
   integration/     Integration tests (package integration_test)

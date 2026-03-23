@@ -129,6 +129,28 @@ Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag
 sets the refresh period (default `2s`). The interval must be a positive duration;
 zero or negative values are rejected with an error.
 
+## Graph Command
+
+`mato graph` visualizes the task dependency topology:
+
+```bash
+# Text output (default)
+mato graph
+
+# Graphviz DOT pipeline
+mato graph --format dot | dot -Tpng > graph.png
+
+# Machine-readable JSON
+mato graph --format json
+
+# Include completed and failed tasks
+mato graph --all
+```
+
+The graph reuses `PollIndex` and `DiagnoseDependencies` to show dependency
+edges, blocked tasks, cycles, and hidden (off-graph) dependencies. Output is
+read-only and makes no filesystem changes.
+
 ## Doctor Command
 
 `mato doctor` runs a structured health check across the repository and task queue:
