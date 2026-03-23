@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 )
 
@@ -76,13 +77,13 @@ func SetupRepoWithTasks(t *testing.T) (string, string) {
 	}
 
 	tasksDir := filepath.Join(dir, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed"} {
+	for _, sub := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
-		t.Fatalf("os.MkdirAll(.locks): %v", err)
+	if err := os.MkdirAll(filepath.Join(tasksDir, dirs.Locks), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", dirs.Locks, err)
 	}
 	// Initialise messaging directories inline to avoid an import cycle
 	// (messaging → taskfile, and taskfile tests import testutil).

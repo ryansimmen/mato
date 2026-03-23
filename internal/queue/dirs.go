@@ -1,15 +1,17 @@
 package queue
 
-// Queue directory name constants. These replace hardcoded strings like
-// "backlog", "in-progress", etc. throughout the codebase.
+import "mato/internal/dirs"
+
+// Queue directory name constants. Re-exported from the shared dirs package
+// so that existing callers using queue.Dir* continue to work.
 const (
-	DirWaiting     = "waiting"
-	DirBacklog     = "backlog"
-	DirInProgress  = "in-progress"
-	DirReadyReview = "ready-for-review"
-	DirReadyMerge  = "ready-to-merge"
-	DirCompleted   = "completed"
-	DirFailed      = "failed"
+	DirWaiting     = dirs.Waiting
+	DirBacklog     = dirs.Backlog
+	DirInProgress  = dirs.InProgress
+	DirReadyReview = dirs.ReadyReview
+	DirReadyMerge  = dirs.ReadyMerge
+	DirCompleted   = dirs.Completed
+	DirFailed      = dirs.Failed
 )
 
 // AllDirs is the ordered list of all queue directories.

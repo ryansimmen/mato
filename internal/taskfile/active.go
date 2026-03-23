@@ -5,20 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
-)
-
-// Active directory names — duplicated from queue.Dir* to avoid a circular
-// import between taskfile and queue.
-const (
-	dirInProgress  = "in-progress"
-	dirReadyReview = "ready-for-review"
-	dirReadyMerge  = "ready-to-merge"
 )
 
 // activeDirs lists the directories that contain tasks currently being
 // worked on, under review, or awaiting merge.
-var activeDirs = []string{dirInProgress, dirReadyReview, dirReadyMerge}
+var activeDirs = []string{dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge}
 
 // ActiveTask describes a task currently being worked on or awaiting merge,
 // along with the files it declares in its affects: metadata.
