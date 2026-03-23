@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -242,8 +243,43 @@ func CleanOldMessages(tasksDir string, maxAge time.Duration) {
 	}
 }
 
+// completionFilename encodes a task ID into a collision-resistant filename
+// safe for use inside the completions directory. Characters in [a-zA-Z0-9-]
+// pass through unchanged; all others are encoded as _XX where XX is the
+// lowercase hex value of the byte. This is reversible and guarantees
+// distinct task IDs map to distinct filenames.
+func completionFilename(taskID string) string {
+	var b strings.Builder
+	for i := 0; i < len(taskID); i++ {
+		c := taskID[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' {
+			b.WriteByte(c)
+		} else {
+			b.WriteByte('_')
+			b.WriteString(hex.EncodeToString([]byte{c}))
+		}
+	}
+	s := b.String()
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
+// legacyCompletionFilename reproduces the old lossy sanitization so
+// ReadCompletionDetail can fall back to pre-existing files written before the
+// collision-resistant encoding was introduced.
+func legacyCompletionFilename(taskID string) string {
+	s := strings.Trim(safeMessageFilePart.ReplaceAllString(taskID, "-"), "-_. ")
+	if s == "" {
+		return "unknown"
+	}
+	return s
+}
+
 // WriteCompletionDetail writes a completion-detail JSON file for a merged task
-// so downstream dependent tasks can read what changed.
+// so downstream dependent tasks can read what changed. The filename is derived
+// from TaskID using a collision-resistant encoding (see completionFilename).
 func WriteCompletionDetail(tasksDir string, detail CompletionDetail) error {
 	if detail.MergedAt.IsZero() {
 		detail.MergedAt = time.Now().UTC()
@@ -253,11 +289,8 @@ func WriteCompletionDetail(tasksDir string, detail CompletionDetail) error {
 	if detail.TaskID == "" {
 		return fmt.Errorf("completion detail requires a task ID")
 	}
-	safeID := strings.Trim(safeMessageFilePart.ReplaceAllString(detail.TaskID, "-"), "-_. ")
-	if safeID == "" {
-		safeID = "unknown"
-	}
-	path := filepath.Join(tasksDir, "messages", "completions", safeID+".json")
+	name := completionFilename(detail.TaskID)
+	path := filepath.Join(tasksDir, "messages", "completions", name+".json")
 	if err := writeJSONAtomically(path, detail); err != nil {
 		return fmt.Errorf("write completion detail: %w", err)
 	}
@@ -265,16 +298,23 @@ func WriteCompletionDetail(tasksDir string, detail CompletionDetail) error {
 }
 
 // ReadCompletionDetail reads the completion-detail JSON for a given task ID.
-// Returns os.ErrNotExist if the file does not exist.
+// It first tries the collision-resistant filename, then falls back to the
+// legacy lossy sanitized name for backward compatibility with pre-existing
+// completion files. Returns os.ErrNotExist if neither file exists.
 func ReadCompletionDetail(tasksDir, taskID string) (*CompletionDetail, error) {
-	safeID := strings.Trim(safeMessageFilePart.ReplaceAllString(taskID, "-"), "-_. ")
-	if safeID == "" {
-		safeID = "unknown"
-	}
-	path := filepath.Join(tasksDir, "messages", "completions", safeID+".json")
+	name := completionFilename(taskID)
+	path := filepath.Join(tasksDir, "messages", "completions", name+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read completion detail %s: %w", taskID, err)
+		// Fall back to the legacy lossy filename for backward compatibility.
+		legacy := legacyCompletionFilename(taskID)
+		if legacy != name {
+			legacyPath := filepath.Join(tasksDir, "messages", "completions", legacy+".json")
+			data, err = os.ReadFile(legacyPath)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read completion detail %s: %w", taskID, err)
+		}
 	}
 	var detail CompletionDetail
 	if err := json.Unmarshal(data, &detail); err != nil {
