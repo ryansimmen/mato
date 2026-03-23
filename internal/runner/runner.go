@@ -332,6 +332,10 @@ func setupSignalContext() (context.Context, context.CancelFunc) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	// Store sigCh in ctx before launching goroutine to avoid data race
+	// on the ctx variable.
+	ctx = context.WithValue(ctx, signalChanKey{}, sigCh)
+
 	go func() {
 		select {
 		case <-sigCh:
@@ -341,8 +345,6 @@ func setupSignalContext() (context.Context, context.CancelFunc) {
 		}
 	}()
 
-	// Store sigCh in ctx so the caller can call signal.Stop on it.
-	ctx = context.WithValue(ctx, signalChanKey{}, sigCh)
 	return ctx, cancel
 }
 
