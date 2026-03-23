@@ -331,11 +331,83 @@ func TestDoctor_OrphanedInProgress(t *testing.T) {
 				if !f.Fixable {
 					t.Error("expected orphaned_task to be fixable")
 				}
+				if !strings.Contains(f.Message, "deadbeef") {
+					t.Errorf("expected message to include agent ID, got %q", f.Message)
+				}
 			}
 		}
 	}
 	if !found {
 		t.Error("expected locks.orphaned_task finding")
+	}
+}
+
+func TestDoctor_UnclaimedInProgress(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create an in-progress task with no claimed-by marker at all.
+	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "unclaimed.md"),
+		"---\nid: unclaimed\n---\nUnclaimed task\n")
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.unclaimed_in_progress" {
+				found = true
+				if !f.Fixable {
+					t.Error("expected unclaimed_in_progress to be fixable")
+				}
+				if !strings.Contains(f.Message, "no claimed-by marker") {
+					t.Errorf("expected message about missing marker, got %q", f.Message)
+				}
+			}
+			if f.Code == "locks.orphaned_task" {
+				t.Error("unclaimed task should not produce locks.orphaned_task finding")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected locks.unclaimed_in_progress finding")
+	}
+}
+
+func TestDoctor_UnclaimedInProgress_Fix(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	inProgressFile := filepath.Join(tasksDir, "in-progress", "unclaimed.md")
+	testutil.WriteFile(t, inProgressFile,
+		"---\nid: unclaimed\n---\nUnclaimed task\n")
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Task should be moved to backlog.
+	if _, statErr := os.Stat(inProgressFile); !os.IsNotExist(statErr) {
+		t.Error("expected unclaimed in-progress task to be removed by --fix")
+	}
+	if _, statErr := os.Stat(filepath.Join(tasksDir, "backlog", "unclaimed.md")); statErr != nil {
+		t.Error("expected unclaimed.md in backlog/ after --fix")
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.unclaimed_in_progress" && f.Fixed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("expected locks.unclaimed_in_progress finding marked fixed")
 	}
 }
 
