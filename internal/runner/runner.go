@@ -380,6 +380,9 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		// this snapshot instead of independently scanning directories
 		// and parsing files.
 		idx := queue.BuildIndex(tasksDir)
+		if surfaceBuildWarnings(idx) {
+			pollHadError = true
+		}
 
 		queue.ReconcileReadyQueue(tasksDir, idx)
 
@@ -388,6 +391,9 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		// (~7 dir scans + N parses) is minimal compared to the redundant
 		// work that was previously done.
 		idx = queue.BuildIndex(tasksDir)
+		if surfaceBuildWarnings(idx) {
+			pollHadError = true
+		}
 
 		deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
 		// Merge in tasks excluded due to failed/ being unavailable so they
@@ -482,6 +488,28 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		case <-time.After(pollBackoff(consecutiveErrors)):
 		}
 	}
+}
+
+// surfaceBuildWarnings logs non-fatal build warnings from a PollIndex to
+// stderr. It returns true when any warning indicates a directory-level read
+// failure (incomplete index), which callers should treat as a poll-cycle error
+// to trigger backoff signaling.
+func surfaceBuildWarnings(idx *queue.PollIndex) bool {
+	warnings := idx.BuildWarnings()
+	if len(warnings) == 0 {
+		return false
+	}
+	hasDirReadFailure := false
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "warning: index build: %s (%s): %v\n", w.Path, w.State, w.Err)
+		// Directory-level read failures produce paths without a .md
+		// suffix; these mean the index is missing an entire queue
+		// directory and downstream scheduling may be distorted.
+		if !strings.HasSuffix(w.Path, ".md") {
+			hasDirReadFailure = true
+		}
+	}
+	return hasDirReadFailure
 }
 
 // checkIdleTransition returns true when the system transitions from active to
