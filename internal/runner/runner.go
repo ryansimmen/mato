@@ -261,23 +261,13 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 }
 
 // resolveGitIdentity reads git user.name and user.email from the local
-// repo config, falling back to global config, and ensures both are set
-// on the local repo for use inside Docker containers.
+// repo config, falling back to global config and defaults via
+// git.ResolveIdentity, and ensures both are set on the local repo for
+// use inside Docker containers.
 func resolveGitIdentity(repoRoot string) (name, email string) {
-	name, _ = git.Output(repoRoot, "config", "user.name")
-	email, _ = git.Output(repoRoot, "config", "user.email")
-	if strings.TrimSpace(name) == "" {
-		name, _ = git.Output("", "config", "--global", "user.name")
-	}
-	if strings.TrimSpace(email) == "" {
-		email, _ = git.Output("", "config", "--global", "user.email")
-	}
-	if n := strings.TrimSpace(name); n != "" {
-		git.Output(repoRoot, "config", "user.name", n)
-	}
-	if e := strings.TrimSpace(email); e != "" {
-		git.Output(repoRoot, "config", "user.email", e)
-	}
+	name, email = git.ResolveIdentity(repoRoot)
+	git.Output(repoRoot, "config", "user.name", name)
+	git.Output(repoRoot, "config", "user.email", email)
 	return name, email
 }
 

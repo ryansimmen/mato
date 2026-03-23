@@ -610,3 +610,75 @@ func TestCommitGitignore_DoesNotCommitUnrelatedStagedFiles(t *testing.T) {
 		t.Errorf("expected unrelated.txt to still be staged, got status: %s", status)
 	}
 }
+
+func TestResolveIdentity_LocalConfig(t *testing.T) {
+	_, clone := initBareAndClone(t)
+
+	// initBareAndClone sets user.name="test" and user.email="test@test.com"
+	name, email := ResolveIdentity(clone)
+	if name != "test" {
+		t.Errorf("expected name %q, got %q", "test", name)
+	}
+	if email != "test@test.com" {
+		t.Errorf("expected email %q, got %q", "test@test.com", email)
+	}
+}
+
+func TestResolveIdentity_Defaults(t *testing.T) {
+	// Create a repo with no identity configured.
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init", repo)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	// Unset any inherited config by overriding with empty values.
+	cmd = exec.Command("git", "-C", repo, "config", "--unset", "user.name")
+	cmd.Run() // ignore error if not set
+	cmd = exec.Command("git", "-C", repo, "config", "--unset", "user.email")
+	cmd.Run()
+
+	// Isolate from global config by setting GIT_CONFIG_NOSYSTEM and
+	// pointing HOME/XDG_CONFIG_HOME to an empty dir.
+	emptyHome := t.TempDir()
+	t.Setenv("HOME", emptyHome)
+	t.Setenv("XDG_CONFIG_HOME", emptyHome)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(emptyHome, "nonexistent"))
+
+	name, email := ResolveIdentity(repo)
+	if name != "mato" {
+		t.Errorf("expected default name %q, got %q", "mato", name)
+	}
+	if email != "mato@local.invalid" {
+		t.Errorf("expected default email %q, got %q", "mato@local.invalid", email)
+	}
+}
+
+func TestResolveIdentity_PartialConfig(t *testing.T) {
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init", repo)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	// Isolate from global config.
+	emptyHome := t.TempDir()
+	t.Setenv("HOME", emptyHome)
+	t.Setenv("XDG_CONFIG_HOME", emptyHome)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(emptyHome, "nonexistent"))
+
+	// Set only user.name, leave email unset.
+	cmd = exec.Command("git", "-C", repo, "config", "user.name", "partial-user")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git config user.name: %v\n%s", err, out)
+	}
+
+	name, email := ResolveIdentity(repo)
+	if name != "partial-user" {
+		t.Errorf("expected name %q, got %q", "partial-user", name)
+	}
+	if email != "mato@local.invalid" {
+		t.Errorf("expected default email %q, got %q", "mato@local.invalid", email)
+	}
+}

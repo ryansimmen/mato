@@ -117,6 +117,32 @@ func EnsureGitignoreContains(repoRoot, pattern string) (bool, error) {
 	return true, nil
 }
 
+// ResolveIdentity reads git user.name and user.email from the local repo
+// config in repoRoot, falling back to global config, and applying defaults
+// ("mato" / "mato@local.invalid") when neither is set. Returns the resolved
+// name and email.
+func ResolveIdentity(repoRoot string) (name, email string) {
+	name, _ = Output(repoRoot, "config", "user.name")
+	if strings.TrimSpace(name) == "" {
+		name, _ = Output("", "config", "--global", "user.name")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "mato"
+	}
+
+	email, _ = Output(repoRoot, "config", "user.email")
+	if strings.TrimSpace(email) == "" {
+		email, _ = Output("", "config", "--global", "user.email")
+	}
+	email = strings.TrimSpace(email)
+	if email == "" {
+		email = "mato@local.invalid"
+	}
+
+	return name, email
+}
+
 // CommitGitignore stages .gitignore and commits it with the given message.
 // This is a simple wrapper that lets callers decide when to commit, rather
 // than coupling the commit to the file modification.
