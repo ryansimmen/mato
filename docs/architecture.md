@@ -183,9 +183,9 @@ State meanings:
 | `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, `ON_FAILURE` requeue, or review rejection | host `SelectAndClaimTask` moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
 | `in-progress/` | task owned by one agent | host `SelectAndClaimTask` | host `postAgentPush` (to `ready-for-review/`), `ON_FAILURE`, or host orphan recovery |
 | `ready-for-review/` | branch pushed, waiting for AI review | host `postAgentPush` | host `postReviewAction` moves to `ready-to-merge/` on approval, or to `backlog/` on rejection |
-| `ready-to-merge/` | reviewed and approved, waiting for host merge | host `postReviewAction` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict, to `failed/` if the task branch is missing, or leaves it in place if the squash commit cannot be pushed |
+| `ready-to-merge/` | reviewed and approved, waiting for host merge | host `postReviewAction` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict or missing task branch (if retries remain), to `failed/` if the task branch is missing and `max_retries` is exhausted, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
-| `failed/` | failure record budget exhausted, merge blocked by a missing task branch, or circular dependency detected | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), merge-queue missing-branch handling, or `ReconcileReadyQueue` moves cycle members from `waiting/` to `failed/` with `<!-- cycle-failure: ... -->` markers | no normal exit |
+| `failed/` | failure record budget exhausted or circular dependency detected | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), merge-queue failure handling (squash conflict or missing branch with retries exhausted), or `ReconcileReadyQueue` moves cycle members from `waiting/` to `failed/` with `<!-- cycle-failure: ... -->` markers | no normal exit |
 Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
 ## 5. Dependency Resolution
 `queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied and moves cyclic tasks to `failed/`.
@@ -266,8 +266,8 @@ Affects: internal/runner/runner.go, internal/runner/runner_test.go
 
 ### Conflict and failure handling
 Merge failure handling is branch-specific:
-1. Missing task branch: append `<!-- failure: merge-queue ... -->` and move the task `ready-to-merge/ -> failed/`.
-2. Squash merge conflict: append `<!-- failure: merge-queue ... -->`, move the task `ready-to-merge/ -> backlog/`, and delete the stale task branch locally and on `origin` so a future agent run can push a fresh branch.
+1. Missing task branch: append `<!-- failure: merge-queue ... -->` and move the task to `backlog/` if retries remain, or `failed/` if `max_retries` is exhausted.
+2. Squash merge conflict: append `<!-- failure: merge-queue ... -->`, move the task to `backlog/` (or `failed/` if retries exhausted), and delete the stale task branch locally and on `origin` so a future agent run can push a fresh branch.
 3. Push failure after a successful squash commit: append `<!-- failure: merge-queue ... -->` but leave the task file in `ready-to-merge/` for retry on the next merge pass.
 4. Parse errors are also recorded as merge-queue failures and requeued to `backlog/`.
 ## 7. Review Agent
