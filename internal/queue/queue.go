@@ -120,6 +120,16 @@ var ErrDestinationExists = errors.New("destination already exists")
 // Tests override it to simulate EXDEV without separate filesystems.
 var linkFn = os.Link
 
+// readFileFn, openFileFn, and writeFileFn are used by crossDeviceMove.
+// Tests override them to inject failures without relying on filesystem
+// permissions, which are not portable across root/container environments.
+var readFileFn = os.ReadFile
+var openFileFn = os.OpenFile
+var writeFileFn = func(f *os.File, data []byte) error {
+	_, err := f.Write(data)
+	return err
+}
+
 // AtomicMove atomically moves src to dst using os.Link + os.Remove to prevent
 // TOCTOU races. If the destination already exists, it returns
 // ErrDestinationExists. On cross-device links (EXDEV), it falls back to
@@ -147,18 +157,18 @@ func AtomicMove(src, dst string) error {
 // filesystems. It uses O_CREATE|O_EXCL to atomically fail if the destination
 // already exists, then copies the content and removes the source.
 func crossDeviceMove(src, dst string) error {
-	data, err := os.ReadFile(src)
+	data, err := readFileFn(src)
 	if err != nil {
 		return fmt.Errorf("atomic move %s → %s: read source: %w", src, dst, err)
 	}
-	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := openFileFn(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("atomic move %s → %s: %w", src, dst, ErrDestinationExists)
 		}
 		return fmt.Errorf("atomic move %s → %s: create destination: %w", src, dst, err)
 	}
-	if _, err := f.Write(data); err != nil {
+	if err := writeFileFn(f, data); err != nil {
 		f.Close()
 		os.Remove(dst)
 		return fmt.Errorf("atomic move %s → %s: write destination: %w", src, dst, err)
