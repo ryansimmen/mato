@@ -120,13 +120,17 @@ func laterStateDuplicateDir(tasksDir, name string) string {
 // already exists. Callers can check for it with errors.Is.
 var ErrDestinationExists = errors.New("destination already exists")
 
+// linkFn is the function used by AtomicMove to create hard links.
+// Tests override it to simulate EXDEV without separate filesystems.
+var linkFn = os.Link
+
 // AtomicMove atomically moves src to dst using os.Link + os.Remove to prevent
 // TOCTOU races. If the destination already exists, it returns
 // ErrDestinationExists. On cross-device links (EXDEV), it falls back to
 // O_CREATE|O_EXCL + copy + remove, which is still TOCTOU-safe at the
 // destination.
 func AtomicMove(src, dst string) error {
-	if err := os.Link(src, dst); err != nil {
+	if err := linkFn(src, dst); err != nil {
 		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
 			return fmt.Errorf("atomic move %s → %s: %w", src, dst, ErrDestinationExists)
 		}
