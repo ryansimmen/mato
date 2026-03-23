@@ -15,26 +15,28 @@ Estimated effort: ~1.5 days.
 
 | Task | Effort |
 |------|--------|
-| `internal/graph/graph.go` — `Build()` + `Show()` entry point producing `GraphData` | 2.5 hours |
-| `internal/graph/graph_test.go` — unit tests (empty, linear, diamond, cycle, mixed states) | 2 hours |
-| `internal/graph/render_text.go` — indented tree text renderer | 2 hours |
-| `internal/graph/render_dot.go` — DOT format renderer | 1.5 hours |
-| `internal/graph/render_json.go` — JSON format renderer | 1 hour |
+| `internal/graph/graph.go` — types, `Build()`, `Show()`/`ShowTo()` | 3 hours |
+| `internal/graph/graph_test.go` — unit tests | 2.5 hours |
+| `internal/graph/render_text.go` — text renderer | 2 hours |
+| `internal/graph/render_dot.go` — DOT renderer | 1.5 hours |
+| `internal/graph/render_json.go` — JSON renderer | 1 hour |
 | `internal/graph/render_test.go` — renderer unit tests | 2 hours |
 | `cmd/mato/main.go` — `newGraphCmd()` cobra subcommand | 0.5 hours |
 | `cmd/mato/main_test.go` — subcommand wiring tests | 0.5 hours |
 | Integration tests in `internal/integration/` | 1 hour |
-| Documentation updates (README, docs/architecture.md) | 0.5 hours |
+| Documentation updates | 0.5 hours |
 | **Total** | **~1.5 days** |
 
 ## Goals
 
 - Visualize dependency topology so users understand why tasks are blocked.
 - Expose the rich blocking-reason data that `dag.Analyze()` already produces
-  (waiting, unknown, external, ambiguous, cycle).
+  (waiting, unknown, external, ambiguous, cycle) for waiting tasks.
 - Reuse `PollIndex` and `DiagnoseDependencies()` — no new filesystem scanning.
 - Support machine-readable output (DOT, JSON) for tooling integration.
 - Keep the command read-only with zero side effects.
+- Ensure no dependency silently vanishes from the graph — all `depends_on`
+  references are accounted for as edges, `HiddenDeps`, or `BlockDetails`.
 
 ## Non-Goals
 
@@ -44,6 +46,9 @@ Estimated effort: ~1.5 days.
   `--dry-run`.
 - No interactive mode or pager integration.
 - No graph mutation or "what-if" simulation.
+- No block-reason classification for non-waiting tasks. Only waiting tasks
+  are "blocked" in the mato runtime model. Non-waiting tasks show dependency
+  edges (satisfied/unsatisfied) and `HiddenDeps` but do not carry `BlockDetails`.
 
 ## CLI Specification
 
@@ -54,10 +59,10 @@ Implement `graph` as a normal Cobra subcommand, following the `status` and
 mato graph [flags]
 
 Flags:
-  --repo <path>        Path to git repository (default: current directory)
-  --tasks-dir <path>   Path to tasks directory (default: <repo>/.tasks)
+  --repo <path>           Path to git repository (default: current directory)
+  --tasks-dir <path>      Path to tasks directory (default: <repo>/.tasks)
   --format text|dot|json  Output format (default: text)
-  --all                Include completed and failed tasks (default: active only)
+  --all                   Include completed and failed tasks (default: active only)
 ```
 
 ### Exit Codes
@@ -88,13 +93,16 @@ if format != "text" && format != "dot" && format != "json" {
 
 By default, the graph shows only actionable tasks: `waiting/`, `backlog/`,
 `in-progress/`, `ready-for-review/`, and `ready-to-merge/`. Dependencies on
-completed tasks are recorded in each dependent node's `SatisfiedDeps` list
-and rendered as inline annotations (e.g., `(completed ✓)`) — no `Edge` or
-node is created for them.
+tasks not in the graph are recorded in each dependent node's `HiddenDeps`
+list with a status classification:
+- `"satisfied"` — dependency is in `safeCompleted` (completed and not ambiguous)
+- `"external"` — dependency is known but not completed (e.g., in `failed/`)
+- `"ambiguous"` — dependency ID exists in both `completed/` and a non-completed dir
+- `"unknown"` — dependency ID not found in any queue directory
 
 With `--all`, completed and failed tasks are included as full nodes with
-real `Edge` entries connecting them. This is useful for understanding the
-full dependency history of a task chain.
+real `Edge` entries connecting them. `HiddenDeps` is empty when all
+referenced tasks have in-graph nodes.
 
 ## Design
 
@@ -119,21 +127,26 @@ The package is kept separate from `internal/dag/` because:
 ```go
 package graph
 
-// NodeState classifies a task's current queue position.
+// NodeState classifies a task's current queue position. Values match
+// the queue directory constants from queue.DirWaiting etc.
 type NodeState string
 
 const (
-    StateWaiting       NodeState = "waiting"
-    StateBacklog       NodeState = "backlog"
-    StateInProgress    NodeState = "in-progress"
-    StateReadyReview   NodeState = "ready-for-review"
-    StateReadyMerge    NodeState = "ready-to-merge"
-    StateCompleted     NodeState = "completed"
-    StateFailed        NodeState = "failed"
+    StateWaiting     NodeState = NodeState(queue.DirWaiting)
+    StateBacklog     NodeState = NodeState(queue.DirBacklog)
+    StateInProgress  NodeState = NodeState(queue.DirInProgress)
+    StateReadyReview NodeState = NodeState(queue.DirReadyReview)
+    StateReadyMerge  NodeState = NodeState(queue.DirReadyMerge)
+    StateCompleted   NodeState = NodeState(queue.DirCompleted)
+    StateFailed      NodeState = NodeState(queue.DirFailed)
 )
 
 // GraphNode represents a single task in the dependency graph.
 type GraphNode struct {
+    // Key uniquely identifies this node. Format: "state/filename"
+    // (e.g., "waiting/add-auth-tests.md"). Edge endpoints and Cycles
+    // entries reference this value.
+    Key           string        `json:"key"`
     ID            string        `json:"id"`
     Filename      string        `json:"filename"`
     Title         string        `json:"title,omitempty"`
@@ -141,102 +154,240 @@ type GraphNode struct {
     Priority      int           `json:"priority"`
     DependsOn     []string      `json:"depends_on,omitempty"`
     FailureCount  int           `json:"failure_count,omitempty"`
+    // BlockDetails is populated only for waiting-state nodes (the only
+    // state where tasks can be "blocked" in the mato runtime model).
     BlockDetails  []BlockDetail `json:"block_details,omitempty"`
     IsCycleMember bool          `json:"is_cycle_member,omitempty"`
-    // SatisfiedDeps lists dependency IDs that are satisfied but whose
-    // source task has no corresponding node in the graph (e.g., a
-    // completed dep when --all=false). Renderers use this for inline
-    // annotations rather than producing edges to nonexistent nodes.
-    SatisfiedDeps []string      `json:"satisfied_deps,omitempty"`
+    // HiddenDeps lists dependencies whose target task has no node in the
+    // graph. Each entry carries a status classification so no dependency
+    // silently vanishes from the output.
+    HiddenDeps    []HiddenDep   `json:"hidden_deps,omitempty"`
 }
 
-// BlockDetail describes why a specific dependency blocks this task.
-// Named to parallel dag.BlockDetail, with string Reason for JSON output.
+// BlockDetail describes why a specific dependency blocks a waiting task.
+// Only attached to waiting-state nodes. The string Reason is converted
+// from dag.BlockReason via blockReasonString().
 type BlockDetail struct {
     DependencyID string `json:"dependency_id"`
     Reason       string `json:"reason"` // "waiting", "unknown", "external", "ambiguous"
 }
 
-// Edge represents a dependency relationship.
+// blockReasonString converts dag.BlockReason to its string representation.
+//
+//   dag.BlockedByWaiting   → "waiting"
+//   dag.BlockedByUnknown   → "unknown"
+//   dag.BlockedByExternal  → "external"
+//   dag.BlockedByAmbiguous → "ambiguous"
+func blockReasonString(r dag.BlockReason) string
+
+// HiddenDep represents a dependency whose target task is not present as a
+// node in the graph (e.g., completed or failed tasks when --all=false).
+type HiddenDep struct {
+    DependencyID string `json:"dependency_id"`
+    // Status classifies the hidden dependency using the same sets
+    // as DiagnoseDependencies:
+    //   "satisfied"  — dep ID in safeCompleted
+    //   "external"   — dep ID known but not completed (e.g., in failed/)
+    //   "ambiguous"  — dep ID in both completed/ and a non-completed dir
+    //   "unknown"    — dep ID not in any queue directory
+    Status       string `json:"status"`
+}
+
+// Edge represents a dependency relationship between two in-graph nodes.
 type Edge struct {
-    From      string `json:"from"`       // depended-on task ID
-    To        string `json:"to"`         // dependent task ID
+    From      string `json:"from"`       // Key of depended-on node
+    To        string `json:"to"`         // Key of dependent node
     Satisfied bool   `json:"satisfied"`
 }
 
 // ParseFailure records a task file that could not be parsed.
 // Its filename stem is still registered in ID sets by BuildIndex,
-// so it may affect dependency resolution.
+// so it may affect dependency resolution. The Path field from
+// queue.ParseFailure is intentionally omitted to avoid exposing
+// absolute filesystem paths in output.
 type ParseFailure struct {
     Filename string `json:"filename"`
     State    string `json:"state"`
     Error    string `json:"error"`
 }
 
+// DuplicateWarning records a waiting-directory file that shares its
+// meta.ID with another waiting file. The runtime retains only the
+// first file (by filename sort order) for DAG analysis; the duplicate
+// is still shown as a graph node so it does not silently vanish.
+type DuplicateWarning struct {
+    Filename    string `json:"filename"`
+    DuplicateOf string `json:"duplicate_of"` // filename of the retained file
+    SharedID    string `json:"shared_id"`
+}
+
 // GraphData is the complete graph structure ready for rendering.
 type GraphData struct {
-    Nodes         []GraphNode    `json:"nodes"`
-    Edges         []Edge         `json:"edges"`
-    Cycles        [][]string     `json:"cycles,omitempty"`
-    ParseFailures []ParseFailure `json:"parse_failures,omitempty"`
+    Nodes             []GraphNode        `json:"nodes"`
+    Edges             []Edge             `json:"edges"`
+    // Cycles contains SCCs as lists of node keys (not semantic IDs).
+    Cycles            [][]string         `json:"cycles,omitempty"`
+    ParseFailures     []ParseFailure     `json:"parse_failures,omitempty"`
+    DuplicateWarnings []DuplicateWarning `json:"duplicate_warnings,omitempty"`
 }
 ```
+
+### Alias Resolution
+
+`BuildIndex` registers both the filename stem and the frontmatter `meta.ID`
+into `allIDs`, `completedIDs`, and `nonCompletedIDs` for every task file
+(see `internal/queue/index.go` lines 148–208). A `depends_on` reference
+can resolve via either alias.
+
+`Build()` constructs an alias map during node creation for **display-level
+edge resolution** — determining which nodes to draw edges between:
+
+```go
+// aliasMap maps dependency references (stems and meta.IDs) to the
+// node keys they resolve to.
+aliasMap := make(map[string][]string) // ref → []nodeKey
+```
+
+For each `TaskSnapshot` that becomes a graph node:
+1. `frontmatter.TaskFileStem(snap.Filename)` → node key
+2. `snap.Meta.ID` → node key (if different from stem)
+
+**Important**: This alias map is broader than the runtime waiting-DAG's
+resolution. The runtime DAG only uses `snap.Meta.ID` for waiting-to-waiting
+edges (see `internal/dag/dag.go` lines 85–105), while filename stems
+provide resolution for completed IDs. The graph intentionally uses the
+broader alias resolution to show structural relationships across all
+states. See Design Decision "Display edges vs runtime analysis."
+
+### Status Classification
+
+Before resolving edges, `Build()` constructs the same classification sets
+as `DiagnoseDependencies`:
+
+```go
+safeCompleted := copySet(idx.CompletedIDs())
+ambiguousIDs := make(map[string]struct{})
+for id := range idx.NonCompletedIDs() {
+    if _, dup := safeCompleted[id]; dup {
+        delete(safeCompleted, id)
+        ambiguousIDs[id] = struct{}{}
+    }
+}
+```
+
+Each dependency reference is classified:
+1. Is the reference in `safeCompleted`? → satisfied
+2. Is the reference in `ambiguousIDs`? → ambiguous (unsatisfied)
+3. Is the reference in `idx.AllIDs()` but not completed? → external (unsatisfied)
+4. Is the reference not in `idx.AllIDs()`? → unknown (unsatisfied)
+
+This classification determines `Edge.Satisfied` and `HiddenDep.Status`. It
+is independent of alias map cardinality — ambiguity is defined solely by
+`ambiguousIDs` membership, matching runtime semantics. When a single
+dependency reference fans out to multiple in-graph node keys via the
+alias map, an edge is created to each target, all sharing the same
+satisfied/unsatisfied status from classification. This fanout is not
+the same as runtime ambiguity and is not labeled "ambiguous" unless
+the ID is also in `ambiguousIDs`.
+
+### Cycle Key Mapping
+
+Cycle member IDs from `diag.Analysis.Cycles` are semantic IDs (`snap.Meta.ID`)
+from retained waiting tasks. They are mapped to node keys through a
+**waiting-scoped lookup**, not the global alias map:
+
+```go
+// waitingIDToKey maps retained waiting meta.IDs to their node keys.
+waitingIDToKey := make(map[string]string)
+for id, filename := range diag.RetainedFiles {
+    waitingIDToKey[id] = queue.DirWaiting + "/" + filename
+}
+
+for _, scc := range diag.Analysis.Cycles {
+    var keys []string
+    for _, id := range scc {
+        if key, ok := waitingIDToKey[id]; ok {
+            keys = append(keys, key)
+        }
+    }
+    if len(keys) > 0 {
+        sort.Strings(keys)
+        data.Cycles = append(data.Cycles, keys)
+    }
+}
+```
+
+This ensures non-waiting nodes with coincidentally matching IDs are never
+included in cycles.
 
 ### Build Function
 
 ```go
 // Build constructs the dependency graph from a PollIndex.
 // If showAll is true, completed and failed tasks are included as nodes.
-// If showAll is false, only actionable tasks are shown; completed
-// dependencies are recorded in SatisfiedDeps on the dependent node.
+// If showAll is false, only actionable tasks are shown; off-graph
+// dependencies are recorded in HiddenDeps with status classification.
 func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData
 ```
 
-The implementation:
+Steps:
 
 1. Calls `queue.DiagnoseDependencies(tasksDir, idx)` to get the DAG analysis
    for waiting-task blocking reasons and cycle classification.
-2. Iterates `idx.TasksByState(dir)` for each directory in `queue.AllDirs`
-   to build nodes. For `showAll=false`, skips `DirCompleted` and `DirFailed`.
-   For `showAll=true`, includes all directories.
-3. Builds a lookup map from task ID → `*GraphNode` for edge resolution.
-   Within `waiting/`, duplicate IDs are deduplicated (first filename wins,
-   matching `DiagnoseDependencies` which skips duplicates). Across
-   directories, duplicate IDs are **not** resolved winner-take-all — if an
-   ID exists in both `completed/` and a non-completed directory, it is
-   ambiguous and treated as unsatisfied (see step 4).
-4. Derives `safeCompleted` from `idx.CompletedIDs()` by removing any ID
-   that also appears in `idx.NonCompletedIDs()` (the same ambiguous-ID
-   exclusion that `DiagnoseDependencies` performs). For each node with
-   `depends_on`, resolves each dependency ID:
-   - If the ID maps to an in-graph node, creates an `Edge` with
-     `Satisfied` set based on `safeCompleted`.
-   - If the ID is in `safeCompleted` but has no in-graph node (e.g.,
-     completed dep with `showAll=false`), appends it to the dependent
-     node's `SatisfiedDeps` — no `Edge` is created.
-   - If the ID is ambiguous, creates an unsatisfied `Edge` (for in-graph
-     targets) or a `BlockDetail` with `Reason: "ambiguous"` (for
-     off-graph targets).
-5. For waiting-task nodes, attaches `BlockDetails` from
-   `diag.Analysis.Blocked` and `IsCycleMember` from
-   `diag.Analysis.Cycles`.
-6. Sorts nodes by state order (waiting → backlog → in-progress →
-   ready-for-review → ready-to-merge → completed → failed), then by priority
-   ascending, then by filename — deterministic output.
-7. Sorts edges by (From, To) for deterministic output.
+2. Builds `safeCompleted` and `ambiguousIDs` sets (same derivation as
+   `DiagnoseDependencies`).
+3. Iterates `idx.TasksByState(dir)` for each directory in `queue.AllDirs`
+   to build nodes. For `showAll=false`, skips `queue.DirCompleted` and
+   `queue.DirFailed`. Each node's `Key` is `dir + "/" + snap.Filename`.
+   Title extracted via `frontmatter.ExtractTitle(snap.Filename, snap.Body)`.
+4. Builds `aliasMap` and `nodeByKey` lookup map. All waiting files
+   become nodes (including duplicates). Within `waiting/`, when multiple
+   files share the same `meta.ID`, the alias map entry points to the
+   retained file's node key (matching `diag.RetainedFiles`), and a
+   `DuplicateWarning` is emitted for each non-retained file. Duplicate
+   files are still full graph nodes — they are not skipped — so nothing
+   silently vanishes. Their `BlockDetails` and `IsCycleMember` are not
+   populated (only the retained file participates in DAG analysis).
+5. For each node with `depends_on`, resolves each reference:
+   - Skip empty strings
+   - **Classify** the reference using `safeCompleted`, `ambiguousIDs`,
+     `idx.AllIDs()`
+   - **Route**: look up reference in `aliasMap` for in-graph target(s)
+     - If target(s) exist → create `Edge`(s) with `Satisfied` from
+       classification
+     - If no target → create `HiddenDep` with status from classification
+   - Note: a waiting node may have BOTH an `Edge` (from alias resolution)
+     AND a `BlockDetail` (from `DiagnoseDependencies`) for the same
+     dependency reference. This is correct — the edge shows the structural
+     relationship and the BlockDetail explains the runtime blocking reason.
+6. For waiting-state nodes only, attaches `BlockDetails` from
+   `diag.Analysis.Blocked` (converting via `blockReasonString()`) and
+   sets `IsCycleMember` from cycle membership.
+7. Maps cycle member IDs to node keys using `waitingIDToKey` (see Cycle Key
+   Mapping above). Sets `IsCycleMember: true` on corresponding nodes.
+8. Sorts nodes by state order (`queue.AllDirs`), then priority ascending,
+   then filename — deterministic output.
+9. Sorts edges by (From, To). Sorts `Cycles` by first element. Sorts
+   `HiddenDeps` by `DependencyID` within each node.
 
-### Entry Point Function
+### Entry Point Functions
 
-The graph package exposes a `Show` function that mirrors the
-`status.Show(repoRoot, tasksDir)` pattern — the caller passes raw flag
-values and the function handles git-root resolution, index building, and
-rendering internally.
+The graph package exposes `Show` and `ShowTo`, matching the
+`status.Show`/`status.ShowTo` pattern:
 
 ```go
-// Show resolves the tasks directory, builds the dependency graph, and
+// Show writes the dependency graph to os.Stdout.
+func Show(repoRoot, tasksDir, format string, showAll bool) error {
+    return ShowTo(os.Stdout, repoRoot, tasksDir, format, showAll)
+}
+
+// ShowTo resolves the tasks directory, builds the dependency graph, and
 // writes it to w in the requested format. repoRoot and tasksDir follow
 // the same resolution semantics as status.ShowTo.
-func Show(w io.Writer, repoRoot, tasksDir, format string, showAll bool) error {
+func ShowTo(w io.Writer, repoRoot, tasksDir, format string, showAll bool) error {
+    if format != "text" && format != "dot" && format != "json" {
+        return fmt.Errorf("unsupported format %q", format)
+    }
     resolvedRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
     if err != nil {
         return err
@@ -246,6 +397,15 @@ func Show(w io.Writer, repoRoot, tasksDir, format string, showAll bool) error {
         tasksDir = filepath.Join(repoRoot, ".tasks")
     }
     idx := queue.BuildIndex(tasksDir)
+    // Fail on directory-level read errors — the index is incomplete
+    // and the graph would be silently partial. File-level warnings
+    // (e.g., invalid affects globs) are non-fatal and do not prevent
+    // rendering, matching how doctor separates the two cases.
+    for _, bw := range idx.BuildWarnings() {
+        if !isGlobWarning(bw) {
+            return fmt.Errorf("incomplete index: %s: %v", bw.State, bw.Err)
+        }
+    }
     data := Build(tasksDir, idx, showAll)
     switch format {
     case "dot":
@@ -297,20 +457,24 @@ in-progress/
 Design principles for the text output:
 
 - **Grouped by state**: waiting first (most interesting), then backlog,
-  in-progress, ready-for-review, ready-to-merge.
+  in-progress, ready-for-review, ready-to-merge. Follows `queue.AllDirs` order.
 - **Dependency trees are inline**: each task shows its `depends_on` entries
   indented below it, with status annotations.
-- **Status indicators**: `✓` completed, `⟳` in-progress, `⚠` cycle/blocked,
-  `✗` failed. No emoji beyond these established Unicode symbols.
+- **Status indicators**: `✓` satisfied, `⟳` in-progress, `⚠` cycle/blocked,
+  `✗` external/unknown. No emoji beyond these established Unicode symbols.
+- **HiddenDeps rendered inline**: `(completed ✓)` for satisfied,
+  `(external ✗)` for external, `(ambiguous ⚠)` for ambiguous,
+  `(unknown ?)` for unknown.
 - **Standalone tasks** (no deps, no dependents) are listed with just their
   priority.
 - **No agent attribution** in v1. `TaskSnapshot` does not carry a
-  `ClaimedBy` field, and the `<!-- claimed-by: ... -->` comment is stripped
-  before frontmatter parsing. Showing the agent ID would require re-reading
-  each in-progress file via `queue.ParseClaimedBy()`, adding filesystem I/O
-  that the graph package otherwise avoids. A future version could add this
-  by either extending `TaskSnapshot` with a `ClaimedBy` field or accepting
-  the extra I/O.
+  `ClaimedBy` field. HTML comments (`<!-- claimed-by: ... -->`) are skipped
+  before frontmatter detection and stripped from the returned body by
+  `frontmatter.stripHTMLCommentLines`; `taskfile.ParseClaimedBy()` extracts
+  them independently via regex. Showing the agent ID would require calling
+  `queue.ParseClaimedBy()` per in-progress file, adding filesystem I/O
+  that the graph package otherwise avoids. A future version could extend
+  `TaskSnapshot` with a `ClaimedBy` field.
 - **Cycle members** are called out explicitly.
 - **Deduplication**: every task appears as a primary node under its state
   heading with full detail. When the same task appears as a dependency
@@ -320,9 +484,11 @@ Design principles for the text output:
 ### DOT Renderer
 
 Produces valid Graphviz DOT for piping to `dot -Tpng` or `dot -Tsvg`.
+DOT node identifiers use the node `Key` (state/filename), which is always
+unique and avoids collisions when duplicate semantic IDs exist across states.
 The following example uses `--all` to include completed task nodes as
 full graph entries with real edges; without `--all`, completed
-dependencies appear only in `SatisfiedDeps` and are not rendered as
+dependencies appear only in `HiddenDeps` and are not rendered as
 nodes or edges.
 
 ```dot
@@ -331,18 +497,26 @@ digraph mato {
   node [shape=box, style=filled];
 
   // Nodes
-  "setup-http-client" [label="setup-http-client\n(completed)", fillcolor="#90EE90"];
-  "add-retry-logic"   [label="add-retry-logic\npriority: 10\n(backlog)", fillcolor="#ADD8E6"];
-  "setup-test-fixtures" [label="setup-test-fixtures\npriority: 15\n(in-progress)", fillcolor="#FFD700"];
-  "add-auth-tests"    [label="add-auth-tests\npriority: 25\n(waiting)", fillcolor="#D3D3D3"];
-  "refactor-auth"     [label="refactor-auth\npriority: 20\n(waiting, blocked)", fillcolor="#D3D3D3"];
+  "completed/setup-http-client.md" [label="setup-http-client\n(completed)", fillcolor="#90EE90"];
+  "backlog/add-retry-logic.md"     [label="add-retry-logic\npriority: 10\n(backlog)", fillcolor="#ADD8E6"];
+  "in-progress/setup-test-fixtures.md" [label="setup-test-fixtures\npriority: 15\n(in-progress)", fillcolor="#FFD700"];
+  "waiting/add-auth-tests.md"      [label="add-auth-tests\npriority: 25\n(waiting)", fillcolor="#D3D3D3"];
+  "waiting/refactor-auth.md"       [label="refactor-auth\npriority: 20\n(waiting, blocked)", fillcolor="#D3D3D3"];
 
   // Edges
-  "setup-http-client" -> "add-retry-logic";
-  "setup-test-fixtures" -> "add-auth-tests" [style=dashed, color=red];
-  "add-auth-tests" -> "refactor-auth" [style=dashed, color=red];
+  "completed/setup-http-client.md" -> "backlog/add-retry-logic.md";
+  "in-progress/setup-test-fixtures.md" -> "waiting/add-auth-tests.md" [style=dashed, color=red];
+  "waiting/add-auth-tests.md" -> "waiting/refactor-auth.md" [style=dashed, color=red];
 }
 ```
+
+**Cycle edge rule**: An edge is rendered as a cycle edge (bold, red) when
+both `From` and `To` node keys appear in the **same** entry (SCC) of
+`GraphData.Cycles`. Checking the same SCC prevents mis-styling edges
+between nodes that belong to different independent cycles.
+
+**DOT escaping**: task IDs containing special characters (quotes,
+backslashes) are escaped in DOT node identifiers and labels.
 
 Color scheme:
 
@@ -374,13 +548,16 @@ get the full node and edge data for programmatic analysis.
 {
   "nodes": [
     {
+      "key": "backlog/add-retry-logic.md",
       "id": "add-retry-logic",
       "filename": "add-retry-logic.md",
       "title": "Add retry logic to HTTP client",
       "state": "backlog",
       "priority": 10,
       "depends_on": ["setup-http-client"],
-      "satisfied_deps": ["setup-http-client"]
+      "hidden_deps": [
+        {"dependency_id": "setup-http-client", "status": "satisfied"}
+      ]
     }
   ],
   "edges": [],
@@ -414,42 +591,99 @@ runtime behavior. No new analysis logic is needed; the graph simply
 annotates edges as satisfied or unsatisfied based on whether the dependency
 ID appears in `safeCompleted`.
 
-### 2. Edge target resolution uses the same ID semantics as the runtime
+### 2. Block details are waiting-task-only
 
-Dependency matching uses the existing stem+explicit-ID aliasing: a
-`depends_on` reference is resolved if it matches either the filename stem
-or the `meta.ID` of a task in any directory. This matches
-`BuildIndex()` in `index.go` which registers both values in `completedIDs`
-and `allIDs`. The graph does not invent new resolution semantics.
+Only waiting tasks can be "blocked" in the mato runtime model. Tasks in
+backlog, in-progress, ready-for-review, and ready-to-merge have already
+been promoted and are not subject to dependency-based blocking.
+`BlockDetails` are therefore only populated for waiting-state nodes.
+Non-waiting tasks show dependency edges with `Satisfied: true/false` and
+`HiddenDeps` but carry no `BlockDetails`. This avoids inventing new
+blocking semantics that don't exist in the runtime.
 
-When a `depends_on` reference resolves to a task node in the graph, an
-edge is created between them. When it resolves to a task not shown (e.g.,
-a completed task with `--all=false`), **no `Edge` is created** — instead
-the dependency ID is added to the dependent node's `SatisfiedDeps` list.
-This avoids DOT synthesizing implicit phantom nodes for `From` IDs that
-have no corresponding node definition, and keeps the JSON schema
-unambiguous: every `Edge.From` and `Edge.To` corresponds to a `Node.ID`
-in the same `GraphData`. Renderers use `SatisfiedDeps` for inline
-annotations (e.g., `setup-http-client (completed ✓)` in text output).
+### 3. Display edges vs runtime analysis
 
-When a `depends_on` reference is unresolved (not in `idx.AllIDs()`), no edge
-is created; instead the node carries a `BlockDetail` with `Reason: "unknown"`.
+The graph serves two purposes: (1) show structural dependency relationships
+between tasks, and (2) explain why waiting tasks are blocked. These use
+different resolution semantics:
 
-### 3. Ambiguous IDs produce warning annotations, not errors
+**Edges** use the full alias resolution available from `BuildIndex` — both
+filename stems and frontmatter `meta.ID` values across all states. This
+gives a complete "what depends on what" picture. A waiting task referencing
+another waiting task's filename stem will produce a display edge even though
+the runtime waiting-DAG (which uses only `meta.ID` for waiting-to-waiting
+matching) does not analyze that as a waiting dependency.
 
-When a dependency ID maps to multiple tasks via stem/explicit-ID aliasing,
-the graph annotates the edge as ambiguous (matching the
-`BlockedByAmbiguous` classification from `dag.Analyze()`) rather than
-failing the command. This is consistent with how the runtime handles
-ambiguity: the task stays blocked with a warning, not an error.
+**BlockDetails** come strictly from `DiagnoseDependencies` and reflect
+actual runtime blocking classification. They are attached only to waiting
+nodes and use the runtime's semantic-ID-based analysis.
 
-### 4. Tasks with no dependencies and no dependents are included
+A node can carry both an `Edge` to another node and a `BlockDetail` for
+the same dependency when the display alias resolution finds the target but
+the runtime classifies it differently (e.g., a stem reference to a waiting
+task classified as `BlockedByExternal`). This is intentional: the edge
+shows the user where the dependency actually points, and the BlockDetail
+explains how the runtime treats it.
+
+### 4. Status classification matches the runtime exactly
+
+Dependency satisfaction uses the same `safeCompleted`, `ambiguousIDs`, and
+`idx.AllIDs()` derivation as `DiagnoseDependencies`. Alias map cardinality
+(one reference mapping to multiple node keys) does NOT determine ambiguity
+status. Ambiguity is defined solely by `ambiguousIDs` membership.
+
+### 5. Node keys are unique across the graph
+
+The `Key` field (`"state/filename"`) uniquely identifies each node. This
+handles the case where the same semantic `meta.ID` appears in multiple
+states (which the runtime treats as ambiguous). `Edge.From` and `Edge.To`
+reference node keys, ensuring every edge endpoint has exactly one
+corresponding node in the JSON/DOT output.
+
+### 6. Cycle key mapping is waiting-scoped
+
+Cycle members from `diag.Analysis.Cycles` are mapped to node keys through
+a waiting-only lookup (`diag.RetainedFiles`), not the global alias map.
+This prevents non-waiting nodes with matching IDs from being incorrectly
+marked as cycle members.
+
+### 7. No dependency silently vanishes
+
+Every `depends_on` reference is accounted for as either:
+- An `Edge` to an in-graph node
+- A `HiddenDep` with status classification
+- A `BlockDetail` (waiting nodes only, from `DiagnoseDependencies`)
+
+The `HiddenDeps` field ensures that off-graph unsatisfied dependencies
+(e.g., failed tasks when `showAll=false`) are visible to users and
+machine consumers.
+
+Duplicate waiting files (sharing a `meta.ID`) are kept as full graph
+nodes and surfaced via `DuplicateWarnings`, rather than being silently
+skipped. Directory-level build warnings (read failures) cause `ShowTo`
+to return an error rather than rendering a silently partial graph.
+File-level warnings (e.g., invalid affects globs) are non-fatal and
+do not prevent rendering.
+
+### 8. Ambiguous IDs produce warning annotations, not errors
+
+Runtime ambiguity (an ID in both `completedIDs` and `nonCompletedIDs`) is
+classified as `"ambiguous"`, matching `BlockedByAmbiguous` from
+`dag.Analyze()`. This is a distinct concept from alias-map fanout, where
+one dependency reference resolves to multiple in-graph node keys (e.g.,
+the same filename stem in two non-completed directories). Fanout produces
+multiple edges — one per target — each with its own satisfied/unsatisfied
+status from classification. Fanout edges are not labeled "ambiguous"
+unless the underlying ID is also in `ambiguousIDs`. The graph does not
+overload the runtime's ambiguity semantics.
+
+### 9. Tasks with no dependencies and no dependents are included
 
 Standalone tasks (no `depends_on`, not referenced by any other task's
 `depends_on`) are shown as leaf nodes. This gives a complete picture of
 the queue and avoids the surprise of tasks "disappearing" from the graph.
 
-### 5. DOT output uses `rankdir=LR` (left-to-right)
+### 10. DOT output uses `rankdir=LR` (left-to-right)
 
 Dependency graphs are most readable when the flow goes from left
 (prerequisites) to right (dependents), matching the natural reading
@@ -457,7 +691,7 @@ direction. Top-to-bottom (`rankdir=TB`) compresses wide graphs but
 makes long chains hard to follow. Users who prefer top-to-bottom can
 post-process the DOT output.
 
-### 6. No dependency on external graphviz tools at runtime
+### 11. No dependency on external graphviz tools at runtime
 
 `mato graph --format dot` outputs raw DOT text to stdout. The user pipes
 it to `dot`, `neato`, or any other Graphviz tool. mato does not invoke
@@ -465,7 +699,7 @@ Graphviz itself, keeping the dependency footprint at zero external tools.
 This is consistent with mato's existing approach: structured data on
 stdout, rendering left to the consumer.
 
-### 7. Text renderer handles duplicate appearances
+### 12. Text renderer handles duplicate appearances
 
 A task may appear both as a primary node (listed under its state) and as a
 dependency reference (indented under another task). The text renderer
@@ -473,21 +707,11 @@ deduplicates by showing the full detail at the primary listing and using
 a short reference (ID + state annotation) when it appears as a dependency.
 This prevents redundant output in diamond-shaped graphs.
 
-### 8. Every edge endpoint has a corresponding node
-
-`Edge.From` and `Edge.To` always reference an `ID` that appears in the
-`Nodes` list. Dependencies whose source task has no node in the graph
-(e.g., completed tasks when `showAll=false`) are recorded in the
-dependent node's `SatisfiedDeps` field instead of as `Edge` entries. This
-prevents DOT from synthesizing implicit phantom nodes for dangling `From`
-references, and keeps the JSON schema self-consistent: a consumer can
-join edges to nodes without encountering missing IDs.
-
 ## Integration with Existing Code
 
 ### PollIndex reuse
 
-`Build()` accepts a `*queue.PollIndex`. When called from `Show()`, the
+`Build()` accepts a `*queue.PollIndex`. When called from `ShowTo()`, the
 index is built once via `queue.BuildIndex(tasksDir)`. This matches the pattern
 used by `gatherStatus()` in `internal/status/status_gather.go`.
 
@@ -525,13 +749,17 @@ The graph package consumes only existing public APIs from `queue`, `dag`,
 - `queue.BuildIndex(tasksDir)` — build the index
 - `queue.DiagnoseDependencies(tasksDir, idx)` — waiting-task analysis
 - `queue.AllDirs` — canonical directory list for iteration
+- `queue.DirWaiting`, `queue.DirCompleted`, `queue.DirFailed` — state constants
 - `idx.TasksByState(dir)` — iterate tasks per state
 - `idx.CompletedIDs()` — base completed set (before ambiguous-ID exclusion)
 - `idx.NonCompletedIDs()` — IDs in non-completed dirs (for safeCompleted derivation)
-- `idx.AllIDs()` — resolve dependency references
+- `idx.AllIDs()` — all known IDs for reference resolution
 - `idx.ParseFailures()` — files that failed parsing (for warning output)
-- `git.Output(repoRoot, ...)` — resolve git root (in `Show()`)
+- `idx.BuildWarnings()` — directory-level read failures (hard error) and
+  file-level glob warnings (non-fatal, ignored by graph)
+- `git.Output(repoRoot, ...)` — resolve git root (in `ShowTo()`)
 - `frontmatter.ExtractTitle(filename, body)` — derive task titles
+- `frontmatter.TaskFileStem(filename)` — filename stem for alias resolution
 
 No new methods or exported functions need to be added to existing packages.
 
@@ -540,21 +768,38 @@ No new methods or exported functions need to be added to existing packages.
 ### Phase 1: Core graph builder (internal/graph/)
 
 1. Create `internal/graph/graph.go` with the `GraphData`, `GraphNode`, `Edge`,
-   and `BlockDetail` types.
-2. Implement `Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData`.
-3. Implement `Show(w io.Writer, repoRoot, tasksDir, format string, showAll bool) error`
-   as the high-level entry point (git-root resolution, index build, render).
-4. Unit tests covering:
+   `BlockDetail`, `HiddenDep`, `ParseFailure`, `DuplicateWarning` types
+   and `blockReasonString()`.
+2. Implement `Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData`
+   with alias map construction, status classification, edge/HiddenDep routing,
+   and cycle key mapping.
+3. Implement `Show(repoRoot, tasksDir, format string, showAll bool) error` and
+   `ShowTo(w io.Writer, repoRoot, tasksDir, format string, showAll bool) error`.
+4. Unit tests in `internal/graph/graph_test.go` using `t.TempDir()` and
+   `queue.BuildIndex()` (PollIndex has unexported fields), covering:
    - Empty queue (no tasks in any directory)
    - Single task with no dependencies
    - Linear chain: A → B → C with mixed states
    - Diamond dependency: D depends on B and C, both depend on A
    - Cycle detection: mutual dependency and self-dependency
-   - `showAll=false` omits completed/failed nodes
-   - `showAll=true` includes them
-   - Ambiguous dependency IDs (ID exists in both completed/ and another directory)
-   - Duplicate waiting IDs (second file skipped, matching `DiagnoseDependencies`)
+   - `showAll=false` omits completed/failed nodes; completed deps in HiddenDep(satisfied)
+   - `showAll=false` with failed deps → HiddenDep(external)
+   - `showAll=true` includes completed/failed as nodes with real edges
+   - Alias resolution: depends_on uses filename stem vs meta.ID
+   - Stem alias to waiting task: edge exists, BlockDetail is external
+     (runtime DAG only matches by meta.ID, so stem is classified as external)
+   - Ambiguous IDs (completed + non-completed): HiddenDep(ambiguous) or unsatisfied edge
+   - Duplicate IDs only in completed (NOT ambiguous per runtime rules)
+   - Duplicate IDs only across non-completed states (NOT ambiguous unless also in completedIDs)
+   - Duplicate waiting IDs: both files are nodes, non-retained file gets
+     DuplicateWarning, alias map points to retained file only
+   - Parse failures: stem in ID sets, no node, listed in ParseFailures
+   - Build warnings: directory read failure → ShowTo returns error
+   - Invalid affects glob warning does NOT make ShowTo fail
+   - Cycle member with duplicate ID in non-waiting state under `--all`:
+     only waiting node in Cycles, non-waiting NOT marked IsCycleMember
    - Deterministic ordering (sorted by state, priority, filename)
+   - Node key uniqueness
 
 ### Phase 2: Renderers
 
@@ -562,11 +807,16 @@ No new methods or exported functions need to be added to existing packages.
 6. Implement `RenderDOT(w io.Writer, data GraphData)` in `render_dot.go`.
 7. Implement `RenderJSON(w io.Writer, data GraphData) error` in
    `render_json.go`.
-8. Unit tests for each renderer covering:
+8. Unit tests in `internal/graph/render_test.go` (using directly-constructed
+   `GraphData` structs — public fields) covering:
    - Empty graph
-   - Graph with cycles (text: cycle warning annotation; DOT: bold red edges)
+   - Graph with cycles (text: cycle warning annotation; DOT: bold red edges
+     identified by same-SCC membership)
    - Graph with blocked tasks (text: block reason; DOT: dashed red edges)
+   - HiddenDeps annotations (text: inline status; JSON: structured)
    - Deterministic output (byte-for-byte comparison)
+   - DOT escaping for special characters in task IDs
+   - JSON round-trip: marshal → unmarshal → compare
 
 ### Phase 3: CLI wiring
 
@@ -579,9 +829,10 @@ No new methods or exported functions need to be added to existing packages.
 
 ### Phase 4: Integration & docs
 
-12. Add integration tests in `internal/integration/` that set up a repo with
-    waiting/backlog/completed tasks using `testutil.SetupRepoWithTasks()`
-    and verify graph output for each format.
+12. Add integration tests in `internal/integration/graph_test.go` that set
+    up a repo with `testutil.SetupRepoWithTasks()`, place tasks in various
+    directories with dependency chains (including alias references and
+    ambiguous IDs), and validate `ShowTo` output for each format.
 13. Update `README.md` with `mato graph` in the commands section.
 14. Update `AGENTS.md` project layout with `internal/graph/`.
 15. Update `docs/architecture.md` to reference the graph command.
@@ -612,7 +863,7 @@ func newGraphCmd() *cobra.Command {
             if err != nil {
                 return err
             }
-            return graph.Show(os.Stdout, repo, graphTasksDir, format, showAll)
+            return graph.Show(repo, graphTasksDir, format, showAll)
         },
     }
 
@@ -640,27 +891,32 @@ an empty index and a valid empty graph at exit 0.
 
 ### Unit tests
 
-- `internal/graph/graph_test.go`: test `Build()` with constructed
-  `PollIndex` instances covering all dependency scenarios (empty, linear,
-  diamond, cycle, mixed states, showAll variants).
+- `internal/graph/graph_test.go`: test `Build()` with real filesystem
+  directories created via `t.TempDir()` and indexed via `queue.BuildIndex()`.
+  `PollIndex` has unexported fields and cannot be constructed directly.
+  Each test case creates the needed task files, calls `BuildIndex`, then
+  calls `Build()` and asserts on the resulting `GraphData`.
 - `internal/graph/render_test.go`: test each renderer against known
-  `GraphData` inputs with byte-exact expected output.
+  `GraphData` inputs (constructed directly — `GraphData` is a public struct
+  with public fields) with byte-exact expected output.
 
 ### Integration tests
 
 - `internal/integration/graph_test.go`: set up a real repo with
-  `testutil.SetupRepoWithTasks()`, place tasks in various directories
-  with dependency chains, run `graph.Build()`, and verify the graph
-  structure. Test all three output formats.
+  `testutil.SetupRepoWithTasks()`, validate `ShowTo` output for each
+  format. Covers the full path: git-root resolution → index build →
+  Build → render.
 
 ### Test patterns
 
 - Standard `testing` package, table-driven with `t.Run`.
 - Test naming: `TestBuild_EmptyQueue`, `TestBuild_LinearChain`,
-  `TestBuild_CycleDetection`, `TestRenderText_BlockedTask`, etc.
-- Use `t.TempDir()` for filesystem tests.
-- No mocks — the function-variable hook pattern is not needed since
-  `Build()` takes a `PollIndex` directly (pure data in, pure data out).
+  `TestBuild_AliasResolution`, `TestBuild_StemAliasToWaiting`,
+  `TestBuild_AmbiguousIDs`, `TestBuild_HiddenExternalDep`,
+  `TestBuild_CycleKeyMapping`, `TestRenderDOT_Escaping`, etc.
+- Use `t.TempDir()` for filesystem tests, `t.Helper()` in helpers.
+- No mocks — `Build()` tests use real filesystem + `BuildIndex()`.
+  Renderer tests use directly-constructed `GraphData` structs.
 
 ## Edge Cases
 
@@ -704,7 +960,8 @@ creates a self-referencing edge. The text renderer shows
 ### `depends_on` entries with empty strings
 
 Empty strings in `depends_on` arrays are skipped during edge creation,
-matching `dag.Analyze()` which also skips empty dependency strings.
+matching `dag.Analyze()` which also skips empty dependency strings. Also
+filtered by `frontmatter.ParseTaskData` which calls `filterEmpty`.
 
 ### Ambiguous dependency IDs
 
@@ -714,6 +971,38 @@ as `BlockedByAmbiguous` by `dag.Analyze()`. The graph marks the edge with
 `Reason: "ambiguous"` and the text renderer annotates it with `(ambiguous ⚠)`.
 This matches the runtime behavior where the task stays blocked rather than
 being silently promoted.
+
+This is distinct from alias-map fanout, where one reference resolves to
+multiple in-graph node keys that are not in `ambiguousIDs`. Fanout produces
+multiple edges, each with its own satisfied/unsatisfied status, but they are
+not labeled "ambiguous".
+
+### Duplicate waiting IDs
+
+When two files in `waiting/` share the same `meta.ID`, both files become
+graph nodes (unique keys via `state/filename`). The runtime retains only
+the first file (by filename sort order) for DAG analysis; the duplicate is
+recorded in `GraphData.DuplicateWarnings`. The alias map points only to
+the retained file's node key, so edges target the retained file. The
+duplicate node appears under its state heading but carries no `BlockDetails`
+or `IsCycleMember` (it is not in `diag.RetainedFiles`). Text output
+prints a warning about the duplicate.
+
+### Stem alias to waiting task
+
+A waiting task referencing another waiting task's filename stem (not its
+`meta.ID`) produces a display edge between the two nodes. However, the
+runtime DAG only matches waiting-to-waiting dependencies by `meta.ID`, so
+`DiagnoseDependencies` classifies the stem reference as `BlockedByExternal`.
+Both the edge and the `BlockDetail` coexist on the node — the edge shows
+the structural relationship, the BlockDetail explains the runtime behavior.
+
+### Hidden external dependencies
+
+When `showAll=false` and a task depends on a failed-state task, no edge is
+created (the failed task has no in-graph node). Instead, a `HiddenDep` with
+`Status: "external"` is added. This ensures the dependency is visible in
+all output formats.
 
 ### Very large queues
 
@@ -740,6 +1029,10 @@ can pipe to `less` or use `--format json` for programmatic access. The
    graph?** e.g., `mato graph add-retry-logic` shows only the subgraph
    reachable from that task. Useful for large queues, but adds complexity.
    Defer to v2.
+
+5. **Should `ReviewFailureCount` be exposed in graph output?** The
+   `TaskSnapshot` tracks it separately from `FailureCount`. v1 includes
+   `FailureCount` only; `ReviewFailureCount` can be added if users need it.
 
 ## Maintaining This Proposal
 
