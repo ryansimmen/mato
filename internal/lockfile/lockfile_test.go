@@ -481,6 +481,122 @@ func TestAcquire_StaleLockRemoveFailure(t *testing.T) {
 	}
 }
 
+// --- Acquire retry race condition tests ---
+
+func TestAcquire_RetryRace_StaleVanishes(t *testing.T) {
+	// Simulates the race where a stale lock file is removed by another
+	// process between OpenFile returning EEXIST and ReadFile. The first
+	// ReadFile returns ENOENT, triggering the continue path (line 91-93)
+	// in the retry loop. The second iteration's OpenFile succeeds.
+	orig := osReadFile
+	defer func() { osReadFile = orig }()
+
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "race.lock")
+
+	// Write a stale lock so the first OpenFile returns EEXIST.
+	if err := os.WriteFile(lockPath, []byte("4194300:99999999"), 0o644); err != nil {
+		t.Fatalf("writing stale lock: %v", err)
+	}
+
+	calls := 0
+	osReadFile = func(name string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			// Simulate lock vanishing before we can read it.
+			os.Remove(lockPath)
+			return nil, os.ErrNotExist
+		}
+		return orig(name)
+	}
+
+	release, ok := Acquire(dir, "race")
+	if !ok {
+		t.Fatal("Acquire should succeed after retry when stale lock vanishes")
+	}
+	defer release()
+
+	if calls < 1 {
+		t.Error("osReadFile should have been called at least once")
+	}
+
+	// Verify the lock file contains the current process identity.
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("reading lock file: %v", err)
+	}
+	expected := process.LockIdentity(os.Getpid())
+	if string(data) != expected {
+		t.Errorf("lock identity = %q, want %q", string(data), expected)
+	}
+}
+
+func TestAcquire_LiveLockNotReclaimed(t *testing.T) {
+	// Create a lock file with the current process's real identity.
+	// Acquire must detect the live holder and return (nil, false)
+	// without modifying the lock file.
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "live.lock")
+
+	liveIdentity := process.LockIdentity(os.Getpid())
+	if err := os.WriteFile(lockPath, []byte(liveIdentity), 0o644); err != nil {
+		t.Fatalf("writing live lock: %v", err)
+	}
+
+	_, ok := Acquire(dir, "live")
+	if ok {
+		t.Fatal("Acquire should fail when lock is held by a live process")
+	}
+
+	// Verify the existing lock file was not modified.
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("reading lock file: %v", err)
+	}
+	if string(data) != liveIdentity {
+		t.Errorf("lock file was modified: got %q, want %q", string(data), liveIdentity)
+	}
+}
+
+func TestAcquire_ConcurrentTwoGoroutines(t *testing.T) {
+	dir := t.TempDir()
+
+	var mu sync.Mutex
+	winners := 0
+	var winnerRelease func()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			release, ok := Acquire(dir, "dual")
+			if ok {
+				mu.Lock()
+				winners++
+				winnerRelease = release
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if winners != 1 {
+		t.Fatalf("expected exactly 1 winner among 2 concurrent acquires, got %d", winners)
+	}
+
+	if winnerRelease != nil {
+		winnerRelease()
+	}
+
+	// After release, the lock file should be gone.
+	lockPath := filepath.Join(dir, "dual.lock")
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Error("lock file should be removed after winner releases")
+	}
+}
+
 func TestAcquire_CleanupAfterExternalRemoval(t *testing.T) {
 	dir := t.TempDir()
 	release, ok := Acquire(dir, "test")
