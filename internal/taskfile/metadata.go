@@ -1,3 +1,6 @@
+// Package taskfile provides task file metadata parsing and mutation utilities.
+// It reads YAML frontmatter from markdown task files and supports in-place
+// updates to fields such as priority, dependencies, and affected paths.
 package taskfile
 
 import (

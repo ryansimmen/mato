@@ -1,3 +1,6 @@
+// Package merge implements squash-merge queue processing for completed task
+// branches. It serialises concurrent branch merges into the target branch,
+// handling conflict detection and retry scheduling.
 package merge
 
 import (

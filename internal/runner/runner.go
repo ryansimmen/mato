@@ -1,3 +1,6 @@
+// Package runner manages the agent lifecycle including Docker-based task
+// execution, review orchestration, and the top-level poll loop that drives
+// claiming, running, and merging tasks.
 package runner
 
 import (

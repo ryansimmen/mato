@@ -1,3 +1,5 @@
+// Package status gathers and displays queue state for the mato status command,
+// including task counts, agent activity, and dependency information.
 package status
 
 import (
