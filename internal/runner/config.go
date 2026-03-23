@@ -56,6 +56,7 @@ type envConfig struct {
 	image, workdir                          string
 	copilotPath, gitPath, gitUploadPackPath string
 	gitReceivePackPath, ghPath, goRoot      string
+	copilotConfigDir                        string
 	gitName, gitEmail, homeDir, ghConfigDir string
 	hasGhConfig                             bool
 	gitTemplatesDir                         string
@@ -91,7 +92,6 @@ func isTerminal(f *os.File) bool {
 
 func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVolumes []string) []string {
 	containerHome := env.homeDir
-	copilotDir := filepath.Join(env.homeDir, ".copilot")
 	goModCache := filepath.Join(env.homeDir, "go", "pkg", "mod")
 	goBuildCache := filepath.Join(env.homeDir, ".cache", "go-build")
 
@@ -135,7 +135,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	}
 	args = append(args,
 		"-e", fmt.Sprintf("HOME=%s", containerHome),
-		"-v", fmt.Sprintf("%s:%s/.copilot", copilotDir, containerHome),
+		"-v", fmt.Sprintf("%s:%s/.copilot", env.copilotConfigDir, containerHome),
 		"-e", fmt.Sprintf("GOPATH=%s/go", containerHome),
 		"-e", fmt.Sprintf("GOMODCACHE=%s/go/pkg/mod", containerHome),
 		"-e", fmt.Sprintf("GOCACHE=%s/.cache/go-build", containerHome),
