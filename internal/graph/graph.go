@@ -381,11 +381,14 @@ func ShowTo(w io.Writer, repoRoot, tasksDir, format string, showAll bool) error 
 	data := Build(tasksDir, idx, showAll)
 
 	switch format {
+	case "dot":
+		RenderDOT(w, data)
+		return nil
 	case "json":
 		return RenderJSON(w, data)
 	default:
-		// text and dot formats are Phase 2 — for now only json is supported.
-		return RenderJSON(w, data)
+		RenderText(w, data)
+		return nil
 	}
 }
 
