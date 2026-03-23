@@ -174,23 +174,7 @@ func parseAgentCommitLog(log string) (subject, body string) {
 }
 
 func configureMergeCloneIdentity(repoRoot, cloneDir string) error {
-	name, _ := git.Output(repoRoot, "config", "user.name")
-	if strings.TrimSpace(name) == "" {
-		name, _ = git.Output("", "config", "--global", "user.name")
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "mato"
-	}
-
-	email, _ := git.Output(repoRoot, "config", "user.email")
-	if strings.TrimSpace(email) == "" {
-		email, _ = git.Output("", "config", "--global", "user.email")
-	}
-	email = strings.TrimSpace(email)
-	if email == "" {
-		email = "mato@local.invalid"
-	}
+	name, email := git.ResolveIdentity(repoRoot)
 
 	if _, err := git.Output(cloneDir, "config", "user.name", name); err != nil {
 		return fmt.Errorf("configure merge user.name: %w", err)
