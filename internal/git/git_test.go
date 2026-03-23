@@ -127,6 +127,77 @@ func TestOutput_StderrNotInSuccessOutput(t *testing.T) {
 	}
 }
 
+func TestOutput_SuccessWithStderrWarning(t *testing.T) {
+	// Regression test: a successful git command that also writes to stderr
+	// must return only stdout. This is the exact scenario Output's separate
+	// stdout/stderr capture is meant to protect against.
+
+	// Set up a repo with a commit using the real git.
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	for _, kv := range [][2]string{{"user.name", "test"}, {"user.email", "test@test.com"}} {
+		cmd = exec.Command("git", "-C", dir, "config", kv[0], kv[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", kv[0], err, out)
+		}
+	}
+	readme := filepath.Join(dir, "README.md")
+	if err := os.WriteFile(readme, []byte("# test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", dir, "add", ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", dir, "commit", "-m", "init")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// Capture the expected SHA before swapping PATH.
+	cmd = exec.Command("git", "-C", dir, "rev-parse", "HEAD")
+	shaBytes, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	wantSHA := strings.TrimSpace(string(shaBytes))
+
+	// Create a git wrapper that injects a stderr warning on every
+	// invocation, then delegates to the real git binary.
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal("git not found in PATH")
+	}
+	wrapperDir := t.TempDir()
+	wrapper := filepath.Join(wrapperDir, "git")
+	script := "#!/bin/sh\necho 'warning: unexpected stderr noise' >&2\nexec " +
+		realGit + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Prepend the wrapper directory so Output finds our shim first.
+	t.Setenv("PATH", wrapperDir+string(filepath.ListSeparator)+os.Getenv("PATH"))
+
+	// Call Output — it should succeed and return only the SHA on stdout,
+	// with no stderr warning text mixed in.
+	got, err := Output(dir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("Output should succeed even when stderr is written: %v", err)
+	}
+
+	gotSHA := strings.TrimSpace(got)
+	if gotSHA != wantSHA {
+		t.Errorf("expected SHA %q, got %q", wantSHA, gotSHA)
+	}
+	if strings.Contains(got, "warning") {
+		t.Errorf("stderr warning leaked into stdout result: %q", got)
+	}
+}
+
 func TestEnsureBranch_PrefersRemoteTrackingBranch(t *testing.T) {
 	bare, clone := initBareAndClone(t)
 
