@@ -12,6 +12,12 @@ import (
 	"mato/internal/process"
 )
 
+// Test hooks for injecting I/O failures in Acquire.
+var (
+	osReadFile = os.ReadFile
+	osRemove   = os.Remove
+)
+
 // IsHeld checks whether a lock file at the given path exists and is held by
 // a live process. Returns false if the file does not exist, is empty, or
 // the holder process is no longer running.
@@ -80,7 +86,7 @@ func Acquire(locksDir, name string) (func(), bool) {
 			return nil, false
 		}
 
-		data, readErr := os.ReadFile(lockFile)
+		data, readErr := osReadFile(lockFile)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
 				continue
@@ -93,7 +99,7 @@ func Acquire(locksDir, name string) (func(), bool) {
 		if content == "" || process.IsLockHolderAlive(content) {
 			return nil, false
 		}
-		if removeErr := os.Remove(lockFile); removeErr != nil && !os.IsNotExist(removeErr) {
+		if removeErr := osRemove(lockFile); removeErr != nil && !os.IsNotExist(removeErr) {
 			fmt.Fprintf(os.Stderr, "warning: remove stale %s lock: %v\n", name, removeErr)
 			return nil, false
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -348,6 +349,47 @@ func TestRegister_CreatesDir(t *testing.T) {
 	}
 }
 
+func TestRegister_MkdirAllFailure(t *testing.T) {
+	base := t.TempDir()
+	// Place a regular file where MkdirAll needs to create a directory.
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("creating blocker file: %v", err)
+	}
+	locksDir := filepath.Join(blocker, "sub")
+	_, err := Register(locksDir, "agent")
+	if err == nil {
+		t.Fatal("Register should fail when locks directory cannot be created")
+	}
+}
+
+func TestRegister_WriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	// Create a directory at the .pid path so WriteFile fails with EISDIR.
+	pidDir := filepath.Join(dir, "agent.pid")
+	if err := os.MkdirAll(pidDir, 0o755); err != nil {
+		t.Fatalf("creating blocker directory: %v", err)
+	}
+	_, err := Register(dir, "agent")
+	if err == nil {
+		t.Fatal("Register should fail when pid file path is a directory")
+	}
+}
+
+func TestRegister_CleanupAfterExternalRemoval(t *testing.T) {
+	dir := t.TempDir()
+	cleanup, err := Register(dir, "agent")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	pidFile := filepath.Join(dir, "agent.pid")
+	if err := os.Remove(pidFile); err != nil {
+		t.Fatalf("removing pid file: %v", err)
+	}
+	// Cleanup must not panic when the file is already gone.
+	cleanup()
+}
+
 func TestRegister_Overwrites(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "overwrite.pid")
@@ -371,4 +413,85 @@ func TestRegister_Overwrites(t *testing.T) {
 	if string(data) != expected {
 		t.Errorf("pid file content = %q, want %q (should overwrite old content)", string(data), expected)
 	}
+}
+
+// --- Acquire I/O failure and cleanup path tests ---
+
+func TestAcquire_MkdirAllFailure(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("creating blocker file: %v", err)
+	}
+	locksDir := filepath.Join(blocker, "sub")
+	_, ok := Acquire(locksDir, "test")
+	if ok {
+		t.Fatal("Acquire should fail when locks directory cannot be created")
+	}
+}
+
+func TestAcquire_NonExistCreateError(t *testing.T) {
+	dir := t.TempDir()
+	// A filename longer than NAME_MAX (255) triggers ENAMETOOLONG,
+	// an unrecoverable error unrelated to an existing lock.
+	longName := strings.Repeat("x", 300)
+	_, ok := Acquire(dir, longName)
+	if ok {
+		t.Fatal("Acquire should return false on unrecoverable create error")
+	}
+}
+
+func TestAcquire_StaleLockReadFailure(t *testing.T) {
+	orig := osReadFile
+	defer func() { osReadFile = orig }()
+
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "test.lock")
+	if err := os.WriteFile(lockPath, []byte("4194300:99999999"), 0o644); err != nil {
+		t.Fatalf("writing stale lock: %v", err)
+	}
+
+	osReadFile = func(string) ([]byte, error) {
+		return nil, fmt.Errorf("injected read error")
+	}
+
+	_, ok := Acquire(dir, "test")
+	if ok {
+		t.Fatal("Acquire should fail when stale lock file cannot be read")
+	}
+}
+
+func TestAcquire_StaleLockRemoveFailure(t *testing.T) {
+	orig := osRemove
+	defer func() { osRemove = orig }()
+
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "test.lock")
+	if err := os.WriteFile(lockPath, []byte("4194300:99999999"), 0o644); err != nil {
+		t.Fatalf("writing stale lock: %v", err)
+	}
+
+	osRemove = func(string) error {
+		return fmt.Errorf("injected remove error")
+	}
+
+	_, ok := Acquire(dir, "test")
+	if ok {
+		t.Fatal("Acquire should fail when stale lock cannot be removed")
+	}
+}
+
+func TestAcquire_CleanupAfterExternalRemoval(t *testing.T) {
+	dir := t.TempDir()
+	release, ok := Acquire(dir, "test")
+	if !ok {
+		t.Fatal("Acquire should succeed")
+	}
+
+	lockPath := filepath.Join(dir, "test.lock")
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatalf("removing lock file: %v", err)
+	}
+	// Cleanup must not panic when the lock file is already gone.
+	release()
 }
