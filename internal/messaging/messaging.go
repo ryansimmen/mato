@@ -6,6 +6,7 @@ package messaging
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -307,15 +308,21 @@ func WriteCompletionDetail(tasksDir string, detail CompletionDetail) error {
 }
 
 // ReadCompletionDetail reads the completion-detail JSON for a given task ID.
-// It first tries the collision-resistant filename, then falls back to the
-// legacy lossy sanitized name for backward compatibility with pre-existing
-// completion files. Returns os.ErrNotExist if neither file exists.
+// It first tries the collision-resistant filename. If that file does not exist,
+// it falls back to the legacy lossy sanitized name for backward compatibility
+// with pre-existing completion files. If the new file exists but is unreadable
+// (permissions, I/O error, etc.), the real error is returned without consulting
+// the legacy file. Returns os.ErrNotExist if neither file exists.
 func ReadCompletionDetail(tasksDir, taskID string) (*CompletionDetail, error) {
 	name := completionFilename(taskID)
 	path := filepath.Join(tasksDir, "messages", "completions", name+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		// Fall back to the legacy lossy filename for backward compatibility.
+		// Only fall back to the legacy filename when the new file is absent.
+		// If it exists but is unreadable (permissions, etc.), surface the real error.
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("read completion detail %s: %w", taskID, err)
+		}
 		legacy := legacyCompletionFilename(taskID)
 		if legacy != name {
 			legacyPath := filepath.Join(tasksDir, "messages", "completions", legacy+".json")

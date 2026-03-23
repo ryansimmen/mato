@@ -1235,6 +1235,66 @@ func TestReadCompletionDetail_LegacyFallback(t *testing.T) {
 	}
 }
 
+func TestReadCompletionDetail_LegacyFallbackOnlyOnNotExist(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	taskID := "foo/bar"
+	newName := completionFilename(taskID)
+	newPath := filepath.Join(tasksDir, "messages", "completions", newName+".json")
+
+	// Write the new file with mode 0000 so it exists but is unreadable.
+	if err := os.WriteFile(newPath, []byte(`{"task_id":"foo/bar"}`), 0o000); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Also place a valid legacy file that would be consulted under the old code.
+	legacyPath := filepath.Join(tasksDir, "messages", "completions", "foo-bar.json")
+	legacyData, _ := json.Marshal(CompletionDetail{TaskID: taskID, Title: "Legacy"})
+	if err := os.WriteFile(legacyPath, legacyData, 0o644); err != nil {
+		t.Fatalf("WriteFile legacy: %v", err)
+	}
+
+	// ReadCompletionDetail must return the real read error, not silently
+	// fall back to the legacy file.
+	_, err := ReadCompletionDetail(tasksDir, taskID)
+	if err == nil {
+		t.Fatal("expected error when new file is unreadable, got nil")
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error should not be ErrNotExist; got %v", err)
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("expected os.ErrPermission wrapped in error, got %v", err)
+	}
+}
+
+func TestReadCompletionDetail_LegacyFallbackWhenNewFileMissing(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	taskID := "foo/bar"
+
+	// Only the legacy file exists (no new-format file).
+	legacyPath := filepath.Join(tasksDir, "messages", "completions", "foo-bar.json")
+	legacyData, _ := json.Marshal(CompletionDetail{TaskID: taskID, Title: "Legacy OK"})
+	if err := os.WriteFile(legacyPath, legacyData, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := ReadCompletionDetail(tasksDir, taskID)
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail: %v", err)
+	}
+	if got.Title != "Legacy OK" {
+		t.Fatalf("Title = %q, want %q", got.Title, "Legacy OK")
+	}
+}
+
 func TestWriteCompletionDetail_NormalIDUnchanged(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {
