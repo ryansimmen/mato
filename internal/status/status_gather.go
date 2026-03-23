@@ -13,6 +13,7 @@ import (
 
 // statusData holds all the data gathered for the status dashboard.
 type statusData struct {
+	idx             *queue.PollIndex
 	queueCounts     map[string]int
 	runnable        int
 	agents          []statusAgent
@@ -46,6 +47,7 @@ func gatherStatus(tasksDir string) (statusData, error) {
 
 	// Build one index for the entire gather cycle.
 	idx := queue.BuildIndex(tasksDir)
+	data.idx = idx
 
 	// Queue counts derived from the index snapshot.
 	// Include parse-failed files in counts to match old countMarkdownFiles behavior.

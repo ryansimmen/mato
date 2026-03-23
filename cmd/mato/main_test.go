@@ -463,6 +463,32 @@ func TestStatusCmd_WatchIntervalValidation(t *testing.T) {
 	}
 }
 
+func TestStatusCmd_FormatJSONWithWatchRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "--format=json", "--watch"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format json with --watch, got nil")
+	}
+	want := "--format json and --watch cannot be used together"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestStatusCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "--format=yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestStatusCmd_WatchPositiveIntervalAccepted(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"status", "--watch", "--interval=1s"})
@@ -509,6 +535,7 @@ func TestStatusCmd_FlagParsing(t *testing.T) {
 		{"status with repo", []string{"status", "--repo=/tmp/repo"}},
 		{"status with tasks-dir", []string{"status", "--tasks-dir=/tmp/tasks"}},
 		{"status with repo and tasks-dir", []string{"status", "--repo=/tmp/repo", "--tasks-dir=/tmp/tasks"}},
+		{"status with text format", []string{"status", "--format=text"}},
 	}
 
 	for _, tt := range tests {

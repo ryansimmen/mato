@@ -3,6 +3,7 @@ package status
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1029,5 +1030,153 @@ func TestWatchTo_PartialRedrawFailure(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("WatchTo did not exit after partial write failure")
+	}
+}
+
+func TestShowJSON_ValidOutput(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	files := map[string]string{
+		filepath.Join(tasksDir, queue.DirWaiting, "refactor-api.md"):       "---\nid: refactor-api\ndepends_on: [setup-models]\n---\n# Refactor the API layer\n",
+		filepath.Join(tasksDir, queue.DirBacklog, "add-auth.md"):           "---\nid: add-auth\npriority: 10\n---\n# Add authentication\n",
+		filepath.Join(tasksDir, queue.DirInProgress, "agent-task.md"):      "<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: agent-task\n---\n# In progress task\n",
+		filepath.Join(tasksDir, queue.DirReadyReview, "review-feature.md"): "<!-- branch: task/review-feature -->\n---\npriority: 10\n---\n# Review this feature\n",
+		filepath.Join(tasksDir, queue.DirReadyMerge, "merge-me.md"):        "---\npriority: 5\n---\n# Ready to merge\n",
+		filepath.Join(tasksDir, queue.DirCompleted, "setup-models.md"):     "---\nid: setup-models\n---\n# Setup models\n",
+		filepath.Join(tasksDir, queue.DirFailed, "failed-task.md"):         "<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=tests failed files_changed=none -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z step=WORK error=merge conflict files_changed=none -->\n---\nid: failed-task\nmax_retries: 2\n---\n# A failed task\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	// Verify it is valid JSON.
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+
+	// Verify expected top-level keys.
+	if result.Counts == nil {
+		t.Fatal("counts should not be nil")
+	}
+	if result.Counts["in_progress"] != 1 {
+		t.Errorf("expected 1 in-progress, got %d", result.Counts["in_progress"])
+	}
+	if result.Counts["failed"] != 1 {
+		t.Errorf("expected 1 failed, got %d", result.Counts["failed"])
+	}
+	if result.Counts["waiting"] != 1 {
+		t.Errorf("expected 1 waiting, got %d", result.Counts["waiting"])
+	}
+	if result.MergeQueue != "idle" {
+		t.Errorf("expected merge_queue idle, got %s", result.MergeQueue)
+	}
+
+	// Verify in-progress tasks.
+	if len(result.InProgress) != 1 {
+		t.Fatalf("expected 1 in-progress task, got %d", len(result.InProgress))
+	}
+	if result.InProgress[0].Title != "In progress task" {
+		t.Errorf("expected title 'In progress task', got %q", result.InProgress[0].Title)
+	}
+	if result.InProgress[0].ClaimedBy != "abc123" {
+		t.Errorf("expected claimed_by 'abc123', got %q", result.InProgress[0].ClaimedBy)
+	}
+
+	// Verify ready-for-review tasks.
+	if len(result.ReadyReview) != 1 {
+		t.Fatalf("expected 1 ready-for-review task, got %d", len(result.ReadyReview))
+	}
+	if result.ReadyReview[0].Branch != "task/review-feature" {
+		t.Errorf("expected branch 'task/review-feature', got %q", result.ReadyReview[0].Branch)
+	}
+
+	// Verify ready-to-merge tasks.
+	if len(result.ReadyMerge) != 1 {
+		t.Fatalf("expected 1 ready-to-merge task, got %d", len(result.ReadyMerge))
+	}
+	if result.ReadyMerge[0].Title != "Ready to merge" {
+		t.Errorf("expected title 'Ready to merge', got %q", result.ReadyMerge[0].Title)
+	}
+
+	// Verify waiting tasks with dependency info.
+	if len(result.Waiting) != 1 {
+		t.Fatalf("expected 1 waiting task, got %d", len(result.Waiting))
+	}
+	if result.Waiting[0].Title != "Refactor the API layer" {
+		t.Errorf("expected title 'Refactor the API layer', got %q", result.Waiting[0].Title)
+	}
+	if len(result.Waiting[0].Dependencies) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(result.Waiting[0].Dependencies))
+	}
+	if result.Waiting[0].Dependencies[0].ID != "setup-models" {
+		t.Errorf("expected dependency ID 'setup-models', got %q", result.Waiting[0].Dependencies[0].ID)
+	}
+	if result.Waiting[0].Dependencies[0].Status != queue.DirCompleted {
+		t.Errorf("expected dependency status %q, got %q", queue.DirCompleted, result.Waiting[0].Dependencies[0].Status)
+	}
+
+	// Verify failed tasks.
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(result.Failed))
+	}
+	if result.Failed[0].FailCount != 2 {
+		t.Errorf("expected fail_count 2, got %d", result.Failed[0].FailCount)
+	}
+	if result.Failed[0].MaxRetries != 2 {
+		t.Errorf("expected max_retries 2, got %d", result.Failed[0].MaxRetries)
+	}
+}
+
+func TestShowJSON_EmptyTasksDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v", err)
+	}
+
+	// All lists should be empty but non-nil.
+	if result.ActiveAgents == nil {
+		t.Error("active_agents should not be nil")
+	}
+	if len(result.ActiveAgents) != 0 {
+		t.Errorf("expected 0 active agents, got %d", len(result.ActiveAgents))
+	}
+	if len(result.InProgress) != 0 {
+		t.Errorf("expected 0 in-progress tasks, got %d", len(result.InProgress))
+	}
+	if result.Counts["in_progress"] != 0 {
+		t.Errorf("expected in_progress count 0, got %d", result.Counts["in_progress"])
 	}
 }
