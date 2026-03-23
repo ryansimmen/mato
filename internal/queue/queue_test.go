@@ -827,8 +827,8 @@ func TestReconcileReadyQueue_PromotesWhenDepsMet(t *testing.T) {
 	waitingPath := filepath.Join(tasksDir, DirWaiting, "task.md")
 	os.WriteFile(waitingPath, []byte("---\ndepends_on: [dep-a, dep-b]\n---\nReady now\n"), 0o644)
 
-	if got := ReconcileReadyQueue(tasksDir, nil); got != 1 {
-		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+	if got := ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("ReconcileReadyQueue() = false, want true")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task.md")); err != nil {
 		t.Fatalf("promoted task missing from backlog: %v", err)
@@ -847,8 +847,8 @@ func TestReconcileReadyQueue_LeavesUnmetDepsWaiting(t *testing.T) {
 	waitingPath := filepath.Join(tasksDir, DirWaiting, "blocked-task.md")
 	os.WriteFile(waitingPath, []byte("---\ndepends_on:\n  - missing-task\n---\nStill blocked\n"), 0o644)
 
-	if got := ReconcileReadyQueue(tasksDir, nil); got != 0 {
-		t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+	if got := ReconcileReadyQueue(tasksDir, nil); got {
+		t.Fatal("ReconcileReadyQueue() = true, want false")
 	}
 	if _, err := os.Stat(waitingPath); err != nil {
 		t.Fatalf("task with unmet deps should stay in waiting: %v", err)
@@ -863,8 +863,8 @@ func TestReconcileReadyQueue_PromotesTaskWithNoDeps(t *testing.T) {
 
 	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "solo-task.md"), []byte("# Solo\n"), 0o644)
 
-	if got := ReconcileReadyQueue(tasksDir, nil); got != 1 {
-		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+	if got := ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("ReconcileReadyQueue() = false, want true")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "solo-task.md")); err != nil {
 		t.Fatalf("promoted task missing from backlog: %v", err)
@@ -887,8 +887,8 @@ func TestReconcileReadyQueue_SkipsOverlappingWithActive(t *testing.T) {
 		t.Fatalf("write waiting task: %v", err)
 	}
 
-	if got := ReconcileReadyQueue(tasksDir, nil); got != 0 {
-		t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+	if got := ReconcileReadyQueue(tasksDir, nil); got {
+		t.Fatal("ReconcileReadyQueue() = true, want false")
 	}
 	if _, err := os.Stat(waitingPath); err != nil {
 		t.Fatalf("overlapping waiting task should stay in waiting: %v", err)
@@ -914,8 +914,8 @@ func TestReconcileReadyQueue_PromotesAfterActiveCompletes(t *testing.T) {
 		t.Fatalf("write waiting task: %v", err)
 	}
 
-	if got := ReconcileReadyQueue(tasksDir, nil); got != 1 {
-		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+	if got := ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("ReconcileReadyQueue() = false, want true")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task-b.md")); err != nil {
 		t.Fatalf("task should be promoted after active completion: %v", err)
@@ -937,8 +937,8 @@ func TestReconcileReadyQueue_DoesNotOverwriteExistingBacklogTask(t *testing.T) {
 	os.WriteFile(backlogPath, []byte("# Existing backlog\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
-		if got := ReconcileReadyQueue(tasksDir, nil); got != 0 {
-			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		if got := ReconcileReadyQueue(tasksDir, nil); got {
+			t.Fatal("ReconcileReadyQueue() = true, want false")
 		}
 	})
 
@@ -967,8 +967,8 @@ func TestReconcileReadyQueue_DetectsSelfDependency(t *testing.T) {
 	os.WriteFile(waitingPath, []byte("---\nid: self-task\ndepends_on: [self-task]\n---\nBlocked\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
-		if got := ReconcileReadyQueue(tasksDir, nil); got != 0 {
-			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		if got := ReconcileReadyQueue(tasksDir, nil); !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true")
 		}
 	})
 
@@ -1002,8 +1002,8 @@ func TestReconcileReadyQueue_DetectsCircularDependency(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-b.md"), []byte("---\nid: task-b\ndepends_on: [task-a]\n---\nB\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
-		if got := ReconcileReadyQueue(tasksDir, nil); got != 0 {
-			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		if got := ReconcileReadyQueue(tasksDir, nil); !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true")
 		}
 	})
 
@@ -1406,8 +1406,8 @@ func TestQueueOps_SpecialCharacterFilenames(t *testing.T) {
 		t.Fatalf("write waiting task: %v", err)
 	}
 
-	if got := ReconcileReadyQueue(tasksDir, nil); got != 1 {
-		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+	if got := ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("ReconcileReadyQueue() = false, want true")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, name)); err != nil {
 		t.Fatalf("special-character task missing from backlog: %v", err)
@@ -1443,8 +1443,8 @@ func TestReconcileReadyQueue_HighPriorityNotBlockedByLowPriorityBacklog(t *testi
 		[]byte("---\npriority: 5\naffects: [main.go]\n---\n# High\n"), 0o644)
 
 	got := ReconcileReadyQueue(tasksDir, nil)
-	if got != 1 {
-		t.Fatalf("ReconcileReadyQueue() = %d, want 1 (high-priority should promote)", got)
+	if !got {
+		t.Fatal("ReconcileReadyQueue() = false, want true (high-priority should promote)")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "high-priority.md")); err != nil {
 		t.Fatal("high-priority task should be promoted to backlog")
@@ -1480,7 +1480,7 @@ func TestReconcileReadyQueue_DuplicateIDDoesNotSatisfyDependency(t *testing.T) {
 	}
 	// second-task (no deps) should still promote
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "second-task.md")); err != nil {
-		t.Fatalf("second-task (no deps) should promote, got err: %v (promoted=%d)", err, got)
+		t.Fatalf("second-task (no deps) should promote, got err: %v (moved=%v)", err, got)
 	}
 }
 
@@ -1498,8 +1498,8 @@ func TestReconcileReadyQueue_UniqueCompletedIDStillWorks(t *testing.T) {
 		[]byte("---\nid: consumer\ndepends_on: [unique-dep]\n---\n# Consumer\n"), 0o644)
 
 	got := ReconcileReadyQueue(tasksDir, nil)
-	if got != 1 {
-		t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+	if !got {
+		t.Fatal("ReconcileReadyQueue() = false, want true")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "consumer.md")); err != nil {
 		t.Fatal("consumer task should be promoted when dep is uniquely completed")
@@ -1518,8 +1518,8 @@ func TestReconcileReadyQueue_MovesUnparseableToFailed(t *testing.T) {
 
 	stderr := captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
-		if got != 0 {
-			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		if !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true")
 		}
 	})
 
@@ -1544,8 +1544,8 @@ func TestReconcileReadyQueue_MovesMalformedBacklogTaskToFailed(t *testing.T) {
 
 	stderr := captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
-		if got != 0 {
-			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		if !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true")
 		}
 	})
 
@@ -1572,8 +1572,8 @@ func TestReconcileReadyQueue_MovesMissingTerminatorToFailed(t *testing.T) {
 
 	stderr := captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
-		if got != 0 {
-			t.Fatalf("ReconcileReadyQueue() = %d, want 0", got)
+		if !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true")
 		}
 	})
 
@@ -1604,8 +1604,8 @@ func TestReconcileReadyQueue_ValidTasksStillPromotedAlongsideUnparseable(t *test
 
 	captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
-		if got != 1 {
-			t.Fatalf("ReconcileReadyQueue() = %d, want 1", got)
+		if !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true")
 		}
 	})
 
@@ -1633,8 +1633,8 @@ func TestReconcileReadyQueue_QuarantinesWaitingTaskWithInvalidGlob(t *testing.T)
 
 	stderr := captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
-		if got != 1 {
-			t.Fatalf("ReconcileReadyQueue() = %d, want 1 (only good-glob should promote)", got)
+		if !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true (only good-glob should promote)")
 		}
 	})
 
@@ -1824,8 +1824,8 @@ func TestReconcileReadyQueue_ChainPromotionSemantics(t *testing.T) {
 
 	captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
-		if got != 1 {
-			t.Fatalf("first reconcile: promoted = %d, want 1 (only B)", got)
+		if !got {
+			t.Fatal("first reconcile: promoted = false, want true (only B)")
 		}
 	})
 
@@ -1856,8 +1856,8 @@ func TestReconcileReadyQueue_LongCycleMovesToFailed(t *testing.T) {
 
 	captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
-		if got != 0 {
-			t.Fatalf("promoted = %d, want 0", got)
+		if !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true")
 		}
 	})
 
@@ -1927,8 +1927,8 @@ func TestReconcileReadyQueue_DownstreamOfCycleRemainsWaiting(t *testing.T) {
 
 	captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
-		if got != 0 {
-			t.Fatalf("promoted = %d, want 0", got)
+		if !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true")
 		}
 	})
 
@@ -1962,8 +1962,8 @@ func TestReconcileReadyQueue_AmbiguousCompletedDoesNotSatisfy(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		got := ReconcileReadyQueue(tasksDir, nil)
 		// other-shared.md has no deps and gets promoted; dependent stays blocked.
-		if got != 1 {
-			t.Fatalf("promoted = %d, want 1 (only other-shared)", got)
+		if !got {
+			t.Fatal("ReconcileReadyQueue() = false, want true (only other-shared)")
 		}
 	})
 
@@ -1996,9 +1996,9 @@ func TestCountPromotableWaitingTasks_MatchesReconcile(t *testing.T) {
 	}
 
 	captureStderr(t, func() {
-		promoted := ReconcileReadyQueue(tasksDir, nil)
-		if promoted != count {
-			t.Fatalf("ReconcileReadyQueue promoted %d, CountPromotableWaitingTasks returned %d", promoted, count)
+		moved := ReconcileReadyQueue(tasksDir, nil)
+		if moved != (count > 0) {
+			t.Fatalf("ReconcileReadyQueue moved = %v, CountPromotableWaitingTasks returned %d", moved, count)
 		}
 	})
 }
@@ -2017,13 +2017,13 @@ func TestReconcileReadyQueue_DuplicateWaitingIDPromotesOnce(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "zzz-dup.md"),
 		[]byte("---\nid: dup-id\n---\n# Second\n"), 0o644)
 
-	promoted := 0
+	moved := false
 	captureStderr(t, func() {
-		promoted = ReconcileReadyQueue(tasksDir, nil)
+		moved = ReconcileReadyQueue(tasksDir, nil)
 	})
 
-	if promoted != 1 {
-		t.Fatalf("ReconcileReadyQueue promoted %d, want 1 (only the retained file)", promoted)
+	if !moved {
+		t.Fatal("ReconcileReadyQueue moved = false, want true (only the retained file)")
 	}
 
 	// First file (aaa-dup.md) should be promoted.

@@ -32,9 +32,9 @@ func TestReconcileReadyQueue_PromotesSatisfiedDeps(t *testing.T) {
 	writeTask(t, tasksDir, DirWaiting, "consumer.md",
 		"---\nid: consumer\ndepends_on: [dep-done]\n---\n# Consumer\n")
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 1 {
-		t.Fatalf("promoted = %d, want 1", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
 	}
 
 	// consumer.md should now be in backlog/.
@@ -57,9 +57,9 @@ func TestReconcileReadyQueue_UnsatisfiedDepsRemain(t *testing.T) {
 	writeTask(t, tasksDir, DirBacklog, "not-done-yet.md",
 		"---\nid: not-done-yet\n---\n# Not done\n")
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 0 {
-		t.Fatalf("promoted = %d, want 0", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if moved {
+		t.Fatalf("moved = %v, want false", moved)
 	}
 
 	// blocked.md should still be in waiting/.
@@ -75,9 +75,9 @@ func TestReconcileReadyQueue_NoDepsPromoted(t *testing.T) {
 	writeTask(t, tasksDir, DirWaiting, "no-deps.md",
 		"---\nid: no-deps\n---\n# No deps\n")
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 1 {
-		t.Fatalf("promoted = %d, want 1", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
 	}
 
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "no-deps.md")); err != nil {
@@ -94,9 +94,9 @@ func TestReconcileReadyQueue_CycleDetection(t *testing.T) {
 	writeTask(t, tasksDir, DirWaiting, "cycle-b.md",
 		"---\nid: cycle-b\ndepends_on: [cycle-a]\n---\n# Cycle B\n")
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 0 {
-		t.Fatalf("promoted = %d, want 0 (cycle tasks should not be promoted)", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
 	}
 
 	// Both cycle members should be in failed/.
@@ -118,9 +118,9 @@ func TestReconcileReadyQueue_SelfCycle(t *testing.T) {
 	writeTask(t, tasksDir, DirWaiting, "self-ref.md",
 		"---\nid: self-ref\ndepends_on: [self-ref]\n---\n# Self\n")
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 0 {
-		t.Fatalf("promoted = %d, want 0", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
 	}
 
 	failedPath := filepath.Join(tasksDir, DirFailed, "self-ref.md")
@@ -140,9 +140,9 @@ func TestReconcileReadyQueue_InvalidGlobQuarantined(t *testing.T) {
 	writeTask(t, tasksDir, DirWaiting, "bad-glob.md",
 		"---\nid: bad-glob\naffects:\n  - \"[invalid\"\n---\n# Bad glob\n")
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 0 {
-		t.Fatalf("promoted = %d, want 0 (bad glob should be quarantined)", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
 	}
 
 	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-glob.md")); err != nil {
@@ -174,15 +174,15 @@ func TestReconcileReadyQueue_Idempotency(t *testing.T) {
 	writeTask(t, tasksDir, DirWaiting, "task-b.md",
 		"---\nid: task-b\ndepends_on: [dep]\n---\n# B\n")
 
-	promoted1 := ReconcileReadyQueue(tasksDir, nil)
-	if promoted1 != 2 {
-		t.Fatalf("first pass promoted = %d, want 2", promoted1)
+	moved1 := ReconcileReadyQueue(tasksDir, nil)
+	if !moved1 {
+		t.Fatalf("first pass moved = %v, want true", moved1)
 	}
 
-	// Second call should promote 0 (all already moved).
-	promoted2 := ReconcileReadyQueue(tasksDir, nil)
-	if promoted2 != 0 {
-		t.Fatalf("second pass promoted = %d, want 0", promoted2)
+	// Second call should move nothing (all already moved).
+	moved2 := ReconcileReadyQueue(tasksDir, nil)
+	if moved2 {
+		t.Fatalf("second pass moved = %v, want false", moved2)
 	}
 
 	// Both should be in backlog/.
@@ -252,9 +252,9 @@ func TestReconcileReadyQueue_ActiveOverlapBlocksPromotion(t *testing.T) {
 	writeTask(t, tasksDir, DirWaiting, "overlap.md",
 		"---\nid: overlap\naffects:\n  - src/main.go\n---\n# Overlap\n")
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 0 {
-		t.Fatalf("promoted = %d, want 0 (active overlap should block)", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if moved {
+		t.Fatalf("moved = %v, want false", moved)
 	}
 
 	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "overlap.md")); err != nil {
@@ -275,9 +275,9 @@ func TestReconcileReadyQueue_MixedTasks(t *testing.T) {
 	writeTask(t, tasksDir, DirBacklog, "not-completed.md",
 		"---\nid: not-completed\n---\n# Not done\n")
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 1 {
-		t.Fatalf("promoted = %d, want 1", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
 	}
 
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "ready.md")); err != nil {
@@ -354,9 +354,9 @@ func TestCountPromotableWaitingTasks(t *testing.T) {
 func TestReconcileReadyQueue_EmptyQueue(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 0 {
-		t.Fatalf("promoted = %d, want 0 for empty queue", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if moved {
+		t.Fatalf("moved = %v, want false", moved)
 	}
 }
 
@@ -407,9 +407,9 @@ func TestReconcileReadyQueue_MultiplePromotions(t *testing.T) {
 			"---\nid: "+id+"\n---\n# "+id+"\n")
 	}
 
-	promoted := ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 3 {
-		t.Fatalf("promoted = %d, want 3", promoted)
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
 	}
 
 	for _, name := range []string{"aaa.md", "bbb.md", "ccc.md"} {

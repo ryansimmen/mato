@@ -53,9 +53,12 @@ func resolvePromotableTasks(tasksDir string, idx *PollIndex) []promotableTask {
 // to backlog/. It also moves unparseable waiting/backlog tasks to failed/ and
 // moves cycle members to failed/ with cycle-failure markers.
 //
+// It returns true if any task was moved (promoted or failed), false otherwise.
 // When idx is nil, a temporary index is built internally.
-func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
+func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	idx = ensureIndex(tasksDir, idx)
+
+	moved := false
 
 	// Move unparseable waiting/backlog tasks to failed/ using index parse failures.
 	for _, pf := range idx.WaitingParseFailures() {
@@ -63,6 +66,8 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
+		} else {
+			moved = true
 		}
 	}
 	for _, pf := range idx.BacklogParseFailures() {
@@ -70,6 +75,8 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
+		} else {
+			moved = true
 		}
 	}
 
@@ -80,6 +87,8 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
 			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+			} else {
+				moved = true
 			}
 		}
 	}
@@ -140,6 +149,8 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 				// Step 4: If move fails, warn and continue. The idempotency
 				// check in step 1 prevents duplicate records on the next pass.
 				fmt.Fprintf(os.Stderr, "warning: could not move cycle member %s to failed/: %v\n", snap.Filename, err)
+			} else {
+				moved = true
 			}
 		}
 	}
@@ -150,7 +161,6 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 		satisfiedSet[id] = struct{}{}
 	}
 
-	promoted := 0
 	for _, snap := range idx.TasksByState(DirWaiting) {
 		// Only operate on retained files; skip duplicates.
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
@@ -169,6 +179,8 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
 			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+			} else {
+				moved = true
 			}
 			continue
 		}
@@ -177,10 +189,10 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) int {
 			fmt.Fprintf(os.Stderr, "warning: could not promote waiting task %s: %v\n", snap.Filename, err)
 			continue
 		}
-		promoted++
+		moved = true
 	}
 
-	return promoted
+	return moved
 }
 
 // CountPromotableWaitingTasks is a read-only variant of ReconcileReadyQueue.

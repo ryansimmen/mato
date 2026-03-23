@@ -94,8 +94,8 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 
 	backlogTask := writeTask(t, tasksDir, queue.DirBacklog, "add-hello.md", "# Add hello\nCreate hello.txt with \"hello world\"\n")
 
-	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 0 {
-		t.Fatalf("queue.ReconcileReadyQueue() = %d, want 0", got)
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got {
+		t.Fatalf("queue.ReconcileReadyQueue() = %v, want false", got)
 	}
 	if err := queue.WriteQueueManifest(tasksDir, nil, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest: %v", err)
@@ -163,8 +163,8 @@ func TestDependencyChainPromotion(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\npriority: 2\ndepends_on: [task-a]\n---\n# Task B\n")
 	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\npriority: 3\ndepends_on: [task-b]\n---\n# Task C\n")
 
-	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 1 {
-		t.Fatalf("first queue.ReconcileReadyQueue() = %d, want 1", got)
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("first queue.ReconcileReadyQueue() = false, want true")
 	}
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"))
 	mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-a.md"))
@@ -176,8 +176,8 @@ func TestDependencyChainPromotion(t *testing.T) {
 		filepath.Join(tasksDir, queue.DirCompleted, "task-a.md"),
 	)
 
-	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 1 {
-		t.Fatalf("second queue.ReconcileReadyQueue() = %d, want 1", got)
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("second queue.ReconcileReadyQueue() = false, want true")
 	}
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"))
 	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-c.md"))
@@ -187,8 +187,8 @@ func TestDependencyChainPromotion(t *testing.T) {
 		filepath.Join(tasksDir, queue.DirCompleted, "task-b.md"),
 	)
 
-	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 1 {
-		t.Fatalf("third queue.ReconcileReadyQueue() = %d, want 1", got)
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("third queue.ReconcileReadyQueue() = false, want true")
 	}
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"))
 }
@@ -218,8 +218,8 @@ func TestOverlapPrevention(t *testing.T) {
 		filepath.Join(tasksDir, queue.DirCompleted, "high.md"),
 	)
 
-	if got := queue.ReconcileReadyQueue(tasksDir, nil); got != 0 {
-		t.Fatalf("queue.ReconcileReadyQueue() after completion = %d, want 0", got)
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); got {
+		t.Fatalf("queue.ReconcileReadyQueue() after completion = %v, want false", got)
 	}
 
 	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
@@ -420,17 +420,17 @@ func TestDAG_ChainPromotion(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n")
 
 	// First reconcile: promotes B only.
-	promoted := queue.ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 1 {
-		t.Fatalf("first reconcile: promoted = %d, want 1", promoted)
+	moved := queue.ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatal("first reconcile: moved = false, want true")
 	}
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"))
 	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-c.md"))
 
 	// C is still blocked by B (now in backlog, not completed).
-	promoted2 := queue.ReconcileReadyQueue(tasksDir, nil)
-	if promoted2 != 0 {
-		t.Fatalf("second reconcile: promoted = %d, want 0 (B not completed yet)", promoted2)
+	moved2 := queue.ReconcileReadyQueue(tasksDir, nil)
+	if moved2 {
+		t.Fatal("second reconcile: moved = true, want false (B not completed yet)")
 	}
 }
 
@@ -442,9 +442,9 @@ func TestDAG_CycleMovesToFailed(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
 	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-a]\n---\n# C (downstream)\n")
 
-	promoted := queue.ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 0 {
-		t.Fatalf("promoted = %d, want 0", promoted)
+	moved := queue.ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatal("moved = false, want true")
 	}
 
 	// Cycle members should be in failed/ with cycle-failure markers.
@@ -472,9 +472,9 @@ func TestDAG_LongCycleMovesToFailed(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n")
 	writeTask(t, tasksDir, queue.DirWaiting, "task-d.md", "---\nid: task-d\ndepends_on: [task-c]\n---\n# D\n")
 
-	promoted := queue.ReconcileReadyQueue(tasksDir, nil)
-	if promoted != 0 {
-		t.Fatalf("promoted = %d, want 0", promoted)
+	moved := queue.ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatal("moved = false, want true")
 	}
 
 	// All 3 cycle members should be in failed/.
@@ -502,11 +502,11 @@ func TestDAG_AmbiguousID(t *testing.T) {
 	// dependent task depends on the ambiguous ID.
 	writeTask(t, tasksDir, queue.DirWaiting, "dependent.md", "---\nid: dependent\ndepends_on: [shared]\n---\n# Dependent\n")
 
-	promoted := queue.ReconcileReadyQueue(tasksDir, nil)
+	moved := queue.ReconcileReadyQueue(tasksDir, nil)
 
 	// shared-waiting has no deps so it gets promoted. dependent stays blocked.
-	if promoted != 1 {
-		t.Fatalf("promoted = %d, want 1 (only shared-waiting)", promoted)
+	if !moved {
+		t.Fatal("moved = false, want true (only shared-waiting)")
 	}
 
 	// dependent should remain in waiting (ambiguous ID not satisfied).
