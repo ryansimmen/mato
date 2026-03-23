@@ -230,7 +230,7 @@ func TestConcurrentMergeQueueProcessing(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
 	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "---\npriority: 10\n---\n# Beta\n")
 
-	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil); got != 2 {
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 2 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 2", got)
 	}
 
@@ -256,7 +256,7 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
 	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "---\npriority: 10\n---\n# Beta\n")
 
-	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil); got != 1 {
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("first merge.ProcessQueue() = %d, want 1", got)
 	}
 
@@ -285,7 +285,7 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 	betaReady := filepath.Join(tasksDir, queue.DirReadyMerge, "beta.md")
 	mustRename(t, betaBacklog, betaReady)
 
-	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil); got != 1 {
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("second merge.ProcessQueue() = %d, want 1", got)
 	}
 
@@ -305,7 +305,7 @@ func TestConflictRequeueThenRaceToClaim(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
 	writeTask(t, tasksDir, queue.DirReadyMerge, "conflict-task.md", "---\npriority: 10\n---\n# Conflict Task\n")
 
-	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil); got != 1 {
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 
@@ -383,7 +383,7 @@ func TestConcurrentMergeQueueTwoHosts(t *testing.T) {
 			defer wg.Done()
 			<-start
 			if cleanup, ok := merge.AcquireLock(tasksDir); ok {
-				results[idx] = merge.ProcessQueue(repoRoot, tasksDir, "mato", nil)
+				results[idx] = merge.ProcessQueue(repoRoot, tasksDir, "mato")
 				cleanup()
 			}
 		}(i)

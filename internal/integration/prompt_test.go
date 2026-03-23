@@ -889,7 +889,7 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 		t.Fatalf("move to ready-to-merge: %v", err)
 	}
 
-	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil); got != 1 {
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 

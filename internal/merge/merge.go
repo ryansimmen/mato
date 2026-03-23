@@ -42,18 +42,24 @@ const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 // It scans ready-to-merge/ for task files, prefers branch metadata recorded in
 // each task file, falls back to the filename-derived branch name for backward
 // compatibility, and performs a squash merge.
-// When idx is non-nil, it is used to resolve active branches without a
-// filesystem scan; when nil, the function falls back to scanning the
-// in-progress/, ready-for-review/, and ready-to-merge/ directories.
+// Active branches for fallback disambiguation are always resolved via a fresh
+// filesystem scan (passing nil to CollectActiveBranches) to avoid stale data
+// from a PollIndex snapshot that was built earlier in the poll cycle.
 // Returns the number of tasks successfully merged.
-func ProcessQueue(repoRoot, tasksDir, branch string, idx *queue.PollIndex) int {
+func ProcessQueue(repoRoot, tasksDir, branch string) int {
 	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
 	names, err := queue.ListTaskFiles(readyDir)
 	if err != nil {
 		return 0
 	}
 
-	activeBranches := queue.CollectActiveBranches(tasksDir, idx)
+	// Pass nil to force a fresh filesystem scan rather than relying on a
+	// potentially stale PollIndex snapshot. The index is built at the
+	// start of each poll cycle, but by the time ProcessQueue runs, task
+	// claiming and review actions may have changed the set of active
+	// branches. A fresh scan here ensures correct fallback branch
+	// disambiguation for legacy tasks without a <!-- branch: --> marker.
+	activeBranches := queue.CollectActiveBranches(tasksDir, nil)
 
 	tasks := make([]mergeQueueTask, 0, len(names))
 	for _, name := range names {

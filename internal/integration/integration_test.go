@@ -139,7 +139,7 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 	readyTask := filepath.Join(tasksDir, queue.DirReadyMerge, "add-hello.md")
 	mustRename(t, inProgressTask, readyTask)
 
-	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil); got != 1 {
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 
@@ -263,7 +263,7 @@ func TestMergeConflictHandling(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
 	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "---\npriority: 10\n---\n# Beta\n")
 
-	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil); got != 1 {
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 
