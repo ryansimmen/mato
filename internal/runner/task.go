@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
@@ -268,7 +269,7 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 	}
 
 	depCtxPath := filepath.Join(tasksDir, "messages", "dependency-context-"+claimed.Filename+".json")
-	if err := os.WriteFile(depCtxPath, data, 0o644); err != nil {
+	if err := atomicwrite.WriteFile(depCtxPath, data); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write dependency context file: %v\n", err)
 		return ""
 	}
