@@ -559,41 +559,58 @@ func TestAcquire_LiveLockNotReclaimed(t *testing.T) {
 }
 
 func TestAcquire_ConcurrentTwoGoroutines(t *testing.T) {
-	dir := t.TempDir()
+	// Repeat several times to reduce the chance of passing by accident
+	// when the scheduler serializes the two goroutines.
+	for round := 0; round < 5; round++ {
+		dir := t.TempDir()
 
-	var mu sync.Mutex
-	winners := 0
-	var winnerRelease func()
+		var mu sync.Mutex
+		winners := 0
+		var winnerRelease func()
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+		var wg sync.WaitGroup
+		wg.Add(2)
 
-	for i := 0; i < 2; i++ {
-		go func() {
-			defer wg.Done()
-			release, ok := Acquire(dir, "dual")
-			if ok {
-				mu.Lock()
-				winners++
-				winnerRelease = release
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
+		// Barrier: both goroutines signal readiness, then block until
+		// the gate is closed so they race into Acquire together.
+		ready := make(chan struct{}, 2)
+		gate := make(chan struct{})
 
-	if winners != 1 {
-		t.Fatalf("expected exactly 1 winner among 2 concurrent acquires, got %d", winners)
-	}
+		for i := 0; i < 2; i++ {
+			go func() {
+				defer wg.Done()
+				ready <- struct{}{}
+				<-gate
+				release, ok := Acquire(dir, "dual")
+				if ok {
+					mu.Lock()
+					winners++
+					winnerRelease = release
+					mu.Unlock()
+				}
+			}()
+		}
 
-	if winnerRelease != nil {
-		winnerRelease()
-	}
+		// Wait for both goroutines to be ready, then release them.
+		<-ready
+		<-ready
+		close(gate)
 
-	// After release, the lock file should be gone.
-	lockPath := filepath.Join(dir, "dual.lock")
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Error("lock file should be removed after winner releases")
+		wg.Wait()
+
+		if winners != 1 {
+			t.Fatalf("round %d: expected exactly 1 winner among 2 concurrent acquires, got %d", round, winners)
+		}
+
+		if winnerRelease != nil {
+			winnerRelease()
+		}
+
+		// After release, the lock file should be gone.
+		lockPath := filepath.Join(dir, "dual.lock")
+		if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+			t.Errorf("round %d: lock file should be removed after winner releases", round)
+		}
 	}
 }
 
