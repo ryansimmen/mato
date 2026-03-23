@@ -13,6 +13,7 @@ import (
 // and directories that are bind-mounted into Docker agent containers.
 type hostTools struct {
 	copilotPath        string
+	copilotConfigDir   string
 	gitPath            string
 	gitUploadPackPath  string
 	gitReceivePackPath string
@@ -71,6 +72,16 @@ func discoverHostTools() (hostTools, error) {
 	if err != nil {
 		return hostTools{}, fmt.Errorf("resolve home directory: %w", err)
 	}
+
+	copilotConfigDir := filepath.Join(homeDir, ".copilot")
+	info, statErr := os.Stat(copilotConfigDir)
+	if statErr != nil {
+		return hostTools{}, fmt.Errorf("~/.copilot directory not found at %s: %w", copilotConfigDir, statErr)
+	}
+	if !info.IsDir() {
+		return hostTools{}, fmt.Errorf("~/.copilot path %s exists but is not a directory", copilotConfigDir)
+	}
+
 	ghConfigDir := filepath.Join(homeDir, ".config", "gh")
 	hasGhConfig := false
 	if info, statErr := os.Stat(ghConfigDir); statErr == nil && info.IsDir() {
@@ -79,6 +90,7 @@ func discoverHostTools() (hostTools, error) {
 
 	return hostTools{
 		copilotPath:        copilotPath,
+		copilotConfigDir:   copilotConfigDir,
 		gitPath:            gitPath,
 		gitUploadPackPath:  gitUploadPackPath,
 		gitReceivePackPath: gitReceivePackPath,
