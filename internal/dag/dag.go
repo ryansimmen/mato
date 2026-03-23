@@ -6,7 +6,20 @@
 // inputs.
 package dag
 
-import "sort"
+import (
+	"container/heap"
+	"sort"
+)
+
+// stringHeap implements heap.Interface for a min-heap of strings,
+// used by Kahn's algorithm to maintain deterministic processing order.
+type stringHeap []string
+
+func (h stringHeap) Len() int            { return len(h) }
+func (h stringHeap) Less(i, j int) bool  { return h[i] < h[j] }
+func (h stringHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *stringHeap) Push(x any)         { *h = append(*h, x.(string)) }
+func (h *stringHeap) Pop() any           { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
 
 // Node represents a waiting task in the dependency graph.
 type Node struct {
@@ -99,19 +112,17 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 	}
 
 	// --- Kahn's algorithm: find nodes not blocked by waiting-task edges ---
-	var queue []string
+	h := &stringHeap{}
 	for _, n := range waiting {
 		if inDeg[n.ID] == 0 {
-			queue = append(queue, n.ID)
+			*h = append(*h, n.ID)
 		}
 	}
-	// Sort initial queue for determinism.
-	sort.Strings(queue)
+	heap.Init(h)
 
 	kahnResolved := make(map[string]struct{}, len(waiting))
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
+	for h.Len() > 0 {
+		id := heap.Pop(h).(string)
 		kahnResolved[id] = struct{}{}
 
 		// Collect and sort neighbors for deterministic processing.
@@ -122,9 +133,7 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 		for _, next := range sorted {
 			inDeg[next]--
 			if inDeg[next] == 0 {
-				queue = append(queue, next)
-				// Re-sort to maintain deterministic processing order.
-				sort.Strings(queue)
+				heap.Push(h, next)
 			}
 		}
 	}
