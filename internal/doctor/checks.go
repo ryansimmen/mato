@@ -560,19 +560,31 @@ func scanOrphanedTasks(tasksDir string, fix bool) []Finding {
 			continue
 		}
 
-		// Check if agent is dead.
+		// Check claim marker and agent liveness.
 		agent := queue.ParseClaimedBy(src)
 		if agent != "" && identity.IsAgentActive(tasksDir, agent) {
 			continue // agent is alive, skip
 		}
 
-		findings = append(findings, Finding{
-			Code:     "locks.orphaned_task",
-			Severity: SeverityWarning,
-			Message:  fmt.Sprintf("in-progress task %s claimed by dead agent", name),
-			Path:     src,
-			Fixable:  true,
-		})
+		if agent == "" {
+			// No valid claimed-by marker — different corruption case.
+			findings = append(findings, Finding{
+				Code:     "locks.unclaimed_in_progress",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("in-progress task %s has no claimed-by marker", name),
+				Path:     src,
+				Fixable:  true,
+			})
+		} else {
+			// Valid claim marker but agent is dead.
+			findings = append(findings, Finding{
+				Code:     "locks.orphaned_task",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("in-progress task %s claimed by dead agent %s", name, agent),
+				Path:     src,
+				Fixable:  true,
+			})
+		}
 	}
 
 	if fix && len(findings) > 0 {
