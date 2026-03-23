@@ -792,3 +792,35 @@ func TestBranchDisambiguator(t *testing.T) {
 			"fix the bug (urgent).md", "fix-the-bug-urgent.md", sA)
 	}
 }
+
+func TestParseTaskData_NegativeMaxRetries(t *testing.T) {
+	data := []byte(`---
+max_retries: -1
+---
+# Negative retries
+Body.
+`)
+	_, _, err := ParseTaskData(data, "neg-retries.md")
+	if err == nil {
+		t.Fatal("expected error for negative max_retries, got nil")
+	}
+	if !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("error should mention negative, got: %v", err)
+	}
+}
+
+func TestParseTaskData_ZeroMaxRetries(t *testing.T) {
+	data := []byte(`---
+max_retries: 0
+---
+# Zero retries
+Body.
+`)
+	meta, _, err := ParseTaskData(data, "zero-retries.md")
+	if err != nil {
+		t.Fatalf("unexpected error for max_retries: 0: %v", err)
+	}
+	if meta.MaxRetries != 0 {
+		t.Fatalf("MaxRetries = %d, want 0", meta.MaxRetries)
+	}
+}

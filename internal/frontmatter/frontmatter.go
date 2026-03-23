@@ -99,6 +99,9 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 				meta.MaxRetries = 3
 			}
 		}
+		if meta.MaxRetries < 0 {
+			return TaskMeta{}, "", fmt.Errorf("invalid max_retries in %s: value %d is negative", path, meta.MaxRetries)
+		}
 		// Filter empty strings from arrays (YAML can produce them from ["", x])
 		meta.DependsOn = filterEmpty(meta.DependsOn)
 		meta.Affects = sanitizeAffects(filterEmpty(meta.Affects))
