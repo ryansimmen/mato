@@ -1851,7 +1851,7 @@ func TestPostReviewAction_ApprovalMarkerAndReviewFailureWriteFailure(t *testing.
 	if !strings.Contains(stderr, "could not write approval marker") {
 		t.Fatalf("expected approval marker warning in stderr, got:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, "open task file to append review-failure") {
+	if !strings.Contains(stderr, "for append:") {
 		t.Fatalf("expected review-failure append warning in stderr, got:\n%s", stderr)
 	}
 }

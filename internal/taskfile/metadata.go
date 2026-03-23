@@ -3,10 +3,11 @@ package taskfile
 import (
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	"mato/internal/atomicwrite"
 )
 
 // Compiled regexes for all HTML comment metadata markers in task files.
@@ -172,20 +173,9 @@ func WriteClaimedByComment(w io.Writer, agentID, claimedAt string) error {
 func AppendFailureRecord(path, agentID, step, errMsg string) error {
 	step = SanitizeCommentText(step)
 	errMsg = SanitizeCommentText(errMsg)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open task file to append failure record: %w", err)
-	}
-	_, writeErr := fmt.Fprintf(f, "\n<!-- failure: %s at %s step=%s error=%s -->\n",
+	content := fmt.Sprintf("\n<!-- failure: %s at %s step=%s error=%s -->\n",
 		agentID, time.Now().UTC().Format(time.RFC3339), step, errMsg)
-	closeErr := f.Close()
-	if writeErr != nil {
-		return fmt.Errorf("write failure record: %w", writeErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close after failure record: %w", closeErr)
-	}
-	return nil
+	return atomicwrite.AppendToFile(path, content)
 }
 
 // cycleFailurePrefix is the marker prefix for cycle-failure records.
@@ -195,20 +185,9 @@ var cycleFailurePrefix = "<!-- cycle-failure:"
 // task file at path using O_APPEND. Cycle failures are structural (circular
 // dependency) and do not consume normal retry budget.
 func AppendCycleFailureRecord(path string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open task file to append cycle-failure: %w", err)
-	}
-	_, writeErr := fmt.Fprintf(f, "\n<!-- cycle-failure: mato at %s — circular dependency -->\n",
+	content := fmt.Sprintf("\n<!-- cycle-failure: mato at %s — circular dependency -->\n",
 		time.Now().UTC().Format(time.RFC3339))
-	closeErr := f.Close()
-	if writeErr != nil {
-		return fmt.Errorf("write cycle-failure record: %w", writeErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close after cycle-failure record: %w", closeErr)
-	}
-	return nil
+	return atomicwrite.AppendToFile(path, content)
 }
 
 // ContainsCycleFailure reports whether data contains a <!-- cycle-failure: ... -->
@@ -250,18 +229,7 @@ func LastCycleFailureReason(data []byte) string {
 // for a future review attempt.
 func AppendReviewFailure(path, agentID, reason string) error {
 	reason = SanitizeCommentText(reason)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open task file to append review-failure: %w", err)
-	}
-	_, writeErr := fmt.Fprintf(f, "\n<!-- review-failure: %s at %s step=REVIEW error=%s -->\n",
+	content := fmt.Sprintf("\n<!-- review-failure: %s at %s step=REVIEW error=%s -->\n",
 		agentID, time.Now().UTC().Format(time.RFC3339), reason)
-	closeErr := f.Close()
-	if writeErr != nil {
-		return fmt.Errorf("write review-failure record: %w", writeErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close after review-failure record: %w", closeErr)
-	}
-	return nil
+	return atomicwrite.AppendToFile(path, content)
 }

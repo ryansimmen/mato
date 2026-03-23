@@ -605,7 +605,7 @@ func TestRecoverOrphanedTasks_StillMovesWhenAppendFails(t *testing.T) {
 	}
 
 	// Should have logged a warning about the append failure
-	if !strings.Contains(stderr, "could not open task file to append failure record") {
+	if !strings.Contains(stderr, "could not write failure record") {
 		t.Fatalf("expected warning about append failure, got %q", stderr)
 	}
 

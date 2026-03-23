@@ -211,18 +211,10 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	// Only append a generic failure record if the agent did not already write
 	// one (via ON_FAILURE). This prevents double-counting retries.
 	if !agentWroteFailureRecord(dst, agentID) {
-		f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not open task file to append failure record for %s: %v\n", claimed.Filename, err)
-		} else {
-			_, writeErr := fmt.Fprintf(f, "\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
-				agentID, time.Now().UTC().Format(time.RFC3339))
-			closeErr := f.Close()
-			if writeErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, writeErr)
-			} else if closeErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, closeErr)
-			}
+		content := fmt.Sprintf("\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
+			agentID, time.Now().UTC().Format(time.RFC3339))
+		if err := atomicwrite.AppendToFile(dst, content); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, err)
 		}
 	}
 
