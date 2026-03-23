@@ -276,6 +276,13 @@ func resolveReviewVerdict(task *queue.ClaimedTask) string {
 	return ""
 }
 
+// PostReviewAction is the exported entry point for the host-side review
+// handoff after a review agent exits. It delegates to the internal
+// postReviewAction implementation.
+func PostReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
+	postReviewAction(tasksDir, agentID, task)
+}
+
 // postReviewAction reads the verdict file written by the review agent and
 // handles the result. If approved, the host writes the approval marker and
 // moves the task to ready-to-merge/. If rejected, writes rejection marker
