@@ -2,7 +2,7 @@
 
 -include .env
 
-.PHONY: all build clean fmt help install install-skill integration-test lint run test vet
+.PHONY: all build clean fmt help install integration-test lint run test vet
 
 BIN_DIR := bin
 
