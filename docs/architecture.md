@@ -317,7 +317,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `cmd/mato/main.go`
 - CLI entrypoint.
 - `main()` routes `status` to `status.Show(...)` and otherwise starts `runner.Run(...)`.
-- `parseArgs(...)` handles `--repo`, `--branch`, `--tasks-dir`, `--help`, `--`, and forwards all other args to Copilot CLI.
+- `extractKnownFlags(...)` handles `--repo`, `--branch`, `--tasks-dir`, `--help`, `--`, and forwards all other args to Copilot CLI.
 
 ### `internal/runner/`
 - Embeds `task-instructions.md` (the task agent prompt/state machine) and `review-instructions.md` (the review agent prompt).
@@ -379,7 +379,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `internal/frontmatter/`
 - `TaskMeta` schema.
-- YAML-like frontmatter parsing (stdlib only) — `ParseTaskFile` (from disk) and `ParseTaskData` (from raw bytes).
+- YAML frontmatter parsing via `gopkg.in/yaml.v3` — `ParseTaskFile` (from disk) and `ParseTaskData` (from raw bytes).
 - Default metadata values and task-body extraction.
 - Strips comment-only HTML metadata lines from the body.
 - Branch-name sanitization — `SanitizeBranchName`, `BranchDisambiguator`.
@@ -395,6 +395,11 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `mato status` dashboard — `Show`, `ShowTo`, `Watch` (`status.go`).
 - Data gathering layer — `gatherStatus` collects queue counts, active agents, presence, task lists, completions, messages, merge-lock state (`status_gather.go`).
 - Rendering layer — individual `render*` functions for each dashboard section, terminal colors (`status_render.go`).
+
+### `internal/doctor/`
+- Health check command — `Run`, `RenderText`, `RenderJSON` (`doctor.go`, `checks.go`, `render.go`).
+- 7 checks: git, tools, docker, queue layout, task parsing, locks & orphans, dependencies.
+- Fix mode for repairable issues — `--fix` flag.
 
 ### Test files
 Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignoreContains` and `CommitGitignore`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
