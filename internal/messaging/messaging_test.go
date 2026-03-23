@@ -1827,3 +1827,352 @@ func TestReadAllCompletionDetails_SkipsDeletedFile(t *testing.T) {
 		t.Fatalf("got[0].TaskID = %q, want %q", got[0].TaskID, "task-a")
 	}
 }
+
+func TestWriteMessage_NonUTCSentAtNormalized(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Use a timezone offset that is clearly non-UTC.
+	est := time.FixedZone("EST", -5*60*60)
+	nonUTC := time.Date(2024, time.June, 15, 10, 30, 0, 0, est) // 10:30 EST = 15:30 UTC
+
+	msg := Message{
+		ID:     "tz-test-1",
+		From:   "agent-tz",
+		Type:   "progress",
+		Task:   "tz-task.md",
+		Branch: "task/tz",
+		Body:   "testing timezone normalization",
+		SentAt: nonUTC,
+	}
+	if err := WriteMessage(tasksDir, msg); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Read the persisted file and verify SentAt is UTC.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(entries))
+	}
+
+	data, err := os.ReadFile(filepath.Join(eventsDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var persisted Message
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if persisted.SentAt.Location() != time.UTC {
+		t.Fatalf("SentAt location = %v, want UTC", persisted.SentAt.Location())
+	}
+	wantUTC := nonUTC.UTC()
+	if !persisted.SentAt.Equal(wantUTC) {
+		t.Fatalf("SentAt = %v, want %v", persisted.SentAt, wantUTC)
+	}
+
+	// The filename should embed the UTC timestamp, not the EST one.
+	name := entries[0].Name()
+	if !strings.HasPrefix(name, "20240615T153000") {
+		t.Fatalf("filename %q should start with UTC timestamp 20240615T153000", name)
+	}
+}
+
+func TestWriteMessage_NonUTCSentAtMultipleZones(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		zone     *time.Location
+		hour     int
+		wantHour int
+	}{
+		{"positive offset", time.FixedZone("IST", 5*60*60+30*60), 18, 13},
+		{"negative offset", time.FixedZone("PST", -8*60*60), 4, 12},
+		{"already UTC", time.UTC, 12, 12},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sentAt := time.Date(2024, time.January, 10, tt.hour, 30, 0, 0, tt.zone)
+			msg := Message{
+				ID:     fmt.Sprintf("zone-%d", i),
+				From:   "agent",
+				Type:   "intent",
+				Task:   "task.md",
+				Branch: "b",
+				Body:   "z",
+				SentAt: sentAt,
+			}
+			if err := WriteMessage(tasksDir, msg); err != nil {
+				t.Fatalf("WriteMessage: %v", err)
+			}
+
+			msgs, err := ReadMessages(tasksDir, time.Time{})
+			if err != nil {
+				t.Fatalf("ReadMessages: %v", err)
+			}
+			// Find our message.
+			for _, m := range msgs {
+				if m.ID == msg.ID {
+					if m.SentAt.Hour() != tt.wantHour {
+						t.Fatalf("SentAt hour = %d, want %d (UTC)", m.SentAt.Hour(), tt.wantHour)
+					}
+					return
+				}
+			}
+			t.Fatalf("message %q not found", msg.ID)
+		})
+	}
+}
+
+func TestMessageFilePart_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		fallback string
+		want     string
+	}{
+		{"empty string", "", "fallback", "fallback"},
+		{"whitespace only spaces", "   ", "fallback", "fallback"},
+		{"whitespace only tabs", "\t\t", "fallback", "fallback"},
+		{"mixed whitespace", " \t \n ", "fallback", "fallback"},
+		{"punctuation only exclamation", "!!!", "fallback", "fallback"},
+		{"punctuation only parens", "(())", "fallback", "fallback"},
+		{"punctuation only at-signs", "@@@", "fallback", "fallback"},
+		{"punctuation slash and colon", "://", "fallback", "fallback"},
+		{"punctuation trimmed to empty", "...", "fallback", "fallback"},
+		{"leading trailing dots underscores dashes", ".-_hello_-.", "hello", "hello"},
+		{"valid simple", "agent-1", "fallback", "agent-1"},
+		{"valid with dots", "v1.2.3", "fallback", "v1.2.3"},
+		{"special chars replaced then trimmed", "hello world!", "fallback", "hello-world"},
+		{"special chars then trimmed", " @agent@ ", "fallback", "agent"},
+		{"unicode replaced", "agënt", "fallback", "ag-nt"},
+		{"all unsafe chars", "***", "fallback", "fallback"},
+		{"whitespace around valid", "  ok  ", "fallback", "ok"},
+		{"only trimchars after replace", "---", "fallback", "fallback"},
+		{"dots only", "...", "msg", "msg"},
+		{"underscores only", "___", "msg", "msg"},
+		{"mixed trim chars", "-._.-", "msg", "msg"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := messageFilePart(tt.value, tt.fallback)
+			if got != tt.want {
+				t.Errorf("messageFilePart(%q, %q) = %q, want %q", tt.value, tt.fallback, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteMessage_BlankFromFallsBackToUnknown(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		from string
+	}{
+		{"empty", ""},
+		{"spaces", "   "},
+		{"tabs", "\t\t"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := Init(dir); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			msg := Message{
+				ID:     "blank-from",
+				From:   tt.from,
+				Type:   "intent",
+				Task:   "t.md",
+				Branch: "b",
+				Body:   "b",
+				SentAt: time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC),
+			}
+			if err := WriteMessage(dir, msg); err != nil {
+				t.Fatalf("WriteMessage: %v", err)
+			}
+
+			entries, err := os.ReadDir(filepath.Join(dir, "messages", "events"))
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("expected 1 file, got %d", len(entries))
+			}
+			name := entries[0].Name()
+			// The from part should fall back to "unknown".
+			if !strings.Contains(name, "-unknown-intent-") {
+				t.Fatalf("filename %q should contain '-unknown-intent-' for blank from", name)
+			}
+		})
+	}
+}
+
+func TestWritePresence_UnsafeAgentID(t *testing.T) {
+	tests := []struct {
+		name         string
+		agentID      string
+		wantFilePart string
+	}{
+		{"slashes", "../../etc/passwd", "etc-passwd"},
+		{"spaces", "agent one", "agent-one"},
+		{"special chars", "agent@host:1234", "agent-host-1234"},
+		{"empty", "", "unknown"},
+		{"whitespace only", "   ", "unknown"},
+		{"unicode", "agënt-ünit", "ag-nt--nit"},
+		{"dots only", "...", "unknown"},
+		{"normal", "abc12345", "abc12345"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasksDir := t.TempDir()
+			if err := Init(tasksDir); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+
+			if err := WritePresence(tasksDir, tt.agentID, "task.md", "branch"); err != nil {
+				t.Fatalf("WritePresence: %v", err)
+			}
+
+			// Verify the filename is safe.
+			presenceDir := filepath.Join(tasksDir, "messages", "presence")
+			entries, err := os.ReadDir(presenceDir)
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("expected 1 presence file, got %d", len(entries))
+			}
+			gotFile := entries[0].Name()
+			wantFile := tt.wantFilePart + ".json"
+			if gotFile != wantFile {
+				t.Errorf("presence filename = %q, want %q", gotFile, wantFile)
+			}
+
+			// Verify the JSON payload preserves the original agentID.
+			data, err := os.ReadFile(filepath.Join(presenceDir, gotFile))
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			var info PresenceInfo
+			if err := json.Unmarshal(data, &info); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if info.AgentID != tt.agentID {
+				t.Errorf("AgentID = %q, want %q (original should be preserved in JSON)", info.AgentID, tt.agentID)
+			}
+		})
+	}
+}
+
+func TestReadMessages_DeterministicOrderOnEqualTimestamps(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	sameTime := time.Date(2024, time.July, 4, 12, 0, 0, 0, time.UTC)
+
+	// Write messages with the same timestamp but different IDs.
+	ids := []string{"charlie", "alpha", "bravo"}
+	for _, id := range ids {
+		msg := Message{
+			ID:     id,
+			From:   "agent",
+			Type:   "intent",
+			Task:   "task.md",
+			Branch: "b",
+			Body:   "body",
+			SentAt: sameTime,
+		}
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", id, err)
+		}
+	}
+
+	msgs, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	// Should be sorted by ID when timestamps are equal: alpha, bravo, charlie.
+	wantOrder := []string{"alpha", "bravo", "charlie"}
+	for i, want := range wantOrder {
+		if msgs[i].ID != want {
+			t.Errorf("msgs[%d].ID = %q, want %q", i, msgs[i].ID, want)
+		}
+	}
+}
+
+func TestReadMessages_StableSortMixedTimestamps(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	t1 := time.Date(2024, time.July, 4, 12, 0, 0, 0, time.UTC)
+	t2 := time.Date(2024, time.July, 4, 13, 0, 0, 0, time.UTC)
+
+	// Two messages at t1 (z-id before a-id alphabetically → should swap),
+	// one message at t2.
+	toWrite := []struct {
+		id   string
+		sent time.Time
+	}{
+		{"z-id", t1},
+		{"a-id", t1},
+		{"m-id", t2},
+	}
+	for _, tw := range toWrite {
+		msg := Message{
+			ID:     tw.id,
+			From:   "agent",
+			Type:   "intent",
+			Task:   "task.md",
+			Branch: "b",
+			Body:   "body",
+			SentAt: tw.sent,
+		}
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", tw.id, err)
+		}
+	}
+
+	msgs, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	// Expected: a-id (t1), z-id (t1), m-id (t2).
+	wantOrder := []string{"a-id", "z-id", "m-id"}
+	for i, want := range wantOrder {
+		if msgs[i].ID != want {
+			t.Errorf("msgs[%d].ID = %q, want %q", i, msgs[i].ID, want)
+		}
+	}
+}
