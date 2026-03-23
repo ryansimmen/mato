@@ -13,8 +13,8 @@ import (
 // These are the canonical definitions — no other package should define its own.
 var (
 	branchCommentRe    = regexp.MustCompile(`<!-- branch:\s*(\S+)\s*-->`)
-	claimedByRe        = regexp.MustCompile(`<!-- claimed-by:\s*(\S+)`)
-	claimedAtRe        = regexp.MustCompile(`claimed-at:\s*(\S+)`)
+	claimedByRe        = regexp.MustCompile(`<!-- claimed-by:\s*(\S+).*-->`)
+	claimedAtRe        = regexp.MustCompile(`<!-- claimed-by:\s*\S+\s+claimed-at:\s*(\S+)\s*-->`)
 	reviewRejectionStr = "<!-- review-rejection:"
 	failurePrefix      = "<!-- failure:"
 	reviewFailureStr   = "<!-- review-failure:"

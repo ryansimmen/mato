@@ -54,6 +54,11 @@ func TestParseClaimedBy(t *testing.T) {
 		{"multiline", "line1\n<!-- claimed-by: xyz -->", "xyz", true},
 		{"empty", "", "", false},
 		{"no marker", "# Task\nNo claim here.", "", false},
+		{"unterminated comment", "<!-- claimed-by: abc123\n", "", false},
+		{"missing close", "<!-- claimed-by: abc123", "", false},
+		{"stray text no comment", "claimed-by: abc123", "", false},
+		{"partial open", "<!- claimed-by: abc123 -->", "", false},
+		{"truncated line", "<!-- claimed-by: abc123 --", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,6 +83,10 @@ func TestParseClaimedAt(t *testing.T) {
 		{"invalid timestamp", "<!-- claimed-by: abc  claimed-at: not-a-date -->", false},
 		{"missing", "# No metadata", false},
 		{"empty", "", false},
+		{"unterminated comment", "<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z\n", false},
+		{"bare claimed-at", "claimed-at: 2026-03-15T10:30:00Z", false},
+		{"no claimed-by prefix", "<!-- claimed-at: 2026-03-15T10:30:00Z -->", false},
+		{"truncated marker", "<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z --", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
