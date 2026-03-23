@@ -1,3 +1,6 @@
+// Package messaging implements the inter-agent messaging protocol. It supports
+// intent, progress, and completion event types, enabling coordination between
+// concurrently running agents through filesystem-backed JSON messages.
 package messaging
 
 import (

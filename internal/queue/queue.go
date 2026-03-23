@@ -1,3 +1,6 @@
+// Package queue manages the filesystem-backed task queue with priority-based
+// claiming and dependency tracking. It handles task lifecycle transitions,
+// atomic file moves between queue directories, and orphan recovery.
 package queue
 
 import (
