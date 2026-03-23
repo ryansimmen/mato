@@ -616,6 +616,83 @@ func TestCleanOldMessages(t *testing.T) {
 	}
 }
 
+func TestCleanStalePresence_NonJSONIgnored(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	nonJSON := filepath.Join(presenceDir, "README.txt")
+	if err := os.WriteFile(nonJSON, []byte("not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	CleanStalePresence(tasksDir)
+
+	if _, err := os.Stat(nonJSON); err != nil {
+		t.Fatalf("non-JSON file should not be removed: %v", err)
+	}
+}
+
+func TestCleanStalePresence_MissingDirectory(t *testing.T) {
+	tasksDir := filepath.Join(t.TempDir(), "nonexistent")
+
+	// Should not panic when the presence directory does not exist.
+	CleanStalePresence(tasksDir)
+}
+
+func TestCleanStalePresence_NoLockFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Write presence for an agent that has no .pid lock file at all.
+	if err := WritePresence(tasksDir, "ghost", "ghost-task.md", "ghost-branch"); err != nil {
+		t.Fatalf("WritePresence: %v", err)
+	}
+
+	CleanStalePresence(tasksDir)
+
+	presenceFile := filepath.Join(tasksDir, "messages", "presence", "ghost.json")
+	if _, err := os.Stat(presenceFile); !os.IsNotExist(err) {
+		t.Fatal("presence for agent with no lock file should be removed")
+	}
+}
+
+func TestCleanOldMessages_NonJSONIgnored(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	nonJSON := filepath.Join(eventsDir, "notes.txt")
+	if err := os.WriteFile(nonJSON, []byte("not a message"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Set the non-JSON file's mtime to well in the past so it would be
+	// cleaned if .json filtering were missing.
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(nonJSON, old, old); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	CleanOldMessages(tasksDir, 24*time.Hour)
+
+	if _, err := os.Stat(nonJSON); err != nil {
+		t.Fatalf("non-JSON file should not be removed: %v", err)
+	}
+}
+
+func TestCleanOldMessages_MissingDirectory(t *testing.T) {
+	tasksDir := filepath.Join(t.TempDir(), "nonexistent")
+
+	// Should not panic when the events directory does not exist.
+	CleanOldMessages(tasksDir, 24*time.Hour)
+}
+
 func TestWriteMessageAtomicWrite(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {
