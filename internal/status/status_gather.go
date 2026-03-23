@@ -39,13 +39,22 @@ type progressEntry struct {
 }
 
 // gatherStatus collects all data needed for the status dashboard.
+// It builds a single PollIndex to avoid redundant filesystem scans,
+// then derives all queue data from that snapshot.
 func gatherStatus(tasksDir string) (statusData, error) {
 	var data statusData
 
-	// Queue counts.
+	// Build one index for the entire gather cycle.
+	idx := queue.BuildIndex(tasksDir)
+
+	// Queue counts derived from the index snapshot.
+	// Include parse-failed files in counts to match old countMarkdownFiles behavior.
 	data.queueCounts = make(map[string]int, len(queue.AllDirs))
 	for _, dir := range queue.AllDirs {
-		data.queueCounts[dir] = countMarkdownFiles(filepath.Join(tasksDir, dir))
+		data.queueCounts[dir] = len(idx.TasksByState(dir))
+	}
+	for _, pf := range idx.ParseFailures() {
+		data.queueCounts[pf.State]++
 	}
 
 	// Active agents.
@@ -58,15 +67,11 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	// Presence info.
 	data.presenceMap, _ = messaging.ReadAllPresence(tasksDir)
 
-	// Waiting tasks (dependency-blocked).
-	waitingTasks, err := waitingTasksStatus(tasksDir)
-	if err != nil {
-		return data, err
-	}
-	data.waitingTasks = waitingTasks
+	// Waiting tasks (dependency-blocked) — derived from index.
+	data.waitingTasks = waitingTasksFromIndex(idx)
 
-	// Deferred (conflict-blocked) tasks.
-	data.deferredDetail = queue.DeferredOverlappingTasksDetailed(tasksDir, nil)
+	// Deferred (conflict-blocked) tasks — reuse the same index.
+	data.deferredDetail = queue.DeferredOverlappingTasksDetailed(tasksDir, idx)
 	deferred := make(map[string]struct{}, len(data.deferredDetail))
 	for name := range data.deferredDetail {
 		deferred[name] = struct{}{}
@@ -78,14 +83,14 @@ func gatherStatus(tasksDir string) (statusData, error) {
 		data.runnable = 0
 	}
 
-	// Task lists by state.
-	data.inProgressTasks = listTasksInDir(tasksDir, queue.DirInProgress)
-	data.readyForReview = listTasksInDir(tasksDir, queue.DirReadyReview)
-	data.readyToMerge = listTasksInDir(tasksDir, queue.DirReadyMerge)
-	data.failedTasks = listTasksInDir(tasksDir, queue.DirFailed)
+	// Task lists by state — derived from index.
+	data.inProgressTasks = listTasksFromIndex(idx, queue.DirInProgress)
+	data.readyForReview = listTasksFromIndex(idx, queue.DirReadyReview)
+	data.readyToMerge = listTasksFromIndex(idx, queue.DirReadyMerge)
+	data.failedTasks = listTasksFromIndex(idx, queue.DirFailed)
 
-	// Reverse dependencies.
-	data.reverseDeps = reverseDependencies(tasksDir)
+	// Reverse dependencies — derived from index.
+	data.reverseDeps = reverseDepsFromIndex(idx)
 
 	// Completions.
 	data.completions, _ = messaging.ReadAllCompletionDetails(tasksDir)

@@ -36,7 +36,7 @@ func writeTask(t *testing.T, tasksDir, dir, name, content string) {
 	}
 }
 
-func TestCountMarkdownFiles(t *testing.T) {
+func TestListTasksFromIndex_CountsViaIndex(t *testing.T) {
 	tests := []struct {
 		name  string
 		files []string
@@ -65,42 +65,47 @@ func TestCountMarkdownFiles(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
+			tasksDir := setupTasksDir(t)
 			for _, f := range tt.files {
-				os.WriteFile(filepath.Join(dir, f), []byte("# Task\n"), 0o644)
+				os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, f), []byte("# Task\n"), 0o644)
 			}
-			got := countMarkdownFiles(dir)
+			idx := queue.BuildIndex(tasksDir)
+			got := len(idx.TasksByState(queue.DirBacklog))
 			if got != tt.want {
-				t.Errorf("countMarkdownFiles() = %d, want %d", got, tt.want)
+				t.Errorf("len(idx.TasksByState) = %d, want %d", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestCountMarkdownFiles_MissingDir(t *testing.T) {
-	got := countMarkdownFiles(filepath.Join(t.TempDir(), "nonexistent"))
+func TestListTasksFromIndex_MissingDir(t *testing.T) {
+	// With PollIndex, missing directories result in zero-length slices.
+	idx := queue.BuildIndex(filepath.Join(t.TempDir(), "nonexistent"))
+	got := len(idx.TasksByState(queue.DirBacklog))
 	if got != 0 {
-		t.Errorf("countMarkdownFiles(missing dir) = %d, want 0", got)
+		t.Errorf("len(idx.TasksByState(missing dir)) = %d, want 0", got)
 	}
 }
 
-func TestListTasksInDir_Empty(t *testing.T) {
+func TestListTasksFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	tasks := listTasksInDir(tasksDir, queue.DirBacklog)
+	idx := queue.BuildIndex(tasksDir)
+	tasks := listTasksFromIndex(idx, queue.DirBacklog)
 	if len(tasks) != 0 {
-		t.Errorf("listTasksInDir(empty) returned %d tasks, want 0", len(tasks))
+		t.Errorf("listTasksFromIndex(empty) returned %d tasks, want 0", len(tasks))
 	}
 }
 
-func TestListTasksInDir_SortsByPriorityThenName(t *testing.T) {
+func TestListTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirBacklog, "z-task.md", "---\nid: z-task\npriority: 20\n---\n# Z task\n")
 	writeTask(t, tasksDir, queue.DirBacklog, "a-task.md", "---\nid: a-task\npriority: 10\n---\n# A task\n")
 	writeTask(t, tasksDir, queue.DirBacklog, "b-task.md", "---\nid: b-task\npriority: 10\n---\n# B task\n")
 
-	tasks := listTasksInDir(tasksDir, queue.DirBacklog)
+	idx := queue.BuildIndex(tasksDir)
+	tasks := listTasksFromIndex(idx, queue.DirBacklog)
 	if len(tasks) != 3 {
-		t.Fatalf("listTasksInDir returned %d tasks, want 3", len(tasks))
+		t.Fatalf("listTasksFromIndex returned %d tasks, want 3", len(tasks))
 	}
 	// Priority 10 before 20.
 	if tasks[0].name != "a-task.md" {
@@ -114,11 +119,12 @@ func TestListTasksInDir_SortsByPriorityThenName(t *testing.T) {
 	}
 }
 
-func TestListTasksInDir_ExtractsTitleAndMeta(t *testing.T) {
+func TestListTasksFromIndex_ExtractsTitleAndMeta(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirBacklog, "my-task.md", "---\nid: my-task\npriority: 15\nmax_retries: 5\n---\n# My fancy title\n")
 
-	tasks := listTasksInDir(tasksDir, queue.DirBacklog)
+	idx := queue.BuildIndex(tasksDir)
+	tasks := listTasksFromIndex(idx, queue.DirBacklog)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
@@ -136,11 +142,13 @@ func TestListTasksInDir_ExtractsTitleAndMeta(t *testing.T) {
 	}
 }
 
-func TestListTasksInDir_MalformedFrontmatter(t *testing.T) {
+func TestListTasksFromIndex_MalformedFrontmatter(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirBacklog, "bad.md", "---\n: invalid yaml [\n---\n# Title\n")
 
-	tasks := listTasksInDir(tasksDir, queue.DirBacklog)
+	idx := queue.BuildIndex(tasksDir)
+	// Parse failures are included with default metadata so they remain visible.
+	tasks := listTasksFromIndex(idx, queue.DirBacklog)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
@@ -505,12 +513,13 @@ func TestLastCycleFailureReason(t *testing.T) {
 	}
 }
 
-func TestReverseDependencies_MultipleDeps(t *testing.T) {
+func TestReverseDepsFromIndex_MultipleDeps(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirWaiting, "a.md", "---\nid: a\ndepends_on: [x, y]\n---\n# A\n")
 	writeTask(t, tasksDir, queue.DirWaiting, "b.md", "---\nid: b\ndepends_on: [x]\n---\n# B\n")
 
-	result := reverseDependencies(tasksDir)
+	idx := queue.BuildIndex(tasksDir)
+	result := reverseDepsFromIndex(idx)
 	if len(result["x"]) != 2 {
 		t.Errorf("x has %d dependents, want 2", len(result["x"]))
 	}
@@ -519,35 +528,35 @@ func TestReverseDependencies_MultipleDeps(t *testing.T) {
 	}
 }
 
-func TestReverseDependencies_EmptyWaiting(t *testing.T) {
+func TestReverseDepsFromIndex_EmptyWaiting(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	result := reverseDependencies(tasksDir)
+	idx := queue.BuildIndex(tasksDir)
+	result := reverseDepsFromIndex(idx)
 	if len(result) != 0 {
 		t.Errorf("expected empty map, got %d entries", len(result))
 	}
 }
 
-func TestReverseDependencies_NoDependencies(t *testing.T) {
+func TestReverseDepsFromIndex_NoDependencies(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirWaiting, "standalone.md", "---\nid: standalone\n---\n# Standalone\n")
 
-	result := reverseDependencies(tasksDir)
+	idx := queue.BuildIndex(tasksDir)
+	result := reverseDepsFromIndex(idx)
 	if len(result) != 0 {
 		t.Errorf("expected empty map for task with no deps, got %d entries", len(result))
 	}
 }
 
-func TestTaskStatesByID(t *testing.T) {
+func TestTaskStatesByIDFromIndex(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirBacklog, "task-a.md", "---\nid: task-a\n---\n# A\n")
 	writeTask(t, tasksDir, queue.DirInProgress, "task-b.md", "---\nid: task-b\n---\n# B\n")
 	writeTask(t, tasksDir, queue.DirCompleted, "task-c.md", "---\nid: task-c\n---\n# C\n")
 	writeTask(t, tasksDir, queue.DirFailed, "task-d.md", "---\nid: task-d\n---\n# D\n")
 
-	states, err := taskStatesByID(tasksDir)
-	if err != nil {
-		t.Fatalf("taskStatesByID: %v", err)
-	}
+	idx := queue.BuildIndex(tasksDir)
+	states := taskStatesByIDFromIndex(idx)
 
 	// Both the ID and the filename stem should be mapped.
 	expectations := map[string]string{
@@ -563,26 +572,22 @@ func TestTaskStatesByID(t *testing.T) {
 	}
 }
 
-func TestTaskStatesByID_Empty(t *testing.T) {
+func TestTaskStatesByIDFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	states, err := taskStatesByID(tasksDir)
-	if err != nil {
-		t.Fatalf("taskStatesByID: %v", err)
-	}
+	idx := queue.BuildIndex(tasksDir)
+	states := taskStatesByIDFromIndex(idx)
 	if len(states) != 0 {
 		t.Errorf("expected empty states, got %d", len(states))
 	}
 }
 
-func TestTaskStatesByID_FileStemKey(t *testing.T) {
+func TestTaskStatesByIDFromIndex_FileStemKey(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	// Task with no explicit id — should be keyed by filename stem.
 	writeTask(t, tasksDir, queue.DirBacklog, "no-id-task.md", "---\npriority: 10\n---\n# No ID\n")
 
-	states, err := taskStatesByID(tasksDir)
-	if err != nil {
-		t.Fatalf("taskStatesByID: %v", err)
-	}
+	idx := queue.BuildIndex(tasksDir)
+	states := taskStatesByIDFromIndex(idx)
 	stem := frontmatter.TaskFileStem("no-id-task.md")
 	if got := states[stem]; got != queue.DirBacklog {
 		t.Errorf("states[%q] = %q, want %q", stem, got, queue.DirBacklog)
@@ -731,27 +736,23 @@ func TestIsMergeLockActive_DeadProcess(t *testing.T) {
 	}
 }
 
-func TestWaitingTasksStatus_Empty(t *testing.T) {
+func TestWaitingTasksFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	tasks, err := waitingTasksStatus(tasksDir)
-	if err != nil {
-		t.Fatalf("waitingTasksStatus: %v", err)
-	}
+	idx := queue.BuildIndex(tasksDir)
+	tasks := waitingTasksFromIndex(idx)
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 waiting tasks, got %d", len(tasks))
 	}
 }
 
-func TestWaitingTasksStatus_SortsByPriorityThenName(t *testing.T) {
+func TestWaitingTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirWaiting, "z-wait.md", "---\nid: z-wait\npriority: 20\ndepends_on: [dep-x]\n---\n# Z waiting\n")
 	writeTask(t, tasksDir, queue.DirWaiting, "a-wait.md", "---\nid: a-wait\npriority: 10\ndepends_on: [dep-y]\n---\n# A waiting\n")
 	writeTask(t, tasksDir, queue.DirWaiting, "b-wait.md", "---\nid: b-wait\npriority: 10\ndepends_on: [dep-z]\n---\n# B waiting\n")
 
-	tasks, err := waitingTasksStatus(tasksDir)
-	if err != nil {
-		t.Fatalf("waitingTasksStatus: %v", err)
-	}
+	idx := queue.BuildIndex(tasksDir)
+	tasks := waitingTasksFromIndex(idx)
 	if len(tasks) != 3 {
 		t.Fatalf("expected 3 waiting tasks, got %d", len(tasks))
 	}
@@ -766,15 +767,13 @@ func TestWaitingTasksStatus_SortsByPriorityThenName(t *testing.T) {
 	}
 }
 
-func TestWaitingTasksStatus_CompletedDepShowsCheck(t *testing.T) {
+func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirCompleted, "dep-done.md", "---\nid: dep-done\n---\n# Done\n")
 	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-done]\n---\n# Waiter\n")
 
-	tasks, err := waitingTasksStatus(tasksDir)
-	if err != nil {
-		t.Fatalf("waitingTasksStatus: %v", err)
-	}
+	idx := queue.BuildIndex(tasksDir)
+	tasks := waitingTasksFromIndex(idx)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
@@ -788,14 +787,12 @@ func TestWaitingTasksStatus_CompletedDepShowsCheck(t *testing.T) {
 	}
 }
 
-func TestWaitingTasksStatus_MissingDepShowsCross(t *testing.T) {
+func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [nonexistent]\n---\n# Waiter\n")
 
-	tasks, err := waitingTasksStatus(tasksDir)
-	if err != nil {
-		t.Fatalf("waitingTasksStatus: %v", err)
-	}
+	idx := queue.BuildIndex(tasksDir)
+	tasks := waitingTasksFromIndex(idx)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
