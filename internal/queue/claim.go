@@ -268,7 +268,9 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 }
 
 // selectCandidates returns the ordered list of claimable task filenames.
-// It reads .queue if present, otherwise lists backlog/ alphabetically.
+// It reads .queue if present for ordering, then appends any backlog/ files
+// not listed in the manifest. This ensures stale or incomplete manifests
+// cannot strand ready work. Without .queue, backlog/ is listed alphabetically.
 func selectCandidates(tasksDir string, deferred map[string]struct{}) ([]string, error) {
 	queueFile := filepath.Join(tasksDir, ".queue")
 	backlogDir := filepath.Join(tasksDir, DirBacklog)
@@ -276,6 +278,7 @@ func selectCandidates(tasksDir string, deferred map[string]struct{}) ([]string, 
 	var candidates []string
 
 	if data, err := os.ReadFile(queueFile); err == nil {
+		seen := make(map[string]struct{})
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || !strings.HasSuffix(line, ".md") {
@@ -289,7 +292,28 @@ func selectCandidates(tasksDir string, deferred map[string]struct{}) ([]string, 
 			if _, err := os.Stat(filepath.Join(backlogDir, line)); err != nil {
 				continue
 			}
+			if _, dup := seen[line]; dup {
+				continue
+			}
+			seen[line] = struct{}{}
 			candidates = append(candidates, line)
+		}
+
+		// Append backlog tasks missing from the manifest so a stale
+		// .queue file cannot strand ready work.
+		names, listErr := ListTaskFiles(backlogDir)
+		if listErr == nil {
+			for _, name := range names {
+				if _, already := seen[name]; already {
+					continue
+				}
+				if deferred != nil {
+					if _, excluded := deferred[name]; excluded {
+						continue
+					}
+				}
+				candidates = append(candidates, name)
+			}
 		}
 	} else {
 		names, err := ListTaskFiles(backlogDir)
