@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
+
+	"mato/internal/doctor"
 
 	"github.com/spf13/cobra"
 )
@@ -517,6 +521,188 @@ func TestStatusCmd_FlagParsing(t *testing.T) {
 					sub.RunE = func(cmd *cobra.Command, args []string) error { return nil }
 				}
 			}
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// --- Doctor subcommand tests ---
+
+func TestExitError_Error(t *testing.T) {
+	tests := []struct {
+		name string
+		code int
+		want string
+	}{
+		{"exit 1", 1, "exit 1"},
+		{"exit 2", 2, "exit 2"},
+		{"exit 42", 42, "exit 42"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := ExitError{Code: tt.code}
+			if got := e.Error(); got != tt.want {
+				t.Errorf("ExitError{%d}.Error() = %q, want %q", tt.code, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDoctorCmd_InvalidFormat(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--format", "bogus"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format bogus, got nil")
+	}
+	want := "--format must be text or json, got bogus"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestDoctorCmd_NoExtraArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "extra-arg"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for extra positional args on doctor, got nil")
+	}
+}
+
+func TestDoctorCmd_OnlyFlagsPassedThrough(t *testing.T) {
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--only", "git", "--only", "docker,queue"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// cobra's StringSliceVar merges comma-separated and repeated flags.
+	want := []string{"git", "docker", "queue"}
+	if len(capturedOpts.Only) != len(want) {
+		t.Fatalf("Only = %v, want %v", capturedOpts.Only, want)
+	}
+	for i := range want {
+		if capturedOpts.Only[i] != want[i] {
+			t.Errorf("Only[%d] = %q, want %q", i, capturedOpts.Only[i], want[i])
+		}
+	}
+}
+
+func TestDoctorCmd_ExitCodeBecomesExitError(t *testing.T) {
+	tests := []struct {
+		name     string
+		exitCode int
+		wantCode int
+	}{
+		{"warnings produce exit 1", 1, 1},
+		{"errors produce exit 2", 2, 2},
+	}
+
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+				return doctor.Report{ExitCode: tt.exitCode}, nil
+			}
+
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{"doctor"})
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected ExitError, got nil")
+			}
+
+			var exitErr ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("expected ExitError, got %T: %v", err, err)
+			}
+			if exitErr.Code != tt.wantCode {
+				t.Errorf("ExitError.Code = %d, want %d", exitErr.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestDoctorCmd_ExitCodeZeroNoError(t *testing.T) {
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+		return doctor.Report{ExitCode: 0}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected no error for exit code 0, got: %v", err)
+	}
+}
+
+func TestDoctorCmd_HardFailurePropagated(t *testing.T) {
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	hardErr := fmt.Errorf("context canceled")
+	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+		return doctor.Report{}, hardErr
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected hard failure error, got nil")
+	}
+	if err != hardErr {
+		t.Errorf("error = %v, want %v", err, hardErr)
+	}
+
+	// Hard failure should NOT be an ExitError.
+	var exitErr ExitError
+	if errors.As(err, &exitErr) {
+		t.Errorf("hard failure should not be ExitError, got code %d", exitErr.Code)
+	}
+}
+
+func TestDoctorCmd_FlagParsing(t *testing.T) {
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+		return doctor.Report{}, nil
+	}
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"doctor help", []string{"doctor", "--help"}},
+		{"doctor with repo", []string{"doctor", "--repo=/tmp/repo"}},
+		{"doctor with tasks-dir", []string{"doctor", "--tasks-dir=/tmp/tasks"}},
+		{"doctor with fix", []string{"doctor", "--fix"}},
+		{"doctor with json format", []string{"doctor", "--format=json"}},
+		{"doctor with text format", []string{"doctor", "--format=text"}},
+		{"doctor with all flags", []string{"doctor", "--repo=/tmp/repo", "--tasks-dir=/tmp/tasks", "--fix", "--format=json", "--only=git"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
 			if err := cmd.Execute(); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
