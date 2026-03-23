@@ -1,6 +1,6 @@
 # `mato graph` — Implementation Plan
 
-> **Status: Proposed**
+> **Status: Implemented**
 
 ## Summary
 
