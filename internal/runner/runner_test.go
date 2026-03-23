@@ -2655,3 +2655,91 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 		t.Fatal("task should NOT be moved to in-progress/ during dry-run")
 	}
 }
+
+func TestSurfaceBuildWarnings_NoWarnings(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, d := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, d), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	idx := queue.BuildIndex(tasksDir)
+	_, stderr := captureStdoutStderr(t, func() {
+		if surfaceBuildWarnings(idx) {
+			t.Error("surfaceBuildWarnings should return false when there are no warnings")
+		}
+	})
+
+	if stderr != "" {
+		t.Errorf("expected no stderr output, got: %s", stderr)
+	}
+}
+
+func TestSurfaceBuildWarnings_DirReadFailure(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, d := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, d), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	// Replace the backlog directory with a regular file so ReadDir fails
+	// with a non-NotExist error, triggering a directory-level build warning.
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog)
+	if err := os.RemoveAll(backlogPath); err != nil {
+		t.Fatalf("remove backlog dir: %v", err)
+	}
+	if err := os.WriteFile(backlogPath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("create backlog file: %v", err)
+	}
+
+	idx := queue.BuildIndex(tasksDir)
+	if len(idx.BuildWarnings()) == 0 {
+		t.Fatal("expected BuildWarnings from unreadable directory")
+	}
+
+	_, stderr := captureStdoutStderr(t, func() {
+		if !surfaceBuildWarnings(idx) {
+			t.Error("surfaceBuildWarnings should return true for directory-level read failure")
+		}
+	})
+
+	if !strings.Contains(stderr, "warning: index build:") {
+		t.Errorf("expected warning on stderr, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, queue.DirBacklog) {
+		t.Errorf("expected stderr to mention %q, got: %s", queue.DirBacklog, stderr)
+	}
+}
+
+func TestSurfaceBuildWarnings_GlobWarningDoesNotTriggerPollError(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, d := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, d), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	// Create a task with an invalid glob pattern in affects to trigger a
+	// per-file build warning (not a directory-level failure).
+	taskContent := "---\nid: bad-glob\npriority: 10\naffects:\n  - \"[invalid\"\n---\n# Bad Glob\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-glob.md"), []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("write task: %v", err)
+	}
+
+	idx := queue.BuildIndex(tasksDir)
+	if len(idx.BuildWarnings()) == 0 {
+		t.Fatal("expected BuildWarnings from invalid glob")
+	}
+
+	_, stderr := captureStdoutStderr(t, func() {
+		if surfaceBuildWarnings(idx) {
+			t.Error("surfaceBuildWarnings should return false for per-file glob warnings (not directory-level)")
+		}
+	})
+
+	if !strings.Contains(stderr, "warning: index build:") {
+		t.Errorf("expected warning logged on stderr even for glob issues, got: %s", stderr)
+	}
+}
