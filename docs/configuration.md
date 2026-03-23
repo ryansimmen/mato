@@ -17,6 +17,7 @@ the host and bind-mounts those executables into agent containers.
 ```text
 mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [--dry-run] [copilot-args...]
 mato status [--repo <path>] [--tasks-dir <path>]
+mato doctor [--repo <path>] [--tasks-dir <path>] [--fix] [--format json] [--only <check>]
 ```
 Run mode creates the queue structure if needed, starts the Docker-based Copilot loop,
 and merges completed work into the target branch. If the target branch does not exist
@@ -26,8 +27,8 @@ containers. It parses all task files, promotes ready dependencies from waiting/ 
 backlog/, detects `affects` conflicts, writes the `.queue` manifest, and prints a
 summary of the queue state. Useful for verifying setup in CI or before a real run.
 Status mode prints queue counts, active agents, waiting-task dependency summaries, and
-recent messages. `mato status` rejects extra positional arguments, but it does
-reject unrecognized flags such as `--branch`.
+recent messages. `mato status` rejects both extra positional arguments and
+unrecognized flags such as `--branch`.
 Use `--` to stop `mato` flag parsing and forward the remaining arguments verbatim to
 Copilot CLI. In run mode, unrecognized arguments are also passed through to Copilot.
 
@@ -130,9 +131,11 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |
 | `run` | Run `go run ./cmd/mato --repo "$(REPO)" $(COPILOT_ARGS)`. `REPO` is required; set it in `.env` or on the command line. |
-| `test` | Run `go test ./...`. |
+| `test` | Run `go test -race ./...`. |
+| `vet` | Run `go vet ./...`. |
+| `lint` | Run `golangci-lint run ./...`. |
 | `help` | Print the target list and descriptions. |
 Additional behavior:
-- `all` runs `fmt`, `build`, and `test`.
+- `all` runs `fmt`, `vet`, `build`, and `test`.
 - `REPO` is required for `make run` and may be supplied from `.env`.
 - `COPILOT_ARGS` is passed through to `mato`, which then forwards those arguments to Copilot CLI.
