@@ -26,28 +26,49 @@ func reviewInstructionsPath(t *testing.T) string {
 // section in review-instructions.md.
 func reviewStateBlock(t *testing.T, state string) string {
 	t.Helper()
+	return reviewStateBlockN(t, state, 0)
+}
+
+// reviewStateBlockN extracts the nth (0-indexed) ```bash block from the named
+// STATE section in review-instructions.md.
+func reviewStateBlockN(t *testing.T, state string, n int) string {
+	t.Helper()
 	data, err := os.ReadFile(reviewInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(review instructions): %v", err)
 	}
 
-	sectionStart := strings.Index(string(data), "## STATE: "+state)
+	header := "## STATE: " + state
+	sectionStart := strings.Index(string(data), header)
 	if sectionStart < 0 {
 		t.Fatalf("state %q not found in review instructions", state)
 	}
-	section := string(data[sectionStart:])
+	section := string(data[sectionStart+len(header):])
 
-	blockStart := strings.Index(section, "```bash\n")
-	if blockStart < 0 {
-		t.Fatalf("bash block for state %q not found", state)
+	// Limit to this state section.
+	if next := strings.Index(section, "\n## STATE:"); next >= 0 {
+		section = section[:next]
 	}
-	section = section[blockStart+len("```bash\n"):]
 
-	blockEnd := strings.Index(section, "\n```")
-	if blockEnd < 0 {
-		t.Fatalf("bash block terminator for state %q not found", state)
+	for i := 0; i <= n; i++ {
+		blockStart := strings.Index(section, "```bash\n")
+		if blockStart < 0 {
+			t.Fatalf("bash block %d for state %q not found", i, state)
+		}
+		section = section[blockStart+len("```bash\n"):]
+
+		blockEnd := strings.Index(section, "\n```")
+		if blockEnd < 0 {
+			t.Fatalf("bash block %d terminator for state %q not found", i, state)
+		}
+		if i == n {
+			return strings.TrimSpace(section[:blockEnd])
+		}
+		section = section[blockEnd+len("\n```"):]
 	}
-	return strings.TrimSpace(section[:blockEnd])
+
+	t.Fatalf("unreachable: bash block %d for state %q", n, state)
+	return ""
 }
 
 // reviewPreamble extracts the variable-initialization bash block that precedes
@@ -155,15 +176,13 @@ func TestReviewVerifyReview(t *testing.T) {
 	mustExist(t, filepath.Join(tasksDir, queue.DirReadyReview, "review-task.md"))
 }
 
-// TestReviewEmptyDiffRejects runs VERIFY_REVIEW + DIFF + VERDICT when the task
-// branch has no changes relative to the target branch. The review prompt should
-// reject with the reason "branch contains no changes".
+// TestReviewEmptyDiffRejects runs the real VERIFY_REVIEW, DIFF, and VERDICT
+// blocks when the task branch has no changes relative to the target branch.
+// The DIFF decision table says to reject with "branch contains no changes".
 func TestReviewEmptyDiffRejects(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Create a task branch that is identical to mato (no diff).
-	// We can't use createTaskBranch with nil files because git commit fails
-	// with nothing to commit. Instead, create the branch directly pointing at mato.
 	mustGitOutput(t, repoRoot, "branch", "task/empty-diff", "mato")
 
 	writeTask(t, tasksDir, queue.DirReadyReview, "empty-diff.md",
@@ -176,29 +195,23 @@ func TestReviewEmptyDiffRejects(t *testing.T) {
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-empty-diff.md.json")
 
-	// DIFF state needs to fetch the branch; the clone was created from the repo
-	// so origin already exists.
-	// Build a script that runs VERIFY_REVIEW, then DIFF. The DIFF block in the
-	// prompt transitions to VERDICT with a reject when the diff is empty.
-	// We include the full DIFF bash block and an inline reject-on-empty check
-	// that mirrors the documented decision table.
+	// Build the real VERDICT reject block with the empty-diff reason substituted
+	// into the placeholder.
+	rejectBlock := strings.Replace(
+		reviewStateBlockN(t, "VERDICT", 1),
+		`<one-paragraph summary of the specific issue(s) found>`,
+		`branch contains no changes`, 1)
+
 	script := strings.Join([]string{
 		reviewPreamble(t),
 		reviewStateBlock(t, "VERIFY_REVIEW"),
-		// DIFF: fetch and compute diff
-		`if ! git fetch origin "$BRANCH" 2>/dev/null; then
-  FAIL_STEP="DIFF"
-  FAIL_REASON="could not fetch branch $BRANCH from origin"
-fi`,
+		// Execute the real DIFF block (fetch + list changed files).
+		reviewStateBlock(t, "DIFF"),
+		// Check for empty diff per the DIFF state decision table.
 		`DIFF_FILES="$(git diff --name-only "mato...origin/$BRANCH" 2>/dev/null || true)"`,
-		`if [ -z "$DIFF_FILES" ]; then
-  cat > "$VERDICT_PATH" << 'VERDICTEOF'
-{"verdict":"reject","reason":"branch contains no changes"}
-VERDICTEOF
-  echo "Rejected: branch contains no changes"
-else
-  echo "Diff files: $DIFF_FILES"
-fi`,
+		`if [ -z "$DIFF_FILES" ]; then`,
+		rejectBlock,
+		`fi`,
 	}, "\n\n")
 	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
 
@@ -234,8 +247,8 @@ fi`,
 }
 
 // TestReviewFetchFailureWritesErrorVerdict verifies that when git fetch fails
-// for the task branch, the ON_FAILURE state writes a verdict file with
-// {"verdict":"error",...} that the host can parse.
+// for the task branch, the real DIFF block sets FAIL_STEP/FAIL_REASON and the
+// ON_FAILURE block writes a verdict file with {"verdict":"error",...}.
 func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
@@ -249,18 +262,16 @@ func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-fetch-fail.md.json")
 
-	// Simulate the DIFF → ON_FAILURE transition: attempt fetch, fail, write error.
+	// Execute the real DIFF block. After the fetch fails, the block sets
+	// FAIL_STEP and FAIL_REASON. The subsequent git diff command will also
+	// fail (branch doesn't exist), so we wrap to allow the script to
+	// continue to the ON_FAILURE transition.
 	script := strings.Join([]string{
 		reviewPreamble(t),
 		reviewStateBlock(t, "VERIFY_REVIEW"),
-		// Attempt DIFF fetch — branch doesn't exist, so it fails.
-		`FAIL_STEP=""
-FAIL_REASON=""
-if ! git fetch origin "$BRANCH" 2>/dev/null; then
-  FAIL_STEP="DIFF"
-  FAIL_REASON="could not fetch branch $BRANCH from origin"
-fi`,
-		// Transition to ON_FAILURE if fetch failed.
+		`FAIL_STEP=""`,
+		`FAIL_REASON=""`,
+		`{ ` + reviewStateBlock(t, "DIFF") + `; } 2>/dev/null || true`,
 		`if [ -n "$FAIL_STEP" ]; then`,
 		reviewStateBlock(t, "ON_FAILURE"),
 		`fi`,
@@ -303,52 +314,86 @@ fi`,
 
 // TestReviewRejectReasonWithSpecialChars verifies that rejection reasons
 // containing double quotes and newlines still produce valid JSON in the
-// verdict file.
+// verdict file when written through the real VERDICT reject block.
 func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-
-	writeTask(t, tasksDir, queue.DirReadyReview, "special-chars.md",
-		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
-			"<!-- branch: task/special-chars -->\n"+
-			"# Special Chars Task\nTest special characters.\n")
-
-	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
-
-	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-special-chars.md.json")
-
-	// Write a verdict with special characters in the reason using a here-doc
-	// that mirrors how the prompt's VERDICT state writes rejections.
-	// The prompt instructs: "Escape any double quotes in the reason with a backslash."
-	script := strings.Join([]string{
-		reviewPreamble(t),
-		`VERDICT_PATH="` + verdictPath + `"`,
-		`REASON='missing error wrapping in \"postAgentPush\" — the function does not call fmt.Errorf with %w'`,
-		`cat > "$VERDICT_PATH" << VERDICTEOF
-{"verdict":"reject","reason":"$REASON"}
-VERDICTEOF`,
-	}, "\n\n")
-
-	env := []string{
-		"MATO_AGENT_ID=test-reviewer-4",
-	}
-	out, err := runBash(t, cloneDir, env, script)
-	if err != nil {
-		t.Fatalf("runBash special chars: %v\noutput:\n%s", err, out)
+	tests := []struct {
+		name   string
+		reason string // text substituted into the VERDICT reject block placeholder
+		check  func(t *testing.T, v reviewVerdict)
+	}{
+		{
+			name:   "double quotes",
+			reason: `missing error wrapping in \"postAgentPush\" — the function does not call fmt.Errorf with %w`,
+			check: func(t *testing.T, v reviewVerdict) {
+				t.Helper()
+				if !strings.Contains(v.Reason, "postAgentPush") {
+					t.Fatalf("reason = %q, want it to contain 'postAgentPush'", v.Reason)
+				}
+			},
+		},
+		{
+			name:   "embedded newlines",
+			reason: `line one\\nline two`,
+			check: func(t *testing.T, v reviewVerdict) {
+				t.Helper()
+				if !strings.Contains(v.Reason, "\n") {
+					t.Fatalf("reason = %q, want it to contain a literal newline", v.Reason)
+				}
+			},
+		},
 	}
 
-	mustExist(t, verdictPath)
-	verdictData := readFile(t, verdictPath)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	var v reviewVerdict
-	if err := json.Unmarshal([]byte(verdictData), &v); err != nil {
-		t.Fatalf("verdict JSON is not valid: %v\ncontent: %s", err, verdictData)
-	}
-	if v.Verdict != "reject" {
-		t.Fatalf("verdict = %q, want reject", v.Verdict)
-	}
-	if v.Reason == "" {
-		t.Fatal("reject reason is empty; expected a non-empty reason")
+			writeTask(t, tasksDir, queue.DirReadyReview, "special-chars.md",
+				"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+					"<!-- branch: task/special-chars -->\n"+
+					"# Special Chars Task\nTest special characters.\n")
+
+			cloneDir := createPromptClone(t, repoRoot, tasksDir)
+			cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+			verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-special-chars.md.json")
+
+			// Use the real VERDICT reject block with the placeholder replaced.
+			rejectBlock := strings.Replace(
+				reviewStateBlockN(t, "VERDICT", 1),
+				`<one-paragraph summary of the specific issue(s) found>`,
+				tt.reason, 1)
+
+			script := strings.Join([]string{
+				reviewPreamble(t),
+				`FILENAME="special-chars.md"`,
+				`BRANCH="task/special-chars"`,
+				`VERDICT_PATH="` + verdictPath + `"`,
+				rejectBlock,
+			}, "\n\n")
+
+			env := []string{
+				"MATO_AGENT_ID=test-reviewer-4",
+			}
+			out, err := runBash(t, cloneDir, env, script)
+			if err != nil {
+				t.Fatalf("runBash special chars: %v\noutput:\n%s", err, out)
+			}
+
+			mustExist(t, verdictPath)
+			verdictData := readFile(t, verdictPath)
+
+			var v reviewVerdict
+			if err := json.Unmarshal([]byte(verdictData), &v); err != nil {
+				t.Fatalf("verdict JSON is not valid: %v\ncontent: %s", err, verdictData)
+			}
+			if v.Verdict != "reject" {
+				t.Fatalf("verdict = %q, want reject", v.Verdict)
+			}
+			if v.Reason == "" {
+				t.Fatal("reject reason is empty; expected a non-empty reason")
+			}
+			tt.check(t, v)
+		})
 	}
 }
 
@@ -376,7 +421,7 @@ func TestReviewNoPushNoCommitNoMoveInstructions(t *testing.T) {
 	}
 }
 
-// TestReviewVerdictApproveFormat verifies that the VERDICT state's approve
+// TestReviewVerdictApproveFormat verifies that the real VERDICT state approve
 // block produces a well-formed JSON verdict file.
 func TestReviewVerdictApproveFormat(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -386,17 +431,13 @@ func TestReviewVerdictApproveFormat(t *testing.T) {
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-approve-test.md.json")
 
-	// Run the approve branch of the VERDICT state block directly.
+	// Execute the real VERDICT approve block (first bash block in VERDICT state).
 	script := strings.Join([]string{
 		reviewPreamble(t),
 		`FILENAME="approve-test.md"`,
 		`BRANCH="task/approve-test"`,
 		`VERDICT_PATH="` + verdictPath + `"`,
-		// Extract and run the approve block from VERDICT state.
-		`cat > "$VERDICT_PATH" << 'VERDICTEOF'
-{"verdict":"approve"}
-VERDICTEOF`,
-		`echo "Approved $FILENAME on $BRANCH."`,
+		reviewStateBlock(t, "VERDICT"),
 	}, "\n\n")
 
 	env := []string{
