@@ -39,15 +39,18 @@ const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 // It scans ready-to-merge/ for task files, prefers branch metadata recorded in
 // each task file, falls back to the filename-derived branch name for backward
 // compatibility, and performs a squash merge.
+// When idx is non-nil, it is used to resolve active branches without a
+// filesystem scan; when nil, the function falls back to scanning the
+// in-progress/, ready-for-review/, and ready-to-merge/ directories.
 // Returns the number of tasks successfully merged.
-func ProcessQueue(repoRoot, tasksDir, branch string) int {
+func ProcessQueue(repoRoot, tasksDir, branch string, idx *queue.PollIndex) int {
 	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
 	names, err := queue.ListTaskFiles(readyDir)
 	if err != nil {
 		return 0
 	}
 
-	activeBranches := queue.CollectActiveBranches(tasksDir, nil)
+	activeBranches := queue.CollectActiveBranches(tasksDir, idx)
 
 	tasks := make([]mergeQueueTask, 0, len(names))
 	for _, name := range names {

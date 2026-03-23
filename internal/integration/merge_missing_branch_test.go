@@ -38,7 +38,7 @@ func TestMergeMissingBranch_ExplicitMarker(t *testing.T) {
 	}, "\n")
 	writeTask(t, tasksDir, queue.DirReadyMerge, "missing-explicit.md", taskContent)
 
-	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
+	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil)
 	if merged != 0 {
 		t.Fatalf("ProcessQueue() = %d, want 0 (no tasks should merge)", merged)
 	}
@@ -99,7 +99,7 @@ func TestMergeMissingBranch_FilenameDerived(t *testing.T) {
 	}, "\n")
 	writeTask(t, tasksDir, queue.DirReadyMerge, "missing-derived.md", taskContent)
 
-	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
+	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil)
 	if merged != 0 {
 		t.Fatalf("ProcessQueue() = %d, want 0", merged)
 	}
@@ -152,7 +152,7 @@ func TestMergeMissingBranch_RetriesRemaining(t *testing.T) {
 	}, "\n")
 	writeTask(t, tasksDir, queue.DirReadyMerge, "retryable-missing.md", taskContent)
 
-	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
+	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil)
 	if merged != 0 {
 		t.Fatalf("ProcessQueue() = %d, want 0", merged)
 	}
@@ -215,7 +215,7 @@ func TestMergeMissingBranch_SuccessfulTaskUnaffected(t *testing.T) {
 	}, "\n")
 	writeTask(t, tasksDir, queue.DirReadyMerge, "bad-task.md", badContent)
 
-	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
+	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato", nil)
 	if merged != 1 {
 		t.Fatalf("ProcessQueue() = %d, want 1 (only good task)", merged)
 	}
