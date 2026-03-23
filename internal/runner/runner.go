@@ -425,15 +425,19 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		}
 		claimedTask := claimed != nil
 		if claimed != nil {
-			messaging.WriteMessage(tasksDir, messaging.Message{
+			if err := messaging.WriteMessage(tasksDir, messaging.Message{
 				From:   agentID,
 				Type:   "intent",
 				Task:   claimed.Filename,
 				Branch: claimed.Branch,
 				Body:   "Starting work",
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write intent message: %v\n", err)
+			}
 
-			messaging.WritePresence(tasksDir, agentID, claimed.Filename, claimed.Branch)
+			if err := messaging.WritePresence(tasksDir, agentID, claimed.Filename, claimed.Branch); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write presence: %v\n", err)
+			}
 
 			if err := messaging.BuildAndWriteFileClaims(tasksDir, claimed.Filename); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)

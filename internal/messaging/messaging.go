@@ -207,6 +207,7 @@ func CleanStalePresence(tasksDir string) {
 	presenceDir := filepath.Join(tasksDir, "messages", "presence")
 	entries, err := os.ReadDir(presenceDir)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read presence directory: %v\n", err)
 		return
 	}
 
@@ -216,7 +217,9 @@ func CleanStalePresence(tasksDir string) {
 		}
 		agentID := strings.TrimSuffix(entry.Name(), ".json")
 		if !identity.IsAgentActive(tasksDir, agentID) {
-			os.Remove(filepath.Join(presenceDir, entry.Name()))
+			if err := os.Remove(filepath.Join(presenceDir, entry.Name())); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "warning: could not remove stale presence file %s: %v\n", entry.Name(), err)
+			}
 		}
 	}
 }
@@ -225,6 +228,7 @@ func CleanOldMessages(tasksDir string, maxAge time.Duration) {
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, err := os.ReadDir(eventsDir)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read events directory: %v\n", err)
 		return
 	}
 
@@ -238,7 +242,9 @@ func CleanOldMessages(tasksDir string, maxAge time.Duration) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			os.Remove(filepath.Join(eventsDir, entry.Name()))
+			if err := os.Remove(filepath.Join(eventsDir, entry.Name())); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "warning: could not remove old message file %s: %v\n", entry.Name(), err)
+			}
 		}
 	}
 }
