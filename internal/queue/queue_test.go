@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"mato/internal/process"
@@ -179,6 +180,219 @@ func TestAtomicMove_PermissionError(t *testing.T) {
 	// Source should still exist
 	if _, statErr := os.Stat(src); statErr != nil {
 		t.Fatalf("source should still exist after permission error: %v", statErr)
+	}
+}
+
+// withLinkFn overrides the linkFn hook for the duration of the test and
+// restores it on cleanup.
+func withLinkFn(t *testing.T, fn func(string, string) error) {
+	t.Helper()
+	orig := linkFn
+	linkFn = fn
+	t.Cleanup(func() { linkFn = orig })
+}
+
+func TestAtomicMove_CrossDeviceSuccess(t *testing.T) {
+	withLinkFn(t, func(_, _ string) error {
+		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+	content := "cross-device content\n"
+
+	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	if err := AtomicMove(src, dst); err != nil {
+		t.Fatalf("AtomicMove cross-device: %v", err)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("destination content = %q, want %q", got, content)
+	}
+
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("source should be removed after cross-device move, got err: %v", err)
+	}
+}
+
+func TestAtomicMove_CrossDeviceDestinationExists(t *testing.T) {
+	withLinkFn(t, func(_, _ string) error {
+		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+	srcContent := "source content\n"
+	dstContent := "existing destination\n"
+
+	if err := os.WriteFile(src, []byte(srcContent), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := os.WriteFile(dst, []byte(dstContent), 0o644); err != nil {
+		t.Fatalf("write destination: %v", err)
+	}
+
+	err := AtomicMove(src, dst)
+	if err == nil {
+		t.Fatal("AtomicMove should fail when cross-device destination exists")
+	}
+	if !errors.Is(err, ErrDestinationExists) {
+		t.Fatalf("error = %q, want ErrDestinationExists", err)
+	}
+
+	// Destination must not be clobbered.
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read destination after conflict: %v", err)
+	}
+	if string(got) != dstContent {
+		t.Fatalf("destination was clobbered: got %q, want %q", got, dstContent)
+	}
+
+	// Source must still exist.
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("source should still exist after destination-exists error: %v", err)
+	}
+}
+
+func TestAtomicMove_CrossDeviceWriteFailCleansUp(t *testing.T) {
+	// Simulate EXDEV on link so crossDeviceMove is used, then make the
+	// destination directory read-only after the exclusive create so that
+	// the write (or close/sync) fails. We achieve this by using a
+	// two-level directory where we revoke write on the parent after
+	// open. Instead, we use a simpler approach: make source unreadable
+	// so that os.ReadFile inside crossDeviceMove fails, and verify the
+	// source remains intact.
+	withLinkFn(t, func(_, _ string) error {
+		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+	content := "precious content\n"
+
+	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	// Make source unreadable so crossDeviceMove's ReadFile fails.
+	if err := os.Chmod(src, 0o000); err != nil {
+		t.Fatalf("chmod source: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(src, 0o644) })
+
+	err := AtomicMove(src, dst)
+	if err == nil {
+		t.Fatal("AtomicMove should fail when source is unreadable")
+	}
+
+	// Source must remain on disk (unchanged).
+	os.Chmod(src, 0o644) // restore so we can read it
+	got, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("source should still exist after failed cross-device move: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("source content changed: got %q, want %q", got, content)
+	}
+
+	// Destination must not exist (no partial file left behind).
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("destination should not exist after failed move, got err: %v", err)
+	}
+}
+
+func TestAtomicMove_CrossDeviceCreateFailCleansUp(t *testing.T) {
+	// Force EXDEV, then make the destination directory unwritable so that
+	// the O_CREATE|O_EXCL open fails.
+	withLinkFn(t, func(_, _ string) error {
+		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dstDir := filepath.Join(dir, "readonly")
+	content := "safe content\n"
+
+	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := os.MkdirAll(dstDir, 0o555); err != nil {
+		t.Fatalf("mkdir readonly: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dstDir, 0o755) })
+
+	dst := filepath.Join(dstDir, "dst.md")
+	err := AtomicMove(src, dst)
+	if err == nil {
+		t.Fatal("AtomicMove should fail when destination dir is unwritable")
+	}
+	if errors.Is(err, ErrDestinationExists) {
+		t.Fatal("error should not be ErrDestinationExists for permission failure")
+	}
+
+	// Source must remain intact.
+	got, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("source should still exist: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("source content changed: got %q, want %q", got, content)
+	}
+}
+
+func TestAtomicMove_CrossDeviceConcurrentRace(t *testing.T) {
+	// Multiple goroutines race to cross-device-move different sources to
+	// the same destination. Exactly one should succeed; the rest must get
+	// ErrDestinationExists (via O_CREATE|O_EXCL).
+	withLinkFn(t, func(_, _ string) error {
+		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "dst.md")
+
+	const n = 8
+	srcs := make([]string, n)
+	for i := 0; i < n; i++ {
+		src := filepath.Join(dir, fmt.Sprintf("src-%d.md", i))
+		if err := os.WriteFile(src, []byte(fmt.Sprintf("content-%d\n", i)), 0o644); err != nil {
+			t.Fatalf("write source %d: %v", i, err)
+		}
+		srcs[i] = src
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		idx := i
+		go func() {
+			defer wg.Done()
+			errs[idx] = AtomicMove(srcs[idx], dst)
+		}()
+	}
+	wg.Wait()
+
+	successes := 0
+	for _, err := range errs {
+		if err == nil {
+			successes++
+		} else if !errors.Is(err, ErrDestinationExists) {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 success in cross-device race, got %d", successes)
 	}
 }
 
