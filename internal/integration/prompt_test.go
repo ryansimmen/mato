@@ -650,6 +650,180 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 	}
 }
 
+func TestPromptVerifyClaimDependencyContext(t *testing.T) {
+	// MATO_DEPENDENCY_CONTEXT points to a JSON file written by the host with
+	// details about completed prerequisite tasks. The VERIFY_CLAIM block should
+	// read and echo its contents.
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, queue.DirInProgress, "dep-task.md",
+		"<!-- claimed-by: dep-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Dep Task\nDo dep work.\n")
+
+	// Write a dependency-context JSON file.
+	depCtx := filepath.Join(t.TempDir(), "dependency-context.json")
+	depJSON := `[{"task":"setup-db.md","title":"Setup database","commit":"abc1234","files":["db/schema.sql"]}]`
+	if err := os.WriteFile(depCtx, []byte(depJSON), 0o644); err != nil {
+		t.Fatalf("write dependency context: %v", err)
+	}
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+	script := strings.Join([]string{
+		promptPreamble(t),
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	env := []string{
+		"MATO_AGENT_ID=dep-agent",
+		"MATO_TASK_FILE=dep-task.md",
+		"MATO_TASK_BRANCH=task/dep-task",
+		"MATO_TASK_TITLE=Dep Task",
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirInProgress, "dep-task.md"),
+		"MATO_DEPENDENCY_CONTEXT=" + depCtx,
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash verify claim with dependency context: %v\noutput:\n%s", err, out)
+	}
+
+	if !strings.Contains(out, "Dependency context") {
+		t.Fatalf("output should contain dependency context header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "setup-db.md") {
+		t.Fatalf("output should contain dependency task filename, got:\n%s", out)
+	}
+	if !strings.Contains(out, "abc1234") {
+		t.Fatalf("output should contain dependency commit SHA, got:\n%s", out)
+	}
+}
+
+func TestPromptVerifyClaimFileClaims(t *testing.T) {
+	// MATO_FILE_CLAIMS points to a JSON file listing files claimed by other
+	// in-progress tasks. VERIFY_CLAIM should read and echo the contents.
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, queue.DirInProgress, "claims-task.md",
+		"<!-- claimed-by: claims-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Claims Task\nDo claims work.\n")
+
+	// Write a file-claims JSON file.
+	claimsFile := filepath.Join(t.TempDir(), "file-claims.json")
+	claimsJSON := `{"internal/runner/runner.go":{"task":"other-task.md","status":"in-progress"},"docs/":{"task":"doc-task.md","status":"in-progress"}}`
+	if err := os.WriteFile(claimsFile, []byte(claimsJSON), 0o644); err != nil {
+		t.Fatalf("write file claims: %v", err)
+	}
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+	script := strings.Join([]string{
+		promptPreamble(t),
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	env := []string{
+		"MATO_AGENT_ID=claims-agent",
+		"MATO_TASK_FILE=claims-task.md",
+		"MATO_TASK_BRANCH=task/claims-task",
+		"MATO_TASK_TITLE=Claims Task",
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirInProgress, "claims-task.md"),
+		"MATO_FILE_CLAIMS=" + claimsFile,
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash verify claim with file claims: %v\noutput:\n%s", err, out)
+	}
+
+	if !strings.Contains(out, "Files and directory prefixes currently claimed") {
+		t.Fatalf("output should contain file claims header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "internal/runner/runner.go") {
+		t.Fatalf("output should contain claimed file path, got:\n%s", out)
+	}
+	if !strings.Contains(out, "other-task.md") {
+		t.Fatalf("output should contain claiming task name, got:\n%s", out)
+	}
+}
+
+func TestPromptVerifyClaimPreviousFailures(t *testing.T) {
+	// MATO_PREVIOUS_FAILURES is a string env var containing prior failure
+	// records. VERIFY_CLAIM should echo the content.
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, queue.DirInProgress, "fail-task.md",
+		"<!-- claimed-by: fail-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Fail Task\nRetry work.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+	script := strings.Join([]string{
+		promptPreamble(t),
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	failureLines := "<!-- failure: agent-x at 2026-03-20T10:00:00Z step=WORK error=build_failed files_changed=main.go -->"
+	env := []string{
+		"MATO_AGENT_ID=fail-agent",
+		"MATO_TASK_FILE=fail-task.md",
+		"MATO_TASK_BRANCH=task/fail-task",
+		"MATO_TASK_TITLE=Fail Task",
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirInProgress, "fail-task.md"),
+		"MATO_PREVIOUS_FAILURES=" + failureLines,
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash verify claim with previous failures: %v\noutput:\n%s", err, out)
+	}
+
+	if !strings.Contains(out, "Previous failure records") {
+		t.Fatalf("output should contain previous failures header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "step=WORK") {
+		t.Fatalf("output should contain failure step, got:\n%s", out)
+	}
+	if !strings.Contains(out, "build_failed") {
+		t.Fatalf("output should contain failure error, got:\n%s", out)
+	}
+}
+
+func TestPromptVerifyClaimReviewFeedback(t *testing.T) {
+	// MATO_REVIEW_FEEDBACK is a string env var containing prior review
+	// rejection feedback. VERIFY_CLAIM should echo the content.
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, queue.DirInProgress, "review-task.md",
+		"<!-- claimed-by: review-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Review Task\nAddress review.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+	script := strings.Join([]string{
+		promptPreamble(t),
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	feedback := "Reviewer rejected: missing error handling in parseConfig; add nil check before dereferencing pointer"
+	env := []string{
+		"MATO_AGENT_ID=review-agent",
+		"MATO_TASK_FILE=review-task.md",
+		"MATO_TASK_BRANCH=task/review-task",
+		"MATO_TASK_TITLE=Review Task",
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirInProgress, "review-task.md"),
+		"MATO_REVIEW_FEEDBACK=" + feedback,
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash verify claim with review feedback: %v\noutput:\n%s", err, out)
+	}
+
+	if !strings.Contains(out, "Previous review rejection feedback") {
+		t.Fatalf("output should contain review feedback header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "missing error handling in parseConfig") {
+		t.Fatalf("output should contain review feedback details, got:\n%s", out)
+	}
+}
+
 func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, queue.DirBacklog, "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
