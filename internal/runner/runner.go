@@ -463,7 +463,7 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		if cleanup, ok := merge.AcquireLock(tasksDir); ok {
 			func() {
 				defer cleanup()
-				merged := merge.ProcessQueue(repoRoot, tasksDir, branch)
+				merged := merge.ProcessQueue(repoRoot, tasksDir, branch, idx)
 				if merged > 0 {
 					fmt.Printf("Merged %d task(s) into %s\n", merged, branch)
 				}
