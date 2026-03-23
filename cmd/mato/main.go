@@ -219,6 +219,10 @@ func (e ExitError) Error() string {
 	return fmt.Sprintf("exit %d", e.Code)
 }
 
+// doctorRunFn is the function used to run health checks. It defaults to
+// doctor.Run and can be replaced in tests to inject failures or exit codes.
+var doctorRunFn = doctor.Run
+
 func newDoctorCmd() *cobra.Command {
 	var doctorRepo string
 	var doctorTasksDir string
@@ -249,7 +253,7 @@ func newDoctorCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
 
-			report, err := doctor.Run(ctx, repoInput, doctorTasksDir, doctor.Options{
+			report, err := doctorRunFn(ctx, repoInput, doctorTasksDir, doctor.Options{
 				Fix:    fix,
 				Format: format,
 				Only:   only,
