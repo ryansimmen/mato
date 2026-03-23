@@ -52,6 +52,81 @@ func initBareAndClone(t *testing.T) (bare, clone string) {
 	return bare, clone
 }
 
+func TestOutput_ReturnsOnlyStdout(t *testing.T) {
+	_, clone := initBareAndClone(t)
+
+	// rev-parse --show-toplevel writes only to stdout; verify no stderr leaks.
+	out, err := Output(clone, "rev-parse", "--show-toplevel")
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" {
+		t.Fatal("expected non-empty stdout from rev-parse --show-toplevel")
+	}
+	// stdout should be a clean path with no warnings mixed in.
+	if strings.Contains(trimmed, "warning") {
+		t.Errorf("stdout should not contain warnings, got: %q", trimmed)
+	}
+}
+
+func TestOutput_ErrorIncludesStderr(t *testing.T) {
+	dir := t.TempDir()
+
+	// Run a git command that will fail — rev-parse in a non-repo directory.
+	_, err := Output(dir, "rev-parse", "HEAD")
+	if err == nil {
+		t.Fatal("expected error from rev-parse in non-repo dir")
+	}
+	// The error message should contain the stderr diagnostic from git.
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "git rev-parse HEAD") {
+		t.Errorf("error should reference the git command, got: %s", errMsg)
+	}
+}
+
+func TestOutput_StderrNotInSuccessOutput(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a repo that will produce stderr warnings on certain operations.
+	cmd := exec.Command("git", "init", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	for _, kv := range [][2]string{{"user.name", "test"}, {"user.email", "test@test.com"}} {
+		cmd = exec.Command("git", "-C", dir, "config", kv[0], kv[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", kv[0], err, out)
+		}
+	}
+	readme := filepath.Join(dir, "README.md")
+	if err := os.WriteFile(readme, []byte("# test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", dir, "add", ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", dir, "commit", "-m", "init")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// git log --oneline should return only the commit line on stdout.
+	out, err := Output(dir, "log", "--oneline", "-1")
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 1 {
+		t.Errorf("expected exactly 1 line from git log --oneline -1, got %d: %q", len(lines), out)
+	}
+	// The line should be a short SHA + message, not contain stderr noise.
+	if !strings.Contains(lines[0], "init") {
+		t.Errorf("expected commit message 'init' in output, got: %q", lines[0])
+	}
+}
+
 func TestEnsureBranch_PrefersRemoteTrackingBranch(t *testing.T) {
 	bare, clone := initBareAndClone(t)
 
