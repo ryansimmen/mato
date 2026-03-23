@@ -1,0 +1,809 @@
+package status
+
+import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	"mato/internal/frontmatter"
+	"mato/internal/messaging"
+	"mato/internal/queue"
+)
+
+// setupTasksDir creates the standard queue directory structure in a temp dir.
+func setupTasksDir(t *testing.T) string {
+	t.Helper()
+	tasksDir := t.TempDir()
+	for _, dir := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.locks): %v", err)
+	}
+	return tasksDir
+}
+
+// writeTask writes a task markdown file to dir/name with the given content.
+func writeTask(t *testing.T, tasksDir, dir, name, content string) {
+	t.Helper()
+	path := filepath.Join(tasksDir, dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
+}
+
+func TestCountMarkdownFiles(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []string
+		want  int
+	}{
+		{
+			name:  "empty directory",
+			files: nil,
+			want:  0,
+		},
+		{
+			name:  "single task",
+			files: []string{"task-a.md"},
+			want:  1,
+		},
+		{
+			name:  "multiple tasks",
+			files: []string{"alpha.md", "beta.md", "gamma.md"},
+			want:  3,
+		},
+		{
+			name:  "non-md files ignored",
+			files: []string{"readme.txt", "notes.md", "config.yaml"},
+			want:  1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, f := range tt.files {
+				os.WriteFile(filepath.Join(dir, f), []byte("# Task\n"), 0o644)
+			}
+			got := countMarkdownFiles(dir)
+			if got != tt.want {
+				t.Errorf("countMarkdownFiles() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountMarkdownFiles_MissingDir(t *testing.T) {
+	got := countMarkdownFiles(filepath.Join(t.TempDir(), "nonexistent"))
+	if got != 0 {
+		t.Errorf("countMarkdownFiles(missing dir) = %d, want 0", got)
+	}
+}
+
+func TestListTasksInDir_Empty(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	tasks := listTasksInDir(tasksDir, queue.DirBacklog)
+	if len(tasks) != 0 {
+		t.Errorf("listTasksInDir(empty) returned %d tasks, want 0", len(tasks))
+	}
+}
+
+func TestListTasksInDir_SortsByPriorityThenName(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirBacklog, "z-task.md", "---\nid: z-task\npriority: 20\n---\n# Z task\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "a-task.md", "---\nid: a-task\npriority: 10\n---\n# A task\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "b-task.md", "---\nid: b-task\npriority: 10\n---\n# B task\n")
+
+	tasks := listTasksInDir(tasksDir, queue.DirBacklog)
+	if len(tasks) != 3 {
+		t.Fatalf("listTasksInDir returned %d tasks, want 3", len(tasks))
+	}
+	// Priority 10 before 20.
+	if tasks[0].name != "a-task.md" {
+		t.Errorf("tasks[0].name = %q, want a-task.md", tasks[0].name)
+	}
+	if tasks[1].name != "b-task.md" {
+		t.Errorf("tasks[1].name = %q, want b-task.md", tasks[1].name)
+	}
+	if tasks[2].name != "z-task.md" {
+		t.Errorf("tasks[2].name = %q, want z-task.md", tasks[2].name)
+	}
+}
+
+func TestListTasksInDir_ExtractsTitleAndMeta(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirBacklog, "my-task.md", "---\nid: my-task\npriority: 15\nmax_retries: 5\n---\n# My fancy title\n")
+
+	tasks := listTasksInDir(tasksDir, queue.DirBacklog)
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].title != "My fancy title" {
+		t.Errorf("title = %q, want %q", tasks[0].title, "My fancy title")
+	}
+	if tasks[0].id != "my-task" {
+		t.Errorf("id = %q, want %q", tasks[0].id, "my-task")
+	}
+	if tasks[0].priority != 15 {
+		t.Errorf("priority = %d, want 15", tasks[0].priority)
+	}
+	if tasks[0].maxRetries != 5 {
+		t.Errorf("maxRetries = %d, want 5", tasks[0].maxRetries)
+	}
+}
+
+func TestListTasksInDir_MalformedFrontmatter(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirBacklog, "bad.md", "---\n: invalid yaml [\n---\n# Title\n")
+
+	tasks := listTasksInDir(tasksDir, queue.DirBacklog)
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	// With parse error, defaults are used.
+	if tasks[0].priority != 50 {
+		t.Errorf("priority = %d, want default 50", tasks[0].priority)
+	}
+	if tasks[0].maxRetries != 3 {
+		t.Errorf("maxRetries = %d, want default 3", tasks[0].maxRetries)
+	}
+}
+
+func TestCountFailureRecords(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{
+			name:    "no failures",
+			content: "# Task\nSome body.\n",
+			want:    0,
+		},
+		{
+			name:    "one failure",
+			content: "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — error -->\n# Task\n",
+			want:    1,
+		},
+		{
+			name:    "multiple failures",
+			content: "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — first -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — second -->\n<!-- failure: agent-3 at 2026-01-01T00:03:00Z — third -->\n# Task\n",
+			want:    3,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name+".md")
+			os.WriteFile(path, []byte(tt.content), 0o644)
+			got := countFailureRecords(path)
+			if got != tt.want {
+				t.Errorf("countFailureRecords() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStatusAgentDisplayName(t *testing.T) {
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{"abc12345", "agent-abc12345"},
+		{"agent-abc12345", "agent-abc12345"},
+		{"x", "agent-x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			a := statusAgent{ID: tt.id}
+			if got := a.displayName(); got != tt.want {
+				t.Errorf("displayName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActiveAgents_EmptyLocksDir(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	agents, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents, got %d", len(agents))
+	}
+}
+
+func TestActiveAgents_NoLocksDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	agents, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if agents != nil {
+		t.Errorf("expected nil agents, got %v", agents)
+	}
+}
+
+func TestActiveAgents_DeadProcess(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	// PID that almost certainly doesn't exist.
+	os.WriteFile(filepath.Join(tasksDir, ".locks", "dead0001.pid"), []byte("2147483647"), 0o644)
+
+	agents, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents (dead process), got %d", len(agents))
+	}
+}
+
+func TestActiveAgents_LiveProcess(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	cleanup, err := queue.RegisterAgent(tasksDir, "live0001")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	agents, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if agents[0].ID != "live0001" {
+		t.Errorf("agent ID = %q, want %q", agents[0].ID, "live0001")
+	}
+	if agents[0].PID != os.Getpid() {
+		t.Errorf("agent PID = %d, want %d", agents[0].PID, os.Getpid())
+	}
+}
+
+func TestActiveAgents_SortedByDisplayName(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	// Write multiple lock files for the current PID so they appear active.
+	pid := strconv.Itoa(os.Getpid())
+	for _, id := range []string{"zzz00001", "aaa00001"} {
+		cleanup, err := queue.RegisterAgent(tasksDir, id)
+		if err != nil {
+			t.Fatalf("RegisterAgent(%s): %v", id, err)
+		}
+		defer cleanup()
+		_ = pid // registered via RegisterAgent
+	}
+
+	agents, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) < 2 {
+		t.Fatalf("expected >= 2 agents, got %d", len(agents))
+	}
+	for i := 1; i < len(agents); i++ {
+		if agents[i-1].displayName() >= agents[i].displayName() {
+			t.Errorf("agents not sorted: %q >= %q", agents[i-1].displayName(), agents[i].displayName())
+		}
+	}
+}
+
+func TestActiveAgents_SkipsNonPIDFiles(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	// Non-.pid file and a directory should be ignored.
+	os.WriteFile(filepath.Join(tasksDir, ".locks", "notes.txt"), []byte("hello"), 0o644)
+	os.MkdirAll(filepath.Join(tasksDir, ".locks", "subdir"), 0o755)
+
+	agents, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents, got %d", len(agents))
+	}
+}
+
+func TestActiveAgents_InvalidPID(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	// Lock file with non-numeric content — should be skipped.
+	os.WriteFile(filepath.Join(tasksDir, ".locks", "badpid01.pid"), []byte("not-a-number"), 0o644)
+
+	agents, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents (invalid PID), got %d", len(agents))
+	}
+}
+
+func TestLatestProgressByAgent(t *testing.T) {
+	now := time.Now().UTC()
+	messages := []messaging.Message{
+		{ID: "1", From: "a1", Type: "progress", Body: "Step: WORK", SentAt: now.Add(-5 * time.Minute)},
+		{ID: "2", From: "a1", Type: "progress", Body: "Step: COMMIT", SentAt: now.Add(-1 * time.Minute)},
+		{ID: "3", From: "a2", Type: "progress", Body: "Step: VERIFY", SentAt: now.Add(-3 * time.Minute)},
+		{ID: "4", From: "a1", Type: "intent", Body: "Starting", SentAt: now},
+	}
+
+	result := latestProgressByAgent(messages)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(result))
+	}
+	if result["a1"].Body != "Step: COMMIT" {
+		t.Errorf("a1 latest = %q, want %q", result["a1"].Body, "Step: COMMIT")
+	}
+	if result["a2"].Body != "Step: VERIFY" {
+		t.Errorf("a2 latest = %q, want %q", result["a2"].Body, "Step: VERIFY")
+	}
+}
+
+func TestLatestProgressByAgent_NoProgressMessages(t *testing.T) {
+	messages := []messaging.Message{
+		{ID: "1", From: "a1", Type: "intent", Body: "Starting"},
+		{ID: "2", From: "a2", Type: "completion", Body: "Done"},
+	}
+	result := latestProgressByAgent(messages)
+	if len(result) != 0 {
+		t.Errorf("expected 0 agents, got %d", len(result))
+	}
+}
+
+func TestLatestProgressByAgent_Empty(t *testing.T) {
+	result := latestProgressByAgent(nil)
+	if len(result) != 0 {
+		t.Errorf("expected 0 agents for nil input, got %d", len(result))
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{"sub-second", 500 * time.Millisecond, "1 sec"},
+		{"one second", time.Second, "1 sec"},
+		{"30 seconds", 30 * time.Second, "30 sec"},
+		{"59 seconds", 59 * time.Second, "59 sec"},
+		{"one minute", time.Minute, "1 min"},
+		{"5 minutes", 5 * time.Minute, "5 min"},
+		{"90 seconds", 90 * time.Second, "1 min"},
+		{"2 hours", 2 * time.Hour, "120 min"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatDuration(tt.d)
+			if got != tt.want {
+				t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPluralize(t *testing.T) {
+	tests := []struct {
+		n    int
+		want string
+	}{
+		{0, "tasks"},
+		{1, "task"},
+		{2, "tasks"},
+		{100, "tasks"},
+	}
+	for _, tt := range tests {
+		t.Run(strconv.Itoa(tt.n), func(t *testing.T) {
+			got := pluralize(tt.n, "task", "tasks")
+			if got != tt.want {
+				t.Errorf("pluralize(%d) = %q, want %q", tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseBranchComment(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"with branch", "<!-- branch: task/add-login -->\n# Task\n", "task/add-login"},
+		{"no branch", "# Task\nSome body.\n", ""},
+		{"empty file", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name+".md")
+			os.WriteFile(path, []byte(tt.content), 0o644)
+			got := parseBranchComment(path)
+			if got != tt.want {
+				t.Errorf("parseBranchComment() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseBranchComment_MissingFile(t *testing.T) {
+	got := parseBranchComment(filepath.Join(t.TempDir(), "missing.md"))
+	if got != "" {
+		t.Errorf("parseBranchComment(missing) = %q, want empty", got)
+	}
+}
+
+func TestParseClaimedAt_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	os.WriteFile(path, []byte("<!-- claimed-by: agent-1  claimed-at: 2026-06-15T12:30:00Z -->\n# Task\n"), 0o644)
+
+	got := parseClaimedAt(path)
+	want := time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("parseClaimedAt() = %v, want %v", got, want)
+	}
+}
+
+func TestParseClaimedAt_MissingFile(t *testing.T) {
+	got := parseClaimedAt(filepath.Join(t.TempDir(), "missing.md"))
+	if !got.IsZero() {
+		t.Errorf("parseClaimedAt(missing) = %v, want zero", got)
+	}
+}
+
+func TestLastFailureReason_Variants(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"single", "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — broken -->\n# T\n", "broken"},
+		{"last of multiple", "<!-- failure: a1 at 2026-01-01T00:01:00Z — first -->\n<!-- failure: a2 at 2026-01-01T00:02:00Z — second -->\n# T\n", "second"},
+		{"none", "# T\nBody.\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name+".md")
+			os.WriteFile(path, []byte(tt.content), 0o644)
+			got := lastFailureReason(path)
+			if got != tt.want {
+				t.Errorf("lastFailureReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLastCycleFailureReason(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"with cycle", "---\nid: t\n---\n# T\n\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dep -->\n", "circular dep"},
+		{"no cycle", "---\nid: t\n---\n# T\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name+".md")
+			os.WriteFile(path, []byte(tt.content), 0o644)
+			got := lastCycleFailureReason(path)
+			if got != tt.want {
+				t.Errorf("lastCycleFailureReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReverseDependencies_MultipleDeps(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirWaiting, "a.md", "---\nid: a\ndepends_on: [x, y]\n---\n# A\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "b.md", "---\nid: b\ndepends_on: [x]\n---\n# B\n")
+
+	result := reverseDependencies(tasksDir)
+	if len(result["x"]) != 2 {
+		t.Errorf("x has %d dependents, want 2", len(result["x"]))
+	}
+	if len(result["y"]) != 1 {
+		t.Errorf("y has %d dependents, want 1", len(result["y"]))
+	}
+}
+
+func TestReverseDependencies_EmptyWaiting(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	result := reverseDependencies(tasksDir)
+	if len(result) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(result))
+	}
+}
+
+func TestReverseDependencies_NoDependencies(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirWaiting, "standalone.md", "---\nid: standalone\n---\n# Standalone\n")
+
+	result := reverseDependencies(tasksDir)
+	if len(result) != 0 {
+		t.Errorf("expected empty map for task with no deps, got %d entries", len(result))
+	}
+}
+
+func TestTaskStatesByID(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirBacklog, "task-a.md", "---\nid: task-a\n---\n# A\n")
+	writeTask(t, tasksDir, queue.DirInProgress, "task-b.md", "---\nid: task-b\n---\n# B\n")
+	writeTask(t, tasksDir, queue.DirCompleted, "task-c.md", "---\nid: task-c\n---\n# C\n")
+	writeTask(t, tasksDir, queue.DirFailed, "task-d.md", "---\nid: task-d\n---\n# D\n")
+
+	states, err := taskStatesByID(tasksDir)
+	if err != nil {
+		t.Fatalf("taskStatesByID: %v", err)
+	}
+
+	// Both the ID and the filename stem should be mapped.
+	expectations := map[string]string{
+		"task-a": queue.DirBacklog,
+		"task-b": queue.DirInProgress,
+		"task-c": queue.DirCompleted,
+		"task-d": queue.DirFailed,
+	}
+	for id, wantState := range expectations {
+		if got := states[id]; got != wantState {
+			t.Errorf("states[%q] = %q, want %q", id, got, wantState)
+		}
+	}
+}
+
+func TestTaskStatesByID_Empty(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	states, err := taskStatesByID(tasksDir)
+	if err != nil {
+		t.Fatalf("taskStatesByID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Errorf("expected empty states, got %d", len(states))
+	}
+}
+
+func TestTaskStatesByID_FileStemKey(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	// Task with no explicit id — should be keyed by filename stem.
+	writeTask(t, tasksDir, queue.DirBacklog, "no-id-task.md", "---\npriority: 10\n---\n# No ID\n")
+
+	states, err := taskStatesByID(tasksDir)
+	if err != nil {
+		t.Fatalf("taskStatesByID: %v", err)
+	}
+	stem := frontmatter.TaskFileStem("no-id-task.md")
+	if got := states[stem]; got != queue.DirBacklog {
+		t.Errorf("states[%q] = %q, want %q", stem, got, queue.DirBacklog)
+	}
+}
+
+func TestGatherStatus_EmptyTasksDir(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	// All queue counts should be zero.
+	for _, dir := range queue.AllDirs {
+		if data.queueCounts[dir] != 0 {
+			t.Errorf("queueCounts[%q] = %d, want 0", dir, data.queueCounts[dir])
+		}
+	}
+	if data.runnable != 0 {
+		t.Errorf("runnable = %d, want 0", data.runnable)
+	}
+	if len(data.agents) != 0 {
+		t.Errorf("agents = %d, want 0", len(data.agents))
+	}
+	if len(data.inProgressTasks) != 0 {
+		t.Errorf("inProgressTasks = %d, want 0", len(data.inProgressTasks))
+	}
+	if len(data.failedTasks) != 0 {
+		t.Errorf("failedTasks = %d, want 0", len(data.failedTasks))
+	}
+	if len(data.recentMessages) != 0 {
+		t.Errorf("recentMessages = %d, want 0", len(data.recentMessages))
+	}
+	if data.mergeLockActive {
+		t.Error("mergeLockActive should be false")
+	}
+}
+
+func TestGatherStatus_PopulatedQueue(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeTask(t, tasksDir, queue.DirBacklog, "b1.md", "---\nid: b1\npriority: 10\n---\n# Backlog 1\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "b2.md", "---\nid: b2\npriority: 20\n---\n# Backlog 2\n")
+	writeTask(t, tasksDir, queue.DirInProgress, "ip.md", "<!-- claimed-by: agent1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: ip\n---\n# In Progress\n")
+	writeTask(t, tasksDir, queue.DirCompleted, "done.md", "---\nid: done\n---\n# Done\n")
+	writeTask(t, tasksDir, queue.DirFailed, "fail.md", "<!-- failure: a1 at 2026-01-01T00:01:00Z — broken -->\n---\nid: fail\nmax_retries: 3\n---\n# Fail\n")
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	if data.queueCounts[queue.DirBacklog] != 2 {
+		t.Errorf("backlog count = %d, want 2", data.queueCounts[queue.DirBacklog])
+	}
+	if data.queueCounts[queue.DirInProgress] != 1 {
+		t.Errorf("in-progress count = %d, want 1", data.queueCounts[queue.DirInProgress])
+	}
+	if data.queueCounts[queue.DirCompleted] != 1 {
+		t.Errorf("completed count = %d, want 1", data.queueCounts[queue.DirCompleted])
+	}
+	if data.queueCounts[queue.DirFailed] != 1 {
+		t.Errorf("failed count = %d, want 1", data.queueCounts[queue.DirFailed])
+	}
+	if len(data.inProgressTasks) != 1 {
+		t.Errorf("inProgressTasks = %d, want 1", len(data.inProgressTasks))
+	}
+	if len(data.failedTasks) != 1 {
+		t.Errorf("failedTasks = %d, want 1", len(data.failedTasks))
+	}
+}
+
+func TestGatherStatus_RecentMessagesLimitedTo5(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	now := time.Now().UTC()
+	for i := 0; i < 10; i++ {
+		messaging.WriteMessage(tasksDir, messaging.Message{
+			ID:     "m" + strconv.Itoa(i),
+			From:   "agent1",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   "msg " + strconv.Itoa(i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		})
+	}
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	if len(data.recentMessages) > 5 {
+		t.Errorf("recentMessages = %d, want <= 5", len(data.recentMessages))
+	}
+}
+
+func TestGatherStatus_RunnableExcludesDeferred(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create two backlog tasks that overlap on affects with an in-progress task.
+	writeTask(t, tasksDir, queue.DirInProgress, "active.md", "<!-- claimed-by: a1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: active\naffects:\n  - src/main.go\n---\n# Active\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "deferred.md", "---\nid: deferred\naffects:\n  - src/main.go\n---\n# Deferred\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "runnable.md", "---\nid: runnable\naffects:\n  - src/other.go\n---\n# Runnable\n")
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	// Total backlog is 2, but 1 is deferred — runnable should be 1.
+	if data.queueCounts[queue.DirBacklog] != 2 {
+		t.Errorf("backlog count = %d, want 2", data.queueCounts[queue.DirBacklog])
+	}
+	if data.runnable != 1 {
+		t.Errorf("runnable = %d, want 1", data.runnable)
+	}
+}
+
+func TestIsMergeLockActive_NoLock(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if isMergeLockActive(tasksDir) {
+		t.Error("isMergeLockActive should be false when no lock file exists")
+	}
+}
+
+func TestIsMergeLockActive_DeadProcess(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	os.WriteFile(filepath.Join(tasksDir, ".locks", "merge.lock"), []byte("2147483647"), 0o644)
+	if isMergeLockActive(tasksDir) {
+		t.Error("isMergeLockActive should be false for dead process")
+	}
+}
+
+func TestWaitingTasksStatus_Empty(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	tasks, err := waitingTasksStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("waitingTasksStatus: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Errorf("expected 0 waiting tasks, got %d", len(tasks))
+	}
+}
+
+func TestWaitingTasksStatus_SortsByPriorityThenName(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirWaiting, "z-wait.md", "---\nid: z-wait\npriority: 20\ndepends_on: [dep-x]\n---\n# Z waiting\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "a-wait.md", "---\nid: a-wait\npriority: 10\ndepends_on: [dep-y]\n---\n# A waiting\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "b-wait.md", "---\nid: b-wait\npriority: 10\ndepends_on: [dep-z]\n---\n# B waiting\n")
+
+	tasks, err := waitingTasksStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("waitingTasksStatus: %v", err)
+	}
+	if len(tasks) != 3 {
+		t.Fatalf("expected 3 waiting tasks, got %d", len(tasks))
+	}
+	if tasks[0].Name != "a-wait.md" {
+		t.Errorf("tasks[0] = %q, want a-wait.md", tasks[0].Name)
+	}
+	if tasks[1].Name != "b-wait.md" {
+		t.Errorf("tasks[1] = %q, want b-wait.md", tasks[1].Name)
+	}
+	if tasks[2].Name != "z-wait.md" {
+		t.Errorf("tasks[2] = %q, want z-wait.md", tasks[2].Name)
+	}
+}
+
+func TestWaitingTasksStatus_CompletedDepShowsCheck(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirCompleted, "dep-done.md", "---\nid: dep-done\n---\n# Done\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-done]\n---\n# Waiter\n")
+
+	tasks, err := waitingTasksStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("waitingTasksStatus: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
+	}
+	// Dependency should show checkmark and "completed" status.
+	dep := tasks[0].Dependencies[0]
+	if !containsSubstring(dep, "✓") {
+		t.Errorf("completed dep should contain ✓, got %q", dep)
+	}
+	if !containsSubstring(dep, queue.DirCompleted) {
+		t.Errorf("completed dep should contain %q, got %q", queue.DirCompleted, dep)
+	}
+}
+
+func TestWaitingTasksStatus_MissingDepShowsCross(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [nonexistent]\n---\n# Waiter\n")
+
+	tasks, err := waitingTasksStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("waitingTasksStatus: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
+	}
+	dep := tasks[0].Dependencies[0]
+	if !containsSubstring(dep, "✗") {
+		t.Errorf("missing dep should contain ✗, got %q", dep)
+	}
+	if !containsSubstring(dep, "missing") {
+		t.Errorf("missing dep should contain 'missing', got %q", dep)
+	}
+}
