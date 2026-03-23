@@ -535,15 +535,18 @@ func TestParseClaimedAt(t *testing.T) {
 
 func TestReverseDependenciesHelper(t *testing.T) {
 	tasksDir := t.TempDir()
+	for _, dir := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, dir), 0o755)
+	}
 	waitingDir := filepath.Join(tasksDir, queue.DirWaiting)
-	os.MkdirAll(waitingDir, 0o755)
 
 	// Task A depends on X and Y.
 	os.WriteFile(filepath.Join(waitingDir, "task-a.md"), []byte("---\nid: task-a\ndepends_on: [dep-x, dep-y]\n---\n# A\n"), 0o644)
 	// Task B also depends on X.
 	os.WriteFile(filepath.Join(waitingDir, "task-b.md"), []byte("---\nid: task-b\ndepends_on: [dep-x]\n---\n# B\n"), 0o644)
 
-	result := reverseDependencies(tasksDir)
+	idx := queue.BuildIndex(tasksDir)
+	result := reverseDepsFromIndex(idx)
 
 	if len(result["dep-x"]) != 2 {
 		t.Errorf("dep-x should have 2 dependents, got %d", len(result["dep-x"]))

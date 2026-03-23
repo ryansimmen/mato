@@ -67,24 +67,33 @@ type taskEntry struct {
 	maxRetries int
 }
 
-func listTasksInDir(tasksDir, dir string) []taskEntry {
-	names, err := queue.ListTaskFiles(filepath.Join(tasksDir, dir))
-	if err != nil {
-		return nil
+// listTasksFromIndex derives a sorted task list from the PollIndex snapshot
+// for the given directory, replacing the old listTasksInDir which performed
+// its own filesystem scan. Tasks with parse failures are included with
+// default metadata to preserve visibility.
+func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
+	snaps := idx.TasksByState(dir)
+	tasks := make([]taskEntry, 0, len(snaps))
+	for _, snap := range snaps {
+		tasks = append(tasks, taskEntry{
+			name:       snap.Filename,
+			title:      frontmatter.ExtractTitle(snap.Filename, snap.Body),
+			id:         snap.Meta.ID,
+			priority:   snap.Meta.Priority,
+			maxRetries: snap.Meta.MaxRetries,
+		})
 	}
-	tasks := make([]taskEntry, 0, len(names))
-	for _, name := range names {
-		meta, body, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, dir, name))
-		priority := 50
-		maxRetries := 3
-		var title, id string
-		if err == nil {
-			priority = meta.Priority
-			maxRetries = meta.MaxRetries
-			id = meta.ID
-			title = frontmatter.ExtractTitle(name, body)
+	// Include files that failed frontmatter parsing with defaults,
+	// so they remain visible in the status dashboard.
+	for _, pf := range idx.ParseFailures() {
+		if pf.State != dir {
+			continue
 		}
-		tasks = append(tasks, taskEntry{name: name, title: title, id: id, priority: priority, maxRetries: maxRetries})
+		tasks = append(tasks, taskEntry{
+			name:       pf.Filename,
+			priority:   50,
+			maxRetries: 3,
+		})
 	}
 	sort.Slice(tasks, func(i, j int) bool {
 		if tasks[i].priority != tasks[j].priority {
@@ -117,14 +126,6 @@ type waitingTaskSummary struct {
 	Title        string
 	Priority     int
 	Dependencies []string
-}
-
-func countMarkdownFiles(dir string) int {
-	names, err := queue.ListTaskFiles(dir)
-	if err != nil {
-		return 0
-	}
-	return len(names)
 }
 
 func activeAgents(tasksDir string) ([]statusAgent, error) {
@@ -165,34 +166,22 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 	return agents, nil
 }
 
-func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
-	stateByID, err := taskStatesByID(tasksDir)
-	if err != nil {
-		return nil, err
-	}
+// waitingTasksFromIndex derives waiting task summaries from the PollIndex snapshot,
+// replacing waitingTasksStatus which performed its own filesystem scans.
+func waitingTasksFromIndex(idx *queue.PollIndex) []waitingTaskSummary {
+	snaps := idx.TasksByState(queue.DirWaiting)
 
-	names, err := queue.ListTaskFiles(filepath.Join(tasksDir, queue.DirWaiting))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read waiting dir: %w", err)
-	}
+	// Build ID→state map from the index.
+	stateByID := taskStatesByIDFromIndex(idx)
 
-	waiting := make([]waitingTaskSummary, 0, len(names))
-	for _, name := range names {
-		path := filepath.Join(tasksDir, queue.DirWaiting, name)
-		meta, body, err := frontmatter.ParseTaskFile(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse %s: %v\n", path, err)
-			continue
-		}
-		title := frontmatter.ExtractTitle(name, body)
+	greenSym := color.New(color.FgGreen).SprintFunc()
+	redSym := color.New(color.FgRed).SprintFunc()
 
-		deps := make([]string, 0, len(meta.DependsOn))
-		greenSym := color.New(color.FgGreen).SprintFunc()
-		redSym := color.New(color.FgRed).SprintFunc()
-		for _, dep := range meta.DependsOn {
+	waiting := make([]waitingTaskSummary, 0, len(snaps))
+	for _, snap := range snaps {
+		title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
+		deps := make([]string, 0, len(snap.Meta.DependsOn))
+		for _, dep := range snap.Meta.DependsOn {
 			status := stateByID[dep]
 			if status == "" {
 				status = "missing"
@@ -206,11 +195,10 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		if len(deps) == 0 {
 			deps = []string{"none"}
 		}
-
 		waiting = append(waiting, waitingTaskSummary{
-			Name:         name,
+			Name:         snap.Filename,
 			Title:        title,
-			Priority:     meta.Priority,
+			Priority:     snap.Meta.Priority,
 			Dependencies: deps,
 		})
 	}
@@ -221,46 +209,35 @@ func waitingTasksStatus(tasksDir string) ([]waitingTaskSummary, error) {
 		}
 		return waiting[i].Name < waiting[j].Name
 	})
-	return waiting, nil
+	return waiting
 }
 
-func taskStatesByID(tasksDir string) (map[string]string, error) {
-	dirStates := []struct {
-		Dir   string
-		State string
-	}{
-		{Dir: queue.DirWaiting, State: queue.DirWaiting},
-		{Dir: queue.DirBacklog, State: queue.DirBacklog},
-		{Dir: queue.DirInProgress, State: queue.DirInProgress},
-		{Dir: queue.DirReadyReview, State: queue.DirReadyReview},
-		{Dir: queue.DirReadyMerge, State: queue.DirReadyMerge},
-		{Dir: queue.DirCompleted, State: queue.DirCompleted},
-		{Dir: queue.DirFailed, State: queue.DirFailed},
-	}
-
+// taskStatesByIDFromIndex builds an ID→state map from the PollIndex snapshot,
+// replacing taskStatesByID which performed its own full directory scans.
+func taskStatesByIDFromIndex(idx *queue.PollIndex) map[string]string {
 	states := make(map[string]string)
-	for _, dirState := range dirStates {
-		names, err := queue.ListTaskFiles(filepath.Join(tasksDir, dirState.Dir))
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("read %s dir: %w", dirState.Dir, err)
-		}
-		for _, name := range names {
-			path := filepath.Join(tasksDir, dirState.Dir, name)
-			meta, _, err := frontmatter.ParseTaskFile(path)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not parse %s: %v\n", path, err)
-				continue
-			}
-			states[frontmatter.TaskFileStem(name)] = dirState.State
-			if meta.ID != "" {
-				states[meta.ID] = dirState.State
+	for _, dir := range queue.AllDirs {
+		for _, snap := range idx.TasksByState(dir) {
+			states[frontmatter.TaskFileStem(snap.Filename)] = dir
+			if snap.Meta.ID != "" {
+				states[snap.Meta.ID] = dir
 			}
 		}
 	}
-	return states, nil
+	return states
+}
+
+// reverseDepsFromIndex derives reverse dependencies from the PollIndex snapshot,
+// replacing reverseDependencies which performed its own filesystem scan.
+func reverseDepsFromIndex(idx *queue.PollIndex) map[string][]string {
+	snaps := idx.TasksByState(queue.DirWaiting)
+	result := make(map[string][]string)
+	for _, snap := range snaps {
+		for _, dep := range snap.Meta.DependsOn {
+			result[dep] = append(result[dep], snap.Filename)
+		}
+	}
+	return result
 }
 
 // latestProgressByAgent returns the most recent progress message per agent.
@@ -329,26 +306,6 @@ func lastCycleFailureReason(path string) string {
 		return ""
 	}
 	return taskfile.LastCycleFailureReason(data)
-}
-
-// reverseDependencies scans waiting/ tasks and returns a map from dependency ID
-// to the list of task filenames that depend on it.
-func reverseDependencies(tasksDir string) map[string][]string {
-	names, err := queue.ListTaskFiles(filepath.Join(tasksDir, queue.DirWaiting))
-	if err != nil {
-		return nil
-	}
-	result := make(map[string][]string)
-	for _, name := range names {
-		meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, queue.DirWaiting, name))
-		if err != nil {
-			continue
-		}
-		for _, dep := range meta.DependsOn {
-			result[dep] = append(result[dep], name)
-		}
-	}
-	return result
 }
 
 func pluralize(n int, singular, plural string) string {
