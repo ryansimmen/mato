@@ -23,6 +23,9 @@ type TaskSnapshot struct {
 	Branch             string // from <!-- branch: ... --> comment, "" if absent
 	FailureCount       int    // <!-- failure: ... --> markers (excluding review-failure)
 	ReviewFailureCount int    // <!-- review-failure: ... --> markers
+	// GlobError caches the result of ValidateAffectsGlobs, computed once
+	// during index build. nil means all glob patterns are valid.
+	GlobError error
 }
 
 // ParseFailure records a task file that could not be parsed during index build.
@@ -186,13 +189,14 @@ func BuildIndex(tasksDir string) *PollIndex {
 				ReviewFailureCount: taskfile.CountReviewFailureMarkers(data),
 			}
 
-			// Validate glob syntax in affects. Invalid globs are
-			// logged as build warnings but the task is still fully
-			// indexed so its affects remain visible to overlap
-			// detection.
-			if err := frontmatter.ValidateAffectsGlobs(meta.Affects); err != nil {
+			// Validate glob syntax in affects once and cache the result.
+			// Invalid globs are logged as build warnings but the task
+			// is still fully indexed so its affects remain visible to
+			// overlap detection.
+			if globErr := frontmatter.ValidateAffectsGlobs(meta.Affects); globErr != nil {
+				snap.GlobError = globErr
 				idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
-					State: dir, Path: path, Err: err,
+					State: dir, Path: path, Err: globErr,
 				})
 			}
 
