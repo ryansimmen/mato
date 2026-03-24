@@ -450,6 +450,20 @@ func (idx *PollIndex) BacklogParseFailures() []ParseFailure {
 	return result
 }
 
+// ReviewParseFailures returns parse failures from the ready-for-review/ directory.
+func (idx *PollIndex) ReviewParseFailures() []ParseFailure {
+	if idx == nil {
+		return nil
+	}
+	var result []ParseFailure
+	for _, pf := range idx.parseFailures {
+		if pf.State == DirReadyReview {
+			result = append(result, pf)
+		}
+	}
+	return result
+}
+
 // Snapshot returns the TaskSnapshot for a specific state/filename, or nil if
 // not found.
 func (idx *PollIndex) Snapshot(state, filename string) *TaskSnapshot {

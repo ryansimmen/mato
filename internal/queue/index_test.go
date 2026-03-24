@@ -393,6 +393,9 @@ func TestBuildIndex_NilIndexMethods(t *testing.T) {
 	if idx.BacklogParseFailures() != nil {
 		t.Error("nil index BacklogParseFailures should return nil")
 	}
+	if idx.ReviewParseFailures() != nil {
+		t.Error("nil index ReviewParseFailures should return nil")
+	}
 	if idx.Snapshot(DirBacklog, "x.md") != nil {
 		t.Error("nil index Snapshot should return nil")
 	}
@@ -436,6 +439,26 @@ func TestBuildIndex_BacklogParseFailures(t *testing.T) {
 	}
 	if failures[0].Filename != "bad.md" {
 		t.Fatalf("failure filename = %q, want bad.md", failures[0].Filename)
+	}
+}
+
+func TestBuildIndex_ReviewParseFailures(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirReadyReview, "bad-review.md", "---\npriority: [oops\n---\n# Bad Review\n")
+	writeTask(t, tasksDir, DirReadyReview, "good-review.md", "---\npriority: 5\n---\n# Good Review\n")
+	idx := BuildIndex(tasksDir)
+	failures := idx.ReviewParseFailures()
+	if len(failures) != 1 {
+		t.Fatalf("expected 1 review parse failure, got %d", len(failures))
+	}
+	if failures[0].Filename != "bad-review.md" {
+		t.Fatalf("failure filename = %q, want bad-review.md", failures[0].Filename)
+	}
+
+	// Good task should still be indexed.
+	snap := idx.Snapshot(DirReadyReview, "good-review.md")
+	if snap == nil {
+		t.Fatal("expected good-review.md to be indexed")
 	}
 }
 

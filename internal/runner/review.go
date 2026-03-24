@@ -52,6 +52,23 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 
 	// Use index if available; otherwise fall back to filesystem scan.
 	if idx != nil {
+		// Quarantine malformed review tasks whose frontmatter could not be parsed.
+		for _, pf := range idx.ReviewParseFailures() {
+			fmt.Fprintf(os.Stderr, "warning: quarantining unparseable review candidate %s: %v\n", pf.Filename, pf.Err)
+			if err := os.MkdirAll(failedDir, 0o755); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", pf.Filename, err)
+				continue
+			}
+			if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter in ready-for-review: %v", pf.Err)); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
+			}
+			if moveErr := queue.AtomicMove(pf.Path, filepath.Join(failedDir, pf.Filename)); moveErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move malformed review task %s to failed: %v\n", pf.Filename, moveErr)
+			} else {
+				fmt.Printf("quarantined malformed review candidate %s to failed/\n", pf.Filename)
+			}
+		}
+
 		snaps := idx.TasksByState(queue.DirReadyReview)
 		for _, snap := range snaps {
 			maxRetries := snap.Meta.MaxRetries
@@ -104,7 +121,19 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 			path := filepath.Join(reviewDir, name)
 			meta, body, err := frontmatter.ParseTaskFile(path)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not parse review candidate %s: %v\n", name, err)
+				fmt.Fprintf(os.Stderr, "warning: quarantining unparseable review candidate %s: %v\n", name, err)
+				if mkErr := os.MkdirAll(failedDir, 0o755); mkErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", name, mkErr)
+					continue
+				}
+				if appendErr := taskfile.AppendTerminalFailureRecord(path, fmt.Sprintf("unparseable frontmatter in ready-for-review: %v", err)); appendErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", name, appendErr)
+				}
+				if moveErr := queue.AtomicMove(path, filepath.Join(failedDir, name)); moveErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not move malformed review task %s to failed: %v\n", name, moveErr)
+				} else {
+					fmt.Printf("quarantined malformed review candidate %s to failed/\n", name)
+				}
 				continue
 			}
 
@@ -177,6 +206,12 @@ func selectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTa
 		return nil
 	}
 	return candidates[0]
+}
+
+// SelectTaskForReview is the exported entry point for selecting the
+// highest-priority review candidate. It delegates to selectTaskForReview.
+func SelectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTask {
+	return selectTaskForReview(tasksDir, idx)
 }
 
 // selectAndLockReview returns the highest-priority review candidate that this

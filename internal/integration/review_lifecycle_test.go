@@ -299,3 +299,82 @@ func TestReviewLifecycle_MissingTaskBranch(t *testing.T) {
 		t.Fatalf("expected 0 completion messages for missing branch, got %d", len(completions))
 	}
 }
+
+func TestReviewLifecycle_MalformedTaskQuarantined(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Write a malformed task file with unterminated frontmatter.
+	malformedFile := "malformed-review.md"
+	malformedPath := writeTask(t, tasksDir, queue.DirReadyReview, malformedFile,
+		"---\npriority: [oops\n# Malformed\n")
+
+	// Write a valid task file.
+	goodFile := "good-review.md"
+	goodPath := writeTask(t, tasksDir, queue.DirReadyReview, goodFile,
+		"<!-- branch: task/good-review -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good Review Task\n")
+
+	// Use ReviewCandidates via SelectTaskForReview (exported).
+	task := runner.SelectTaskForReview(tasksDir, nil)
+
+	// The valid task should be selected.
+	if task == nil {
+		t.Fatal("expected a review candidate to be selected")
+	}
+	if task.Filename != goodFile {
+		t.Fatalf("expected %q, got %q", goodFile, task.Filename)
+	}
+
+	// The malformed task should be quarantined to failed/.
+	mustExist(t, filepath.Join(tasksDir, queue.DirFailed, malformedFile))
+	mustNotExist(t, malformedPath)
+
+	// The valid task should still be in ready-for-review/.
+	mustExist(t, goodPath)
+
+	// The failed task should have a terminal-failure marker.
+	data := readFile(t, filepath.Join(tasksDir, queue.DirFailed, malformedFile))
+	if !strings.Contains(data, "<!-- terminal-failure:") {
+		t.Fatal("terminal-failure marker not written to malformed task")
+	}
+	if !strings.Contains(data, "unparseable frontmatter") {
+		t.Fatal("terminal-failure should mention unparseable frontmatter")
+	}
+}
+
+func TestReviewLifecycle_MalformedTaskQuarantined_Indexed(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Write a malformed task file.
+	malformedFile := "malformed-indexed.md"
+	malformedPath := writeTask(t, tasksDir, queue.DirReadyReview, malformedFile,
+		"---\npriority: [oops\n# Malformed\n")
+
+	// Write a valid task file.
+	goodFile := "good-indexed.md"
+	goodPath := writeTask(t, tasksDir, queue.DirReadyReview, goodFile,
+		"<!-- branch: task/good-indexed -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good Indexed Task\n")
+
+	idx := queue.BuildIndex(tasksDir)
+
+	task := runner.SelectTaskForReview(tasksDir, idx)
+
+	if task == nil {
+		t.Fatal("expected a review candidate to be selected")
+	}
+	if task.Filename != goodFile {
+		t.Fatalf("expected %q, got %q", goodFile, task.Filename)
+	}
+
+	// Malformed task should be in failed/.
+	mustExist(t, filepath.Join(tasksDir, queue.DirFailed, malformedFile))
+	mustNotExist(t, malformedPath)
+
+	// Valid task should still be in ready-for-review/.
+	mustExist(t, goodPath)
+
+	// Terminal-failure marker should be present.
+	data := readFile(t, filepath.Join(tasksDir, queue.DirFailed, malformedFile))
+	if !strings.Contains(data, "<!-- terminal-failure:") {
+		t.Fatal("terminal-failure marker not written")
+	}
+}

@@ -287,6 +287,7 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 ### Key properties
 - Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` records are counted for the task's failure record budget.
 - Review infrastructure failures (network errors, diff timeouts) are recorded as `<!-- review-failure: ... -->` and counted separately from task failure records. This ensures transient review issues do not exhaust the task's failure record budget.
+- **Malformed review candidates** (unparseable frontmatter) are quarantined: `reviewCandidates()` appends a `<!-- terminal-failure: ... -->` marker and moves the task to `failed/`. This prevents a broken task file from blocking review throughput indefinitely. Both the indexed and filesystem fallback code paths follow the same quarantine behavior, consistent with how `ReconcileReadyQueue` handles unparseable `waiting/` and `backlog/` tasks.
 - On retry, the host injects previous review feedback via the `MATO_REVIEW_FEEDBACK` environment variable so the implementing agent can address the reviewer's concerns.
 - The review agent uses the embedded prompt `review-instructions.md`.
 - The review agent writes only a `progress` message; the host sends the `completion` message after processing the verdict.

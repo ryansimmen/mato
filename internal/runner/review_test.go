@@ -572,3 +572,101 @@ func TestRejectDisposition_Constants(t *testing.T) {
 		t.Fatal("reject disposition messageBody should not be empty")
 	}
 }
+
+func TestReviewCandidates_FilesystemFallback_MalformedQuarantined(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirFailed} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Write a malformed task (unterminated frontmatter).
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "malformed.md"),
+		[]byte("---\npriority: [oops\n# Malformed\n"), 0o644)
+
+	// Write a valid task to verify it's still returned.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "good.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, nil)
+		if len(candidates) != 1 {
+			t.Fatalf("expected 1 candidate (malformed should be quarantined), got %d", len(candidates))
+		}
+		if candidates[0].Filename != "good.md" {
+			t.Fatalf("expected good.md, got %q", candidates[0].Filename)
+		}
+	})
+
+	// Malformed task should be moved to failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "malformed.md")); err != nil {
+		t.Fatal("malformed task should be moved to failed/")
+	}
+	// Should no longer exist in ready-for-review/.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, "malformed.md")); !os.IsNotExist(err) {
+		t.Fatal("malformed task should no longer be in ready-for-review/")
+	}
+
+	// Terminal failure marker should be appended.
+	data, _ := os.ReadFile(filepath.Join(tasksDir, queue.DirFailed, "malformed.md"))
+	if !strings.Contains(string(data), "<!-- terminal-failure:") {
+		t.Fatal("terminal-failure marker not written to malformed task")
+	}
+	if !strings.Contains(string(data), "unparseable frontmatter") {
+		t.Fatal("terminal-failure should mention unparseable frontmatter")
+	}
+
+	// Stdout should have a quarantine message.
+	if !strings.Contains(stdout, "quarantined malformed review candidate") {
+		t.Fatalf("expected quarantine message in stdout, got:\n%s", stdout)
+	}
+
+	// Stderr should have a warning.
+	if !strings.Contains(stderr, "quarantining unparseable review candidate") {
+		t.Fatalf("expected quarantine warning in stderr, got:\n%s", stderr)
+	}
+}
+
+func TestReviewCandidates_Indexed_MalformedQuarantined(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirFailed, queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Write a malformed task.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "malformed.md"),
+		[]byte("---\npriority: [oops\n# Malformed\n"), 0o644)
+
+	// Write a valid task.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "good.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, idx)
+		if len(candidates) != 1 {
+			t.Fatalf("expected 1 candidate (malformed should be quarantined), got %d", len(candidates))
+		}
+		if candidates[0].Filename != "good.md" {
+			t.Fatalf("expected good.md, got %q", candidates[0].Filename)
+		}
+	})
+
+	// Malformed task should be moved to failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "malformed.md")); err != nil {
+		t.Fatal("malformed task should be moved to failed/")
+	}
+
+	// Terminal failure marker should be appended.
+	data, _ := os.ReadFile(filepath.Join(tasksDir, queue.DirFailed, "malformed.md"))
+	if !strings.Contains(string(data), "<!-- terminal-failure:") {
+		t.Fatal("terminal-failure marker not written to malformed task")
+	}
+
+	if !strings.Contains(stdout, "quarantined malformed review candidate") {
+		t.Fatalf("expected quarantine message in stdout, got:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "quarantining unparseable review candidate") {
+		t.Fatalf("expected quarantine warning in stderr, got:\n%s", stderr)
+	}
+}
