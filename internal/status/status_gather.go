@@ -11,6 +11,12 @@ import (
 	"mato/internal/queue"
 )
 
+// statusMessageLimit is the maximum number of recent messages read by
+// gatherStatus. It is large enough to cover the 5 displayed messages plus
+// latest-progress lookups for all active agents, while avoiding the I/O
+// cost of reading thousands of old message files.
+const statusMessageLimit = 50
+
 // statusData holds all the data gathered for the status dashboard.
 type statusData struct {
 	idx             *queue.PollIndex
@@ -100,8 +106,9 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	// Merge lock.
 	data.mergeLockActive = isMergeLockActive(tasksDir)
 
-	// Messages.
-	messages, err := messaging.ReadMessages(tasksDir, time.Time{})
+	// Messages — read only the most recent entries to avoid scanning
+	// thousands of old files in long-running repos.
+	messages, err := messaging.ReadRecentMessages(tasksDir, statusMessageLimit)
 	if err != nil {
 		return data, err
 	}
