@@ -181,12 +181,17 @@ func stripHTMLCommentLines(body string) string {
 	return strings.Join(filtered, "\n")
 }
 
-// ExtractTitle returns the first non-empty line from the body, stripping
-// leading markdown heading markers (#). Falls back to TaskFileStem(filename).
+// ExtractTitle returns the first non-empty, non-HTML-comment line from the
+// body, stripping leading markdown heading markers (#). Leading full-line HTML
+// comments (<!-- ... -->) are skipped so that user-authored comments don't
+// become the displayed title. Falls back to TaskFileStem(filename).
 func ExtractTitle(filename, body string) string {
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<!--") && strings.HasSuffix(trimmed, "-->") {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "#") {

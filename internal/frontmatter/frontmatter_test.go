@@ -614,6 +614,36 @@ func TestExtractTitle(t *testing.T) {
 			body:     "###\nActual content",
 			want:     "Actual content",
 		},
+		{
+			name:     "skips leading HTML comment",
+			filename: "task.md",
+			body:     "<!-- some user comment -->\n# Real Title\nBody.",
+			want:     "Real Title",
+		},
+		{
+			name:     "skips multiple leading HTML comments",
+			filename: "task.md",
+			body:     "<!-- comment one -->\n<!-- comment two -->\n# Actual Title",
+			want:     "Actual Title",
+		},
+		{
+			name:     "skips HTML comments and blank lines",
+			filename: "task.md",
+			body:     "<!-- note -->\n\n<!-- another -->\n\nPlain text title",
+			want:     "Plain text title",
+		},
+		{
+			name:     "only HTML comments falls back to filename",
+			filename: "only-comments.md",
+			body:     "<!-- just a comment -->\n<!-- another -->",
+			want:     "only-comments",
+		},
+		{
+			name:     "partial HTML comment is not skipped",
+			filename: "task.md",
+			body:     "<!-- unterminated comment\n# Heading",
+			want:     "<!-- unterminated comment",
+		},
 	}
 
 	for _, tt := range tests {
