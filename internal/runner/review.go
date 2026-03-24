@@ -61,6 +61,9 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 					fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", snap.Filename, err)
 					continue
 				}
+				if err := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("review retry budget exhausted (%d failures >= max_retries %d)", failures, maxRetries)); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
+				}
 				if moveErr := queue.AtomicMove(snap.Path, filepath.Join(failedDir, snap.Filename)); moveErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
 				} else {
@@ -116,6 +119,9 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				if err := os.MkdirAll(failedDir, 0o755); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", name, err)
 					continue
+				}
+				if err := taskfile.AppendTerminalFailureRecord(path, fmt.Sprintf("review retry budget exhausted (%d failures >= max_retries %d)", failures, maxRetries)); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", name, err)
 				}
 				if moveErr := queue.AtomicMove(path, dst); moveErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", name, moveErr)

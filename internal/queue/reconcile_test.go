@@ -418,3 +418,64 @@ func TestReconcileReadyQueue_MultiplePromotions(t *testing.T) {
 		}
 	}
 }
+
+func TestReconcileReadyQueue_ParseFailureHasTerminalMarker(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirWaiting, "bad-yaml.md",
+		"---\nbad: [unclosed\n---\n# Bad YAML\n")
+
+	ReconcileReadyQueue(tasksDir, nil)
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-yaml.md"))
+	if err != nil {
+		t.Fatalf("bad-yaml.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-yaml.md in failed/ should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "unparseable frontmatter") {
+		t.Error("terminal-failure marker should mention unparseable frontmatter")
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobHasTerminalMarker(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "bad-glob.md",
+		"---\nid: bad-glob\naffects:\n  - \"[invalid\"\n---\n# Bad glob\n")
+
+	ReconcileReadyQueue(tasksDir, nil)
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-glob.md"))
+	if err != nil {
+		t.Fatalf("bad-glob.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-glob.md in failed/ should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "invalid glob syntax") {
+		t.Error("terminal-failure marker should mention invalid glob syntax")
+	}
+}
+
+func TestReconcileReadyQueue_WaitingInvalidGlobHasTerminalMarker(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// A waiting task with satisfied deps but invalid glob — quarantined during
+	// the promotion pass rather than the backlog scan.
+	writeTask(t, tasksDir, DirCompleted, "dep.md",
+		"---\nid: dep\n---\n# Dep\n")
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-wait.md",
+		"---\nid: bad-glob-wait\ndepends_on: [dep]\naffects:\n  - \"[invalid\"\n---\n# Bad glob waiting\n")
+
+	ReconcileReadyQueue(tasksDir, nil)
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-glob-wait.md"))
+	if err != nil {
+		t.Fatalf("bad-glob-wait.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-glob-wait.md in failed/ should contain terminal-failure marker")
+	}
+}

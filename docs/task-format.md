@@ -99,6 +99,7 @@ Expected comment patterns:
 <!-- review-rejection: review-agent-3 at 2026-01-01T00:06:00Z — tests do not cover the retry backoff logic; add unit tests for exponential delays -->
 <!-- reviewed: review-agent-3 at 2026-01-01T00:07:00Z — approved -->
 <!-- cycle-failure: mato at 2026-01-01T00:08:00Z — circular dependency -->
+<!-- terminal-failure: mato at 2026-01-01T00:09:00Z — unparseable frontmatter: yaml: line 2: did not find expected ',' or ']' -->
 <!-- merged: merge-queue at 2026-01-01T00:10:00Z -->
 ```
 
@@ -110,6 +111,7 @@ What they mean:
 - `review-rejection:` records feedback from the review agent when rejecting a task. Format: `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->`. Review rejections do **not** count against `max_retries`. The feedback is passed to the implementing agent via the `MATO_REVIEW_FEEDBACK` environment variable on the next attempt.
 - `reviewed:` records that the review agent approved the task. Format: `<!-- reviewed: <agent-id> at <timestamp> — approved -->`. The host writes this after reading the review agent's verdict, then moves the task to `ready-to-merge/`.
 - `cycle-failure:` records that the task was detected as part of a circular dependency during dependency resolution. Format: `<!-- cycle-failure: mato at <timestamp> — circular dependency -->`. The task is moved to `failed/` when this marker is appended. Cycle-failure markers do **not** count against the task's `max_retries` budget. To recover, fix the `depends_on` entries to break the cycle and move the task back to `waiting/`.
+- `terminal-failure:` records that the host automatically moved a task to `failed/` due to a non-recoverable structural problem. Format: `<!-- terminal-failure: mato at <timestamp> — <reason> -->`. Written before the task is moved to `failed/` by reconciliation or review candidate selection. Reasons include unparseable YAML frontmatter, invalid glob syntax in `affects`, and review retry budget exhaustion. Terminal-failure markers do **not** count against the task's `max_retries` budget. To recover, fix the underlying issue (e.g. correct the YAML or glob syntax) and move the task back to `waiting/` or `backlog/`.
 - `merged:` records that the merge queue successfully squashed the task branch into the target branch.
 - The host parses `claimed-by` and strips full-line HTML comments from the task body before agent-facing interpretation.
 
