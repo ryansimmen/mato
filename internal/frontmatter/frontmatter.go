@@ -269,12 +269,10 @@ func sanitizeAffects(affects []string) ([]string, []StrippedAffect) {
 	for _, af := range affects {
 		cleaned := filepath.Clean(af)
 		if filepath.IsAbs(cleaned) {
-			fmt.Fprintf(os.Stderr, "warning: stripping affects entry %q: absolute path\n", af)
 			stripped = append(stripped, StrippedAffect{Entry: af, Reason: "absolute path"})
 			continue
 		}
 		if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-			fmt.Fprintf(os.Stderr, "warning: stripping affects entry %q: path traversal\n", af)
 			stripped = append(stripped, StrippedAffect{Entry: af, Reason: "path traversal"})
 			continue
 		}
