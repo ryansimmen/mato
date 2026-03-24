@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -408,6 +409,36 @@ func TestStatusWithPopulatedQueue(t *testing.T) {
 
 	if err := status.Show(repoRoot, ""); err != nil {
 		t.Fatalf("status.Show: %v", err)
+	}
+}
+
+func TestStatusWithParseFailedTasksPreservesRuntimeMetadata(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirInProgress, "broken-active.md",
+		"<!-- claimed-by: status-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"---\npriority: nope\n---\n# Broken active\n")
+	writeTask(t, tasksDir, queue.DirFailed, "broken-failed.md",
+		"<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — invalid frontmatter -->\n"+
+			"---\npriority: nope\n---\n# Broken failed\n")
+
+	var buf bytes.Buffer
+	if err := status.ShowTo(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("status.ShowTo: %v", err)
+	}
+	output := buf.String()
+
+	if !strings.Contains(output, "broken-active.md") {
+		t.Fatalf("status output missing parse-failed in-progress task:\n%s", output)
+	}
+	if !strings.Contains(output, "agent status-agent") {
+		t.Fatalf("status output missing claimed-by metadata for parse-failed task:\n%s", output)
+	}
+	if !strings.Contains(output, "broken-failed.md") {
+		t.Fatalf("status output missing parse-failed failed task:\n%s", output)
+	}
+	if !strings.Contains(output, "structural failure: invalid frontmatter") {
+		t.Fatalf("status output missing terminal failure reason for parse-failed failed task:\n%s", output)
 	}
 }
 
