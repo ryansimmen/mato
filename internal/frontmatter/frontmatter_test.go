@@ -869,6 +869,36 @@ Body.
 	}
 }
 
+func TestParseTaskData_SanitizeAffectsNoStderr(t *testing.T) {
+	// Parsing unsafe affects must not write warnings to stderr. The
+	// stripped entries are captured in StrippedAffects for structured
+	// diagnostics (queue build warnings, mato doctor).
+	content := "---\naffects:\n  - /absolute/path\n  - ../../etc/passwd\n---\nBody.\n"
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+
+	_, _, parseErr := ParseTaskData([]byte(content), "stderr-test.md")
+
+	w.Close()
+	os.Stderr = origStderr
+
+	if parseErr != nil {
+		t.Fatalf("ParseTaskData returned error: %v", parseErr)
+	}
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	r.Close()
+	if n > 0 {
+		t.Fatalf("sanitizeAffects wrote to stderr: %s", string(buf[:n]))
+	}
+}
+
 func TestBranchDisambiguator(t *testing.T) {
 	// Deterministic: same input always produces the same suffix.
 	s1 := BranchDisambiguator("add-feature.md")
