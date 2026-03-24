@@ -312,6 +312,17 @@ func lastCycleFailureReason(path string) string {
 	return taskfile.LastCycleFailureReason(data)
 }
 
+// lastTerminalFailureReason extracts the reason from the last
+// <!-- terminal-failure: ... --> comment. Returns "" if no terminal-failure
+// markers are found.
+func lastTerminalFailureReason(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return taskfile.LastTerminalFailureReason(data)
+}
+
 func pluralize(n int, singular, plural string) string {
 	if n == 1 {
 		return singular

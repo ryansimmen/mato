@@ -61,11 +61,14 @@ type DependencyJSON struct {
 
 // FailedTaskJSON represents a failed task in JSON output.
 type FailedTaskJSON struct {
-	Name       string `json:"name"`
-	Title      string `json:"title,omitempty"`
-	FailCount  int    `json:"fail_count"`
-	MaxRetries int    `json:"max_retries"`
-	LastReason string `json:"last_reason,omitempty"`
+	Name           string `json:"name"`
+	Title          string `json:"title,omitempty"`
+	FailureKind    string `json:"failure_kind"`
+	FailCount      int    `json:"fail_count"`
+	MaxRetries     int    `json:"max_retries"`
+	LastReason     string `json:"last_reason,omitempty"`
+	TerminalReason string `json:"terminal_reason,omitempty"`
+	CycleReason    string `json:"cycle_reason,omitempty"`
 }
 
 // CompletionJSON represents a recently completed task in JSON output.
@@ -196,12 +199,24 @@ func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 	out.Failed = make([]FailedTaskJSON, 0, len(data.failedTasks))
 	for _, task := range data.failedTasks {
 		taskPath := filepath.Join(tasksDir, queue.DirFailed, task.name)
+		terminalReason := lastTerminalFailureReason(taskPath)
+		cycleReason := lastCycleFailureReason(taskPath)
 		ft := FailedTaskJSON{
-			Name:       task.name,
-			Title:      task.title,
-			FailCount:  countFailureRecords(taskPath),
-			MaxRetries: task.maxRetries,
-			LastReason: lastFailureReason(taskPath),
+			Name:           task.name,
+			Title:          task.title,
+			FailCount:      countFailureRecords(taskPath),
+			MaxRetries:     task.maxRetries,
+			LastReason:     lastFailureReason(taskPath),
+			TerminalReason: terminalReason,
+			CycleReason:    cycleReason,
+		}
+		switch {
+		case terminalReason != "":
+			ft.FailureKind = "terminal"
+		case cycleReason != "":
+			ft.FailureKind = "cycle"
+		default:
+			ft.FailureKind = "retry"
 		}
 		out.Failed = append(out.Failed, ft)
 	}
