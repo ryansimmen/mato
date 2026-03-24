@@ -331,6 +331,8 @@ func Watch(ctx context.Context, repoRoot, tasksDir string, interval time.Duratio
 // closed by a pager or pipe).
 func WatchTo(ctx context.Context, w io.Writer, repoRoot, tasksDir string, interval time.Duration) error {
 	dim := color.New(color.Faint).SprintFunc()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		var buf bytes.Buffer
 		if err := ShowTo(&buf, repoRoot, tasksDir); err != nil {
@@ -357,7 +359,7 @@ func WatchTo(ctx context.Context, w io.Writer, repoRoot, tasksDir string, interv
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(interval):
+		case <-ticker.C:
 		}
 	}
 }

@@ -1036,6 +1036,52 @@ func TestWatchTo_PartialRedrawFailure(t *testing.T) {
 	}
 }
 
+func TestWatchTo_ReturnsNilOnCancel(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Add a backlog task so ShowTo produces meaningful output.
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "ticker-test.md"), []byte("---\nid: ticker-test\n---\n# Ticker test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- WatchTo(ctx, &buf, repoRoot, tasksDir, 50*time.Millisecond)
+	}()
+
+	// Let WatchTo run for a few iterations.
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WatchTo should return nil on context cancellation, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WatchTo did not exit after context cancellation")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "backlog") {
+		t.Errorf("WatchTo output should contain 'backlog' from queue overview, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Ctrl+C") {
+		t.Errorf("WatchTo output should contain 'Ctrl+C' hint, got:\n%s", output)
+	}
+}
+
 func TestShowJSON_ValidOutput(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")
