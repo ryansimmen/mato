@@ -372,7 +372,7 @@ func TestDiscoverHostTools_CopilotNotFoundIncludesHint(t *testing.T) {
 	if err == nil {
 		t.Fatal("discoverHostTools should fail when copilot is missing")
 	}
-	if !strings.Contains(err.Error(), "npm install") {
+	if !strings.Contains(err.Error(), "docs/configuration.md") {
 		t.Errorf("error should contain installation hint, got: %v", err)
 	}
 }
@@ -395,7 +395,7 @@ func TestDiscoverHostTools_GitNotFoundIncludesHint(t *testing.T) {
 	if err == nil {
 		t.Fatal("discoverHostTools should fail when git is missing")
 	}
-	if !strings.Contains(err.Error(), "apt install git") {
+	if !strings.Contains(err.Error(), "https://git-scm.com/downloads") {
 		t.Errorf("error should contain installation hint, got: %v", err)
 	}
 }

@@ -7,9 +7,9 @@ Makefile targets used to build and run it.
 Install these tools on the host that runs `mato`:
 - Go 1.26+ (the module currently declares `go 1.26.0`)
 - Docker
-- Git
-- GitHub CLI (`gh`)
-- GitHub Copilot CLI (`copilot`)
+- [Git](https://git-scm.com/downloads)
+- [GitHub CLI (`gh`)](https://cli.github.com/)
+- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot)
 `mato` locates `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, and `gh` on
 the host and bind-mounts those executables into agent containers.
 
