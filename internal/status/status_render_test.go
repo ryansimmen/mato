@@ -625,3 +625,87 @@ func TestRenderReadyForReview_Empty(t *testing.T) {
 		t.Errorf("expected no output for empty ready-for-review, got:\n%s", buf.String())
 	}
 }
+
+func TestRenderRunnableBacklog_Empty(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{}
+
+	renderRunnableBacklog(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "Runnable Backlog") {
+		t.Errorf("output missing header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "(none)") {
+		t.Errorf("output should show (none), got:\n%s", output)
+	}
+}
+
+func TestRenderRunnableBacklog_Ordering(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		runnableBacklog: []taskEntry{
+			{name: "high-pri.md", title: "High priority task", priority: 5},
+			{name: "mid-pri.md", title: "Medium priority task", priority: 25},
+			{name: "low-pri.md", title: "Low priority task", priority: 50},
+		},
+	}
+
+	renderRunnableBacklog(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "Runnable Backlog (execution order)") {
+		t.Errorf("output missing header, got:\n%s", output)
+	}
+
+	// Verify numbered entries.
+	if !strings.Contains(output, "1. high-pri.md") {
+		t.Errorf("output missing first entry, got:\n%s", output)
+	}
+	if !strings.Contains(output, "2. mid-pri.md") {
+		t.Errorf("output missing second entry, got:\n%s", output)
+	}
+	if !strings.Contains(output, "3. low-pri.md") {
+		t.Errorf("output missing third entry, got:\n%s", output)
+	}
+
+	// Verify titles are shown.
+	if !strings.Contains(output, "High priority task") {
+		t.Errorf("output missing title, got:\n%s", output)
+	}
+
+	// Verify priorities are shown.
+	if !strings.Contains(output, "priority 5") {
+		t.Errorf("output missing priority, got:\n%s", output)
+	}
+
+	// Verify order: high-pri appears before low-pri.
+	highIdx := strings.Index(output, "high-pri.md")
+	lowIdx := strings.Index(output, "low-pri.md")
+	if highIdx >= lowIdx {
+		t.Errorf("high-pri should appear before low-pri, got:\n%s", output)
+	}
+}
+
+func TestRenderRunnableBacklog_NoTitle(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		runnableBacklog: []taskEntry{
+			{name: "no-title.md", title: "", priority: 10},
+		},
+	}
+
+	renderRunnableBacklog(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "no-title.md") {
+		t.Errorf("output missing task name, got:\n%s", output)
+	}
+	// Should not have a dangling dash from empty title.
+	if strings.Contains(output, "no-title.md —") {
+		t.Errorf("output should not have dash with empty title, got:\n%s", output)
+	}
+}

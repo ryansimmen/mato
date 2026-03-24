@@ -5,7 +5,32 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/fatih/color"
 )
+
+var (
+	greenSprint  = color.New(color.FgGreen).SprintFunc()
+	redSprint    = color.New(color.FgRed).SprintFunc()
+	yellowSprint = color.New(color.FgYellow).SprintFunc()
+	faintSprint  = color.New(color.Faint).SprintFunc()
+)
+
+// colorIndicator wraps a plain-text category indicator with ANSI color.
+func colorIndicator(indicator string) string {
+	switch indicator {
+	case "[OK]":
+		return greenSprint(indicator)
+	case "[ERROR]":
+		return redSprint(indicator)
+	case "[WARN]":
+		return yellowSprint(indicator)
+	case "[SKIP]":
+		return faintSprint(indicator)
+	default:
+		return indicator
+	}
+}
 
 // RenderText writes a human-readable text report to w.
 func RenderText(w io.Writer, r Report) {
@@ -13,7 +38,7 @@ func RenderText(w io.Writer, r Report) {
 	fmt.Fprintln(w)
 
 	for _, cr := range r.Checks {
-		indicator := categoryIndicator(cr)
+		indicator := colorIndicator(categoryIndicator(cr))
 		fixed := fixedCount(cr)
 
 		if cr.Status == CheckSkipped {

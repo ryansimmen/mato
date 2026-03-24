@@ -14,6 +14,7 @@ import (
 	"mato/internal/identity"
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
+	"mato/internal/process"
 	"mato/internal/queue"
 	"mato/internal/runner"
 )
@@ -95,11 +96,17 @@ var checks = []checkDef{
 	{"queue", checkQueueLayout},
 	{"tasks", checkTaskParsing},
 	{"locks", checkLocksAndOrphans},
+	{"hygiene", checkHygiene},
 	{"deps", checkDependencies},
 }
 
 // Function variable hooks for test injection.
 var inspectHostToolsFn = runner.InspectHostTools
+
+var dockerLookPathFn = func() error {
+	_, err := exec.LookPath("docker")
+	return err
+}
 
 var dockerProbe = func(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -118,6 +125,17 @@ func SetInspectHostToolsFn(fn func() runner.ToolReport) {
 	inspectHostToolsFn = fn
 }
 
+// ExportDockerLookPathFn returns the current dockerLookPathFn for saving
+// and restoring in integration tests.
+func ExportDockerLookPathFn() func() error {
+	return dockerLookPathFn
+}
+
+// SetDockerLookPathFn overrides dockerLookPathFn for testing.
+func SetDockerLookPathFn(fn func() error) {
+	dockerLookPathFn = fn
+}
+
 // ExportDockerProbe returns the current dockerProbe for saving and restoring
 // in integration tests.
 func ExportDockerProbe() func(context.Context) error {
@@ -127,6 +145,52 @@ func ExportDockerProbe() func(context.Context) error {
 // SetDockerProbe overrides dockerProbe for testing.
 func SetDockerProbe(fn func(context.Context) error) {
 	dockerProbe = fn
+}
+
+// dockerImageInspectFn checks whether a Docker image is available locally.
+var dockerImageInspectFn = func(ctx context.Context, image string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", "image", "inspect", image).Run()
+}
+
+// dockerImagePullFn pulls a Docker image. Used by --fix mode.
+var dockerImagePullFn = func(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "pull", image)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// ExportDockerImageInspectFn returns the current dockerImageInspectFn for
+// saving and restoring in integration tests.
+func ExportDockerImageInspectFn() func(context.Context, string) error {
+	return dockerImageInspectFn
+}
+
+// SetDockerImageInspectFn overrides dockerImageInspectFn for testing.
+func SetDockerImageInspectFn(fn func(context.Context, string) error) {
+	dockerImageInspectFn = fn
+}
+
+// ExportDockerImagePullFn returns the current dockerImagePullFn for saving
+// and restoring in integration tests.
+func ExportDockerImagePullFn() func(context.Context, string) error {
+	return dockerImagePullFn
+}
+
+// SetDockerImagePullFn overrides dockerImagePullFn for testing.
+func SetDockerImagePullFn(fn func(context.Context, string) error) {
+	dockerImagePullFn = fn
+}
+
+// resolveDockerImage returns the configured Docker image name from the
+// environment, falling back to the default ubuntu:24.04.
+func resolveDockerImage() string {
+	if img := os.Getenv("MATO_DOCKER_IMAGE"); img != "" {
+		return img
+	}
+	return "ubuntu:24.04"
 }
 
 // ---------- A. Git Repository ----------
@@ -226,7 +290,7 @@ func checkDocker(cc *checkContext) CheckReport {
 	cr := CheckReport{Name: "docker", Status: CheckRan, Findings: []Finding{}}
 
 	// Check if docker CLI exists.
-	if _, err := exec.LookPath("docker"); err != nil {
+	if err := dockerLookPathFn(); err != nil {
 		cr.Findings = append(cr.Findings, Finding{
 			Code:     "docker.cli_missing",
 			Severity: SeverityError,
@@ -249,6 +313,37 @@ func checkDocker(cc *checkContext) CheckReport {
 		Severity: SeverityInfo,
 		Message:  "docker daemon reachable",
 	})
+
+	// Check if the configured Docker image is available locally.
+	image := resolveDockerImage()
+	if err := dockerImageInspectFn(cc.ctx, image); err != nil {
+		f := Finding{
+			Code:     "docker.image_missing",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("Docker image %s not found locally", image),
+			Fixable:  true,
+		}
+
+		if cc.opts.Fix {
+			if pullErr := dockerImagePullFn(cc.ctx, image); pullErr != nil {
+				f.Message = fmt.Sprintf("Docker image %s not found locally; pull failed: %v", image, pullErr)
+				f.Severity = SeverityError
+				f.Fixable = false
+			} else {
+				f.Fixed = true
+				f.Fixable = false
+				f.Message = fmt.Sprintf("Docker image %s pulled successfully", image)
+			}
+		}
+
+		cr.Findings = append(cr.Findings, f)
+	} else {
+		cr.Findings = append(cr.Findings, Finding{
+			Code:     "docker.image_available",
+			Severity: SeverityInfo,
+			Message:  fmt.Sprintf("Docker image %s available locally", image),
+		})
+	}
 
 	return cr
 }
@@ -381,12 +476,19 @@ func checkTaskParsing(cc *checkContext) CheckReport {
 		})
 	}
 
-	// Glob validation warnings from BuildWarnings.
+	// Invalid glob and unsafe affects errors from BuildWarnings — error
+	// severity to match the runtime, which quarantines affected tasks into
+	// failed/.
 	for _, bw := range idx.BuildWarnings() {
-		if strings.Contains(bw.Err.Error(), "glob") || strings.Contains(bw.Err.Error(), "affects") {
+		errMsg := bw.Err.Error()
+		if strings.Contains(errMsg, "glob") || strings.Contains(errMsg, "affects") {
+			code := "tasks.invalid_glob"
+			if strings.Contains(errMsg, "unsafe affects") {
+				code = "tasks.unsafe_affects"
+			}
 			cr.Findings = append(cr.Findings, Finding{
-				Code:     "tasks.invalid_glob",
-				Severity: SeverityWarning,
+				Code:     code,
+				Severity: SeverityError,
 				Message:  fmt.Sprintf("%s: %v", filepath.Base(bw.Path), bw.Err),
 				Path:     bw.Path,
 			})
@@ -628,7 +730,236 @@ func countActiveAgents(locksDir string) int {
 	return count
 }
 
-// ---------- G. Dependency Integrity ----------
+// ---------- G. Hygiene (Messages, Merge Lock, Temp Files) ----------
+
+// messageRetention is the maximum age for event message files.
+const messageRetention = 24 * time.Hour
+
+// tempFileMaxAge is the minimum age before leftover temp files are eligible
+// for removal in --fix mode.
+const tempFileMaxAge = 1 * time.Hour
+
+func checkHygiene(cc *checkContext) CheckReport {
+	cr := CheckReport{Name: "hygiene", Status: CheckRan, Findings: []Finding{}}
+
+	cr.Findings = append(cr.Findings, scanOrphanedMessages(cc.tasksDir, cc.opts.Fix)...)
+	cr.Findings = append(cr.Findings, scanStaleMergeLock(cc.tasksDir, cc.opts.Fix)...)
+	cr.Findings = append(cr.Findings, scanLeftoverTempFiles(cc.tasksDir, cc.opts.Fix)...)
+
+	return cr
+}
+
+// scanOrphanedMessages checks for event message files older than the
+// 24-hour retention window.
+func scanOrphanedMessages(tasksDir string, fix bool) []Finding {
+	var findings []Finding
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return findings
+		}
+		findings = append(findings, Finding{
+			Code:     "hygiene.events_unreadable",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("cannot read events directory: %v", err),
+			Path:     eventsDir,
+		})
+		return findings
+	}
+
+	cutoff := time.Now().UTC().Add(-messageRetention)
+	var staleFiles []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			staleFiles = append(staleFiles, entry.Name())
+		}
+	}
+
+	if len(staleFiles) == 0 {
+		return findings
+	}
+
+	f := Finding{
+		Code:     "hygiene.stale_events",
+		Severity: SeverityWarning,
+		Message:  fmt.Sprintf("%d event message(s) older than 24h retention window", len(staleFiles)),
+		Path:     eventsDir,
+		Fixable:  true,
+	}
+
+	if fix {
+		messaging.CleanOldMessages(tasksDir, messageRetention)
+		// Re-scan to verify cleanup.
+		remaining := 0
+		if recheck, err := os.ReadDir(eventsDir); err == nil {
+			for _, e := range recheck {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+					continue
+				}
+				info, err := e.Info()
+				if err != nil {
+					continue
+				}
+				if info.ModTime().Before(cutoff) {
+					remaining++
+				}
+			}
+		}
+		if remaining == 0 {
+			f.Fixed = true
+			f.Fixable = false
+		}
+	}
+
+	findings = append(findings, f)
+	return findings
+}
+
+// scanStaleMergeLock checks whether .tasks/.locks/merge.lock is held by
+// a dead process.
+func scanStaleMergeLock(tasksDir string, fix bool) []Finding {
+	var findings []Finding
+
+	mergeLockPath := filepath.Join(tasksDir, ".locks", "merge.lock")
+	data, err := os.ReadFile(mergeLockPath)
+	if err != nil {
+		// No merge.lock is the normal case.
+		return findings
+	}
+
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		// Empty lock file is stale.
+		f := Finding{
+			Code:     "hygiene.stale_merge_lock",
+			Severity: SeverityWarning,
+			Message:  "merge.lock exists but is empty",
+			Path:     mergeLockPath,
+			Fixable:  true,
+		}
+		if fix {
+			os.Remove(mergeLockPath)
+			if _, statErr := os.Stat(mergeLockPath); os.IsNotExist(statErr) {
+				f.Fixed = true
+				f.Fixable = false
+			}
+		}
+		findings = append(findings, f)
+		return findings
+	}
+
+	if !process.IsLockHolderAlive(content) {
+		f := Finding{
+			Code:     "hygiene.stale_merge_lock",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("merge.lock held by dead process (%s)", content),
+			Path:     mergeLockPath,
+			Fixable:  true,
+		}
+		if fix {
+			os.Remove(mergeLockPath)
+			if _, statErr := os.Stat(mergeLockPath); os.IsNotExist(statErr) {
+				f.Fixed = true
+				f.Fixable = false
+			}
+		}
+		findings = append(findings, f)
+	}
+
+	return findings
+}
+
+// tempFilePattern matches leftover atomic-write temp files: .*.tmp-*
+var tempFilePattern = ".tmp-"
+
+// scanLeftoverTempFiles scans queue and message directories for leftover
+// atomic-write temp files matching the .*.tmp-* pattern.
+func scanLeftoverTempFiles(tasksDir string, fix bool) []Finding {
+	var findings []Finding
+
+	// Directories to scan for temp files.
+	scanDirs := make([]string, 0, len(queue.AllDirs)+len(messaging.MessagingDirs))
+	for _, d := range queue.AllDirs {
+		scanDirs = append(scanDirs, filepath.Join(tasksDir, d))
+	}
+	for _, d := range messaging.MessagingDirs {
+		scanDirs = append(scanDirs, filepath.Join(tasksDir, d))
+	}
+
+	now := time.Now().UTC()
+	type tempFile struct {
+		path string
+		age  time.Duration
+	}
+	var tempFiles []tempFile
+
+	for _, dir := range scanDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			// Match the atomicwrite pattern: starts with "." and contains ".tmp-"
+			if !strings.HasPrefix(name, ".") || !strings.Contains(name, tempFilePattern) {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			tempFiles = append(tempFiles, tempFile{
+				path: filepath.Join(dir, name),
+				age:  now.Sub(info.ModTime()),
+			})
+		}
+	}
+
+	if len(tempFiles) == 0 {
+		return findings
+	}
+
+	f := Finding{
+		Code:     "hygiene.leftover_temp_files",
+		Severity: SeverityWarning,
+		Message:  fmt.Sprintf("%d leftover atomic-write temp file(s) found", len(tempFiles)),
+		Fixable:  true,
+	}
+
+	if fix {
+		removed := 0
+		for _, tf := range tempFiles {
+			if tf.age >= tempFileMaxAge {
+				if err := os.Remove(tf.path); err == nil || os.IsNotExist(err) {
+					removed++
+				}
+			}
+		}
+		if removed == len(tempFiles) {
+			f.Fixed = true
+			f.Fixable = false
+		} else if removed > 0 {
+			f.Message = fmt.Sprintf("%d leftover atomic-write temp file(s) found, %d removed (remaining are less than 1h old)", len(tempFiles), removed)
+		}
+	}
+
+	findings = append(findings, f)
+	return findings
+}
+
+// ---------- H. Dependency Integrity ----------
 
 func checkDependencies(cc *checkContext) CheckReport {
 	cr := CheckReport{Name: "deps", Status: CheckRan, Findings: []Finding{}}
@@ -649,8 +980,8 @@ func checkDependencies(cc *checkContext) CheckReport {
 			msg = fmt.Sprintf("task ID %q exists in both completed and non-completed directories", issue.TaskID)
 		case queue.DependencyDuplicateID:
 			code = "deps.duplicate_id"
-			sev = SeverityWarning
-			msg = fmt.Sprintf("duplicate waiting task ID %q (first: %s, duplicate: %s)", issue.TaskID, issue.DependsOn, issue.Filename)
+			sev = SeverityError
+			msg = fmt.Sprintf("duplicate waiting task ID %q (retained: %s, duplicate: %s) — duplicate will be moved to failed/", issue.TaskID, issue.DependsOn, issue.Filename)
 		case queue.DependencySelfCycle:
 			code = "deps.self_dependency"
 			sev = SeverityWarning

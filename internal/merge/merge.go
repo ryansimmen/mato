@@ -4,11 +4,12 @@
 package merge
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	"mato/internal/frontmatter"
 	"mato/internal/lockfile"
@@ -48,10 +49,6 @@ const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 // Returns the number of tasks successfully merged.
 func ProcessQueue(repoRoot, tasksDir, branch string) int {
 	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
-	names, err := queue.ListTaskFiles(readyDir)
-	if err != nil {
-		return 0
-	}
 
 	// Pass nil to force a fresh filesystem scan rather than relying on a
 	// potentially stale PollIndex snapshot. The index is built at the
@@ -61,9 +58,27 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 	// disambiguation for legacy tasks without a <!-- branch: --> marker.
 	activeBranches := queue.CollectActiveBranches(tasksDir, nil)
 
+	candidates, err := loadMergeCandidates(readyDir, tasksDir, activeBranches)
+	if err != nil {
+		return 0
+	}
+
+	return executeMergeRound(repoRoot, tasksDir, branch, candidates)
+}
+
+// loadMergeCandidates reads task files from dir, parses frontmatter for each
+// .md file, resolves branch names (using activeBranches for fallback
+// disambiguation), and returns a priority-sorted slice of candidates.
+// Unparseable files are requeued to the backlog with a stderr warning.
+func loadMergeCandidates(dir, tasksDir string, activeBranches map[string]struct{}) ([]mergeQueueTask, error) {
+	names, err := queue.ListTaskFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+
 	tasks := make([]mergeQueueTask, 0, len(names))
 	for _, name := range names {
-		path := filepath.Join(readyDir, name)
+		path := filepath.Join(dir, name)
 		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse ready-to-merge task %s: %v\n", name, err)
@@ -92,13 +107,20 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		})
 	}
 
-	sort.Slice(tasks, func(i, j int) bool {
-		if tasks[i].priority != tasks[j].priority {
-			return tasks[i].priority < tasks[j].priority
+	slices.SortFunc(tasks, func(a, b mergeQueueTask) int {
+		if c := cmp.Compare(a.priority, b.priority); c != 0 {
+			return c
 		}
-		return tasks[i].name < tasks[j].name
+		return cmp.Compare(a.name, b.name)
 	})
 
+	return tasks, nil
+}
+
+// executeMergeRound iterates sorted candidates, performing squash merges into
+// the target branch. It handles already-merged tasks, conflict requeue, retry
+// budgets, and completion bookkeeping. Returns the number of tasks merged.
+func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask) int {
 	merged := 0
 	for _, task := range tasks {
 		completedPath := filepath.Join(tasksDir, queue.DirCompleted, task.name)

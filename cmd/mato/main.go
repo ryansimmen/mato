@@ -5,13 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"mato/internal/doctor"
+	"mato/internal/git"
 	"mato/internal/graph"
+	"mato/internal/queue"
 	"mato/internal/runner"
 	"mato/internal/status"
 
@@ -126,6 +130,60 @@ func resolveBranch(b string) string {
 	return "mato"
 }
 
+var gitShowTopLevel = func(dir string) (string, error) {
+	return git.Output(dir, "rev-parse", "--show-toplevel")
+}
+
+func resolveRepoRoot(dir string) (string, error) {
+	out, err := gitShowTopLevel(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo root for %q: %w", dir, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// gitCheckRefFormat is the function used to validate branch names. It
+// defaults to running "git check-ref-format --branch" and can be replaced
+// in tests.
+var gitCheckRefFormat = func(name string) error {
+	out, err := exec.Command("git", "check-ref-format", "--branch", name).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("invalid branch name %q: git check-ref-format rejected it (%s)", name, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// validateBranch checks that the branch name is a legal git refname by
+// delegating to "git check-ref-format --branch".
+func validateBranch(branch string) error {
+	return gitCheckRefFormat(branch)
+}
+
+// gitRevParseGitDir is the function used to verify a directory is a git
+// repository. It defaults to running "git rev-parse --git-dir" and can
+// be replaced in tests.
+var gitRevParseGitDir = func(dir string) error {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--git-dir")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("repo path %q is not a git repository: %s", dir, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// validateRepoPath checks that dir exists, is a directory, and is a git
+// repository by running a lightweight git command.
+func validateRepoPath(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("repo path %q does not exist: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("repo path %q is not a directory", dir)
+	}
+	return gitRevParseGitDir(dir)
+}
+
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "mato [copilot-args...]",
@@ -154,7 +212,13 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(resolved); err != nil {
+				return err
+			}
 			br := resolveBranch(cfg.branch)
+			if err := validateBranch(br); err != nil {
+				return err
+			}
 			if cfg.dryRun {
 				return runner.DryRun(resolved, br, cfg.tasksDir)
 			}
@@ -172,6 +236,7 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newGraphCmd())
+	root.AddCommand(newRetryCmd())
 	return root
 }
 
@@ -294,7 +359,7 @@ func newDoctorCmd() *cobra.Command {
 	cmd.Flags().StringVar(&doctorTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
-	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, deps)")
+	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, hygiene, deps)")
 
 	return cmd
 }
@@ -327,6 +392,52 @@ func newGraphCmd() *cobra.Command {
 	cmd.Flags().StringVar(&graphTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, dot, or json")
 	cmd.Flags().BoolVar(&showAll, "all", false, "Include completed and failed tasks")
+
+	return cmd
+}
+
+func newRetryCmd() *cobra.Command {
+	var retryRepo string
+	var retryTasksDir string
+
+	cmd := &cobra.Command{
+		Use:           "retry <task-name> [task-name...]",
+		Short:         "Requeue failed tasks back to backlog",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tasksDir := retryTasksDir
+			if tasksDir == "" {
+				repo, err := resolveRepo(retryRepo)
+				if err != nil {
+					return err
+				}
+				repoRoot, err := resolveRepoRoot(repo)
+				if err != nil {
+					return err
+				}
+				tasksDir = filepath.Join(repoRoot, ".tasks")
+			}
+
+			var firstErr error
+			for _, name := range args {
+				if err := queue.RetryTask(tasksDir, name); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+				}
+				stem := strings.TrimSuffix(name, ".md")
+				fmt.Printf("Requeued %s to backlog\n", stem)
+			}
+			return firstErr
+		},
+	}
+
+	cmd.Flags().StringVar(&retryRepo, "repo", "", "Path to the git repository (default: current directory)")
+	cmd.Flags().StringVar(&retryTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 
 	return cmd
 }

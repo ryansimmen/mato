@@ -2087,6 +2087,147 @@ func TestWriteMessage_BlankFromFallsBackToUnknown(t *testing.T) {
 	}
 }
 
+func TestCleanStalePresence_UnsafeAgentID(t *testing.T) {
+	tests := []struct {
+		name    string
+		agentID string
+	}{
+		{"spaces", "agent one"},
+		{"special chars", "agent@host:1234"},
+		{"unicode", "agënt-ünit"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/active", func(t *testing.T) {
+			tasksDir := t.TempDir()
+			if err := Init(tasksDir); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+
+			if err := WritePresence(tasksDir, tt.agentID, "task.md", "branch"); err != nil {
+				t.Fatalf("WritePresence: %v", err)
+			}
+
+			// Create a lock file using the original (unsanitized) agent ID,
+			// simulating an active agent.
+			lockPath := filepath.Join(tasksDir, ".locks", tt.agentID+".pid")
+			if err := os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+				t.Fatalf("WriteFile lock: %v", err)
+			}
+
+			CleanStalePresence(tasksDir)
+
+			// Presence should NOT be removed because the agent is active.
+			presenceDir := filepath.Join(tasksDir, "messages", "presence")
+			entries, err := os.ReadDir(presenceDir)
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("expected 1 presence file to remain (active agent), got %d", len(entries))
+			}
+		})
+
+		t.Run(tt.name+"/stale", func(t *testing.T) {
+			tasksDir := t.TempDir()
+			if err := Init(tasksDir); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+
+			if err := WritePresence(tasksDir, tt.agentID, "task.md", "branch"); err != nil {
+				t.Fatalf("WritePresence: %v", err)
+			}
+
+			// Create a lock file with a dead PID so cleanup treats it as stale.
+			lockPath := filepath.Join(tasksDir, ".locks", tt.agentID+".pid")
+			if err := os.WriteFile(lockPath, []byte("2147483647"), 0o644); err != nil {
+				t.Fatalf("WriteFile lock: %v", err)
+			}
+
+			CleanStalePresence(tasksDir)
+
+			// Presence should be removed because the agent is stale.
+			presenceDir := filepath.Join(tasksDir, "messages", "presence")
+			entries, err := os.ReadDir(presenceDir)
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			jsonCount := 0
+			for _, e := range entries {
+				if strings.HasSuffix(e.Name(), ".json") {
+					jsonCount++
+				}
+			}
+			if jsonCount != 0 {
+				t.Fatalf("expected stale presence file to be removed, got %d JSON files", jsonCount)
+			}
+		})
+	}
+}
+
+func TestCleanStalePresence_MalformedJSON(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Write a malformed JSON presence file; cleanup should skip it
+	// without panicking.
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	if err := os.WriteFile(filepath.Join(presenceDir, "bad.json"), []byte("{invalid"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	CleanStalePresence(tasksDir)
+
+	// The malformed file should still exist (skipped, not deleted).
+	if _, err := os.Stat(filepath.Join(presenceDir, "bad.json")); err != nil {
+		t.Fatalf("malformed presence file should not be removed: %v", err)
+	}
+}
+
+func TestCleanStalePresence_RejectsAgentIDWithPathSeparator(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	data, err := json.Marshal(PresenceInfo{
+		AgentID:   "../escape",
+		Task:      "task.md",
+		Branch:    "branch",
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(presenceDir, "evil.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile presence: %v", err)
+	}
+
+	// Without agent ID validation, cleanup would treat ../escape as a live
+	// lock file outside .locks and incorrectly preserve the presence entry.
+	if err := os.WriteFile(filepath.Join(tasksDir, "escape.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("WriteFile sibling lock: %v", err)
+	}
+
+	CleanStalePresence(tasksDir)
+
+	if _, err := os.Stat(filepath.Join(presenceDir, "evil.json")); !os.IsNotExist(err) {
+		t.Fatalf("presence file for separator-containing agent ID should be removed, stat err = %v", err)
+	}
+}
+
 func TestWritePresence_UnsafeAgentID(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -2235,5 +2376,195 @@ func TestReadMessages_StableSortMixedTimestamps(t *testing.T) {
 		if msgs[i].ID != want {
 			t.Errorf("msgs[%d].ID = %q, want %q", i, msgs[i].ID, want)
 		}
+	}
+}
+
+func TestReadRecentMessages_ReturnsAll_WhenUnderLimit(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "agent",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	msgs, err := ReadRecentMessages(tasksDir, 10)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Errorf("got %d messages, want 3", len(msgs))
+	}
+}
+
+func TestReadRecentMessages_LimitsToMostRecent(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	now := time.Now().UTC()
+	for i := 0; i < 10; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "agent",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	msgs, err := ReadRecentMessages(tasksDir, 3)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Errorf("got %d messages, want 3", len(msgs))
+	}
+	// Should contain the 3 most recent messages (m7, m8, m9).
+	for _, msg := range msgs {
+		id := msg.ID
+		if id != "m7" && id != "m8" && id != "m9" {
+			t.Errorf("unexpected message ID %q in bounded result", id)
+		}
+	}
+}
+
+func TestReadRecentMessages_ZeroLimitReadsAll(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	now := time.Now().UTC()
+	for i := 0; i < 5; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "agent",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	msgs, err := ReadRecentMessages(tasksDir, 0)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	if len(msgs) != 5 {
+		t.Errorf("got %d messages, want 5", len(msgs))
+	}
+}
+
+func TestReadRecentMessages_NonExistentDir(t *testing.T) {
+	msgs, err := ReadRecentMessages(filepath.Join(t.TempDir(), "nope"), 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("got %d messages, want 0", len(msgs))
+	}
+}
+
+func TestReadRecentMessages_PreservesOrder(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	now := time.Now().UTC()
+	for i := 0; i < 5; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "agent",
+			Type:   "intent",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	msgs, err := ReadRecentMessages(tasksDir, 3)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	// Messages should be sorted by SentAt ascending.
+	for i := 1; i < len(msgs); i++ {
+		if msgs[i].SentAt.Before(msgs[i-1].SentAt) {
+			t.Errorf("messages not sorted: msgs[%d].SentAt=%v before msgs[%d].SentAt=%v",
+				i, msgs[i].SentAt, i-1, msgs[i-1].SentAt)
+		}
+	}
+}
+
+// setupMessagingDirs creates the messaging directory structure for tests.
+func setupMessagingDirs(t *testing.T, tasksDir string) {
+	t.Helper()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+}
+
+// writeNMessages creates n message files in the events directory.
+func writeNMessages(b *testing.B, tasksDir string, n int) {
+	b.Helper()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		msg := Message{
+			ID:     fmt.Sprintf("bench-%d", i),
+			From:   fmt.Sprintf("agent-%d", i%5),
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("progress %d", i),
+			SentAt: base.Add(time.Duration(i) * time.Second),
+		}
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			b.Fatalf("WriteMessage: %v", err)
+		}
+	}
+}
+
+func BenchmarkReadMessages(b *testing.B) {
+	counts := []int{100, 500, 1000}
+	for _, n := range counts {
+		b.Run(fmt.Sprintf("unbounded_%d", n), func(b *testing.B) {
+			tasksDir := b.TempDir()
+			if err := Init(tasksDir); err != nil {
+				b.Fatalf("Init: %v", err)
+			}
+			writeNMessages(b, tasksDir, n)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := ReadMessages(tasksDir, time.Time{})
+				if err != nil {
+					b.Fatalf("ReadMessages: %v", err)
+				}
+			}
+		})
+		b.Run(fmt.Sprintf("bounded_50_of_%d", n), func(b *testing.B) {
+			tasksDir := b.TempDir()
+			if err := Init(tasksDir); err != nil {
+				b.Fatalf("Init: %v", err)
+			}
+			writeNMessages(b, tasksDir, n)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := ReadRecentMessages(tasksDir, 50)
+				if err != nil {
+					b.Fatalf("ReadRecentMessages: %v", err)
+				}
+			}
+		})
 	}
 }

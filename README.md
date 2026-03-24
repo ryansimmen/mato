@@ -78,7 +78,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 - `depends_on` entries refer to task IDs.
 - On each loop, completed dependencies promote a task from `waiting/` to `backlog/`.
 - Lower numbers mean higher priority.
-- `affects` is used for simple conflict prevention: if two backlog tasks have overlapping entries, the lower-priority task is excluded from the `.queue` manifest until the conflict clears. Entries are compared using three matching modes — exact strings are compared literally, entries ending with `/` are treated as directory prefixes that match any path underneath them (e.g. `pkg/client/` conflicts with `pkg/client/http.go`), and entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Conflict-deferred tasks remain in `backlog/` (they are not moved to `waiting/`).
+- `affects` is used for simple conflict prevention: if two backlog tasks have overlapping entries, the lower-priority task is excluded from the `.queue` manifest until the conflict clears. Entries are compared using three matching modes — exact strings are compared literally, entries ending with `/` are treated as directory prefixes that match any path underneath them (e.g. `pkg/client/` conflicts with `pkg/client/http.go`), and entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Conflict-deferred tasks remain in `backlog/` (they are not moved to `waiting/`). Invalid glob syntax (e.g. combining metacharacters with a trailing `/`) is a fatal task error: the queue quarantines the task into `failed/`, and `mato doctor` reports it at error severity.
 
 ## Queue Layout
 
@@ -121,9 +121,15 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 `mato status` prints a terminal-friendly snapshot of the queue:
 
 - counts for `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`
+- runnable backlog in execution order (priority-sorted, conflict-deferred tasks excluded)
 - active agents from `.locks/`
 - waiting tasks with dependency progress
+- conflict-deferred tasks with blocking details
 - the last 5 coordination messages from `.tasks/messages/events/`
+
+The runnable backlog shows what the host will claim next, in the same priority
+order used by `.tasks/.queue`. Use `--format json` to get the same ordered list
+as `runnable_backlog` in the JSON output.
 
 Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag
 sets the refresh period (default `2s`). The interval must be a positive duration;
@@ -166,9 +172,29 @@ read-only and makes no filesystem changes.
 Use `--fix` to auto-repair safe, idempotent issues such as missing directories,
 stale locks, and orphaned tasks. Use `--format json` for machine-readable output.
 The `--only` flag accepts a comma-separated list of check categories to run
-(`git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `deps`);
+(`git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`);
 non-selected checks appear as skipped. Exit code 0 means healthy, 1 means
 warnings only, and 2 means errors were found.
+
+## Retry Command
+
+`mato retry` requeues failed tasks back to backlog for another attempt:
+
+```bash
+# Retry a single task
+mato retry fix-login-bug
+
+# Retry multiple tasks
+mato retry fix-login-bug add-dark-mode
+```
+
+The command strips task-failure markers (`<!-- failure: -->`,
+`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`)
+from the task file and writes the cleaned content to `backlog/`. Review
+feedback markers (`<!-- review-rejection: -->`) are preserved so the next
+attempt still receives prior reviewer guidance. If the task already exists in
+`backlog/`, the command prints an error and leaves the `failed/` copy unchanged
+(no data loss).
 
 ## Docker
 

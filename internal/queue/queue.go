@@ -4,10 +4,12 @@
 package queue
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -87,8 +89,21 @@ func RecoverOrphanedTasks(tasksDir string) {
 
 		dst := filepath.Join(tasksDir, DirBacklog, name)
 		if err := AtomicMove(src, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", name, err)
-			continue
+			if !errors.Is(err, ErrDestinationExists) {
+				fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", name, err)
+				continue
+			}
+			resolved, err := resolveOrphanCollision(src, dst)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not resolve orphan collision for %s: %v\n", name, err)
+				continue
+			}
+			if resolved == "" {
+				// Identical content — dedup'd, nothing more to do.
+				continue
+			}
+			// Different content — orphan was renamed and moved.
+			dst = resolved
 		}
 
 		content := fmt.Sprintf("\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
@@ -99,6 +114,65 @@ func RecoverOrphanedTasks(tasksDir string) {
 
 		fmt.Fprintf(os.Stderr, "Recovered orphaned task %s back to backlog\n", name)
 	}
+}
+
+// resolveOrphanCollision handles the case where an orphan in in-progress/
+// collides with an existing file in backlog/. If the files are identical the
+// in-progress copy is removed (dedup) and an empty string is returned. If they
+// differ, the orphan is renamed with a "-recovered-<timestamp>" suffix, moved
+// to backlog, and the new path is returned.
+func resolveOrphanCollision(src, dst string) (string, error) {
+	srcData, err := os.ReadFile(src)
+	if err != nil {
+		return "", fmt.Errorf("read orphan %s: %w", src, err)
+	}
+	dstData, err := os.ReadFile(dst)
+	if err != nil {
+		return "", fmt.Errorf("read existing backlog %s: %w", dst, err)
+	}
+
+	if equivalentOrphanContent(srcData, dstData) {
+		if err := os.Remove(src); err != nil {
+			return "", fmt.Errorf("remove duplicate orphan %s: %w", src, err)
+		}
+		fmt.Fprintf(os.Stderr, "Removed duplicate orphan %s (identical copy already in backlog)\n", filepath.Base(src))
+		return "", nil
+	}
+
+	// Different content — rename with recovery suffix and move.
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	base := filepath.Base(src)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	recoveredName := fmt.Sprintf("%s-recovered-%s%s", stem, ts, ext)
+	recoveredDst := filepath.Join(filepath.Dir(dst), recoveredName)
+
+	if err := AtomicMove(src, recoveredDst); err != nil {
+		return "", fmt.Errorf("move renamed orphan to %s: %w", recoveredDst, err)
+	}
+	fmt.Fprintf(os.Stderr, "Recovered orphan %s as %s (content differs from backlog copy)\n", base, recoveredName)
+	return recoveredDst, nil
+}
+
+func equivalentOrphanContent(srcData, dstData []byte) bool {
+	return bytes.Equal(normalizeOrphanContent(srcData), normalizeOrphanContent(dstData))
+}
+
+func normalizeOrphanContent(data []byte) []byte {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<!-- claimed-by:") || strings.HasPrefix(trimmed, "<!-- branch:") {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	normalized := strings.TrimSpace(strings.Join(filtered, "\n"))
+	if normalized == "" {
+		return nil
+	}
+	return []byte(normalized)
 }
 
 func laterStateDuplicateDir(tasksDir, name string) string {

@@ -41,10 +41,15 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 
 	// If the squash produced no staged changes, the task branch is already
 	// fully merged into the target (e.g. a prior push succeeded but
-	// post-push bookkeeping failed).  Return success without a duplicate
-	// commit so the caller can finish the bookkeeping.
+	// post-push bookkeeping failed).  Return a mergeResult with recovered
+	// metadata so the caller can write the completion detail that was
+	// missed on the prior run, without creating a duplicate commit.
 	if _, err := git.Output(cloneDir, "diff", "--cached", "--quiet"); err == nil {
-		return nil, nil
+		sha, filesChanged := recoverMergedTaskMetadata(cloneDir, branch, task)
+		return &mergeResult{
+			commitSHA:    sha,
+			filesChanged: filesChanged,
+		}, nil
 	}
 
 	if _, err := git.Output(cloneDir, "commit", "-m", formatSquashCommitMessage(task, agentLog)); err != nil {
@@ -57,17 +62,59 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	// Capture merge result for completion detail.
 	sha, _ := git.Output(cloneDir, "rev-parse", "HEAD")
 	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", "HEAD~1..HEAD")
-	var filesChanged []string
-	for _, f := range strings.Split(strings.TrimSpace(filesOut), "\n") {
-		if f != "" {
-			filesChanged = append(filesChanged, f)
-		}
-	}
+	filesChanged := parseFilesChanged(filesOut)
 
 	return &mergeResult{
 		commitSHA:    strings.TrimSpace(sha),
 		filesChanged: filesChanged,
 	}, nil
+}
+
+func recoverMergedTaskMetadata(cloneDir, branch string, task mergeQueueTask) (string, []string) {
+	if sha := findMergedTaskCommit(cloneDir, branch, task.id); sha != "" {
+		return sha, filesChangedForCommit(cloneDir, sha)
+	}
+
+	sha, _ := git.Output(cloneDir, "rev-parse", "HEAD")
+	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", "origin/"+branch+"...origin/"+taskBranchName(task))
+	return strings.TrimSpace(sha), parseFilesChanged(filesOut)
+}
+
+func findMergedTaskCommit(cloneDir, branch, taskID string) string {
+	if taskID == "" {
+		return ""
+	}
+	out, err := git.Output(cloneDir, "log", "origin/"+branch, "--format=%H", "-F", "--grep", "Task-ID: "+taskID)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func filesChangedForCommit(cloneDir, sha string) []string {
+	if sha == "" {
+		return nil
+	}
+	out, err := git.Output(cloneDir, "show", "--pretty=", "--name-only", sha)
+	if err != nil {
+		return nil
+	}
+	return parseFilesChanged(out)
+}
+
+func parseFilesChanged(out string) []string {
+	var filesChanged []string
+	for _, f := range strings.Split(strings.TrimSpace(out), "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			filesChanged = append(filesChanged, f)
+		}
+	}
+	return filesChanged
 }
 
 // formatSquashCommitMessage builds the squash-merge commit message.

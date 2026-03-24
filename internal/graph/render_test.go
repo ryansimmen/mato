@@ -433,6 +433,25 @@ func TestRenderDOT_SpecialCharacters(t *testing.T) {
 	}
 }
 
+func TestRenderDOT_LabelNewlines(t *testing.T) {
+	data := GraphData{
+		Nodes: []GraphNode{
+			{Key: "waiting/task.md", ID: "task", Filename: "task.md", State: StateWaiting, Priority: 7},
+		},
+	}
+
+	var buf bytes.Buffer
+	RenderDOT(&buf, data)
+	got := buf.String()
+
+	if !strings.Contains(got, `label="task\npriority: 7\n(waiting)"`) {
+		t.Fatalf("missing DOT newline escapes in label:\n%s", got)
+	}
+	if strings.Contains(got, `label="task\\npriority: 7\\n(waiting)"`) {
+		t.Fatalf("label newlines were double-escaped:\n%s", got)
+	}
+}
+
 func TestRenderDOT_NodeColors(t *testing.T) {
 	tests := []struct {
 		state NodeState

@@ -159,6 +159,63 @@ func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 	return messages, nil
 }
 
+// ReadRecentMessages reads the most recent limit messages from the events
+// directory. It leverages the timestamp-prefixed filenames (sorted lexically
+// by os.ReadDir) to skip older entries without reading or parsing them.
+// If limit <= 0, all messages are read (equivalent to ReadMessages with a
+// zero time).
+func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read messages dir: %w", err)
+	}
+
+	// Filter to JSON files only.
+	jsonEntries := make([]os.DirEntry, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			jsonEntries = append(jsonEntries, e)
+		}
+	}
+
+	// os.ReadDir returns entries sorted by name. Since filenames are
+	// timestamp-prefixed, the last entries are the most recent.
+	if limit > 0 && len(jsonEntries) > limit {
+		jsonEntries = jsonEntries[len(jsonEntries)-limit:]
+	}
+
+	messages := make([]Message, 0, len(jsonEntries))
+	for _, entry := range jsonEntries {
+		data, err := os.ReadFile(filepath.Join(eventsDir, entry.Name()))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read message %s: %w", entry.Name(), err)
+		}
+
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse message %s: %v\n", entry.Name(), err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	sort.Slice(messages, func(i, j int) bool {
+		if messages[i].SentAt.Equal(messages[j].SentAt) {
+			return messages[i].ID < messages[j].ID
+		}
+		return messages[i].SentAt.Before(messages[j].SentAt)
+	})
+
+	return messages, nil
+}
+
 func WritePresence(tasksDir, agentID, taskFile, branch string) error {
 	info := PresenceInfo{
 		AgentID:   agentID,
@@ -219,9 +276,31 @@ func CleanStalePresence(tasksDir string) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
+		path := filepath.Join(presenceDir, entry.Name())
+
+		// Read the JSON payload to get the canonical agent_id rather than
+		// deriving it from the sanitized filename, which loses information
+		// for agent IDs containing non-filename-safe characters.
 		agentID := strings.TrimSuffix(entry.Name(), ".json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "warning: could not read presence file %s: %v\n", entry.Name(), err)
+			continue
+		}
+		var info PresenceInfo
+		if err := json.Unmarshal(data, &info); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse presence file %s: %v\n", entry.Name(), err)
+			continue
+		}
+		if info.AgentID != "" {
+			agentID = info.AgentID
+		}
+
 		if !identity.IsAgentActive(tasksDir, agentID) {
-			if err := os.Remove(filepath.Join(presenceDir, entry.Name())); err != nil && !os.IsNotExist(err) {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				fmt.Fprintf(os.Stderr, "warning: could not remove stale presence file %s: %v\n", entry.Name(), err)
 			}
 		}

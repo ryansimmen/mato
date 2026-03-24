@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -489,7 +490,40 @@ func TestRecoverOrphanedTasks_IgnoresNonMd(t *testing.T) {
 	}
 }
 
-func TestRecoverOrphanedTasks_DoesNotOverwriteExistingBacklogTask(t *testing.T) {
+func TestRecoverOrphanedTasks_CollisionIdenticalContent(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirBacklog, DirInProgress} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	content := []byte("# Fix bug\nDo the thing.\n")
+	backlogPath := filepath.Join(tasksDir, DirBacklog, "fix-bug.md")
+	orphanPath := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
+	os.WriteFile(backlogPath, content, 0o644)
+	os.WriteFile(orphanPath, content, 0o644)
+
+	stderr := captureStderr(t, func() {
+		RecoverOrphanedTasks(tasksDir)
+	})
+
+	if !strings.Contains(stderr, "Removed duplicate orphan") {
+		t.Fatalf("expected dedup message, got %q", stderr)
+	}
+	// Orphan should be removed from in-progress.
+	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+		t.Fatal("orphan should be removed from in-progress after dedup")
+	}
+	// Backlog copy should remain unchanged.
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("read backlog task: %v", err)
+	}
+	if !bytes.Equal(data, content) {
+		t.Fatalf("backlog task should be unchanged, got %q", string(data))
+	}
+}
+
+func TestRecoverOrphanedTasks_CollisionDifferentContent(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{DirBacklog, DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -504,18 +538,119 @@ func TestRecoverOrphanedTasks_DoesNotOverwriteExistingBacklogTask(t *testing.T) 
 		RecoverOrphanedTasks(tasksDir)
 	})
 
-	if !strings.Contains(stderr, "destination already exists") {
-		t.Fatalf("expected overwrite warning, got %q", stderr)
+	if !strings.Contains(stderr, "content differs from backlog copy") {
+		t.Fatalf("expected rename message, got %q", stderr)
 	}
-	if _, err := os.Stat(orphanPath); err != nil {
-		t.Fatalf("orphan should stay in in-progress after failed recovery: %v", err)
+	if !strings.Contains(stderr, "Recovered orphaned task") {
+		t.Fatalf("expected recovery message, got %q", stderr)
 	}
+	// Orphan should be removed from in-progress.
+	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+		t.Fatal("orphan should be removed from in-progress after rename")
+	}
+	// Original backlog file should be untouched.
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("read backlog task: %v", err)
 	}
 	if string(data) != "# Existing task\n" {
 		t.Fatalf("existing backlog task should be unchanged, got %q", string(data))
+	}
+	// A recovered file should exist in backlog with the orphan content.
+	entries, err := os.ReadDir(filepath.Join(tasksDir, DirBacklog))
+	if err != nil {
+		t.Fatalf("read backlog dir: %v", err)
+	}
+	var recoveredFile string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "fix-bug-recovered-") {
+			recoveredFile = e.Name()
+			break
+		}
+	}
+	if recoveredFile == "" {
+		t.Fatal("expected a recovered file in backlog, found none")
+	}
+	recoveredData, err := os.ReadFile(filepath.Join(tasksDir, DirBacklog, recoveredFile))
+	if err != nil {
+		t.Fatalf("read recovered file: %v", err)
+	}
+	if !strings.Contains(string(recoveredData), "# Recovered task") {
+		t.Fatalf("recovered file should contain orphan content, got %q", string(recoveredData))
+	}
+	// The recovered file should also have a failure record.
+	if !strings.Contains(string(recoveredData), "<!-- failure: mato-recovery") {
+		t.Fatalf("recovered file should have failure record, got %q", string(recoveredData))
+	}
+}
+
+func TestNormalizeOrphanContent(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			name: "empty input",
+			data: "",
+			want: "",
+		},
+		{
+			name: "removes runtime metadata and trims",
+			data: "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/fix-bug -->\n# Fix bug\n\nDo it.\n",
+			want: "# Fix bug\n\nDo it.",
+		},
+		{
+			name: "normalizes windows newlines",
+			data: "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n\r\nBody\r\n",
+			want: "# Fix bug\n\nBody",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(normalizeOrphanContent([]byte(tt.data)))
+			if got != tt.want {
+				t.Fatalf("normalizeOrphanContent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEquivalentOrphanContent(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want bool
+	}{
+		{
+			name: "same task different runtime metadata",
+			a:    "<!-- claimed-by: a  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/fix-bug -->\n# Fix bug\n",
+			b:    "# Fix bug\n",
+			want: true,
+		},
+		{
+			name: "same task with windows newlines",
+			a:    "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n",
+			b:    "# Fix bug\n",
+			want: true,
+		},
+		{
+			name: "different body remains different",
+			a:    "# Fix bug\n",
+			b:    "# Different task\n",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := equivalentOrphanContent([]byte(tt.a), []byte(tt.b))
+			if got != tt.want {
+				t.Fatalf("equivalentOrphanContent() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -2055,8 +2190,8 @@ func TestCountPromotableWaitingTasks_MatchesReconcile(t *testing.T) {
 
 func TestReconcileReadyQueue_DuplicateWaitingIDPromotesOnce(t *testing.T) {
 	// Two files in waiting/ share the same meta.ID and have no deps.
-	// Only the first (alphabetically) should be promoted; the duplicate
-	// must remain in waiting/.
+	// The first (alphabetically) should be promoted; the duplicate
+	// should be moved to failed/ with a terminal-failure marker.
 	tasksDir := t.TempDir()
 	for _, sub := range AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -2073,7 +2208,7 @@ func TestReconcileReadyQueue_DuplicateWaitingIDPromotesOnce(t *testing.T) {
 	})
 
 	if !moved {
-		t.Fatal("ReconcileReadyQueue moved = false, want true (only the retained file)")
+		t.Fatal("ReconcileReadyQueue moved = false, want true")
 	}
 
 	// First file (aaa-dup.md) should be promoted.
@@ -2081,16 +2216,21 @@ func TestReconcileReadyQueue_DuplicateWaitingIDPromotesOnce(t *testing.T) {
 		t.Fatal("retained file aaa-dup.md should be promoted to backlog/")
 	}
 
-	// Duplicate file (zzz-dup.md) should remain in waiting/.
-	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "zzz-dup.md")); err != nil {
-		t.Fatal("duplicate file zzz-dup.md should remain in waiting/")
+	// Duplicate file (zzz-dup.md) should be in failed/ with terminal-failure marker.
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "zzz-dup.md"))
+	if err != nil {
+		t.Fatal("duplicate file zzz-dup.md should be moved to failed/")
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("duplicate file should have a terminal-failure marker")
 	}
 }
 
 func TestReconcileReadyQueue_DuplicateWaitingIDCycleTargetsRetained(t *testing.T) {
 	// Two files share the same meta.ID and form a self-dependency (cycle).
-	// Only the retained file (first seen) should be moved to failed/; the
-	// duplicate should remain in waiting/ untouched.
+	// The retained file (first seen) should be moved to failed/ with a
+	// cycle-failure marker; the duplicate should be moved to failed/ with
+	// a terminal-failure (duplicate ID) marker.
 	tasksDir := t.TempDir()
 	for _, sub := range AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -2115,11 +2255,13 @@ func TestReconcileReadyQueue_DuplicateWaitingIDCycleTargetsRetained(t *testing.T
 		t.Fatal("retained file should have a cycle-failure marker")
 	}
 
-	// Duplicate file (zzz-self.md) should remain in waiting/ without a cycle-failure marker.
-	dupPath := filepath.Join(tasksDir, DirWaiting, "zzz-self.md")
-	dupData, err := os.ReadFile(dupPath)
+	// Duplicate file (zzz-self.md) should be in failed/ with terminal-failure marker.
+	dupData, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "zzz-self.md"))
 	if err != nil {
-		t.Fatalf("duplicate file zzz-self.md should remain in waiting/: %v", err)
+		t.Fatalf("duplicate file zzz-self.md should be in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(dupData) {
+		t.Fatal("duplicate file should have a terminal-failure marker")
 	}
 	if taskfile.ContainsCycleFailure(dupData) {
 		t.Fatal("duplicate file should NOT have a cycle-failure marker")

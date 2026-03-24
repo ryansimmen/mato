@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -388,4 +389,93 @@ func TestValidateTasksDir_SuccessCreatesAbsPath(t *testing.T) {
 	if got != dir+"/.tasks" {
 		t.Fatalf("expected %q, got %q", dir+"/.tasks", got)
 	}
+}
+
+// ---------- ensureDockerImage ----------
+
+func TestEnsureDockerImage_Found(t *testing.T) {
+	origInspect := dockerImageInspectFn
+	t.Cleanup(func() { dockerImageInspectFn = origInspect })
+
+	inspectCalled := false
+	dockerImageInspectFn = func(image string) error {
+		inspectCalled = true
+		if image != "test:latest" {
+			t.Errorf("expected image %q, got %q", "test:latest", image)
+		}
+		return nil
+	}
+
+	if err := ensureDockerImage("test:latest"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !inspectCalled {
+		t.Error("expected dockerImageInspectFn to be called")
+	}
+}
+
+func TestEnsureDockerImage_NotFound_PullSucceeds(t *testing.T) {
+	origInspect := dockerImageInspectFn
+	origPull := dockerPullFn
+	t.Cleanup(func() {
+		dockerImageInspectFn = origInspect
+		dockerPullFn = origPull
+	})
+
+	dockerImageInspectFn = func(image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	}
+	pullCalled := false
+	dockerPullFn = func(image string) error {
+		pullCalled = true
+		if image != "myimage:v1" {
+			t.Errorf("expected image %q, got %q", "myimage:v1", image)
+		}
+		return nil
+	}
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := ensureDockerImage("myimage:v1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	if !pullCalled {
+		t.Error("expected dockerPullFn to be called")
+	}
+	if !strings.Contains(stdout, "not found locally") {
+		t.Errorf("expected 'not found locally' message, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Pulling") {
+		t.Errorf("expected 'Pulling' message, got: %s", stdout)
+	}
+}
+
+func TestEnsureDockerImage_NotFound_PullFails(t *testing.T) {
+	origInspect := dockerImageInspectFn
+	origPull := dockerPullFn
+	t.Cleanup(func() {
+		dockerImageInspectFn = origInspect
+		dockerPullFn = origPull
+	})
+
+	dockerImageInspectFn = func(image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	}
+	dockerPullFn = func(image string) error {
+		return fmt.Errorf("network timeout")
+	}
+
+	_, _ = captureStdoutStderr(t, func() {
+		err := ensureDockerImage("bad:image")
+		if err == nil {
+			t.Fatal("expected error when pull fails")
+		}
+		if !strings.Contains(err.Error(), "failed to pull Docker image bad:image") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		if !strings.Contains(err.Error(), "verify the image name") {
+			t.Errorf("expected actionable guidance in error: %v", err)
+		}
+	})
 }

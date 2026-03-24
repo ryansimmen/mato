@@ -4,7 +4,7 @@
 Mato uses file-based messaging so concurrent task agents can share intent and reduce avoidable conflicts.
 The channel is advisory, not authoritative: task ownership still comes from queue file moves, git remains the source of truth for branches and commits, and merge readiness still comes from moving a task into `ready-to-merge/`.
 
-Both task agents and review agents participate in the messaging system. The review agent sends `progress` and `completion` messages following the same protocol as the task agent. However, the review verdict (approve/reject) is communicated via task file movement and HTML comments (e.g. `<!-- reviewed: ... -->`, `<!-- review-rejection: ... -->`), not via the messaging system.
+Both task agents and review agents participate in the messaging system. The review agent sends only a `progress` message; the host sends the `completion` message after processing the verdict. The review verdict (approve/reject) is communicated via a JSON verdict file, and the host writes HTML comment markers (e.g. `<!-- reviewed: ... -->`, `<!-- review-rejection: ... -->`) for state tracking after reading the verdict.
 
 Messaging is best-effort. If reading or writing messages fails, agents continue the task anyway.
 The host runner enables messaging by creating the directories with `messaging.Init(...)`, injecting `MATO_MESSAGING_ENABLED=1` and `MATO_MESSAGES_DIR=/workspace/.tasks/messages`, and cleaning stale presence and old event files on each loop iteration.
@@ -132,6 +132,8 @@ When the host merge queue successfully squash-merges a task branch, it writes a 
 
 The merge queue (`merge.ProcessQueue`) writes the file immediately after a successful squash-merge commit and push, before moving the task to `completed/`.
 
+If a prior push succeeded but post-push bookkeeping failed (e.g. the move to `completed/` was interrupted), the next merge cycle detects the already-merged branch via the idempotent squash path. In this recovery scenario, the merge queue recovers metadata — the target branch HEAD as the commit SHA and the task branch's changed files — and writes the completion detail before finishing the bookkeeping. This ensures downstream dependent tasks always receive dependency context, even after a partial failure and retry.
+
 ### Format
 
 Completion detail files are JSON objects matching `CompletionDetail` in `messaging.go`:
@@ -176,7 +178,7 @@ For backward compatibility, `ReadCompletionDetail` tries the new encoded filenam
 Presence files live in `.tasks/messages/presence/` and are host-managed.
 The host runner calls `messaging.WritePresence(tasksDir, agentID, taskFile, branch)` immediately after claiming a task, writing JSON with `agent_id`, `task`, `branch`, and `updated_at` to `<sanitized-agent-id>.json`. Task agents should not edit `presence/` directly.
 
-`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It checks `.tasks/.locks/<agent>.pid` through `identity.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
+`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It reads the `agent_id` field from each presence JSON payload to obtain the canonical (unsanitized) agent ID, then checks `.tasks/.locks/<agent>.pid` through `identity.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Using the JSON payload avoids mismatches when the agent ID differs from the sanitized filename (e.g., IDs containing spaces or special characters). Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
 
 ## Garbage Collection
 `messaging.CleanOldMessages(tasksDir, 24*time.Hour)` garbage-collects event files.
@@ -190,10 +192,13 @@ Completion detail files in `completions/` are not garbage-collected; they persis
 Consumers should assume messages can be missing, delayed, duplicated by intent, or already deleted.
 
 ## Filename Convention
-Task agents currently write event files directly from shell with names like `${MSG_ID}.json`, where `MSG_ID` is already embedded inside the JSON payload. That means agent-produced files are typically simple names such as:
+Task agents write event files directly from shell with names like `${MSG_ID}.json`, where `MSG_ID` is already embedded inside the JSON payload. Each progress message includes the state name as its suffix instead of a generic `-progress` tag, so multiple messages from the same agent within the same second never collide. Example agent-produced filenames:
 
 ```text
-20260101T000000Z-agent-7-intent.json
+20260101T000000Z-agent-7-verify-claim.json
+20260101T000000Z-agent-7-work.json
+20260101T000000Z-agent-7-commit.json
+20260101T000000Z-agent-7-verify-review.json
 ```
 
 The Go helper `messaging.WriteMessage(...)` is still available for host-side tooling and tests. When that helper writes an event, the filename is:

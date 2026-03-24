@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -217,6 +218,141 @@ func TestAppendToFile_PermissionDenied(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrPermission) {
 		t.Errorf("expected os.ErrPermission, got: %v", err)
+	}
+}
+
+func TestWriteFunc_EXDEVFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exdev.txt")
+	data := []byte("cross-device content")
+
+	origRenameFn := renameFn
+	renameFn = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() { renameFn = origRenameFn })
+
+	if err := WriteFunc(path, func(f *os.File) error {
+		_, err := f.Write(data)
+		return err
+	}); err != nil {
+		t.Fatalf("WriteFunc with EXDEV fallback: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("content = %q, want %q", got, data)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Errorf("permissions = %o, want 644", perm)
+	}
+
+	// No leftover temp files.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "exdev.txt" {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
+	}
+}
+
+func TestWriteFunc_EXDEVFallbackOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "overwrite.txt")
+
+	// Write initial content normally.
+	if err := WriteFile(path, []byte("old")); err != nil {
+		t.Fatalf("initial WriteFile: %v", err)
+	}
+
+	origRenameFn := renameFn
+	renameFn = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() { renameFn = origRenameFn })
+
+	if err := WriteFile(path, []byte("new")); err != nil {
+		t.Fatalf("WriteFile with EXDEV fallback: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "new" {
+		t.Errorf("content = %q, want %q", got, "new")
+	}
+}
+
+func TestWriteFunc_EXDEVFallbackCleanupOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fail-exdev.txt")
+	writeErr := errors.New("simulated write error")
+
+	origRenameFn := renameFn
+	renameFn = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() { renameFn = origRenameFn })
+
+	// The write callback fails, so the fallback should never be reached.
+	err := WriteFunc(path, func(f *os.File) error {
+		return writeErr
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Errorf("error = %v, want wrapping %v", err, writeErr)
+	}
+
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Error("target file should not exist after callback error")
+	}
+
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		t.Errorf("leftover temp file: %s", e.Name())
+	}
+}
+
+func TestWriteFile_EXDEVFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "writefile-exdev.txt")
+
+	origRenameFn := renameFn
+	renameFn = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() { renameFn = origRenameFn })
+
+	data := []byte("WriteFile through fallback")
+	if err := WriteFile(path, data); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("content = %q, want %q", got, data)
+	}
+
+	// Verify temp cleanup.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "writefile-exdev.txt" {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
 	}
 }
 

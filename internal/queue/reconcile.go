@@ -63,6 +63,9 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	// Move unparseable waiting/backlog tasks to failed/ using index parse failures.
 	for _, pf := range idx.WaitingParseFailures() {
 		fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", pf.Filename, pf.Err)
+		if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter: %v", pf.Err)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
+		}
 		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
@@ -72,6 +75,9 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	}
 	for _, pf := range idx.BacklogParseFailures() {
 		fmt.Fprintf(os.Stderr, "warning: moving unparseable backlog task %s to failed/: %v\n", pf.Filename, pf.Err)
+		if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter: %v", pf.Err)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
+		}
 		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
@@ -84,6 +90,9 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	for _, snap := range idx.TasksByState(DirBacklog) {
 		if err := frontmatter.ValidateAffectsGlobs(snap.Meta.Affects); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: moving backlog task %s with invalid glob to failed/: %v\n", snap.Filename, err)
+			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", err)); appendErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
+			}
 			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
 			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
@@ -109,6 +118,28 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			fmt.Fprintf(os.Stderr, "warning: task %s is part of a circular dependency\n", issue.TaskID)
 		case DependencyUnknownID:
 			fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", issue.Filename, issue.DependsOn)
+		}
+	}
+
+	// Move duplicate waiting files to failed/ with terminal-failure markers.
+	// A file is a duplicate if its task ID appears in RetainedFiles but
+	// its filename is not the retained copy. The first file (by filename
+	// sort) is kept; every subsequent copy is failed.
+	for _, snap := range idx.TasksByState(DirWaiting) {
+		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
+		if !ok || retainedFile == snap.Filename {
+			continue // retained copy or unknown ID — skip
+		}
+		reason := fmt.Sprintf("duplicate waiting task ID %q (retained copy: %s)", snap.Meta.ID, retainedFile)
+		fmt.Fprintf(os.Stderr, "warning: moving duplicate waiting task %s to failed/: %s\n", snap.Filename, reason)
+		if err := taskfile.AppendTerminalFailureRecord(snap.Path, reason); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
+		}
+		failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+		if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+		} else {
+			moved = true
 		}
 	}
 
@@ -176,6 +207,9 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		// Quarantine tasks with invalid glob syntax instead of promoting.
 		if err := frontmatter.ValidateAffectsGlobs(snap.Meta.Affects); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: moving waiting task %s with invalid glob to failed/: %v\n", snap.Filename, err)
+			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", err)); appendErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
+			}
 			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
 			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)

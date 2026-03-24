@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"path/filepath"
+	"strings"
 
 	"mato/internal/lockfile"
 )
@@ -20,9 +21,15 @@ func GenerateAgentID() (string, error) {
 }
 
 // IsAgentActive checks whether the agent that wrote a lock file is still running.
-// Supports both the "PID:starttime" format and legacy "PID" format.
+// Supports both the "PID:starttime" format and legacy "PID" format. Agent
+// IDs containing path separators are rejected so lock-file lookups cannot
+// escape the .locks directory.
 func IsAgentActive(tasksDir, agentID string) bool {
+	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
+		return false
+	}
+	if strings.Contains(agentID, "/") || strings.Contains(agentID, "\\") {
 		return false
 	}
 	lockFile := filepath.Join(tasksDir, ".locks", agentID+".pid")
