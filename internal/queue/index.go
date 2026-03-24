@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -192,6 +193,15 @@ func BuildIndex(tasksDir string) *PollIndex {
 			if err := frontmatter.ValidateAffectsGlobs(meta.Affects); err != nil {
 				idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
 					State: dir, Path: path, Err: err,
+				})
+			}
+
+			// Report unsafe affects entries (absolute paths, path
+			// traversal) that were stripped during parsing.
+			for _, sa := range meta.StrippedAffects {
+				idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
+					State: dir, Path: path,
+					Err: fmt.Errorf("unsafe affects entry %q: %s", sa.Entry, sa.Reason),
 				})
 			}
 

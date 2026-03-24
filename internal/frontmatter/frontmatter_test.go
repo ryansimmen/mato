@@ -775,34 +775,44 @@ func TestValidateAffectsGlobs_ValidEntries(t *testing.T) {
 
 func TestParseTaskData_AffectsPathTraversal(t *testing.T) {
 	tests := []struct {
-		name        string
-		affects     string
-		wantAffects []string
+		name             string
+		affects          string
+		wantAffects      []string
+		wantStrippedLen  int
+		wantStrippedReason string
 	}{
 		{
-			name:        "dotdot escape",
-			affects:     "../../etc/passwd",
-			wantAffects: nil,
+			name:               "dotdot escape",
+			affects:            "../../etc/passwd",
+			wantAffects:        nil,
+			wantStrippedLen:    1,
+			wantStrippedReason: "path traversal",
 		},
 		{
-			name:        "absolute path",
-			affects:     "/absolute/path",
-			wantAffects: nil,
+			name:               "absolute path",
+			affects:            "/absolute/path",
+			wantAffects:        nil,
+			wantStrippedLen:    1,
+			wantStrippedReason: "absolute path",
 		},
 		{
-			name:        "sibling traversal",
-			affects:     "../sibling/file.go",
-			wantAffects: nil,
+			name:               "sibling traversal",
+			affects:            "../sibling/file.go",
+			wantAffects:        nil,
+			wantStrippedLen:    1,
+			wantStrippedReason: "path traversal",
 		},
 		{
-			name:        "internal dotdot cleaned",
-			affects:     "internal/../internal/foo.go",
-			wantAffects: []string{"internal/foo.go"},
+			name:            "internal dotdot cleaned",
+			affects:         "internal/../internal/foo.go",
+			wantAffects:     []string{"internal/foo.go"},
+			wantStrippedLen: 0,
 		},
 		{
-			name:        "normal path unchanged",
-			affects:     "src/main.go",
-			wantAffects: []string{"src/main.go"},
+			name:            "normal path unchanged",
+			affects:         "src/main.go",
+			wantAffects:     []string{"src/main.go"},
+			wantStrippedLen: 0,
 		},
 	}
 	for _, tt := range tests {
@@ -814,6 +824,17 @@ func TestParseTaskData_AffectsPathTraversal(t *testing.T) {
 			}
 			if !reflect.DeepEqual(meta.Affects, tt.wantAffects) {
 				t.Fatalf("Affects = %v, want %v", meta.Affects, tt.wantAffects)
+			}
+			if len(meta.StrippedAffects) != tt.wantStrippedLen {
+				t.Fatalf("StrippedAffects len = %d, want %d", len(meta.StrippedAffects), tt.wantStrippedLen)
+			}
+			if tt.wantStrippedLen > 0 {
+				if meta.StrippedAffects[0].Entry != tt.affects {
+					t.Errorf("StrippedAffects[0].Entry = %q, want %q", meta.StrippedAffects[0].Entry, tt.affects)
+				}
+				if meta.StrippedAffects[0].Reason != tt.wantStrippedReason {
+					t.Errorf("StrippedAffects[0].Reason = %q, want %q", meta.StrippedAffects[0].Reason, tt.wantStrippedReason)
+				}
 			}
 		})
 	}
@@ -836,6 +857,15 @@ Body.
 	want := []string{"src/main.go", "internal/foo.go"}
 	if !reflect.DeepEqual(meta.Affects, want) {
 		t.Fatalf("Affects = %v, want %v", meta.Affects, want)
+	}
+	if len(meta.StrippedAffects) != 2 {
+		t.Fatalf("StrippedAffects len = %d, want 2", len(meta.StrippedAffects))
+	}
+	if meta.StrippedAffects[0].Reason != "path traversal" {
+		t.Errorf("StrippedAffects[0].Reason = %q, want %q", meta.StrippedAffects[0].Reason, "path traversal")
+	}
+	if meta.StrippedAffects[1].Reason != "absolute path" {
+		t.Errorf("StrippedAffects[1].Reason = %q, want %q", meta.StrippedAffects[1].Reason, "absolute path")
 	}
 }
 
@@ -897,5 +927,27 @@ Body.
 	}
 	if meta.MaxRetries != 0 {
 		t.Fatalf("MaxRetries = %d, want 0", meta.MaxRetries)
+	}
+}
+
+func TestParseTaskData_StrippedAffectsNilWhenSafe(t *testing.T) {
+	content := "---\naffects:\n  - src/main.go\n  - internal/foo.go\n---\nBody.\n"
+	meta, _, err := ParseTaskData([]byte(content), "safe-test.md")
+	if err != nil {
+		t.Fatalf("ParseTaskData returned error: %v", err)
+	}
+	if meta.StrippedAffects != nil {
+		t.Fatalf("StrippedAffects = %v, want nil for safe entries", meta.StrippedAffects)
+	}
+}
+
+func TestParseTaskData_StrippedAffectsNilWithNoFrontmatter(t *testing.T) {
+	content := "# Simple task\nDo something.\n"
+	meta, _, err := ParseTaskData([]byte(content), "no-fm.md")
+	if err != nil {
+		t.Fatalf("ParseTaskData returned error: %v", err)
+	}
+	if meta.StrippedAffects != nil {
+		t.Fatalf("StrippedAffects = %v, want nil for no-frontmatter task", meta.StrippedAffects)
 	}
 }
