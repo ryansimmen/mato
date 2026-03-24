@@ -18,6 +18,7 @@ the host and bind-mounts those executables into agent containers.
 mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [--dry-run] [copilot-args...]
 mato status [--repo <path>] [--tasks-dir <path>]
 mato doctor [--repo <path>] [--tasks-dir <path>] [--fix] [--format json] [--only <check>]
+mato graph [--repo <path>] [--tasks-dir <path>] [--format text|dot|json] [--all]
 ```
 Run mode creates the queue structure if needed, starts the Docker-based Copilot loop,
 and merges completed work into the target branch. If the target branch does not exist
@@ -51,6 +52,34 @@ Long flags support both `--flag value` and `--flag=value` forms.
 - waiting tasks plus dependency-status summaries
 - the five most recent messages from `.tasks/messages`
 Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, and `--help`/`-h`.
+
+### `mato graph`
+`mato graph` visualizes the task dependency topology. It reuses `PollIndex` and
+`DiagnoseDependencies` to show dependency edges, blocked tasks, cycles, and
+hidden (off-graph) dependencies. The command is read-only and makes no
+filesystem changes.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--tasks-dir <path>` | `<repo>/.tasks` | Path to the tasks directory. |
+| `--format` | `text` | Output format: `text`, `dot`, or `json`. |
+| `--all` | `false` | Include completed and failed tasks. |
+
+Example usage:
+```bash
+# Text output (default)
+mato graph
+
+# Graphviz DOT pipeline
+mato graph --format dot | dot -Tpng > deps.png
+
+# Machine-readable JSON
+mato graph --format json
+
+# Include completed and failed tasks
+mato graph --all
+```
 
 ## Environment Variables
 | Variable | Scope | Default | Description |
