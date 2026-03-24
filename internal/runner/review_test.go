@@ -8,7 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/frontmatter"
+	"mato/internal/git"
 	"mato/internal/queue"
+	"mato/internal/testutil"
 )
 
 func TestResolveReviewVerdict_Approved(t *testing.T) {
@@ -623,6 +626,211 @@ func TestReviewCandidates_FilesystemFallback_MalformedQuarantined(t *testing.T) 
 	// Stderr should have a warning.
 	if !strings.Contains(stderr, "quarantining unparseable review candidate") {
 		t.Fatalf("expected quarantine warning in stderr, got:\n%s", stderr)
+	}
+}
+
+func TestReviewCandidates_Indexed_PrioritySort(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "low-pri.md"),
+		[]byte("<!-- branch: task/low-pri -->\n---\npriority: 50\nmax_retries: 3\n---\n# Low Priority\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "high-pri.md"),
+		[]byte("<!-- branch: task/high-pri -->\n---\npriority: 5\nmax_retries: 3\n---\n# High Priority\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "mid-pri.md"),
+		[]byte("<!-- branch: task/mid-pri -->\n---\npriority: 20\nmax_retries: 3\n---\n# Mid Priority\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 3 {
+		t.Fatalf("expected 3 candidates, got %d", len(candidates))
+	}
+	want := []string{"high-pri.md", "mid-pri.md", "low-pri.md"}
+	for i, w := range want {
+		if candidates[i].Filename != w {
+			t.Fatalf("candidate[%d]: expected %q, got %q", i, w, candidates[i].Filename)
+		}
+	}
+}
+
+func TestReviewCandidates_Indexed_SamePrioritySortsByFilename(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "beta.md"),
+		[]byte("<!-- branch: task/beta -->\n---\npriority: 10\nmax_retries: 3\n---\n# Beta\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "alpha.md"),
+		[]byte("<!-- branch: task/alpha -->\n---\npriority: 10\nmax_retries: 3\n---\n# Alpha\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+	if candidates[0].Filename != "alpha.md" {
+		t.Fatalf("expected alpha.md first (alphabetical), got %q", candidates[0].Filename)
+	}
+	if candidates[1].Filename != "beta.md" {
+		t.Fatalf("expected beta.md second, got %q", candidates[1].Filename)
+	}
+}
+
+func TestReviewCandidates_Indexed_ExhaustedBudget(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	exhaustedContent := "---\npriority: 10\nmax_retries: 2\n---\n# Exhausted\n" +
+		"<!-- review-failure: a1 at 2026-01-01T00:00:00Z — fail 1 -->\n" +
+		"<!-- review-failure: a2 at 2026-01-02T00:00:00Z — fail 2 -->\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"), []byte(exhaustedContent), 0o644)
+
+	validContent := "<!-- branch: task/valid -->\n---\npriority: 20\nmax_retries: 3\n---\n# Valid\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "valid.md"), []byte(validContent), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, idx)
+		if len(candidates) != 1 {
+			t.Fatalf("expected 1 candidate (exhausted filtered out), got %d", len(candidates))
+		}
+		if candidates[0].Filename != "valid.md" {
+			t.Fatalf("expected valid.md, got %q", candidates[0].Filename)
+		}
+	})
+
+	if !strings.Contains(stdout, "review retry budget exhausted") {
+		t.Fatalf("expected budget exhaustion message in stdout, got:\n%s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); err != nil {
+		t.Fatal("exhausted task should be moved to failed/")
+	}
+}
+
+func TestReviewCandidates_Indexed_BranchFromSnapshot(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "with-branch.md"),
+		[]byte("<!-- branch: task/custom-branch -->\n---\npriority: 10\nmax_retries: 3\n---\n# With Branch\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Branch != "task/custom-branch" {
+		t.Fatalf("expected branch 'task/custom-branch', got %q", candidates[0].Branch)
+	}
+}
+
+func TestReviewCandidates_Indexed_BranchGeneratedWhenMissing(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "no-branch.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# No Branch\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	expected := "task/" + frontmatter.SanitizeBranchName("no-branch.md")
+	if candidates[0].Branch != expected {
+		t.Fatalf("expected generated branch %q, got %q", expected, candidates[0].Branch)
+	}
+}
+
+func TestReviewCandidates_Indexed_TitleExtracted(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "titled.md"),
+		[]byte("<!-- branch: task/titled -->\n---\npriority: 10\nmax_retries: 3\n---\n# My Custom Title\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Title != "My Custom Title" {
+		t.Fatalf("expected title 'My Custom Title', got %q", candidates[0].Title)
+	}
+}
+
+func TestVerifyReviewBranch_BranchExists(t *testing.T) {
+	repoDir := testutil.SetupRepo(t)
+
+	// Create a task branch.
+	if _, err := git.Output(repoDir, "branch", "task/feature-x"); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	task := &queue.ClaimedTask{
+		Filename: "feature-x.md",
+		Branch:   "task/feature-x",
+		Title:    "Feature X",
+		TaskPath: filepath.Join(t.TempDir(), "feature-x.md"),
+	}
+	os.WriteFile(task.TaskPath, []byte("# Feature X\n"), 0o644)
+
+	result := VerifyReviewBranch(repoDir, task, "agent-test")
+	if !result {
+		t.Fatal("expected VerifyReviewBranch to return true for existing branch")
+	}
+
+	// Task file should not have a review-failure marker.
+	data, _ := os.ReadFile(task.TaskPath)
+	if strings.Contains(string(data), "review-failure") {
+		t.Fatal("should not write review-failure when branch exists")
+	}
+}
+
+func TestVerifyReviewBranch_BranchMissing(t *testing.T) {
+	repoDir := testutil.SetupRepo(t)
+
+	taskDir := t.TempDir()
+	taskPath := filepath.Join(taskDir, "missing-branch.md")
+	os.WriteFile(taskPath, []byte("# Missing Branch\n"), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: "missing-branch.md",
+		Branch:   "task/nonexistent-branch",
+		Title:    "Missing Branch",
+		TaskPath: taskPath,
+	}
+
+	_, stderr := captureStdoutStderr(t, func() {
+		result := VerifyReviewBranch(repoDir, task, "agent-test")
+		if result {
+			t.Fatal("expected VerifyReviewBranch to return false for missing branch")
+		}
+	})
+
+	if !strings.Contains(stderr, "task branch") {
+		t.Fatalf("expected warning about missing branch in stderr, got:\n%s", stderr)
+	}
+
+	// Task file should have a review-failure marker.
+	data, _ := os.ReadFile(taskPath)
+	if !strings.Contains(string(data), "review-failure") {
+		t.Fatal("should write review-failure marker when branch is missing")
+	}
+	if !strings.Contains(string(data), "not found in host repo") {
+		t.Fatal("review-failure should mention branch not found")
 	}
 }
 
