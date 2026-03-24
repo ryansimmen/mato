@@ -499,3 +499,58 @@ func TestReviewVerifyReviewMissingTask(t *testing.T) {
 		t.Fatalf("expected 'Task file not found' in output, got:\n%s", out)
 	}
 }
+
+// TestReviewProgressMessageFilenameIsDistinct verifies that the review agent's
+// VERIFY_REVIEW progress message uses a state-specific filename suffix
+// (verify-review) rather than a generic one, ensuring it won't collide with
+// task-agent progress messages written by the same agent ID.
+func TestReviewProgressMessageFilenameIsDistinct(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirReadyReview, "review-progress.md",
+		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"<!-- branch: task/review-progress -->\n"+
+			"# Review Progress Test\nTest review progress message.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-review-progress.md.json")
+
+	script := strings.Join([]string{
+		reviewPreamble(t),
+		reviewStateBlock(t, "VERIFY_REVIEW"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	env := []string{
+		"MATO_AGENT_ID=test-reviewer-progress",
+		"MATO_TASK_FILE=review-progress.md",
+		"MATO_TASK_BRANCH=task/review-progress",
+		"MATO_TASK_TITLE=Review Progress Test",
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirReadyReview, "review-progress.md"),
+		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash review progress: %v\noutput:\n%s", err, out)
+	}
+
+	msgs := readPromptEventMessages(t, tasksDir)
+	found := false
+	for _, msg := range msgs {
+		if msg.Type == "progress" && msg.From == "test-reviewer-progress" {
+			found = true
+			if !strings.Contains(msg.Body, "VERIFY_REVIEW") {
+				t.Fatalf("progress body = %q, want VERIFY_REVIEW", msg.Body)
+			}
+			// The MSG_ID should contain "verify-review", not generic "progress".
+			if !strings.Contains(msg.ID, "verify-review") {
+				t.Fatalf("progress message ID = %q, want it to contain 'verify-review'", msg.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no progress message found from test-reviewer-progress")
+	}
+}

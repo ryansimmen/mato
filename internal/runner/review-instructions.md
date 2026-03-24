@@ -57,7 +57,7 @@ fi
 [ -n "$TASK_TITLE" ] || TASK_TITLE="$(basename "$FILENAME" .md)"
 cat "$TASK_PATH"
 {
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-progress"
+  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-verify-review"
   cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
 {"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: VERIFY_REVIEW","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 EOF
