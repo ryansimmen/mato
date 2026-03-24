@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/queue"
 )
@@ -169,8 +168,24 @@ func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 		out.InProgress = append(out.InProgress, ts)
 	}
 
-	// Waiting (dependency-blocked) tasks — re-derive from index without ANSI.
-	out.Waiting = waitingTasksForJSON(data.idx)
+	// Waiting (dependency-blocked) tasks — converted from the shared model
+	// populated during gatherStatus, avoiding re-derivation.
+	out.Waiting = make([]WaitingTaskJSON, 0, len(data.waitingTasks))
+	for _, wt := range data.waitingTasks {
+		deps := make([]DependencyJSON, 0, len(wt.Dependencies))
+		for _, d := range wt.Dependencies {
+			deps = append(deps, DependencyJSON{ID: d.ID, Status: d.Status})
+		}
+		if len(deps) == 0 {
+			deps = []DependencyJSON{{ID: "none", Status: ""}}
+		}
+		out.Waiting = append(out.Waiting, WaitingTaskJSON{
+			Name:         wt.Name,
+			Title:        wt.Title,
+			Priority:     wt.Priority,
+			Dependencies: deps,
+		})
+	}
 
 	// Ready for review.
 	out.ReadyReview = make([]TaskSummaryJSON, 0, len(data.readyForReview))
@@ -257,33 +272,4 @@ func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 	return out
 }
 
-// waitingTasksForJSON re-derives waiting task data from the PollIndex
-// without ANSI formatting. This is used by ShowJSON to avoid parsing
-// ANSI-embedded dependency strings.
-func waitingTasksForJSON(idx *queue.PollIndex) []WaitingTaskJSON {
-	snaps := idx.TasksByState(queue.DirWaiting)
-	stateByID := taskStatesByIDFromIndex(idx)
 
-	result := make([]WaitingTaskJSON, 0, len(snaps))
-	for _, snap := range snaps {
-		title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
-		deps := make([]DependencyJSON, 0, len(snap.Meta.DependsOn))
-		for _, dep := range snap.Meta.DependsOn {
-			st := stateByID[dep]
-			if st == "" {
-				st = "missing"
-			}
-			deps = append(deps, DependencyJSON{ID: dep, Status: st})
-		}
-		if len(deps) == 0 {
-			deps = []DependencyJSON{{ID: "none", Status: ""}}
-		}
-		result = append(result, WaitingTaskJSON{
-			Name:         snap.Filename,
-			Title:        title,
-			Priority:     snap.Meta.Priority,
-			Dependencies: deps,
-		})
-	}
-	return result
-}
