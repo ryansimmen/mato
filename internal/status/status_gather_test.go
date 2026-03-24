@@ -804,3 +804,91 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 		t.Errorf("missing dep should contain 'missing', got %q", dep)
 	}
 }
+
+func TestGatherStatus_PresenceReadError(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Make the presence directory unreadable to trigger an error.
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	if err := os.Chmod(presenceDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(presenceDir, 0o755) })
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus should not return error for presence failure, got: %v", err)
+	}
+
+	if len(data.warnings) == 0 {
+		t.Fatal("expected at least one warning for presence read failure")
+	}
+	found := false
+	for _, w := range data.warnings {
+		if containsSubstring(w, "presence") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning 'presence', got: %v", data.warnings)
+	}
+	if data.presenceMap != nil {
+		t.Errorf("presenceMap should be nil on error, got: %v", data.presenceMap)
+	}
+}
+
+func TestGatherStatus_CompletionReadError(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Make the completions directory unreadable to trigger an error.
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	if err := os.Chmod(completionsDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(completionsDir, 0o755) })
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus should not return error for completion failure, got: %v", err)
+	}
+
+	if len(data.warnings) == 0 {
+		t.Fatal("expected at least one warning for completion read failure")
+	}
+	found := false
+	for _, w := range data.warnings {
+		if containsSubstring(w, "completion") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning 'completion', got: %v", data.warnings)
+	}
+	if data.completions != nil {
+		t.Errorf("completions should be nil on error, got: %v", data.completions)
+	}
+}
+
+func TestGatherStatus_NoWarningsOnSuccess(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	if len(data.warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", data.warnings)
+	}
+}

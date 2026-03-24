@@ -58,6 +58,7 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 	renderFailedTasks(w, c, tasksDir, data)
 	renderRecentCompletions(w, c, data)
 	renderRecentMessages(w, c, data)
+	renderWarnings(w, c, data)
 
 	return nil
 }
