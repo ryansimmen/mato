@@ -56,7 +56,7 @@ fi
 [ -n "$TASK_TITLE" ] || TASK_TITLE="$(grep -m1 '^# ' "$TASK_PATH" | sed 's/^# //')"
 [ -n "$TASK_TITLE" ] || TASK_TITLE="$(basename "$FILENAME" .md)"
 {
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-progress"
+  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-verify-claim"
   cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
 {"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: VERIFY_CLAIM","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 EOF
@@ -101,7 +101,7 @@ Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... --
 **Commands:**
 ```bash
 {
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-progress"
+  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-work"
   cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
 {"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: WORK","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 EOF
@@ -132,7 +132,7 @@ done
 **Commands:**
 ```bash
 {
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-progress"
+  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-commit"
   cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
 {"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: COMMIT","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 EOF

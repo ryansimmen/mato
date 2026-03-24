@@ -421,6 +421,43 @@ func TestReviewNoPushNoCommitNoMoveInstructions(t *testing.T) {
 	}
 }
 
+// TestReviewMessageBudgetMatchesRuntime verifies that the review prompt
+// accurately describes the message budget: no intent message, one agent
+// progress, one host completion. This prevents the prompt from drifting out
+// of sync with the runtime behavior in review.go.
+func TestReviewMessageBudgetMatchesRuntime(t *testing.T) {
+	data, err := os.ReadFile(reviewInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(review instructions): %v", err)
+	}
+	text := string(data)
+
+	// The prompt must not tell the review agent that the host sends an intent message.
+	// Runtime (review.go) does not send intent for reviews.
+	forbidden := []struct {
+		pattern string
+		reason  string
+	}{
+		{"host sends the `intent`", "review prompt must not claim host sends intent — runtime does not send intent for reviews"},
+		{"host intent", "review prompt must not reference 'host intent' — no intent message is sent for reviews"},
+	}
+	for _, f := range forbidden {
+		if strings.Contains(text, f.pattern) {
+			t.Fatalf("review instructions contain %q: %s", f.pattern, f.reason)
+		}
+	}
+
+	// The prompt must mention that the host sends completion.
+	if !strings.Contains(text, "completion") {
+		t.Fatal("review instructions must mention 'completion' — host sends completion after processing verdict")
+	}
+
+	// The prompt must describe the budget as 2 total messages.
+	if !strings.Contains(text, "2 total messages") {
+		t.Fatal("review instructions must describe '2 total messages' budget (1 agent progress + 1 host completion)")
+	}
+}
+
 // TestReviewVerdictApproveFormat verifies that the real VERDICT state approve
 // block produces a well-formed JSON verdict file.
 func TestReviewVerdictApproveFormat(t *testing.T) {
@@ -497,5 +534,60 @@ func TestReviewVerifyReviewMissingTask(t *testing.T) {
 
 	if !strings.Contains(out, "Task file not found") {
 		t.Fatalf("expected 'Task file not found' in output, got:\n%s", out)
+	}
+}
+
+// TestReviewProgressMessageFilenameIsDistinct verifies that the review agent's
+// VERIFY_REVIEW progress message uses a state-specific filename suffix
+// (verify-review) rather than a generic one, ensuring it won't collide with
+// task-agent progress messages written by the same agent ID.
+func TestReviewProgressMessageFilenameIsDistinct(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirReadyReview, "review-progress.md",
+		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"<!-- branch: task/review-progress -->\n"+
+			"# Review Progress Test\nTest review progress message.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-review-progress.md.json")
+
+	script := strings.Join([]string{
+		reviewPreamble(t),
+		reviewStateBlock(t, "VERIFY_REVIEW"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	env := []string{
+		"MATO_AGENT_ID=test-reviewer-progress",
+		"MATO_TASK_FILE=review-progress.md",
+		"MATO_TASK_BRANCH=task/review-progress",
+		"MATO_TASK_TITLE=Review Progress Test",
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirReadyReview, "review-progress.md"),
+		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash review progress: %v\noutput:\n%s", err, out)
+	}
+
+	msgs := readPromptEventMessages(t, tasksDir)
+	found := false
+	for _, msg := range msgs {
+		if msg.Type == "progress" && msg.From == "test-reviewer-progress" {
+			found = true
+			if !strings.Contains(msg.Body, "VERIFY_REVIEW") {
+				t.Fatalf("progress body = %q, want VERIFY_REVIEW", msg.Body)
+			}
+			// The MSG_ID should contain "verify-review", not generic "progress".
+			if !strings.Contains(msg.ID, "verify-review") {
+				t.Fatalf("progress message ID = %q, want it to contain 'verify-review'", msg.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no progress message found from test-reviewer-progress")
 	}
 }

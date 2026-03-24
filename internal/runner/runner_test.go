@@ -483,6 +483,123 @@ func TestCheckIdleTransition(t *testing.T) {
 	}
 }
 
+func TestIdleHeartbeat_FirstMessageIncludesNextPoll(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	msg := hb.idleMessage(now.Add(10*time.Second), 10*time.Second)
+	want := "[mato] idle — waiting for tasks (next poll in 10s)"
+	if msg != want {
+		t.Errorf("first idle message = %q, want %q", msg, want)
+	}
+}
+
+func TestIdleHeartbeat_SuppressedDuringThreshold(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	// First message should be printed.
+	msg := hb.idleMessage(now.Add(10*time.Second), 10*time.Second)
+	if msg == "" {
+		t.Fatal("expected first idle message, got empty")
+	}
+
+	// Polls 2 through idleHeartbeatThreshold should be suppressed.
+	for i := 2; i <= idleHeartbeatThreshold; i++ {
+		elapsed := time.Duration(i) * 10 * time.Second
+		msg = hb.idleMessage(now.Add(elapsed), 10*time.Second)
+		if msg != "" {
+			t.Errorf("poll %d: expected empty, got %q", i, msg)
+		}
+	}
+}
+
+func TestIdleHeartbeat_ThrottledHeartbeatAfterThreshold(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	// Exhaust the initial quiet period.
+	for i := 1; i <= idleHeartbeatThreshold; i++ {
+		hb.idleMessage(now.Add(time.Duration(i)*10*time.Second), 10*time.Second)
+	}
+
+	// The next call after the threshold should produce a heartbeat.
+	t1 := now.Add(time.Duration(idleHeartbeatThreshold+1) * 10 * time.Second)
+	msg := hb.idleMessage(t1, 10*time.Second)
+	if msg == "" {
+		t.Fatal("expected throttled heartbeat, got empty")
+	}
+	if !strings.Contains(msg, "uptime:") || !strings.Contains(msg, "last activity:") {
+		t.Errorf("throttled heartbeat missing expected fields: %q", msg)
+	}
+
+	// A call less than heartbeatInterval later should be suppressed.
+	t2 := t1.Add(30 * time.Second)
+	msg = hb.idleMessage(t2, 10*time.Second)
+	if msg != "" {
+		t.Errorf("expected suppressed heartbeat within interval, got %q", msg)
+	}
+
+	// A call at or beyond heartbeatInterval should print again.
+	t3 := t1.Add(heartbeatInterval)
+	msg = hb.idleMessage(t3, 10*time.Second)
+	if msg == "" {
+		t.Fatal("expected heartbeat after interval elapsed, got empty")
+	}
+}
+
+func TestIdleHeartbeat_RecordActivityResetsState(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	// Advance through 3 idle polls.
+	for i := 1; i <= 3; i++ {
+		hb.idleMessage(now.Add(time.Duration(i)*10*time.Second), 10*time.Second)
+	}
+
+	// Record activity (e.g., a task was claimed).
+	activityTime := now.Add(35 * time.Second)
+	hb.recordActivity(activityTime)
+
+	if hb.consecutiveIdlePolls != 0 {
+		t.Errorf("consecutiveIdlePolls after recordActivity = %d, want 0", hb.consecutiveIdlePolls)
+	}
+
+	// Next idle message should be the first-idle message again.
+	msg := hb.idleMessage(activityTime.Add(10*time.Second), 10*time.Second)
+	want := "[mato] idle — waiting for tasks (next poll in 10s)"
+	if msg != want {
+		t.Errorf("idle message after reset = %q, want %q", msg, want)
+	}
+}
+
+func TestFormatDurationShort(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{5 * time.Second, "5s"},
+		{10 * time.Second, "10s"},
+		{59 * time.Second, "59s"},
+		{time.Minute, "1m"},
+		{5 * time.Minute, "5m"},
+		{90 * time.Second, "1m"},
+		{time.Hour, "1h"},
+		{time.Hour + 30*time.Minute, "1h30m"},
+		{2*time.Hour + 5*time.Minute, "2h5m"},
+		{2*time.Hour + 5*time.Minute + 37*time.Second, "2h5m"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.d.String(), func(t *testing.T) {
+			got := formatDurationShort(tt.d)
+			if got != tt.want {
+				t.Errorf("formatDurationShort(%v) = %q, want %q", tt.d, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractFailureLines_NoFailures(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
 	os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644)
@@ -1038,6 +1155,39 @@ func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(reviewDir, "exhausted.md")); !os.IsNotExist(err) {
 		t.Fatal("exhausted task still in ready-for-review")
+	}
+}
+
+func TestReviewCandidates_ExhaustedHasTerminalMarker(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(failedDir, 0o755)
+
+	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
+		"---",
+		"priority: 5",
+		"---",
+		"# Exhausted Task",
+		"<!-- review-failure: one -->",
+		"<!-- review-failure: two -->",
+		"<!-- review-failure: three -->",
+		"<!-- branch: task/exhausted -->",
+		"",
+	}, "\n")), 0o644)
+
+	reviewCandidates(tasksDir, nil)
+
+	data, err := os.ReadFile(filepath.Join(failedDir, "exhausted.md"))
+	if err != nil {
+		t.Fatalf("exhausted.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("exhausted.md in failed/ should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "review retry budget exhausted") {
+		t.Error("terminal-failure marker should mention review retry budget exhausted")
 	}
 }
 
@@ -2847,5 +2997,490 @@ func TestSetupSignalContext_PrintsShutdownMessage(t *testing.T) {
 
 	if !strings.Contains(stdout, "Shutting down, waiting for current task to finish...") {
 		t.Fatalf("expected shutdown message in stdout, got: %q", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pollCleanup tests
+// ---------------------------------------------------------------------------
+
+func setupFullTasksDir(t *testing.T) string {
+	t.Helper()
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("mkdir .locks: %v", err)
+	}
+	for _, sub := range []string{"messages/events", "messages/presence", "messages/completions"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	return tasksDir
+}
+
+func TestPollCleanup_RecoverOrphanedTask(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	// Place an orphaned task in in-progress/ with a dead agent ID.
+	taskContent := "<!-- claimed-by: deadagent1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: orphan-task\npriority: 10\n---\n# Orphan\n"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, "orphan-task.md")
+	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+
+	// No lock file for deadagent1, so the task should be recovered.
+	captureStdoutStderr(t, func() {
+		pollCleanup(tasksDir)
+	})
+
+	if _, err := os.Stat(inProgressPath); err == nil {
+		t.Fatal("orphaned task should have been removed from in-progress/")
+	}
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, "orphan-task.md")
+	if _, err := os.Stat(backlogPath); err != nil {
+		t.Fatalf("orphaned task should have been moved to backlog/: %v", err)
+	}
+}
+
+func TestPollCleanup_CleansOldMessages(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	// Create an old message file with a past modification time.
+	msgPath := filepath.Join(tasksDir, "messages", "events", "old-msg.json")
+	os.WriteFile(msgPath, []byte(`{"id":"old-msg"}`), 0o644)
+	oldTime := time.Now().Add(-48 * time.Hour)
+	os.Chtimes(msgPath, oldTime, oldTime)
+
+	// Create a recent message that should be kept.
+	recentPath := filepath.Join(tasksDir, "messages", "events", "new-msg.json")
+	os.WriteFile(recentPath, []byte(`{"id":"new-msg"}`), 0o644)
+
+	captureStdoutStderr(t, func() {
+		pollCleanup(tasksDir)
+	})
+
+	if _, err := os.Stat(msgPath); err == nil {
+		t.Fatal("old message should have been cleaned up")
+	}
+	if _, err := os.Stat(recentPath); err != nil {
+		t.Fatal("recent message should have been kept")
+	}
+}
+
+func TestPollCleanup_EmptyDir(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	// Should not panic or error on empty directories.
+	captureStdoutStderr(t, func() {
+		pollCleanup(tasksDir)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// pollReconcile tests
+// ---------------------------------------------------------------------------
+
+func TestPollReconcile_EmptyQueue(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	_, stderr := captureStdoutStderr(t, func() {
+		idx, hadError := pollReconcile(tasksDir)
+		if hadError {
+			t.Error("expected no errors on empty queue")
+		}
+		if idx == nil {
+			t.Fatal("expected non-nil index")
+		}
+	})
+
+	if strings.Contains(stderr, "warning:") {
+		t.Errorf("expected no warnings, got: %s", stderr)
+	}
+}
+
+func TestPollReconcile_PromotesWaitingTask(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	// Create a completed dependency task.
+	completedContent := "---\nid: dep-task\npriority: 10\n---\n# Dep\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "dep-task.md"), []byte(completedContent), 0o644)
+
+	// Create a waiting task that depends on the completed one.
+	waitingContent := "---\nid: child-task\npriority: 20\ndepends_on:\n  - dep-task\n---\n# Child\n"
+	waitingPath := filepath.Join(tasksDir, queue.DirWaiting, "child-task.md")
+	os.WriteFile(waitingPath, []byte(waitingContent), 0o644)
+
+	captureStdoutStderr(t, func() {
+		idx, hadError := pollReconcile(tasksDir)
+		if hadError {
+			t.Error("expected no errors during reconciliation")
+		}
+		if idx == nil {
+			t.Fatal("expected non-nil index")
+		}
+	})
+
+	// Waiting task should have been promoted to backlog.
+	if _, err := os.Stat(waitingPath); err == nil {
+		t.Fatal("waiting task should have been promoted out of waiting/")
+	}
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, "child-task.md")
+	if _, err := os.Stat(backlogPath); err != nil {
+		t.Fatalf("waiting task should have been promoted to backlog/: %v", err)
+	}
+}
+
+func TestPollReconcile_DirReadFailureFlagsError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	// Replace backlog directory with a regular file to trigger ReadDir failure.
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog)
+	os.RemoveAll(backlogPath)
+	os.WriteFile(backlogPath, []byte("not a directory"), 0o644)
+
+	_, stderr := captureStdoutStderr(t, func() {
+		_, hadError := pollReconcile(tasksDir)
+		if !hadError {
+			t.Error("expected hadError=true when a queue directory is unreadable")
+		}
+	})
+
+	if !strings.Contains(stderr, "warning: index build:") {
+		t.Errorf("expected warning about index build on stderr, got: %s", stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pollClaimAndRun tests
+// ---------------------------------------------------------------------------
+
+func TestPollClaimAndRun_NoTasksAvailable(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	ctx := context.Background()
+	env := envConfig{tasksDir: tasksDir}
+	run := runContext{agentID: "test-agent"}
+	failedDirExcluded := make(map[string]struct{})
+	idx := queue.BuildIndex(tasksDir)
+
+	var claimed, hadError bool
+	captureStdoutStderr(t, func() {
+		claimed, hadError = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+	})
+
+	if claimed {
+		t.Fatal("expected claimed=false when backlog is empty")
+	}
+	if hadError {
+		t.Error("expected hadError=false when backlog is empty")
+	}
+}
+
+func TestPollClaimAndRun_FailedDirUnavailableExclusion(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	// Pre-exclude a task name; verify it stays in the exclusion map
+	// and doesn't cause errors.
+	ctx := context.Background()
+	env := envConfig{tasksDir: tasksDir}
+	run := runContext{agentID: "test-agent"}
+	failedDirExcluded := map[string]struct{}{"already-excluded.md": {}}
+	idx := queue.BuildIndex(tasksDir)
+
+	captureStdoutStderr(t, func() {
+		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+	})
+
+	if _, ok := failedDirExcluded["already-excluded.md"]; !ok {
+		t.Fatal("pre-existing exclusion should be preserved")
+	}
+}
+
+func TestPollClaimAndRun_DeferredOverlapSkipped(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	// Create a task in in-progress that claims affects on a path.
+	activeContent := "<!-- claimed-by: other-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/active -->\n---\nid: active-task\npriority: 5\naffects:\n  - src/main.go\n---\n# Active\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "active-task.md"), []byte(activeContent), 0o644)
+
+	// Register a lock for other-agent so it isn't orphan-recovered.
+	lockPath := filepath.Join(tasksDir, ".locks", "other-agent.pid")
+	os.WriteFile(lockPath, []byte(fmt.Sprintf("%d:%d", os.Getpid(), time.Now().Unix())), 0o644)
+
+	// Create a backlog task that overlaps the same affects.
+	backlogContent := "---\nid: overlap-task\npriority: 10\naffects:\n  - src/main.go\n---\n# Overlap\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "overlap-task.md"), []byte(backlogContent), 0o644)
+
+	ctx := context.Background()
+	env := envConfig{tasksDir: tasksDir}
+	run := runContext{agentID: "test-agent"}
+	failedDirExcluded := make(map[string]struct{})
+	idx := queue.BuildIndex(tasksDir)
+
+	var claimed bool
+	captureStdoutStderr(t, func() {
+		claimed, _ = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+	})
+
+	if claimed {
+		t.Fatal("overlapping task should have been deferred, not claimed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pollMerge tests
+// ---------------------------------------------------------------------------
+
+func TestPollMerge_EmptyQueue(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	var count int
+	captureStdoutStderr(t, func() {
+		count = pollMerge("/nonexistent", tasksDir, "mato")
+	})
+
+	if count != 0 {
+		t.Fatalf("expected 0 merged tasks from empty queue, got %d", count)
+	}
+}
+
+func TestPollMerge_LockAcquiredAndReleased(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	// First call should acquire the lock and return 0 (no tasks).
+	var count int
+	captureStdoutStderr(t, func() {
+		count = pollMerge("/nonexistent", tasksDir, "mato")
+	})
+	if count != 0 {
+		t.Fatalf("expected 0, got %d", count)
+	}
+
+	// Second call should also succeed (lock was released by first call).
+	captureStdoutStderr(t, func() {
+		count = pollMerge("/nonexistent", tasksDir, "mato")
+	})
+	if count != 0 {
+		t.Fatalf("expected 0 on second call, got %d", count)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolveGitIdentity tests
+// ---------------------------------------------------------------------------
+
+func TestResolveGitIdentity_ConfiguredValues(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := exec.Command("git", "-C", dir, "config", "user.name", "Alice Test").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if _, err := exec.Command("git", "-C", dir, "config", "user.email", "alice@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+
+	name, email := resolveGitIdentity(dir)
+
+	if name != "Alice Test" {
+		t.Errorf("expected name %q, got %q", "Alice Test", name)
+	}
+	if email != "alice@example.com" {
+		t.Errorf("expected email %q, got %q", "alice@example.com", email)
+	}
+}
+
+func TestResolveGitIdentity_FallsBackToDefaults(t *testing.T) {
+	// Use an isolated HOME so global git config doesn't interfere.
+	dir := t.TempDir()
+	if _, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+
+	// Temporarily set HOME to an empty dir to prevent global config.
+	fakeHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	origXDG := os.Getenv("XDG_CONFIG_HOME")
+	os.Setenv("HOME", fakeHome)
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(fakeHome, ".config"))
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		if origXDG != "" {
+			os.Setenv("XDG_CONFIG_HOME", origXDG)
+		} else {
+			os.Unsetenv("XDG_CONFIG_HOME")
+		}
+	})
+
+	name, email := resolveGitIdentity(dir)
+
+	if name != "mato" {
+		t.Errorf("expected default name %q, got %q", "mato", name)
+	}
+	if email != "mato@local.invalid" {
+		t.Errorf("expected default email %q, got %q", "mato@local.invalid", email)
+	}
+}
+
+func TestResolveGitIdentity_SetsLocalConfig(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := exec.Command("git", "-C", dir, "config", "user.name", "Bob").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if _, err := exec.Command("git", "-C", dir, "config", "user.email", "bob@test.com").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+
+	resolveGitIdentity(dir)
+
+	// Verify the values were set in local config (git config --local).
+	out, err := exec.Command("git", "-C", dir, "config", "--local", "user.name").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git config --local user.name: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "Bob" {
+		t.Errorf("expected local user.name %q, got %q", "Bob", got)
+	}
+	out, err = exec.Command("git", "-C", dir, "config", "--local", "user.email").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git config --local user.email: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "bob@test.com" {
+		t.Errorf("expected local user.email %q, got %q", "bob@test.com", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Run initialization error path tests
+// ---------------------------------------------------------------------------
+
+func TestRun_InvalidRepoPath(t *testing.T) {
+	err := Run("/nonexistent/path/that/does/not/exist", "mato", "", nil)
+	if err == nil {
+		t.Fatal("expected error for invalid repo path")
+	}
+}
+
+func TestRun_InvalidTasksDirOverride(t *testing.T) {
+	// Create a valid git repo but specify a tasks dir with a non-existent parent.
+	dir := t.TempDir()
+	if _, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v", err)
+	}
+	if _, err := exec.Command("git", "-C", dir, "config", "user.name", "Test").CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644)
+	exec.Command("git", "-C", dir, "add", "-A").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
+	exec.Command("git", "-C", dir, "checkout", "-b", "mato").Run()
+
+	// tasksDir parent doesn't exist.
+	err := Run(dir, "mato", "/nonexistent/parent/path/.tasks", nil)
+	if err == nil {
+		t.Fatal("expected error for invalid tasks dir")
+	}
+	if !strings.Contains(err.Error(), "does not exist") && !strings.Contains(err.Error(), "tasks directory") {
+		t.Fatalf("expected tasks directory error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildEnvAndRunContext tests
+// ---------------------------------------------------------------------------
+
+func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
+	tools := hostTools{
+		copilotPath:        "/usr/bin/copilot",
+		gitPath:            "/usr/bin/git",
+		gitUploadPackPath:  "/usr/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/bin/git-receive-pack",
+		ghPath:             "/usr/bin/gh",
+		goRoot:             "/usr/local/go",
+		homeDir:            "/home/testuser",
+		copilotConfigDir:   "/home/testuser/.copilot",
+	}
+
+	env, run := buildEnvAndRunContext("main", tools, "agent-123", "Test User", "test@test.com",
+		[]string{"--verbose"}, "/repo", "/repo/.tasks", 45*time.Minute)
+
+	if env.image == "" {
+		t.Error("expected default docker image to be set")
+	}
+	if env.workdir != "/workspace" {
+		t.Errorf("expected workdir /workspace, got %s", env.workdir)
+	}
+	if env.gitName != "Test User" {
+		t.Errorf("expected gitName %q, got %q", "Test User", env.gitName)
+	}
+	if env.gitEmail != "test@test.com" {
+		t.Errorf("expected gitEmail %q, got %q", "test@test.com", env.gitEmail)
+	}
+	if env.targetBranch != "main" {
+		t.Errorf("expected targetBranch %q, got %q", "main", env.targetBranch)
+	}
+	if run.agentID != "agent-123" {
+		t.Errorf("expected agentID %q, got %q", "agent-123", run.agentID)
+	}
+	if run.timeout != 45*time.Minute {
+		t.Errorf("expected timeout %v, got %v", 45*time.Minute, run.timeout)
+	}
+	if !strings.Contains(run.prompt, "main") {
+		t.Error("expected prompt to contain branch name")
+	}
+}
+
+func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
+	t.Setenv("MATO_DOCKER_IMAGE", "custom:latest")
+
+	tools := hostTools{homeDir: "/home/test"}
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.tasks", time.Hour)
+
+	if env.image != "custom:latest" {
+		t.Errorf("expected custom image %q, got %q", "custom:latest", env.image)
+	}
+}
+
+func TestBuildEnvAndRunContext_PromptPlaceholders(t *testing.T) {
+	tools := hostTools{homeDir: "/home/test"}
+	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", nil, "/r", "/r/.tasks", time.Hour)
+
+	if strings.Contains(run.prompt, "TASKS_DIR_PLACEHOLDER") {
+		t.Error("prompt still contains TASKS_DIR_PLACEHOLDER")
+	}
+	if strings.Contains(run.prompt, "TARGET_BRANCH_PLACEHOLDER") {
+		t.Error("prompt still contains TARGET_BRANCH_PLACEHOLDER")
+	}
+	if strings.Contains(run.prompt, "MESSAGES_DIR_PLACEHOLDER") {
+		t.Error("prompt still contains MESSAGES_DIR_PLACEHOLDER")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pollLoop integration-level tests
+// ---------------------------------------------------------------------------
+
+func TestPollLoop_ExitsOnCancelledContext(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel
+
+	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
+	run := runContext{agentID: "test-agent"}
+
+	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent")
+	if err != nil {
+		t.Fatalf("expected nil error from cancelled pollLoop, got: %v", err)
 	}
 }

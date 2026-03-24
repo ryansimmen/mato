@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -488,6 +489,365 @@ func TestReviewCandidates_FilesystemFallback_SkipsParseErrors(t *testing.T) {
 
 	if !strings.Contains(stderr, "warning:") {
 		t.Fatalf("expected parse warning in stderr, got:\n%s", stderr)
+	}
+}
+
+// setupGitCloneWithCommits creates a bare repo as "remote", clones it, and adds
+// a commit on the given task branch above the target branch. Returns the clone
+// directory. The caller can use this to test postAgentPush end-to-end.
+func setupGitCloneWithCommits(t *testing.T, targetBranch, taskBranch string) string {
+	t.Helper()
+	remoteDir := t.TempDir()
+	cloneDir := t.TempDir()
+
+	gitRun := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+
+	gitRun(remoteDir, "git", "init", "--bare", "-b", targetBranch)
+	gitRun(cloneDir, "git", "init", "-b", targetBranch)
+	gitRun(cloneDir, "git", "config", "user.name", "test")
+	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("initial"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "init")
+	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
+	gitRun(cloneDir, "git", "push", "origin", targetBranch)
+	gitRun(cloneDir, "git", "checkout", "-b", taskBranch)
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "task work")
+
+	return cloneDir
+}
+
+// readEventMessages reads all message JSON files from the messages/events/
+// directory and returns them as parsed Message structs.
+func readEventMessages(t *testing.T, tasksDir string) []messaging.Message {
+	t.Helper()
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("read events dir: %v", err)
+	}
+	var msgs []messaging.Message
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(eventsDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("read event file %s: %v", entry.Name(), err)
+		}
+		var msg messaging.Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue // skip malformed
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs
+}
+
+func TestPostAgentPush_HappyPath(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "happy-task.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Happy Task\n"), 0o644)
+
+	cloneDir := setupGitCloneWithCommits(t, "main", "task/happy-task")
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/happy-task",
+		Title:    "Happy Task",
+		TaskPath: inProgressPath,
+	}
+	env := envConfig{
+		tasksDir:     tasksDir,
+		targetBranch: "main",
+	}
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		err := postAgentPush(env, "agent1", claimed, cloneDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// Task should have moved to ready-for-review/.
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	if _, statErr := os.Stat(readyPath); statErr != nil {
+		t.Fatalf("task should be in ready-for-review/: %v", statErr)
+	}
+
+	// Task should no longer be in in-progress/.
+	if _, statErr := os.Stat(inProgressPath); !os.IsNotExist(statErr) {
+		t.Fatal("task should not remain in in-progress/ after successful push")
+	}
+
+	// Branch marker should be present in the moved file.
+	data, err := os.ReadFile(readyPath)
+	if err != nil {
+		t.Fatalf("read ready file: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- branch: task/happy-task -->") {
+		t.Fatalf("branch marker not found in moved file, got:\n%s", string(data))
+	}
+
+	// Stdout should report success.
+	if !strings.Contains(stdout, "Pushed task/happy-task") {
+		t.Fatalf("expected success message in stdout, got:\n%s", stdout)
+	}
+
+	// Verify conflict-warning and completion messages were emitted.
+	msgs := readEventMessages(t, tasksDir)
+	var hasConflictWarning, hasCompletion bool
+	for _, msg := range msgs {
+		if msg.Task != taskFile {
+			continue
+		}
+		switch msg.Type {
+		case "conflict-warning":
+			hasConflictWarning = true
+			if msg.From != "agent1" {
+				t.Fatalf("conflict-warning from should be agent1, got %q", msg.From)
+			}
+			if msg.Branch != "task/happy-task" {
+				t.Fatalf("conflict-warning branch should be task/happy-task, got %q", msg.Branch)
+			}
+			if len(msg.Files) == 0 {
+				t.Fatal("conflict-warning should include changed files")
+			}
+		case "completion":
+			hasCompletion = true
+			if msg.From != "agent1" {
+				t.Fatalf("completion from should be agent1, got %q", msg.From)
+			}
+			if msg.Branch != "task/happy-task" {
+				t.Fatalf("completion branch should be task/happy-task, got %q", msg.Branch)
+			}
+		}
+	}
+	if !hasConflictWarning {
+		t.Fatal("expected conflict-warning message to be written")
+	}
+	if !hasCompletion {
+		t.Fatal("expected completion message to be written")
+	}
+}
+
+func TestPostAgentPush_PushFailure(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "push-fail.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Push Fail\n"), 0o644)
+
+	// Set up a git repo with commits but NO remote, so push will fail.
+	cloneDir := t.TempDir()
+	gitRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = cloneDir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	gitRun("git", "init", "-b", "main")
+	gitRun("git", "config", "user.name", "test")
+	gitRun("git", "config", "user.email", "test@test.com")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	gitRun("git", "add", ".")
+	gitRun("git", "commit", "-m", "init")
+	gitRun("git", "checkout", "-b", "task/push-fail")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	gitRun("git", "add", ".")
+	gitRun("git", "commit", "-m", "task work")
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/push-fail",
+		Title:    "Push Fail",
+		TaskPath: inProgressPath,
+	}
+	env := envConfig{
+		tasksDir:     tasksDir,
+		targetBranch: "main",
+	}
+
+	err := postAgentPush(env, "agent1", claimed, cloneDir)
+
+	// Should return a push error.
+	if err == nil {
+		t.Fatal("expected error when push fails")
+	}
+	if !strings.Contains(err.Error(), "push task branch") {
+		t.Fatalf("error should mention push failure, got: %v", err)
+	}
+
+	// Task should remain in in-progress/ (no premature move).
+	if _, statErr := os.Stat(inProgressPath); statErr != nil {
+		t.Fatalf("task should remain in in-progress/ after push failure: %v", statErr)
+	}
+
+	// Task should NOT be in ready-for-review/.
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	if _, statErr := os.Stat(readyPath); !os.IsNotExist(statErr) {
+		t.Fatal("task should not appear in ready-for-review/ after push failure")
+	}
+
+	// No conflict-warning or completion messages should have been written.
+	msgs := readEventMessages(t, tasksDir)
+	for _, msg := range msgs {
+		if msg.Task == taskFile && (msg.Type == "conflict-warning" || msg.Type == "completion") {
+			t.Fatalf("no conflict-warning or completion messages should be written on push failure, found %q", msg.Type)
+		}
+	}
+}
+
+func TestPostAgentPush_MessagesContainChangedFiles(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "files-msg.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("# Files Msg\n"), 0o644)
+
+	// Set up repo with multiple changed files to verify file list.
+	remoteDir := t.TempDir()
+	cloneDir := t.TempDir()
+	gitRun := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	gitRun(remoteDir, "git", "init", "--bare", "-b", "main")
+	gitRun(cloneDir, "git", "init", "-b", "main")
+	gitRun(cloneDir, "git", "config", "user.name", "test")
+	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
+	os.WriteFile(filepath.Join(cloneDir, "a.go"), []byte("package a"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "init")
+	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
+	gitRun(cloneDir, "git", "push", "origin", "main")
+	gitRun(cloneDir, "git", "checkout", "-b", "task/files-msg")
+	os.WriteFile(filepath.Join(cloneDir, "a.go"), []byte("package a // changed"), 0o644)
+	os.WriteFile(filepath.Join(cloneDir, "b.go"), []byte("package b"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "multi-file change")
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/files-msg",
+		Title:    "Files Msg",
+		TaskPath: inProgressPath,
+	}
+	env := envConfig{
+		tasksDir:     tasksDir,
+		targetBranch: "main",
+	}
+
+	captureStdoutStderr(t, func() {
+		if err := postAgentPush(env, "agent1", claimed, cloneDir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// Both conflict-warning and completion messages should list the changed files.
+	msgs := readEventMessages(t, tasksDir)
+	for _, msg := range msgs {
+		if msg.Task != taskFile {
+			continue
+		}
+		if msg.Type == "conflict-warning" || msg.Type == "completion" {
+			foundA := false
+			foundB := false
+			for _, f := range msg.Files {
+				if f == "a.go" {
+					foundA = true
+				}
+				if f == "b.go" {
+					foundB = true
+				}
+			}
+			if !foundA || !foundB {
+				t.Fatalf("%s message should list both a.go and b.go, got %v", msg.Type, msg.Files)
+			}
+		}
+	}
+}
+
+func TestPostAgentPush_DestinationCollisionPreventsPush(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "collision.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("# Collision\n"), 0o644)
+
+	// Pre-create the destination file to trigger the pre-check collision.
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	os.WriteFile(readyPath, []byte("# Existing Review\n"), 0o644)
+
+	cloneDir := setupGitCloneWithCommits(t, "main", "task/collision")
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/collision",
+		Title:    "Collision",
+		TaskPath: inProgressPath,
+	}
+	env := envConfig{
+		tasksDir:     tasksDir,
+		targetBranch: "main",
+	}
+
+	_, stderr := captureStdoutStderr(t, func() {
+		err := postAgentPush(env, "agent1", claimed, cloneDir)
+		if err == nil {
+			t.Fatal("expected error when destination already exists")
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("error should mention destination collision, got: %v", err)
+		}
+	})
+
+	// Warning should be printed to stderr.
+	if !strings.Contains(stderr, "already exists in ready-for-review") {
+		t.Fatalf("expected collision warning in stderr, got:\n%s", stderr)
+	}
+
+	// The existing file in ready-for-review/ should be unchanged.
+	data, _ := os.ReadFile(readyPath)
+	if !strings.Contains(string(data), "Existing Review") {
+		t.Fatal("existing file in ready-for-review/ should not be overwritten")
+	}
+
+	// Task should still be in in-progress/.
+	if _, statErr := os.Stat(inProgressPath); statErr != nil {
+		t.Fatalf("task should remain in in-progress/: %v", statErr)
 	}
 }
 

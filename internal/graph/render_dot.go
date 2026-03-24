@@ -40,7 +40,7 @@ func RenderDOT(w io.Writer, data GraphData) {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "  // Nodes")
 		for _, node := range data.Nodes {
-			label := dotEscape(node.ID) + "\\npriority: " + fmt.Sprintf("%d", node.Priority) + "\\n(" + dotEscape(string(node.State))
+			label := node.ID + "\npriority: " + fmt.Sprintf("%d", node.Priority) + "\n(" + string(node.State)
 			if len(node.BlockDetails) > 0 {
 				label += ", blocked"
 			}
@@ -51,7 +51,7 @@ func RenderDOT(w io.Writer, data GraphData) {
 				color = "#FFFFFF"
 			}
 			fmt.Fprintf(w, "  %s [label=%s, fillcolor=%q];\n",
-				dotQuote(node.Key), dotQuote(label), color)
+				dotQuote(node.Key), dotQuoteLabel(label), color)
 		}
 	}
 
@@ -116,4 +116,12 @@ func dotEscape(s string) string {
 // escaping internal quotes and backslashes.
 func dotQuote(s string) string {
 	return `"` + dotEscape(s) + `"`
+}
+
+// dotQuoteLabel wraps a DOT label in double quotes, preserving newline escapes.
+func dotQuoteLabel(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	return `"` + s + `"`
 }

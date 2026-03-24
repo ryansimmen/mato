@@ -14,16 +14,17 @@ import (
 
 // StatusJSON is the top-level JSON output for the status command.
 type StatusJSON struct {
-	Counts       map[string]int    `json:"counts"`
-	MergeQueue   string            `json:"merge_queue"`
-	ActiveAgents []AgentJSON       `json:"active_agents"`
-	InProgress   []TaskSummaryJSON `json:"in_progress"`
-	Waiting      []WaitingTaskJSON `json:"waiting"`
-	ReadyReview  []TaskSummaryJSON `json:"ready_for_review"`
-	ReadyMerge   []TaskSummaryJSON `json:"ready_to_merge"`
-	Failed       []FailedTaskJSON  `json:"failed"`
-	Completions  []CompletionJSON  `json:"recent_completions"`
-	Messages     []MessageJSON     `json:"recent_messages"`
+	Counts          map[string]int    `json:"counts"`
+	MergeQueue      string            `json:"merge_queue"`
+	RunnableBacklog []TaskSummaryJSON `json:"runnable_backlog"`
+	ActiveAgents    []AgentJSON       `json:"active_agents"`
+	InProgress      []TaskSummaryJSON `json:"in_progress"`
+	Waiting         []WaitingTaskJSON `json:"waiting"`
+	ReadyReview     []TaskSummaryJSON `json:"ready_for_review"`
+	ReadyMerge      []TaskSummaryJSON `json:"ready_to_merge"`
+	Failed          []FailedTaskJSON  `json:"failed"`
+	Completions     []CompletionJSON  `json:"recent_completions"`
+	Messages        []MessageJSON     `json:"recent_messages"`
 }
 
 // AgentJSON represents an active agent in JSON output.
@@ -126,6 +127,16 @@ func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 	}
 	if data.mergeLockActive {
 		out.MergeQueue = "active"
+	}
+
+	// Runnable backlog in priority order.
+	out.RunnableBacklog = make([]TaskSummaryJSON, 0, len(data.runnableBacklog))
+	for _, task := range data.runnableBacklog {
+		out.RunnableBacklog = append(out.RunnableBacklog, TaskSummaryJSON{
+			Name:     task.name,
+			Title:    task.title,
+			Priority: task.priority,
+		})
 	}
 
 	// Active agents.

@@ -236,3 +236,52 @@ func AppendReviewFailure(path, agentID, reason string) error {
 		agentID, time.Now().UTC().Format(time.RFC3339), reason)
 	return atomicwrite.AppendToFile(path, content)
 }
+
+// terminalFailurePrefix is the marker prefix for terminal-failure records.
+var terminalFailurePrefix = "<!-- terminal-failure:"
+
+// AppendTerminalFailureRecord appends a <!-- terminal-failure: ... --> record
+// to the task file at path using O_APPEND. Terminal failures are written by
+// the host before automatically moving a task to failed/ (e.g. unparseable
+// frontmatter, invalid glob syntax, review retry exhaustion). They do not
+// consume the normal agent retry budget.
+func AppendTerminalFailureRecord(path, reason string) error {
+	reason = SanitizeCommentText(reason)
+	content := fmt.Sprintf("\n<!-- terminal-failure: mato at %s — %s -->\n",
+		time.Now().UTC().Format(time.RFC3339), reason)
+	return atomicwrite.AppendToFile(path, content)
+}
+
+// ContainsTerminalFailure reports whether data contains a
+// <!-- terminal-failure: ... --> marker.
+func ContainsTerminalFailure(data []byte) bool {
+	return strings.Contains(string(data), terminalFailurePrefix)
+}
+
+// CountTerminalFailureMarkers counts <!-- terminal-failure: ... --> lines in data.
+func CountTerminalFailureMarkers(data []byte) int {
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), terminalFailurePrefix) {
+			count++
+		}
+	}
+	return count
+}
+
+// LastTerminalFailureReason extracts the reason from the last
+// <!-- terminal-failure: ... --> comment in data. Returns "" if none found.
+func LastTerminalFailureReason(data []byte) string {
+	last := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, terminalFailurePrefix) {
+			continue
+		}
+		reason := failureReasonFromLine(trimmed)
+		if reason != "" {
+			last = reason
+		}
+	}
+	return last
+}

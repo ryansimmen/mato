@@ -112,6 +112,14 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	if !contains(output, "merge queue:    idle") {
 		t.Errorf("output should contain 'merge queue:    idle', got:\n%s", output)
 	}
+
+	// Verify runnable backlog section appears with the backlog task.
+	if !contains(output, "Runnable Backlog (execution order)") {
+		t.Errorf("output should contain runnable backlog section header, got:\n%s", output)
+	}
+	if !contains(output, "add-auth.md") {
+		t.Errorf("output should contain runnable backlog task 'add-auth.md', got:\n%s", output)
+	}
 }
 
 func TestActiveAgentsPIDColonStarttime(t *testing.T) {
@@ -872,6 +880,9 @@ func TestWatch(t *testing.T) {
 	if !contains(output, "\033[J") {
 		t.Errorf("Watch output should contain clear-to-end-of-screen (\\033[J)")
 	}
+	if !contains(output, "\033[K") {
+		t.Errorf("Watch output should contain clear-to-end-of-line (\\033[K) to prevent artifacts when lines shrink")
+	}
 }
 
 func TestFailedTaskRendering_CycleFailure(t *testing.T) {
@@ -982,10 +993,10 @@ func TestWatchTo_RedrawWriteError(t *testing.T) {
 
 // failAfterNWriter succeeds for the first n writes, then fails.
 type failAfterNWriter struct {
-	n      int
-	count  int
-	err    error
-	buf    bytes.Buffer
+	n     int
+	count int
+	err   error
+	buf   bytes.Buffer
 }
 
 func (w *failAfterNWriter) Write(p []byte) (int, error) {
@@ -1031,6 +1042,235 @@ func TestWatchTo_PartialRedrawFailure(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("WatchTo did not exit after partial write failure")
 	}
+}
+
+func TestWatchTo_ReturnsNilOnCancel(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Add a backlog task so ShowTo produces meaningful output.
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "ticker-test.md"), []byte("---\nid: ticker-test\n---\n# Ticker test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- WatchTo(ctx, &buf, repoRoot, tasksDir, 50*time.Millisecond)
+	}()
+
+	// Let WatchTo run for a few iterations.
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WatchTo should return nil on context cancellation, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WatchTo did not exit after context cancellation")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "backlog") {
+		t.Errorf("WatchTo output should contain 'backlog' from queue overview, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Ctrl+C") {
+		t.Errorf("WatchTo output should contain 'Ctrl+C' hint, got:\n%s", output)
+	}
+}
+
+func TestRunnableBacklogSection(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create backlog tasks with different priorities.
+	files := map[string]string{
+		filepath.Join(tasksDir, queue.DirBacklog, "alpha.md"): "---\nid: alpha\npriority: 30\n---\n# Alpha task\n",
+		filepath.Join(tasksDir, queue.DirBacklog, "beta.md"):  "---\nid: beta\npriority: 10\n---\n# Beta task\n",
+		filepath.Join(tasksDir, queue.DirBacklog, "gamma.md"): "---\nid: gamma\npriority: 20\n---\n# Gamma task\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+
+	output := captureShow(t, repoRoot)
+
+	if !contains(output, "Runnable Backlog (execution order)") {
+		t.Errorf("output should contain runnable backlog header, got:\n%s", output)
+	}
+
+	// Tasks should appear in priority order: beta (10), gamma (20), alpha (30).
+	betaIdx := strings.Index(output, "beta.md")
+	gammaIdx := strings.Index(output, "gamma.md")
+	alphaIdx := strings.Index(output, "alpha.md")
+	if betaIdx < 0 || gammaIdx < 0 || alphaIdx < 0 {
+		t.Fatalf("output should contain all backlog tasks, got:\n%s", output)
+	}
+	if betaIdx >= gammaIdx {
+		t.Errorf("beta (priority 10) should appear before gamma (priority 20), got:\n%s", output)
+	}
+	if gammaIdx >= alphaIdx {
+		t.Errorf("gamma (priority 20) should appear before alpha (priority 30), got:\n%s", output)
+	}
+
+	// Numbered entries.
+	if !contains(output, "1. beta.md") {
+		t.Errorf("output should show '1. beta.md', got:\n%s", output)
+	}
+}
+
+func TestRunnableBacklogExcludesDeferred(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create an in-progress task that claims "src/main.go".
+	inProgressContent := "<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: active-task\naffects:\n  - src/main.go\n---\n# Active task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "active-task.md"), []byte(inProgressContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Create backlog tasks: one overlaps with in-progress affects, one does not.
+	conflicting := "---\nid: conflict-task\npriority: 5\naffects:\n  - src/main.go\n---\n# Conflicting task\n"
+	runnable := "---\nid: runnable-task\npriority: 10\naffects:\n  - src/other.go\n---\n# Runnable task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "conflict-task.md"), []byte(conflicting), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable-task.md"), []byte(runnable), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	output := captureShow(t, repoRoot)
+
+	// Runnable backlog should NOT contain the deferred (conflicting) task.
+	runnableSection := extractSection(output, "Runnable Backlog", "Active Agents")
+	if strings.Contains(runnableSection, "conflict-task.md") {
+		t.Errorf("runnable backlog should NOT contain deferred task, got:\n%s", runnableSection)
+	}
+	if !strings.Contains(runnableSection, "runnable-task.md") {
+		t.Errorf("runnable backlog should contain runnable task, got:\n%s", runnableSection)
+	}
+
+	// The deferred section should contain the conflicting task.
+	if !contains(output, "Conflict-Deferred") {
+		t.Errorf("output should show conflict-deferred section, got:\n%s", output)
+	}
+}
+
+func TestRunnableBacklogEmpty(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	output := captureShow(t, repoRoot)
+
+	if !contains(output, "Runnable Backlog (execution order)") {
+		t.Errorf("output should contain runnable backlog header even when empty, got:\n%s", output)
+	}
+	runnableSection := extractSection(output, "Runnable Backlog", "Active Agents")
+	if !strings.Contains(runnableSection, "(none)") {
+		t.Errorf("empty runnable backlog should show (none), got:\n%s", runnableSection)
+	}
+}
+
+func TestRunnableBacklogJSON_Ordering(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create backlog tasks with different priorities.
+	files := map[string]string{
+		filepath.Join(tasksDir, queue.DirBacklog, "z-task.md"): "---\nid: z-task\npriority: 5\n---\n# Z task\n",
+		filepath.Join(tasksDir, queue.DirBacklog, "a-task.md"): "---\nid: a-task\npriority: 5\n---\n# A task\n",
+		filepath.Join(tasksDir, queue.DirBacklog, "m-task.md"): "---\nid: m-task\npriority: 1\n---\n# M task\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+
+	// Should have 3 runnable backlog entries.
+	if len(result.RunnableBacklog) != 3 {
+		t.Fatalf("expected 3 runnable backlog tasks, got %d", len(result.RunnableBacklog))
+	}
+
+	// Order: m-task (priority 1), a-task (priority 5, alpha first), z-task (priority 5).
+	if result.RunnableBacklog[0].Name != "m-task.md" {
+		t.Errorf("expected first task 'm-task.md', got %q", result.RunnableBacklog[0].Name)
+	}
+	if result.RunnableBacklog[1].Name != "a-task.md" {
+		t.Errorf("expected second task 'a-task.md', got %q", result.RunnableBacklog[1].Name)
+	}
+	if result.RunnableBacklog[2].Name != "z-task.md" {
+		t.Errorf("expected third task 'z-task.md', got %q", result.RunnableBacklog[2].Name)
+	}
+}
+
+// extractSection returns the text between two section headers in the output.
+func extractSection(output, startHeader, endHeader string) string {
+	startIdx := strings.Index(output, startHeader)
+	if startIdx < 0 {
+		return ""
+	}
+	rest := output[startIdx:]
+	endIdx := strings.Index(rest, endHeader)
+	if endIdx < 0 {
+		return rest
+	}
+	return rest[:endIdx]
 }
 
 func TestShowJSON_ValidOutput(t *testing.T) {
@@ -1142,6 +1382,20 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 	if result.Failed[0].MaxRetries != 2 {
 		t.Errorf("expected max_retries 2, got %d", result.Failed[0].MaxRetries)
 	}
+
+	// Verify runnable backlog.
+	if len(result.RunnableBacklog) != 1 {
+		t.Fatalf("expected 1 runnable backlog task, got %d", len(result.RunnableBacklog))
+	}
+	if result.RunnableBacklog[0].Name != "add-auth.md" {
+		t.Errorf("expected runnable backlog task 'add-auth.md', got %q", result.RunnableBacklog[0].Name)
+	}
+	if result.RunnableBacklog[0].Title != "Add authentication" {
+		t.Errorf("expected title 'Add authentication', got %q", result.RunnableBacklog[0].Title)
+	}
+	if result.RunnableBacklog[0].Priority != 10 {
+		t.Errorf("expected priority 10, got %d", result.RunnableBacklog[0].Priority)
+	}
 }
 
 func TestShowJSON_EmptyTasksDir(t *testing.T) {
@@ -1178,5 +1432,83 @@ func TestShowJSON_EmptyTasksDir(t *testing.T) {
 	}
 	if result.Counts["in_progress"] != 0 {
 		t.Errorf("expected in_progress count 0, got %d", result.Counts["in_progress"])
+	}
+	if len(result.RunnableBacklog) != 0 {
+		t.Errorf("expected 0 runnable backlog tasks, got %d", len(result.RunnableBacklog))
+	}
+}
+
+func TestShowJSON_WriterError(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeErr := errors.New("disk full")
+	fw := &failWriter{err: writeErr}
+
+	err := ShowJSON(fw, repoRoot, "")
+	if err == nil {
+		t.Fatal("ShowJSON should return an error when the writer fails")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Errorf("ShowJSON error should wrap the write error, got: %v", err)
+	}
+}
+
+func TestShowJSON_FailedLastReason(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Two failure records — last_reason should be from the most recent one.
+	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=tests failed files_changed=none -->\n" +
+		"<!-- failure: agent-2 at 2026-01-01T00:02:00Z step=COMMIT error=merge conflict files_changed=api.go -->\n" +
+		"---\nid: broken-task\nmax_retries: 3\n---\n# A broken task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "broken-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(result.Failed))
+	}
+	ft := result.Failed[0]
+	if ft.Name != "broken-task.md" {
+		t.Errorf("expected name 'broken-task.md', got %q", ft.Name)
+	}
+	if ft.Title != "A broken task" {
+		t.Errorf("expected title 'A broken task', got %q", ft.Title)
+	}
+	if ft.FailCount != 2 {
+		t.Errorf("expected fail_count 2, got %d", ft.FailCount)
+	}
+	if ft.MaxRetries != 3 {
+		t.Errorf("expected max_retries 3, got %d", ft.MaxRetries)
+	}
+	if ft.LastReason != "merge conflict" {
+		t.Errorf("expected last_reason 'merge conflict', got %q", ft.LastReason)
 	}
 }

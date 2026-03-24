@@ -899,3 +899,73 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 		t.Fatalf("hello.txt on mato = %q, want %q", got, "hello world")
 	}
 }
+
+// TestPromptProgressMessagesAreDistinct verifies that the VERIFY_CLAIM, WORK,
+// and COMMIT state blocks each produce a progress message with a distinct
+// filename so that messages are never overwritten even when all three states
+// run in the same second.
+func TestPromptProgressMessagesAreDistinct(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirInProgress, "progress-test.md",
+		"<!-- claimed-by: test-progress  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"# Progress Test\nTest progress messages.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+
+	// Run the messaging snippets from all three state blocks back-to-back.
+	// Extract just the message-writing portions of each state block.
+	script := strings.Join([]string{
+		promptPreamble(t),
+		`FILENAME="progress-test.md"`,
+		`BRANCH="task/progress-test"`,
+		`TASK_TITLE="Progress Test"`,
+		`TASK_PATH="` + filepath.Join(cloneTasksDir, queue.DirInProgress, "progress-test.md") + `"`,
+		promptStateBlock(t, "VERIFY_CLAIM"),
+		promptStateBlock(t, "WORK"),
+		// Create a file to stage so the COMMIT block's git commit succeeds.
+		`echo "progress test" > progress-file.txt`,
+		promptStateBlock(t, "COMMIT"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	mustGitOutput(t, cloneDir, "checkout", "-b", "task/progress-test")
+
+	env := []string{
+		"MATO_AGENT_ID=test-progress",
+		"MATO_TASK_FILE=progress-test.md",
+		"MATO_TASK_BRANCH=task/progress-test",
+		"MATO_TASK_TITLE=Progress Test",
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirInProgress, "progress-test.md"),
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash progress: %v\noutput:\n%s", err, out)
+	}
+
+	// Read all messages from the agent and verify we got exactly 3 distinct
+	// progress messages — one for each state.
+	msgs := readPromptEventMessages(t, tasksDir)
+	progressBodies := make(map[string]string) // body → filename
+	for _, msg := range msgs {
+		if msg.Type != "progress" || msg.From != "test-progress" {
+			continue
+		}
+		if prev, ok := progressBodies[msg.Body]; ok {
+			t.Fatalf("duplicate progress body %q: %s and %s", msg.Body, prev, msg.ID)
+		}
+		progressBodies[msg.Body] = msg.ID
+	}
+
+	for _, expected := range []string{"VERIFY_CLAIM", "WORK", "COMMIT"} {
+		key := "Step: " + expected
+		if _, ok := progressBodies[key]; !ok {
+			t.Fatalf("missing progress message for %s; got bodies: %v", expected, progressBodies)
+		}
+	}
+
+	if len(progressBodies) != 3 {
+		t.Fatalf("expected 3 distinct progress messages, got %d: %v", len(progressBodies), progressBodies)
+	}
+}

@@ -872,3 +872,172 @@ func TestConcurrentSelectAndClaimTask(t *testing.T) {
 			numGoroutines, len(inProgress), inProgress)
 	}
 }
+
+// TestOverlapDeferralAndFileClaims verifies that the overlap logic in
+// internal/queue defers overlapping tasks from the runnable set and that
+// BuildAndWriteFileClaims produces advisory claims consistent with the
+// active tasks. The two mechanisms are independent: queue deferral is NOT
+// driven by file-claims.json, but their outputs should be coherent.
+func TestOverlapDeferralAndFileClaims(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// ── Scenario 1: exact-path overlap ───────────────────────────────────
+	// task-A and task-B both affect src/api.go.
+	writeTask(t, tasksDir, queue.DirBacklog, "task-a.md",
+		"---\npriority: 5\naffects: [src/api.go]\n---\n# Task A\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "task-b.md",
+		"---\npriority: 20\naffects: [src/api.go]\n---\n# Task B\n")
+
+	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+	if _, ok := deferred["task-b.md"]; !ok {
+		t.Fatalf("task-b.md should be deferred (overlap on src/api.go): deferred=%v", deferred)
+	}
+	if _, ok := deferred["task-a.md"]; ok {
+		t.Fatalf("task-a.md should NOT be deferred (higher priority): deferred=%v", deferred)
+	}
+
+	// Simulate task-A being claimed → move to in-progress with claimed-by header.
+	mustRename(t,
+		filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"),
+		filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"))
+	os.WriteFile(
+		filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"),
+		[]byte("<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: 5\naffects: [src/api.go]\n---\n# Task A\n"),
+		0o644)
+
+	// Build file-claims.json; verify the advisory claim for src/api.go.
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+	claims := readFileClaims(t, tasksDir)
+	if c, ok := claims["src/api.go"]; !ok {
+		t.Fatal("file-claims.json missing entry for src/api.go")
+	} else if c.Task != "task-a.md" {
+		t.Fatalf("src/api.go claim task = %q, want task-a.md", c.Task)
+	} else if c.Status != queue.DirInProgress {
+		t.Fatalf("src/api.go claim status = %q, want %q", c.Status, queue.DirInProgress)
+	}
+
+	// task-B should still be deferred (task-A active in in-progress).
+	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	if _, ok := deferred["task-b.md"]; !ok {
+		t.Fatalf("task-b.md should be deferred while task-a is in-progress: deferred=%v", deferred)
+	}
+
+	// Complete task-A → move to completed.
+	mustRename(t,
+		filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"),
+		filepath.Join(tasksDir, queue.DirCompleted, "task-a.md"))
+
+	// Rebuild deferred set and file claims.
+	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	if _, ok := deferred["task-b.md"]; ok {
+		t.Fatalf("task-b.md should no longer be deferred after task-a completed: deferred=%v", deferred)
+	}
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims after completion: %v", err)
+	}
+	claims = readFileClaims(t, tasksDir)
+	if _, ok := claims["src/api.go"]; ok {
+		t.Fatal("src/api.go should not appear in file-claims.json after task-a completed")
+	}
+
+	// Clean up for next scenario.
+	os.Remove(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"))
+	os.Remove(filepath.Join(tasksDir, queue.DirCompleted, "task-a.md"))
+
+	// ── Scenario 2: glob pattern overlap ─────────────────────────────────
+	// task-C affects internal/runner/*.go, task-D affects internal/runner/review.go.
+	writeTask(t, tasksDir, queue.DirBacklog, "task-c.md",
+		"---\npriority: 5\naffects: [\"internal/runner/*.go\"]\n---\n# Task C\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "task-d.md",
+		"---\npriority: 20\naffects: [internal/runner/review.go]\n---\n# Task D\n")
+
+	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	if _, ok := deferred["task-d.md"]; !ok {
+		t.Fatalf("task-d.md should be deferred (glob overlap with task-c): deferred=%v", deferred)
+	}
+	if _, ok := deferred["task-c.md"]; ok {
+		t.Fatalf("task-c.md should NOT be deferred: deferred=%v", deferred)
+	}
+
+	// Clean up for next scenario.
+	os.Remove(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"))
+	os.Remove(filepath.Join(tasksDir, queue.DirBacklog, "task-d.md"))
+
+	// ── Scenario 3: directory prefix overlap ─────────────────────────────
+	// task-E affects pkg/client/, task-F affects pkg/client/http.go.
+	writeTask(t, tasksDir, queue.DirBacklog, "task-e.md",
+		"---\npriority: 5\naffects: [\"pkg/client/\"]\n---\n# Task E\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "task-f.md",
+		"---\npriority: 20\naffects: [pkg/client/http.go]\n---\n# Task F\n")
+
+	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	if _, ok := deferred["task-f.md"]; !ok {
+		t.Fatalf("task-f.md should be deferred (directory prefix overlap with task-e): deferred=%v", deferred)
+	}
+	if _, ok := deferred["task-e.md"]; ok {
+		t.Fatalf("task-e.md should NOT be deferred: deferred=%v", deferred)
+	}
+
+	// Verify file-claims picks up the directory prefix claim when task-E is active.
+	mustRename(t,
+		filepath.Join(tasksDir, queue.DirBacklog, "task-e.md"),
+		filepath.Join(tasksDir, queue.DirInProgress, "task-e.md"))
+	os.WriteFile(
+		filepath.Join(tasksDir, queue.DirInProgress, "task-e.md"),
+		[]byte("<!-- claimed-by: agent-3  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: 5\naffects: [\"pkg/client/\"]\n---\n# Task E\n"),
+		0o644)
+
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("BuildAndWriteFileClaims dir prefix: %v", err)
+	}
+	claims = readFileClaims(t, tasksDir)
+	if c, ok := claims["pkg/client/"]; !ok {
+		t.Fatal("file-claims.json missing directory prefix entry for pkg/client/")
+	} else if c.Task != "task-e.md" {
+		t.Fatalf("pkg/client/ claim task = %q, want task-e.md", c.Task)
+	}
+
+	// Clean up for next scenario.
+	os.Remove(filepath.Join(tasksDir, queue.DirInProgress, "task-e.md"))
+	os.Remove(filepath.Join(tasksDir, queue.DirBacklog, "task-f.md"))
+
+	// ── Scenario 4: no overlap — both tasks remain runnable ──────────────
+	writeTask(t, tasksDir, queue.DirBacklog, "task-g.md",
+		"---\npriority: 5\naffects: [src/api.go]\n---\n# Task G\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "task-h.md",
+		"---\npriority: 20\naffects: [src/db.go]\n---\n# Task H\n")
+
+	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	if _, ok := deferred["task-g.md"]; ok {
+		t.Fatalf("task-g.md should NOT be deferred: deferred=%v", deferred)
+	}
+	if _, ok := deferred["task-h.md"]; ok {
+		t.Fatalf("task-h.md should NOT be deferred: deferred=%v", deferred)
+	}
+
+	// Queue manifest should include both tasks.
+	if err := queue.WriteQueueManifest(tasksDir, deferred, nil); err != nil {
+		t.Fatalf("WriteQueueManifest: %v", err)
+	}
+	manifest := readFile(t, filepath.Join(tasksDir, ".queue"))
+	if !strings.Contains(manifest, "task-g.md") || !strings.Contains(manifest, "task-h.md") {
+		t.Fatalf("queue manifest should contain both tasks: %q", manifest)
+	}
+}
+
+// readFileClaims reads and parses .tasks/messages/file-claims.json.
+func readFileClaims(t *testing.T, tasksDir string) map[string]messaging.FileClaim {
+	t.Helper()
+	path := filepath.Join(tasksDir, "messages", "file-claims.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file-claims.json: %v", err)
+	}
+	var claims map[string]messaging.FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("parse file-claims.json: %v", err)
+	}
+	return claims
+}

@@ -39,6 +39,10 @@ func IsFailedDirUnavailable(err error) bool {
 	return errors.Is(err, errFailedDirUnavailable)
 }
 
+// defaultRetryCooldown is the default time to wait after a task failure before
+// the task becomes eligible for claiming again.
+const defaultRetryCooldown = 2 * time.Minute
+
 // Testing hooks for the claim path. Default to real implementations.
 // Tests can override these to inject failures without filesystem permission
 // tricks.
@@ -47,6 +51,7 @@ var (
 	claimRollbackFn        = AtomicMove
 	retryExhaustedMoveFn   = AtomicMove
 	retryExhaustedRollback = AtomicMove
+	timeNowFn              = time.Now
 )
 
 // ClaimedTask holds the pre-resolved metadata for a task claimed on the host
@@ -224,6 +229,21 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 			}
 		}
 
+		// Skip tasks that failed recently (within cooldown window) to
+		// prevent rapid retry churn after immediate agent crashes. Tasks that
+		// already exhausted their retry budget should still move straight to
+		// failed/ without waiting for cooldown.
+		if failures > 0 && failures < maxRetries {
+			rawData, readErr := os.ReadFile(src)
+			if readErr == nil {
+				if lastFail, ok := lastFailureTime(rawData); ok {
+					if timeNowFn().Sub(lastFail) < retryCooldown() {
+						continue
+					}
+				}
+			}
+		}
+
 		if err := AtomicMove(src, dst); err != nil {
 			// Another agent may have claimed it, or the destination
 			// already exists (EEXIST). Skip to the next candidate.
@@ -378,4 +398,49 @@ func CountReviewFailureLines(taskPath string) (int, error) {
 		return 0, fmt.Errorf("count review failure lines: %w", err)
 	}
 	return taskfile.CountReviewFailureMarkers(data), nil
+}
+
+// retryCooldown returns the configured retry cooldown duration from the
+// MATO_RETRY_COOLDOWN environment variable, defaulting to defaultRetryCooldown
+// (2 minutes). Invalid or non-positive values are silently ignored.
+func retryCooldown() time.Duration {
+	if v := os.Getenv("MATO_RETRY_COOLDOWN"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultRetryCooldown
+}
+
+// lastFailureTime extracts the timestamp from the most recent
+// <!-- failure: ... --> comment in the given data. Returns the zero time
+// and false if no failure comment with a valid timestamp is found.
+// Lines starting with <!-- review-failure: are excluded.
+func lastFailureTime(data []byte) (time.Time, bool) {
+	var last time.Time
+	found := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "<!-- failure:") || strings.HasPrefix(trimmed, "<!-- review-failure:") {
+			continue
+		}
+		// Format: <!-- failure: AGENTID at 2026-01-01T00:00:00Z step=... -->
+		idx := strings.Index(trimmed, " at ")
+		if idx < 0 {
+			continue
+		}
+		rest := trimmed[idx+4:]
+		spaceIdx := strings.Index(rest, " ")
+		if spaceIdx < 0 {
+			continue
+		}
+		ts := rest[:spaceIdx]
+		t, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			continue
+		}
+		last = t
+		found = true
+	}
+	return last, found
 }

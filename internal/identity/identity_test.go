@@ -53,6 +53,27 @@ func TestIsAgentActive_EmptyAgentID(t *testing.T) {
 	}
 }
 
+func TestIsAgentActive_RejectsAgentIDWithPathSeparator(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(filepath.Join(locksDir, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(locksDir, "nested", "agent.pid"), []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "escape.pid"), []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, agentID := range []string{"nested/agent", "../escape"} {
+		if IsAgentActive(tasksDir, agentID) {
+			t.Fatalf("expected false for agent ID with path separator %q", agentID)
+		}
+	}
+}
+
 func TestIsAgentActive_LiveProcess(t *testing.T) {
 	tasksDir := t.TempDir()
 	locksDir := filepath.Join(tasksDir, ".locks")

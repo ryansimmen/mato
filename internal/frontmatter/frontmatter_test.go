@@ -129,9 +129,9 @@ func TestParseTaskFile_EmptyFrontmatter(t *testing.T) {
 	}
 }
 
-func TestParseTaskFile_StripsHTMLCommentLines(t *testing.T) {
+func TestParseTaskFile_StripsOnlyManagedCommentLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commented-task.md")
-	content := "<!-- claimed-by: abc -->\n# Title\n<!-- failure: x -->\nBody text\n"
+	content := "<!-- claimed-by: abc -->\n# Title\n<!-- failure: x -->\n<!-- This is a user note -->\nBody text\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
@@ -141,8 +141,53 @@ func TestParseTaskFile_StripsHTMLCommentLines(t *testing.T) {
 		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
-	if body != "# Title\nBody text\n" {
-		t.Fatalf("body = %q, want %q", body, "# Title\nBody text\n")
+	want := "# Title\n<!-- This is a user note -->\nBody text\n"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestParseTaskFile_PreservesNonManagedHTMLComments(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "user HTML comment preserved",
+			content: "# Title\n<!-- TODO: fix later -->\nBody\n",
+			want:    "# Title\n<!-- TODO: fix later -->\nBody\n",
+		},
+		{
+			name:    "example comment in instructions preserved",
+			content: "# Title\nUse `<!-- failure: ... -->` to record failures.\n<!-- An example comment -->\n",
+			want:    "# Title\nUse `<!-- failure: ... -->` to record failures.\n<!-- An example comment -->\n",
+		},
+		{
+			name:    "managed markers still stripped",
+			content: "<!-- branch: task/foo -->\n# Title\n<!-- review-failure: x at T step=REVIEW error=e -->\n<!-- reviewed: x at T — approved -->\n<!-- cycle-failure: mato at T — circular dependency -->\n<!-- terminal-failure: mato at T — reason -->\n<!-- merged: merge-queue at T -->\n<!-- review-rejection: x at T — feedback -->\nBody\n",
+			want:    "# Title\nBody\n",
+		},
+		{
+			name:    "mixed managed and non-managed",
+			content: "<!-- failure: agent at T step=WORK error=e -->\n# Title\n<!-- user note -->\n<!-- branch: task/bar -->\nBody\n",
+			want:    "# Title\n<!-- user note -->\nBody\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "test-task.md")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("os.WriteFile: %v", err)
+			}
+			_, body, err := ParseTaskFile(path)
+			if err != nil {
+				t.Fatalf("ParseTaskFile: %v", err)
+			}
+			if body != tt.want {
+				t.Fatalf("body = %q, want %q", body, tt.want)
+			}
+		})
 	}
 }
 
@@ -569,6 +614,36 @@ func TestExtractTitle(t *testing.T) {
 			body:     "###\nActual content",
 			want:     "Actual content",
 		},
+		{
+			name:     "skips leading HTML comment",
+			filename: "task.md",
+			body:     "<!-- some user comment -->\n# Real Title\nBody.",
+			want:     "Real Title",
+		},
+		{
+			name:     "skips multiple leading HTML comments",
+			filename: "task.md",
+			body:     "<!-- comment one -->\n<!-- comment two -->\n# Actual Title",
+			want:     "Actual Title",
+		},
+		{
+			name:     "skips HTML comments and blank lines",
+			filename: "task.md",
+			body:     "<!-- note -->\n\n<!-- another -->\n\nPlain text title",
+			want:     "Plain text title",
+		},
+		{
+			name:     "only HTML comments falls back to filename",
+			filename: "only-comments.md",
+			body:     "<!-- just a comment -->\n<!-- another -->",
+			want:     "only-comments",
+		},
+		{
+			name:     "partial HTML comment is not skipped",
+			filename: "task.md",
+			body:     "<!-- unterminated comment\n# Heading",
+			want:     "<!-- unterminated comment",
+		},
 	}
 
 	for _, tt := range tests {
@@ -700,34 +775,44 @@ func TestValidateAffectsGlobs_ValidEntries(t *testing.T) {
 
 func TestParseTaskData_AffectsPathTraversal(t *testing.T) {
 	tests := []struct {
-		name        string
-		affects     string
-		wantAffects []string
+		name             string
+		affects          string
+		wantAffects      []string
+		wantStrippedLen  int
+		wantStrippedReason string
 	}{
 		{
-			name:        "dotdot escape",
-			affects:     "../../etc/passwd",
-			wantAffects: nil,
+			name:               "dotdot escape",
+			affects:            "../../etc/passwd",
+			wantAffects:        nil,
+			wantStrippedLen:    1,
+			wantStrippedReason: "path traversal",
 		},
 		{
-			name:        "absolute path",
-			affects:     "/absolute/path",
-			wantAffects: nil,
+			name:               "absolute path",
+			affects:            "/absolute/path",
+			wantAffects:        nil,
+			wantStrippedLen:    1,
+			wantStrippedReason: "absolute path",
 		},
 		{
-			name:        "sibling traversal",
-			affects:     "../sibling/file.go",
-			wantAffects: nil,
+			name:               "sibling traversal",
+			affects:            "../sibling/file.go",
+			wantAffects:        nil,
+			wantStrippedLen:    1,
+			wantStrippedReason: "path traversal",
 		},
 		{
-			name:        "internal dotdot cleaned",
-			affects:     "internal/../internal/foo.go",
-			wantAffects: []string{"internal/foo.go"},
+			name:            "internal dotdot cleaned",
+			affects:         "internal/../internal/foo.go",
+			wantAffects:     []string{"internal/foo.go"},
+			wantStrippedLen: 0,
 		},
 		{
-			name:        "normal path unchanged",
-			affects:     "src/main.go",
-			wantAffects: []string{"src/main.go"},
+			name:            "normal path unchanged",
+			affects:         "src/main.go",
+			wantAffects:     []string{"src/main.go"},
+			wantStrippedLen: 0,
 		},
 	}
 	for _, tt := range tests {
@@ -739,6 +824,17 @@ func TestParseTaskData_AffectsPathTraversal(t *testing.T) {
 			}
 			if !reflect.DeepEqual(meta.Affects, tt.wantAffects) {
 				t.Fatalf("Affects = %v, want %v", meta.Affects, tt.wantAffects)
+			}
+			if len(meta.StrippedAffects) != tt.wantStrippedLen {
+				t.Fatalf("StrippedAffects len = %d, want %d", len(meta.StrippedAffects), tt.wantStrippedLen)
+			}
+			if tt.wantStrippedLen > 0 {
+				if meta.StrippedAffects[0].Entry != tt.affects {
+					t.Errorf("StrippedAffects[0].Entry = %q, want %q", meta.StrippedAffects[0].Entry, tt.affects)
+				}
+				if meta.StrippedAffects[0].Reason != tt.wantStrippedReason {
+					t.Errorf("StrippedAffects[0].Reason = %q, want %q", meta.StrippedAffects[0].Reason, tt.wantStrippedReason)
+				}
 			}
 		})
 	}
@@ -761,6 +857,15 @@ Body.
 	want := []string{"src/main.go", "internal/foo.go"}
 	if !reflect.DeepEqual(meta.Affects, want) {
 		t.Fatalf("Affects = %v, want %v", meta.Affects, want)
+	}
+	if len(meta.StrippedAffects) != 2 {
+		t.Fatalf("StrippedAffects len = %d, want 2", len(meta.StrippedAffects))
+	}
+	if meta.StrippedAffects[0].Reason != "path traversal" {
+		t.Errorf("StrippedAffects[0].Reason = %q, want %q", meta.StrippedAffects[0].Reason, "path traversal")
+	}
+	if meta.StrippedAffects[1].Reason != "absolute path" {
+		t.Errorf("StrippedAffects[1].Reason = %q, want %q", meta.StrippedAffects[1].Reason, "absolute path")
 	}
 }
 
@@ -822,5 +927,27 @@ Body.
 	}
 	if meta.MaxRetries != 0 {
 		t.Fatalf("MaxRetries = %d, want 0", meta.MaxRetries)
+	}
+}
+
+func TestParseTaskData_StrippedAffectsNilWhenSafe(t *testing.T) {
+	content := "---\naffects:\n  - src/main.go\n  - internal/foo.go\n---\nBody.\n"
+	meta, _, err := ParseTaskData([]byte(content), "safe-test.md")
+	if err != nil {
+		t.Fatalf("ParseTaskData returned error: %v", err)
+	}
+	if meta.StrippedAffects != nil {
+		t.Fatalf("StrippedAffects = %v, want nil for safe entries", meta.StrippedAffects)
+	}
+}
+
+func TestParseTaskData_StrippedAffectsNilWithNoFrontmatter(t *testing.T) {
+	content := "# Simple task\nDo something.\n"
+	meta, _, err := ParseTaskData([]byte(content), "no-fm.md")
+	if err != nil {
+		t.Fatalf("ParseTaskData returned error: %v", err)
+	}
+	if meta.StrippedAffects != nil {
+		t.Fatalf("StrippedAffects = %v, want nil for no-frontmatter task", meta.StrippedAffects)
 	}
 }

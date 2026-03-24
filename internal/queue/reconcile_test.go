@@ -418,3 +418,188 @@ func TestReconcileReadyQueue_MultiplePromotions(t *testing.T) {
 		}
 	}
 }
+
+func TestReconcileReadyQueue_ParseFailureHasTerminalMarker(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirWaiting, "bad-yaml.md",
+		"---\nbad: [unclosed\n---\n# Bad YAML\n")
+
+	ReconcileReadyQueue(tasksDir, nil)
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-yaml.md"))
+	if err != nil {
+		t.Fatalf("bad-yaml.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-yaml.md in failed/ should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "unparseable frontmatter") {
+		t.Error("terminal-failure marker should mention unparseable frontmatter")
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobHasTerminalMarker(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "bad-glob.md",
+		"---\nid: bad-glob\naffects:\n  - \"[invalid\"\n---\n# Bad glob\n")
+
+	ReconcileReadyQueue(tasksDir, nil)
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-glob.md"))
+	if err != nil {
+		t.Fatalf("bad-glob.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-glob.md in failed/ should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "invalid glob syntax") {
+		t.Error("terminal-failure marker should mention invalid glob syntax")
+	}
+}
+
+func TestReconcileReadyQueue_WaitingInvalidGlobHasTerminalMarker(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// A waiting task with satisfied deps but invalid glob — quarantined during
+	// the promotion pass rather than the backlog scan.
+	writeTask(t, tasksDir, DirCompleted, "dep.md",
+		"---\nid: dep\n---\n# Dep\n")
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-wait.md",
+		"---\nid: bad-glob-wait\ndepends_on: [dep]\naffects:\n  - \"[invalid\"\n---\n# Bad glob waiting\n")
+
+	ReconcileReadyQueue(tasksDir, nil)
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-glob-wait.md"))
+	if err != nil {
+		t.Fatalf("bad-glob-wait.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-glob-wait.md in failed/ should contain terminal-failure marker")
+	}
+}
+
+func TestReconcileReadyQueue_DuplicateIDMovedToFailed(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// Two waiting files with the same ID — second should be failed.
+	writeTask(t, tasksDir, DirWaiting, "aaa-first.md",
+		"---\nid: shared\n---\n# First\n")
+	writeTask(t, tasksDir, DirWaiting, "bbb-second.md",
+		"---\nid: shared\n---\n# Second\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	// The retained copy (aaa-first.md, first by filename sort) should be promoted.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "aaa-first.md")); err != nil {
+		t.Fatalf("aaa-first.md not found in backlog/: %v", err)
+	}
+
+	// The duplicate (bbb-second.md) should be in failed/.
+	failedPath := filepath.Join(tasksDir, DirFailed, "bbb-second.md")
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("bbb-second.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bbb-second.md in failed/ should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "duplicate waiting task ID") {
+		t.Error("terminal-failure marker should mention duplicate waiting task ID")
+	}
+}
+
+func TestReconcileReadyQueue_DuplicateIDThreeCopies(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// Three waiting files with the same ID — first retained, others failed.
+	writeTask(t, tasksDir, DirWaiting, "aaa.md", "---\nid: dup3\n---\n# A\n")
+	writeTask(t, tasksDir, DirWaiting, "bbb.md", "---\nid: dup3\n---\n# B\n")
+	writeTask(t, tasksDir, DirWaiting, "ccc.md", "---\nid: dup3\n---\n# C\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	// Retained copy promoted to backlog/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "aaa.md")); err != nil {
+		t.Fatalf("aaa.md not found in backlog/: %v", err)
+	}
+
+	// Both duplicates should be in failed/.
+	for _, name := range []string{"bbb.md", "ccc.md"} {
+		data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, name))
+		if err != nil {
+			t.Fatalf("%s not found in failed/: %v", name, err)
+		}
+		if !taskfile.ContainsTerminalFailure(data) {
+			t.Errorf("%s should have terminal-failure marker", name)
+		}
+	}
+}
+
+func TestReconcileReadyQueue_DuplicateIDIdempotency(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirWaiting, "aaa.md", "---\nid: idem\n---\n# A\n")
+	writeTask(t, tasksDir, DirWaiting, "bbb.md", "---\nid: idem\n---\n# B\n")
+
+	ReconcileReadyQueue(tasksDir, nil)
+
+	// Capture content of the failed duplicate after first pass.
+	dataBefore, _ := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bbb.md"))
+
+	// Second pass should not change anything.
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if moved {
+		t.Fatalf("second pass moved = %v, want false", moved)
+	}
+
+	dataAfter, _ := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bbb.md"))
+	if string(dataBefore) != string(dataAfter) {
+		t.Error("bbb.md content changed after second reconcile pass")
+	}
+}
+
+func TestReconcileReadyQueue_DuplicateWithDepsInteraction(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// Completed dependency.
+	writeTask(t, tasksDir, DirCompleted, "dep.md",
+		"---\nid: dep\n---\n# Dep\n")
+
+	// Two waiting files with the same ID, both depending on dep.
+	writeTask(t, tasksDir, DirWaiting, "aaa.md",
+		"---\nid: dup-dep\ndepends_on: [dep]\n---\n# A\n")
+	writeTask(t, tasksDir, DirWaiting, "bbb.md",
+		"---\nid: dup-dep\ndepends_on: [dep]\n---\n# B\n")
+
+	// Also a non-duplicate waiting task that should be promoted.
+	writeTask(t, tasksDir, DirWaiting, "normal.md",
+		"---\nid: normal\ndepends_on: [dep]\n---\n# Normal\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	// Retained copy should be promoted to backlog/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "aaa.md")); err != nil {
+		t.Fatalf("aaa.md (retained) not found in backlog/: %v", err)
+	}
+
+	// Duplicate should be in failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bbb.md")); err != nil {
+		t.Fatalf("bbb.md (duplicate) not found in failed/: %v", err)
+	}
+
+	// Normal task should also be promoted.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "normal.md")); err != nil {
+		t.Fatalf("normal.md not found in backlog/: %v", err)
+	}
+}

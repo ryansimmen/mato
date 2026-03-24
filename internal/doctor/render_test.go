@@ -518,6 +518,31 @@ func TestRenderJSON_FixedFinding(t *testing.T) {
 	}
 }
 
+func TestColorIndicator(t *testing.T) {
+	// fatih/color disables color output when stdout is not a TTY (as in
+	// tests), so colorIndicator returns plain-text indicators unchanged.
+	tests := []struct {
+		name      string
+		indicator string
+		want      string
+	}{
+		{"ok", "[OK]", "[OK]"},
+		{"error", "[ERROR]", "[ERROR]"},
+		{"warn", "[WARN]", "[WARN]"},
+		{"skip", "[SKIP]", "[SKIP]"},
+		{"unknown passthrough", "[UNKNOWN]", "[UNKNOWN]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := colorIndicator(tt.indicator)
+			if got != tt.want {
+				t.Errorf("colorIndicator(%q) = %q, want %q", tt.indicator, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestComputeSummary(t *testing.T) {
 	tests := []struct {
 		name         string
