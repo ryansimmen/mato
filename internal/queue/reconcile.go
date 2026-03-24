@@ -11,9 +11,10 @@ import (
 
 // promotableTask describes a waiting task whose dependencies are satisfied.
 type promotableTask struct {
-	name string
-	path string
-	meta frontmatter.TaskMeta
+	name      string
+	path      string
+	meta      frontmatter.TaskMeta
+	globError error
 }
 
 // resolvePromotableTasks determines which waiting tasks have all dependencies
@@ -44,7 +45,7 @@ func resolvePromotableTasks(tasksDir string, idx *PollIndex) []promotableTask {
 		if idx.HasActiveOverlap(snap.Meta.Affects) {
 			continue
 		}
-		result = append(result, promotableTask{name: snap.Filename, path: snap.Path, meta: snap.Meta})
+		result = append(result, promotableTask{name: snap.Filename, path: snap.Path, meta: snap.Meta, globError: snap.GlobError})
 	}
 	return result
 }
@@ -88,9 +89,9 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 
 	// Move backlog tasks with invalid glob syntax to failed/.
 	for _, snap := range idx.TasksByState(DirBacklog) {
-		if err := frontmatter.ValidateAffectsGlobs(snap.Meta.Affects); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: moving backlog task %s with invalid glob to failed/: %v\n", snap.Filename, err)
-			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", err)); appendErr != nil {
+		if snap.GlobError != nil {
+			fmt.Fprintf(os.Stderr, "warning: moving backlog task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
+			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", snap.GlobError)); appendErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
 			}
 			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
@@ -205,9 +206,9 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			continue
 		}
 		// Quarantine tasks with invalid glob syntax instead of promoting.
-		if err := frontmatter.ValidateAffectsGlobs(snap.Meta.Affects); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: moving waiting task %s with invalid glob to failed/: %v\n", snap.Filename, err)
-			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", err)); appendErr != nil {
+		if snap.GlobError != nil {
+			fmt.Fprintf(os.Stderr, "warning: moving waiting task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
+			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", snap.GlobError)); appendErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
 			}
 			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
@@ -239,7 +240,7 @@ func CountPromotableWaitingTasks(tasksDir string, idx *PollIndex) int {
 	promotable := resolvePromotableTasks(tasksDir, idx)
 	count := 0
 	for _, task := range promotable {
-		if frontmatter.ValidateAffectsGlobs(task.meta.Affects) == nil {
+		if task.globError == nil {
 			count++
 		}
 	}
