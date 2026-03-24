@@ -351,6 +351,78 @@ func TestDiscoverHostTools_SeamCopilotIsFile(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// discoverHostTools — tool-not-found installation hints
+// ---------------------------------------------------------------------------
+
+func TestDiscoverHostTools_CopilotNotFoundIncludesHint(t *testing.T) {
+	home := "/fake/home"
+	tools := allRequiredTools()
+	delete(tools, "copilot")
+	setTestSeams(t,
+		makeLookPathFn(tools),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+
+	_, err := discoverHostTools()
+	if err == nil {
+		t.Fatal("discoverHostTools should fail when copilot is missing")
+	}
+	if !strings.Contains(err.Error(), "npm install") {
+		t.Errorf("error should contain installation hint, got: %v", err)
+	}
+}
+
+func TestDiscoverHostTools_GitNotFoundIncludesHint(t *testing.T) {
+	home := "/fake/home"
+	tools := allRequiredTools()
+	delete(tools, "git")
+	setTestSeams(t,
+		makeLookPathFn(tools),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+
+	_, err := discoverHostTools()
+	if err == nil {
+		t.Fatal("discoverHostTools should fail when git is missing")
+	}
+	if !strings.Contains(err.Error(), "apt install git") {
+		t.Errorf("error should contain installation hint, got: %v", err)
+	}
+}
+
+func TestDiscoverHostTools_GhNotFoundIncludesHint(t *testing.T) {
+	home := "/fake/home"
+	tools := allRequiredTools()
+	delete(tools, "gh")
+	setTestSeams(t,
+		makeLookPathFn(tools),
+		makeStatFn(map[string]fakeFileInfo{
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+
+	_, err := discoverHostTools()
+	if err == nil {
+		t.Fatal("discoverHostTools should fail when gh is missing")
+	}
+	if !strings.Contains(err.Error(), "https://cli.github.com/") {
+		t.Errorf("error should contain installation hint, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // InspectHostTools — required vs optional classification
 // ---------------------------------------------------------------------------
 
