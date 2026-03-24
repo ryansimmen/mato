@@ -185,10 +185,10 @@ State meanings:
 | `ready-for-review/` | branch pushed, waiting for AI review | host `postAgentPush` | host `postReviewAction` moves to `ready-to-merge/` on approval, or to `backlog/` on rejection |
 | `ready-to-merge/` | reviewed and approved, waiting for host merge | host `postReviewAction` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict or missing task branch (if retries remain), to `failed/` if the task branch is missing and `max_retries` is exhausted, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
-| `failed/` | failure record budget exhausted or circular dependency detected | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), merge-queue failure handling (squash conflict or missing branch with retries exhausted), or `ReconcileReadyQueue` moves cycle members from `waiting/` to `failed/` with `<!-- cycle-failure: ... -->` markers | no normal exit |
+| `failed/` | failure record budget exhausted, circular dependency, or duplicate waiting task ID | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), merge-queue failure handling (squash conflict or missing branch with retries exhausted), `ReconcileReadyQueue` moves cycle members from `waiting/` to `failed/` with `<!-- cycle-failure: ... -->` markers, or `ReconcileReadyQueue` moves duplicate waiting task ID copies to `failed/` with `<!-- terminal-failure: ... -->` markers | no normal exit |
 Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
 ## 5. Dependency Resolution
-`queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied and moves cyclic tasks to `failed/`.
+`queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied, moves cyclic tasks to `failed/`, and moves duplicate waiting task ID copies to `failed/`.
 ### DAG Analysis
 Dependency resolution is built on a shared analysis pass in `internal/dag/`. `dag.Analyze(nodes, completedIDs, ambiguousIDs, knownIDs)` constructs a dependency graph from the waiting tasks and classifies each node:
 - **DepsSatisfied**: all `depends_on` entries are in the completed-ID set (unambiguously).
@@ -200,8 +200,9 @@ The analysis produces deterministic, sorted output for all three categories.
 ### Reconcile Flow
 `ReconcileReadyQueue(tasksDir, idx)` calls `DiagnoseDependencies()` once per reconcile cycle, then:
 1. Emits structured warnings from `diag.Issues` (duplicate waiting IDs, unknown dependencies, ambiguous completed IDs, cycles).
-2. Moves cycle members to `failed/` with `<!-- cycle-failure: mato at <timestamp> — circular dependency -->` markers. These markers do **not** consume the task's normal `max_retries` budget (only `<!-- failure: ... -->` records are counted).
-3. Promotes deps-satisfied tasks from `waiting/` to `backlog/` if they also pass the `HasActiveOverlap` filter (no conflicting active tasks).
+2. Moves duplicate waiting task ID copies to `failed/` with `<!-- terminal-failure: ... -->` markers. When multiple `waiting/` files share the same task ID, the first file (by filename sort) is retained and every subsequent copy is failed. These markers do **not** consume the task's normal `max_retries` budget.
+3. Moves cycle members to `failed/` with `<!-- cycle-failure: mato at <timestamp> — circular dependency -->` markers. These markers do **not** consume the task's normal `max_retries` budget (only `<!-- failure: ... -->` records are counted).
+4. Promotes deps-satisfied tasks from `waiting/` to `backlog/` if they also pass the `HasActiveOverlap` filter (no conflicting active tasks).
 ### One-Hop Promotion Semantics
 Promotion is intentionally one-hop per reconcile cycle. If A is completed, B depends on A, and C depends on B, then one reconcile pass promotes B to `backlog/` but leaves C in `waiting/`. C becomes promotable on the next reconcile cycle after B completes. This preserves the existing behavior and avoids premature promotion of deeply chained tasks.
 ### Cycle-to-Failed Behavior

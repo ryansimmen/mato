@@ -209,3 +209,43 @@ func TestDiagnoseDependencies_IssuesSorted(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnoseDependencies_ThreeDuplicateWaitingIDs(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Three waiting files with the same meta.ID.
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "aaa.md"),
+		[]byte("---\nid: shared\n---\n# A\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "bbb.md"),
+		[]byte("---\nid: shared\n---\n# B\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "ccc.md"),
+		[]byte("---\nid: shared\n---\n# C\n"), 0o644)
+
+	diag := DiagnoseDependencies(tasksDir, nil)
+
+	// Should have two DependencyDuplicateID issues (bbb and ccc).
+	var dupIssues []DependencyIssue
+	for _, issue := range diag.Issues {
+		if issue.Kind == DependencyDuplicateID && issue.TaskID == "shared" {
+			dupIssues = append(dupIssues, issue)
+		}
+	}
+	if len(dupIssues) != 2 {
+		t.Fatalf("expected 2 duplicate issues, got %d: %v", len(dupIssues), dupIssues)
+	}
+
+	// The retained file should be aaa.md (first by filename sort).
+	if diag.RetainedFiles["shared"] != "aaa.md" {
+		t.Errorf("retained file = %q, want %q", diag.RetainedFiles["shared"], "aaa.md")
+	}
+
+	// Both duplicates should reference aaa.md as the first file.
+	for _, issue := range dupIssues {
+		if issue.DependsOn != "aaa.md" {
+			t.Errorf("duplicate issue DependsOn = %q, want %q", issue.DependsOn, "aaa.md")
+		}
+	}
+}

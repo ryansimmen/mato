@@ -880,8 +880,8 @@ func checkDependencies(cc *checkContext) CheckReport {
 			msg = fmt.Sprintf("task ID %q exists in both completed and non-completed directories", issue.TaskID)
 		case queue.DependencyDuplicateID:
 			code = "deps.duplicate_id"
-			sev = SeverityWarning
-			msg = fmt.Sprintf("duplicate waiting task ID %q (first: %s, duplicate: %s)", issue.TaskID, issue.DependsOn, issue.Filename)
+			sev = SeverityError
+			msg = fmt.Sprintf("duplicate waiting task ID %q (retained: %s, duplicate: %s) — duplicate will be moved to failed/", issue.TaskID, issue.DependsOn, issue.Filename)
 		case queue.DependencySelfCycle:
 			code = "deps.self_dependency"
 			sev = SeverityWarning
