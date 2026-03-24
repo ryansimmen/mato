@@ -24,6 +24,15 @@ func stubTools(t *testing.T, fn func() runner.ToolReport) {
 	t.Cleanup(func() { inspectHostToolsFn = orig })
 }
 
+// stubDockerLookPath overrides dockerLookPathFn for tests and restores it
+// on cleanup.
+func stubDockerLookPath(t *testing.T, fn func() error) {
+	t.Helper()
+	orig := dockerLookPathFn
+	dockerLookPathFn = fn
+	t.Cleanup(func() { dockerLookPathFn = orig })
+}
+
 // stubDocker overrides dockerProbe for tests and restores it on cleanup.
 func stubDocker(t *testing.T, fn func(context.Context) error) {
 	t.Helper()
@@ -32,7 +41,25 @@ func stubDocker(t *testing.T, fn func(context.Context) error) {
 	t.Cleanup(func() { dockerProbe = orig })
 }
 
-// allOK stubs both tools and docker to report no issues.
+// stubDockerImageInspect overrides dockerImageInspectFn for tests and
+// restores it on cleanup.
+func stubDockerImageInspect(t *testing.T, fn func(context.Context, string) error) {
+	t.Helper()
+	orig := dockerImageInspectFn
+	dockerImageInspectFn = fn
+	t.Cleanup(func() { dockerImageInspectFn = orig })
+}
+
+// stubDockerImagePull overrides dockerImagePullFn for tests and restores
+// it on cleanup.
+func stubDockerImagePull(t *testing.T, fn func(context.Context, string) error) {
+	t.Helper()
+	orig := dockerImagePullFn
+	dockerImagePullFn = fn
+	t.Cleanup(func() { dockerImagePullFn = orig })
+}
+
+// allOK stubs tools, docker, and image inspect to report no issues.
 func allOK(t *testing.T) {
 	t.Helper()
 	stubTools(t, func() runner.ToolReport {
@@ -41,7 +68,9 @@ func allOK(t *testing.T) {
 			{Name: "git", Path: "/usr/bin/git", Required: true, Found: true, Message: "git: /usr/bin/git"},
 		}}
 	})
+	stubDockerLookPath(t, func() error { return nil })
 	stubDocker(t, func(ctx context.Context) error { return nil })
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error { return nil })
 }
 
 func TestDoctor_HealthyRepo(t *testing.T) {
@@ -692,6 +721,7 @@ func TestDoctor_DockerTimeout(t *testing.T) {
 	stubTools(t, func() runner.ToolReport {
 		return runner.ToolReport{}
 	})
+	stubDockerLookPath(t, func() error { return nil })
 	stubDocker(t, func(ctx context.Context) error {
 		return fmt.Errorf("docker daemon unreachable: timeout")
 	})

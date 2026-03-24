@@ -49,6 +49,39 @@ func checkDocker() error {
 	return nil
 }
 
+// dockerImageInspectFn checks whether a Docker image is available locally.
+// It is a variable so tests can inject a stub without calling Docker.
+var dockerImageInspectFn = func(image string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", "image", "inspect", image).Run()
+}
+
+// dockerPullFn pulls a Docker image. It is a variable so tests can inject
+// a stub without calling Docker.
+var dockerPullFn = func(image string) error {
+	cmd := exec.Command("docker", "pull", image)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// ensureDockerImage checks that the configured Docker image is available
+// locally. If not, it prints a message and attempts to pull it with
+// stdout/stderr forwarded to the user. Returns an error if the pull fails.
+// The check is idempotent: once an image is pulled, subsequent calls
+// return immediately.
+func ensureDockerImage(image string) error {
+	if err := dockerImageInspectFn(image); err == nil {
+		return nil
+	}
+	fmt.Printf("Docker image %s not found locally. Pulling...\n", image)
+	if err := dockerPullFn(image); err != nil {
+		return fmt.Errorf("failed to pull Docker image %s: verify the image name and your network connection: %w", image, err)
+	}
+	return nil
+}
+
 // envConfig holds immutable environment configuration populated once during
 // initialization. It contains tool paths, Docker image settings, git identity,
 // feature flags, and filesystem paths that do not change between task runs.

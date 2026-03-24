@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -455,5 +456,148 @@ func TestDoctor_HygieneOnlyFilter(t *testing.T) {
 	}
 	if !hygieneRan {
 		t.Error("expected hygiene check to be present in report")
+	}
+}
+
+// ---------- Docker Image Availability ----------
+
+func TestDoctor_DockerImage_Available(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+		Format: "text",
+		Only:   []string{"docker"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	foundAvailable := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "docker.image_missing" {
+				t.Error("unexpected docker.image_missing when image is available")
+			}
+			if f.Code == "docker.image_available" {
+				foundAvailable = true
+			}
+		}
+	}
+	if !foundAvailable {
+		t.Error("expected docker.image_available finding")
+	}
+}
+
+func TestDoctor_DockerImage_Missing(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	})
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+		Format: "text",
+		Only:   []string{"docker"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "docker.image_missing" {
+				found = true
+				if f.Severity != SeverityWarning {
+					t.Errorf("expected warning severity, got %q", f.Severity)
+				}
+				if !f.Fixable {
+					t.Error("expected docker.image_missing to be fixable")
+				}
+				if !strings.Contains(f.Message, "not found locally") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected docker.image_missing finding")
+	}
+}
+
+func TestDoctor_DockerImage_Fix_PullSucceeds(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	})
+	stubDockerImagePull(t, func(ctx context.Context, image string) error {
+		return nil
+	})
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+		Fix:    true,
+		Format: "text",
+		Only:   []string{"docker"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "docker.image_missing" && f.Fixed {
+				found = true
+				if !strings.Contains(f.Message, "pulled successfully") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected docker.image_missing finding marked as fixed")
+	}
+}
+
+func TestDoctor_DockerImage_Fix_PullFails(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	})
+	stubDockerImagePull(t, func(ctx context.Context, image string) error {
+		return fmt.Errorf("network timeout")
+	})
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+		Fix:    true,
+		Format: "text",
+		Only:   []string{"docker"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "docker.image_missing" {
+				found = true
+				if f.Fixed {
+					t.Error("expected finding NOT to be fixed when pull fails")
+				}
+				if f.Severity != SeverityError {
+					t.Errorf("expected error severity after failed pull, got %q", f.Severity)
+				}
+				if !strings.Contains(f.Message, "pull failed") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected docker.image_missing finding")
 	}
 }

@@ -328,6 +328,10 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, copilotArgs, repoRoot, tasksDir, agentTimeout)
 
+	if err := ensureDockerImage(cfg.image); err != nil {
+		return err
+	}
+
 	ctx, cancel := setupSignalContext()
 	defer cancel()
 	defer signal.Stop(signalChan(ctx))
