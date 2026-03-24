@@ -41,7 +41,7 @@ Flags:
   --tasks-dir <path>   Path to tasks directory (default: <repo>/.tasks)
   --fix                Auto-repair safe issues (stale locks, orphaned tasks, missing dirs)
   --format text|json   Output format (default: text)
-  --only <name>        Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, deps)
+  --only <name>        Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, hygiene, deps)
 ```
 
 `--repo` and `--tasks-dir` mirror the existing root command and `mato status`

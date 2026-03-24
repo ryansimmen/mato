@@ -359,7 +359,7 @@ func newDoctorCmd() *cobra.Command {
 	cmd.Flags().StringVar(&doctorTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
-	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, deps)")
+	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, hygiene, deps)")
 
 	return cmd
 }
