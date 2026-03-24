@@ -483,6 +483,123 @@ func TestCheckIdleTransition(t *testing.T) {
 	}
 }
 
+func TestIdleHeartbeat_FirstMessageIncludesNextPoll(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	msg := hb.idleMessage(now.Add(10*time.Second), 10*time.Second)
+	want := "[mato] idle — waiting for tasks (next poll in 10s)"
+	if msg != want {
+		t.Errorf("first idle message = %q, want %q", msg, want)
+	}
+}
+
+func TestIdleHeartbeat_SuppressedDuringThreshold(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	// First message should be printed.
+	msg := hb.idleMessage(now.Add(10*time.Second), 10*time.Second)
+	if msg == "" {
+		t.Fatal("expected first idle message, got empty")
+	}
+
+	// Polls 2 through idleHeartbeatThreshold should be suppressed.
+	for i := 2; i <= idleHeartbeatThreshold; i++ {
+		elapsed := time.Duration(i) * 10 * time.Second
+		msg = hb.idleMessage(now.Add(elapsed), 10*time.Second)
+		if msg != "" {
+			t.Errorf("poll %d: expected empty, got %q", i, msg)
+		}
+	}
+}
+
+func TestIdleHeartbeat_ThrottledHeartbeatAfterThreshold(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	// Exhaust the initial quiet period.
+	for i := 1; i <= idleHeartbeatThreshold; i++ {
+		hb.idleMessage(now.Add(time.Duration(i)*10*time.Second), 10*time.Second)
+	}
+
+	// The next call after the threshold should produce a heartbeat.
+	t1 := now.Add(time.Duration(idleHeartbeatThreshold+1) * 10 * time.Second)
+	msg := hb.idleMessage(t1, 10*time.Second)
+	if msg == "" {
+		t.Fatal("expected throttled heartbeat, got empty")
+	}
+	if !strings.Contains(msg, "uptime:") || !strings.Contains(msg, "last activity:") {
+		t.Errorf("throttled heartbeat missing expected fields: %q", msg)
+	}
+
+	// A call less than heartbeatInterval later should be suppressed.
+	t2 := t1.Add(30 * time.Second)
+	msg = hb.idleMessage(t2, 10*time.Second)
+	if msg != "" {
+		t.Errorf("expected suppressed heartbeat within interval, got %q", msg)
+	}
+
+	// A call at or beyond heartbeatInterval should print again.
+	t3 := t1.Add(heartbeatInterval)
+	msg = hb.idleMessage(t3, 10*time.Second)
+	if msg == "" {
+		t.Fatal("expected heartbeat after interval elapsed, got empty")
+	}
+}
+
+func TestIdleHeartbeat_RecordActivityResetsState(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	// Advance through 3 idle polls.
+	for i := 1; i <= 3; i++ {
+		hb.idleMessage(now.Add(time.Duration(i)*10*time.Second), 10*time.Second)
+	}
+
+	// Record activity (e.g., a task was claimed).
+	activityTime := now.Add(35 * time.Second)
+	hb.recordActivity(activityTime)
+
+	if hb.consecutiveIdlePolls != 0 {
+		t.Errorf("consecutiveIdlePolls after recordActivity = %d, want 0", hb.consecutiveIdlePolls)
+	}
+
+	// Next idle message should be the first-idle message again.
+	msg := hb.idleMessage(activityTime.Add(10*time.Second), 10*time.Second)
+	want := "[mato] idle — waiting for tasks (next poll in 10s)"
+	if msg != want {
+		t.Errorf("idle message after reset = %q, want %q", msg, want)
+	}
+}
+
+func TestFormatDurationShort(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{5 * time.Second, "5s"},
+		{10 * time.Second, "10s"},
+		{59 * time.Second, "59s"},
+		{time.Minute, "1m"},
+		{5 * time.Minute, "5m"},
+		{90 * time.Second, "1m"},
+		{time.Hour, "1h"},
+		{time.Hour + 30*time.Minute, "1h30m"},
+		{2*time.Hour + 5*time.Minute, "2h5m"},
+		{2*time.Hour + 5*time.Minute + 37*time.Second, "2h5m"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.d.String(), func(t *testing.T) {
+			got := formatDurationShort(tt.d)
+			if got != tt.want {
+				t.Errorf("formatDurationShort(%v) = %q, want %q", tt.d, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractFailureLines_NoFailures(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
 	os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644)

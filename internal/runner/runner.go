@@ -49,6 +49,14 @@ const (
 	// errBackoffThreshold is the number of consecutive poll errors before
 	// the loop enters backoff mode.
 	errBackoffThreshold = 5
+
+	// idleHeartbeatThreshold is the number of consecutive idle polls before
+	// the runner switches from the initial idle message to throttled heartbeats.
+	idleHeartbeatThreshold = 5
+
+	// heartbeatInterval is the minimum time between throttled heartbeat
+	// messages once the idle threshold is reached.
+	heartbeatInterval = time.Minute
 )
 
 // pollBackoff returns the poll interval given the number of consecutive errors.
@@ -66,6 +74,70 @@ func pollBackoff(consecutiveErrors int) time.Duration {
 		}
 	}
 	return d
+}
+
+// idleHeartbeat tracks the idle heartbeat state so the runner can provide
+// periodic output when the queue is empty for an extended period.
+type idleHeartbeat struct {
+	consecutiveIdlePolls int
+	lastActivityTime     time.Time
+	lastHeartbeatTime    time.Time
+	startTime            time.Time
+}
+
+// newIdleHeartbeat creates an idleHeartbeat initialised with the given time.
+func newIdleHeartbeat(now time.Time) idleHeartbeat {
+	return idleHeartbeat{
+		startTime:        now,
+		lastActivityTime: now,
+	}
+}
+
+// recordActivity resets the idle counters when work is performed (task
+// claimed, merge processed, review completed).
+func (h *idleHeartbeat) recordActivity(now time.Time) {
+	h.consecutiveIdlePolls = 0
+	h.lastActivityTime = now
+	h.lastHeartbeatTime = time.Time{}
+}
+
+// idleMessage increments the idle counter and returns the message to print,
+// or "" if nothing should be printed this cycle. nextPoll is the duration
+// until the next poll iteration.
+func (h *idleHeartbeat) idleMessage(now time.Time, nextPoll time.Duration) string {
+	h.consecutiveIdlePolls++
+	if h.consecutiveIdlePolls == 1 {
+		return fmt.Sprintf("[mato] idle — waiting for tasks (next poll in %s)", formatDurationShort(nextPoll))
+	}
+	if h.consecutiveIdlePolls <= idleHeartbeatThreshold {
+		return ""
+	}
+	if !h.lastHeartbeatTime.IsZero() && now.Sub(h.lastHeartbeatTime) < heartbeatInterval {
+		return ""
+	}
+	h.lastHeartbeatTime = now
+	uptime := now.Sub(h.startTime)
+	lastAct := now.Sub(h.lastActivityTime)
+	return fmt.Sprintf("[mato] idle — no tasks available (uptime: %s, last activity: %s ago)",
+		formatDurationShort(uptime), formatDurationShort(lastAct))
+}
+
+// formatDurationShort formats a duration in a compact human-readable form
+// (e.g. "10s", "5m", "1h30m").
+func formatDurationShort(d time.Duration) string {
+	d = d.Truncate(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	if m == 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dh%dm", h, m)
 }
 
 // DryRun validates the task queue setup without launching Docker containers.
@@ -362,7 +434,7 @@ func signalChan(ctx context.Context) chan<- os.Signal {
 // handles reviews, and processes merges. It runs until the context is
 // cancelled (via signal).
 func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, tasksDir, branch, agentID string) error {
-	wasIdle := false
+	heartbeat := newIdleHeartbeat(time.Now())
 	failedDirExcluded := make(map[string]struct{})
 	consecutiveErrors := 0
 	for {
@@ -450,7 +522,9 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			}
 		}
 
+		reviewProcessed := false
 		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx); reviewTask != nil {
+			reviewProcessed = true
 			// Verify the task branch exists before launching the review agent.
 			if !VerifyReviewBranch(env.repoRoot, reviewTask, agentID) {
 				// Branch missing — failure already recorded.
@@ -464,20 +538,31 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			reviewCleanup()
 		}
 
+		mergeCount := 0
 		if cleanup, ok := merge.AcquireLock(tasksDir); ok {
 			func() {
 				defer cleanup()
-				merged := merge.ProcessQueue(repoRoot, tasksDir, branch)
-				if merged > 0 {
-					fmt.Printf("Merged %d task(s) into %s\n", merged, branch)
+				mergeCount = merge.ProcessQueue(repoRoot, tasksDir, branch)
+				if mergeCount > 0 {
+					fmt.Printf("Merged %d task(s) into %s\n", mergeCount, branch)
 				}
 			}()
 		}
 
+		didWork := claimedTask || reviewProcessed || mergeCount > 0
+		if didWork {
+			heartbeat.recordActivity(time.Now())
+		}
+
 		hasReviewTasks := selectTaskForReview(tasksDir, idx) != nil
 		isIdle := !claimedTask && !hasReviewTasks && !merge.HasReadyTasks(tasksDir)
-		if checkIdleTransition(isIdle, &wasIdle) {
-			fmt.Println("No tasks found in backlog, ready-for-review, or ready-to-merge. Waiting...")
+		if isIdle {
+			nextPoll := pollBackoff(consecutiveErrors)
+			if msg := heartbeat.idleMessage(time.Now(), nextPoll); msg != "" {
+				fmt.Println(msg)
+			}
+		} else if !didWork {
+			heartbeat.recordActivity(time.Now())
 		}
 
 		if pollHadError {
