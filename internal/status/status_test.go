@@ -1625,6 +1625,87 @@ func TestShowJSON_TerminalFailure(t *testing.T) {
 	}
 }
 
+func TestShowJSON_ParseFailedTerminalFailure(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	content := "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n---\npriority: nope\n---\n# Broken terminal task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "broken-terminal.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(result.Failed))
+	}
+	ft := result.Failed[0]
+	if ft.Name != "broken-terminal.md" {
+		t.Errorf("expected name 'broken-terminal.md', got %q", ft.Name)
+	}
+	if ft.FailureKind != "terminal" {
+		t.Errorf("expected failure_kind 'terminal', got %q", ft.FailureKind)
+	}
+	if ft.TerminalReason != "unparseable frontmatter" {
+		t.Errorf("expected terminal_reason 'unparseable frontmatter', got %q", ft.TerminalReason)
+	}
+}
+
+func TestShow_ParseFailedInProgressTaskPreservesClaimMetadata(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	content := "<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n# Broken active task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "broken-active.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	output := captureShow(t, repoRoot)
+	if !contains(output, "broken-active.md") {
+		t.Errorf("output should contain parse-failed task name, got:\n%s", output)
+	}
+	if !contains(output, "agent test-agent") {
+		t.Errorf("output should preserve claimed-by metadata, got:\n%s", output)
+	}
+	if !contains(output, "In-Progress Tasks") {
+		t.Errorf("output should contain in-progress section, got:\n%s", output)
+	}
+}
+
+func TestShowJSON_WarningsIncluded(t *testing.T) {
+	result := statusDataToJSON(statusData{warnings: []string{"could not read agent presence: boom"}})
+	if len(result.Warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(result.Warnings))
+	}
+	if result.Warnings[0] != "could not read agent presence: boom" {
+		t.Errorf("warning = %q, want %q", result.Warnings[0], "could not read agent presence: boom")
+	}
+}
+
 func TestShowJSON_CycleFailureKind(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".tasks")

@@ -63,17 +63,17 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 }
 
 type taskEntry struct {
-	name                     string
-	title                    string
-	id                       string
-	priority                 int
-	maxRetries               int
-	branch                   string
-	claimedBy                string
-	claimedAt                time.Time
-	failureCount             int
-	lastFailureReason        string
-	lastCycleFailureReason   string
+	name                      string
+	title                     string
+	id                        string
+	priority                  int
+	maxRetries                int
+	branch                    string
+	claimedBy                 string
+	claimedAt                 time.Time
+	failureCount              int
+	lastFailureReason         string
+	lastCycleFailureReason    string
 	lastTerminalFailureReason string
 }
 
@@ -107,10 +107,16 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 			continue
 		}
 		tasks = append(tasks, taskEntry{
-			name:       pf.Filename,
-			priority:   50,
-			maxRetries: 3,
-			branch:     pf.Branch,
+			name:                      pf.Filename,
+			priority:                  50,
+			maxRetries:                3,
+			branch:                    pf.Branch,
+			claimedBy:                 pf.ClaimedBy,
+			claimedAt:                 pf.ClaimedAt,
+			failureCount:              pf.FailureCount,
+			lastFailureReason:         pf.LastFailureReason,
+			lastCycleFailureReason:    pf.LastCycleFailureReason,
+			lastTerminalFailureReason: pf.LastTerminalFailureReason,
 		})
 	}
 	sort.Slice(tasks, func(i, j int) bool {
