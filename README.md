@@ -172,7 +172,7 @@ read-only and makes no filesystem changes.
 Use `--fix` to auto-repair safe, idempotent issues such as missing directories,
 stale locks, and orphaned tasks. Use `--format json` for machine-readable output.
 The `--only` flag accepts a comma-separated list of check categories to run
-(`git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `deps`);
+(`git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`);
 non-selected checks appear as skipped. Exit code 0 means healthy, 1 means
 warnings only, and 2 means errors were found.
 
