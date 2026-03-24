@@ -38,6 +38,7 @@ func newColorSet() colorSet {
 func renderQueueOverview(w io.Writer, c colorSet, data statusData) {
 	fmt.Fprintln(w, c.bold("Queue Overview"))
 	fmt.Fprintln(w, c.bold("──────────────"))
+	fmt.Fprintf(w, "  backlog:        %s  %s\n", c.green(data.queueCounts[queue.DirBacklog]), c.dim("(total tasks in backlog/)"))
 	fmt.Fprintf(w, "  runnable:       %s\n", c.green(data.runnable))
 	fmt.Fprintf(w, "  deferred:       %s  %s\n", c.yellow(len(data.deferredDetail)), c.dim("(conflict-blocked, in backlog)"))
 	fmt.Fprintf(w, "  waiting:        %s  %s\n", c.dim(data.queueCounts[queue.DirWaiting]), c.dim("(dependency-blocked)"))

@@ -114,6 +114,7 @@ func ShowJSON(w io.Writer, repoRoot, tasksDir string) error {
 func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 	out := StatusJSON{
 		Counts: map[string]int{
+			"backlog":        data.queueCounts[queue.DirBacklog],
 			"runnable":       data.runnable,
 			"deferred":       len(data.deferredDetail),
 			"waiting":        data.queueCounts[queue.DirWaiting],
