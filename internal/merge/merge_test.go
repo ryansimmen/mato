@@ -2068,3 +2068,125 @@ func TestAppendTaskRecord_ReadOnlyDir(t *testing.T) {
 		t.Fatalf("error should mention temp file creation, got: %v", err)
 	}
 }
+
+func TestLoadMergeCandidates(t *testing.T) {
+	tasksDir := t.TempDir()
+	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
+	backlogDir := filepath.Join(tasksDir, queue.DirBacklog)
+	for _, sub := range []string{readyDir, backlogDir} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	// Valid task with frontmatter.
+	validTask := "---\nid: task-alpha\npriority: 20\naffects:\n  - internal/foo\n---\n# Alpha task\nDo the alpha work.\n"
+	if err := os.WriteFile(filepath.Join(readyDir, "alpha.md"), []byte(validTask), 0o644); err != nil {
+		t.Fatalf("write alpha.md: %v", err)
+	}
+
+	// Another valid task with higher priority (lower number = higher priority).
+	validTask2 := "---\nid: task-beta\npriority: 10\n---\n# Beta task\nDo the beta work.\n"
+	if err := os.WriteFile(filepath.Join(readyDir, "beta.md"), []byte(validTask2), 0o644); err != nil {
+		t.Fatalf("write beta.md: %v", err)
+	}
+
+	// Unparseable .md file (invalid frontmatter).
+	if err := os.WriteFile(filepath.Join(readyDir, "broken.md"), []byte("---\nbad yaml: [[\n---\n"), 0o644); err != nil {
+		t.Fatalf("write broken.md: %v", err)
+	}
+
+	// Non-.md file (should be ignored by ListTaskFiles).
+	if err := os.WriteFile(filepath.Join(readyDir, "notes.txt"), []byte("ignore me"), 0o644); err != nil {
+		t.Fatalf("write notes.txt: %v", err)
+	}
+
+	activeBranches := map[string]struct{}{}
+	candidates, err := loadMergeCandidates(readyDir, tasksDir, activeBranches)
+	if err != nil {
+		t.Fatalf("loadMergeCandidates: %v", err)
+	}
+
+	// Should have 2 valid candidates (broken.md was skipped).
+	if len(candidates) != 2 {
+		t.Fatalf("got %d candidates, want 2", len(candidates))
+	}
+
+	// Candidates should be sorted by priority: beta (10) before alpha (20).
+	if candidates[0].name != "beta.md" {
+		t.Errorf("candidates[0].name = %q, want %q", candidates[0].name, "beta.md")
+	}
+	if candidates[0].priority != 10 {
+		t.Errorf("candidates[0].priority = %d, want 10", candidates[0].priority)
+	}
+	if candidates[0].id != "task-beta" {
+		t.Errorf("candidates[0].id = %q, want %q", candidates[0].id, "task-beta")
+	}
+	if candidates[1].name != "alpha.md" {
+		t.Errorf("candidates[1].name = %q, want %q", candidates[1].name, "alpha.md")
+	}
+	if candidates[1].priority != 20 {
+		t.Errorf("candidates[1].priority = %d, want 20", candidates[1].priority)
+	}
+	if candidates[1].id != "task-alpha" {
+		t.Errorf("candidates[1].id = %q, want %q", candidates[1].id, "task-alpha")
+	}
+	if len(candidates[1].affects) != 1 || candidates[1].affects[0] != "internal/foo" {
+		t.Errorf("candidates[1].affects = %v, want [internal/foo]", candidates[1].affects)
+	}
+
+	// Unparseable task should have been requeued to backlog.
+	if _, err := os.Stat(filepath.Join(backlogDir, "broken.md")); err != nil {
+		t.Errorf("broken.md should have been requeued to backlog: %v", err)
+	}
+}
+
+func TestLoadMergeCandidates_EmptyDir(t *testing.T) {
+	readyDir := t.TempDir()
+	tasksDir := t.TempDir()
+
+	candidates, err := loadMergeCandidates(readyDir, tasksDir, nil)
+	if err != nil {
+		t.Fatalf("loadMergeCandidates: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("got %d candidates, want 0", len(candidates))
+	}
+}
+
+func TestLoadMergeCandidates_NonexistentDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	_, err := loadMergeCandidates(filepath.Join(tasksDir, "nonexistent"), tasksDir, nil)
+	if err == nil {
+		t.Fatal("expected error for nonexistent directory, got nil")
+	}
+}
+
+func TestLoadMergeCandidates_SamePrioritySortsByName(t *testing.T) {
+	tasksDir := t.TempDir()
+	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
+	if err := os.MkdirAll(readyDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll: %v", err)
+	}
+
+	for _, name := range []string{"charlie.md", "alice.md", "bob.md"} {
+		content := "---\npriority: 50\n---\n# " + name + "\n"
+		if err := os.WriteFile(filepath.Join(readyDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	candidates, err := loadMergeCandidates(readyDir, tasksDir, nil)
+	if err != nil {
+		t.Fatalf("loadMergeCandidates: %v", err)
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("got %d candidates, want 3", len(candidates))
+	}
+	want := []string{"alice.md", "bob.md", "charlie.md"}
+	for i, c := range candidates {
+		if c.name != want[i] {
+			t.Errorf("candidates[%d].name = %q, want %q", i, c.name, want[i])
+		}
+	}
+}
