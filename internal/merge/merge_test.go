@@ -1358,7 +1358,7 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "durable-merge.md")
-	taskContent := "---\npriority: 5\n---\n# Durable merge\nMerge this.\n"
+	taskContent := "---\nid: durable-merge\npriority: 5\n---\n# Durable merge\nMerge this.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task: %v", err)
 	}
@@ -1391,6 +1391,31 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "durable-merge.md")); err != nil {
 		t.Fatalf("completed task missing after retry: %v", err)
+	}
+
+	// Verify a completion detail was written during the idempotent retry.
+	detail, err := messaging.ReadCompletionDetail(tasksDir, "durable-merge")
+	if err != nil {
+		t.Fatalf("completion detail missing after idempotent retry: %v", err)
+	}
+	if detail.TaskID != "durable-merge" {
+		t.Errorf("completion detail TaskID = %q, want %q", detail.TaskID, "durable-merge")
+	}
+	if detail.CommitSHA == "" {
+		t.Error("completion detail CommitSHA is empty")
+	}
+	if len(detail.FilesChanged) == 0 {
+		t.Error("completion detail FilesChanged is empty")
+	}
+	foundDurable := false
+	for _, f := range detail.FilesChanged {
+		if f == "durable.txt" {
+			foundDurable = true
+			break
+		}
+	}
+	if !foundDurable {
+		t.Errorf("completion detail FilesChanged = %v, want to contain durable.txt", detail.FilesChanged)
 	}
 
 	// Ensure exactly one merge commit (no duplicate).

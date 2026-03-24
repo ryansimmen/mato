@@ -132,6 +132,8 @@ When the host merge queue successfully squash-merges a task branch, it writes a 
 
 The merge queue (`merge.ProcessQueue`) writes the file immediately after a successful squash-merge commit and push, before moving the task to `completed/`.
 
+If a prior push succeeded but post-push bookkeeping failed (e.g. the move to `completed/` was interrupted), the next merge cycle detects the already-merged branch via the idempotent squash path. In this recovery scenario, the merge queue recovers metadata — the target branch HEAD as the commit SHA and the task branch's changed files — and writes the completion detail before finishing the bookkeeping. This ensures downstream dependent tasks always receive dependency context, even after a partial failure and retry.
+
 ### Format
 
 Completion detail files are JSON objects matching `CompletionDetail` in `messaging.go`:
