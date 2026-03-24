@@ -430,124 +430,165 @@ func signalChan(ctx context.Context) chan<- os.Signal {
 	return ch
 }
 
+// pollCleanup recovers orphaned tasks, cleans stale locks and review locks,
+// removes stale presence files, and purges old messages. These housekeeping
+// operations run at the start of every poll cycle.
+func pollCleanup(tasksDir string) {
+	queue.RecoverOrphanedTasks(tasksDir)
+	queue.CleanStaleLocks(tasksDir)
+	queue.CleanStaleReviewLocks(tasksDir)
+	messaging.CleanStalePresence(tasksDir)
+	messaging.CleanOldMessages(tasksDir, 24*time.Hour)
+}
+
+// pollReconcile builds a poll index snapshot, surfaces any build warnings,
+// and reconciles the ready queue (promoting waiting tasks whose dependencies
+// are satisfied and quarantining exhausted ones). If reconciliation moved
+// tasks the index is rebuilt. It returns the (possibly refreshed) index and
+// whether any directory-level read failure occurred.
+func pollReconcile(tasksDir string) (*queue.PollIndex, bool) {
+	idx := queue.BuildIndex(tasksDir)
+	hadError := surfaceBuildWarnings(idx)
+
+	if queue.ReconcileReadyQueue(tasksDir, idx) {
+		idx = queue.BuildIndex(tasksDir)
+		if surfaceBuildWarnings(idx) {
+			hadError = true
+		}
+	}
+
+	return idx, hadError
+}
+
+// pollClaimAndRun computes the deferred task set, selects and claims a task
+// from the backlog, writes coordination messages, runs the agent, and
+// recovers the task if the agent left it stuck in in-progress/. The
+// failedDirExcluded map may be mutated when a FailedDirUnavailableError is
+// encountered. It returns whether a task was claimed and whether any
+// non-fatal error occurred.
+func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (claimed bool, hadError bool) {
+	deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
+	for name := range failedDirExcluded {
+		deferred[name] = struct{}{}
+	}
+	if err := queue.WriteQueueManifest(tasksDir, deferred, idx); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
+		hadError = true
+	}
+
+	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, idx)
+	var fdErr *queue.FailedDirUnavailableError
+	if errors.As(claimErr, &fdErr) {
+		failedDirExcluded[fdErr.TaskFilename] = struct{}{}
+		fmt.Fprintf(os.Stderr, "warning: excluding retry-exhausted task %s from future polls (failed/ directory unavailable)\n", fdErr.TaskFilename)
+	} else if claimErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not claim task: %v\n", claimErr)
+		hadError = true
+	}
+
+	if task == nil {
+		return false, hadError
+	}
+
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		From:   agentID,
+		Type:   "intent",
+		Task:   task.Filename,
+		Branch: task.Branch,
+		Body:   "Starting work",
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write intent message: %v\n", err)
+	}
+	if err := messaging.WritePresence(tasksDir, agentID, task.Filename, task.Branch); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write presence: %v\n", err)
+	}
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, task.Filename); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)
+	}
+
+	if err := runOnce(ctx, env, run, task); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
+	}
+
+	recoverStuckTask(tasksDir, agentID, task)
+	return true, hadError
+}
+
+// pollReview selects a review candidate from ready-for-review/, acquires a
+// review lock, verifies the task branch exists, runs the review agent, and
+// performs post-review actions (approve or reject). It returns whether a
+// review was processed.
+func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, branch, agentID string, idx *queue.PollIndex) bool {
+	reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx)
+	if reviewTask == nil {
+		return false
+	}
+	defer reviewCleanup()
+
+	if !VerifyReviewBranch(env.repoRoot, reviewTask, agentID) {
+		return true
+	}
+
+	fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
+	if err := runReview(ctx, env, run, reviewTask, branch); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
+	}
+	postReviewAction(tasksDir, agentID, reviewTask)
+	return true
+}
+
+// pollMerge acquires the merge lock and processes the squash-merge queue.
+// It returns the number of tasks successfully merged.
+func pollMerge(repoRoot, tasksDir, branch string) int {
+	cleanup, ok := merge.AcquireLock(tasksDir)
+	if !ok {
+		return 0
+	}
+	defer cleanup()
+
+	count := merge.ProcessQueue(repoRoot, tasksDir, branch)
+	if count > 0 {
+		fmt.Printf("Merged %d task(s) into %s\n", count, branch)
+	}
+	return count
+}
+
 // pollLoop is the main orchestration loop that claims tasks, runs agents,
 // handles reviews, and processes merges. It runs until the context is
-// cancelled (via signal).
+// cancelled (via signal). The loop delegates to focused helpers for each
+// concern and manages idle/backoff state locally.
 func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, tasksDir, branch, agentID string) error {
 	heartbeat := newIdleHeartbeat(time.Now())
 	failedDirExcluded := make(map[string]struct{})
 	consecutiveErrors := 0
 	for {
-		// Check for shutdown before starting new work.
 		if ctx.Err() != nil {
 			return nil
 		}
 
 		pollHadError := false
 
-		queue.RecoverOrphanedTasks(tasksDir)
-		queue.CleanStaleLocks(tasksDir)
-		queue.CleanStaleReviewLocks(tasksDir)
-		messaging.CleanStalePresence(tasksDir)
-		messaging.CleanOldMessages(tasksDir, 24*time.Hour)
+		pollCleanup(tasksDir)
 
-		// Build the poll index once per cycle. All consumers below use
-		// this snapshot instead of independently scanning directories
-		// and parsing files.
-		idx := queue.BuildIndex(tasksDir)
-		if surfaceBuildWarnings(idx) {
+		idx, reconcileHadError := pollReconcile(tasksDir)
+		if reconcileHadError {
 			pollHadError = true
 		}
 
-		if queue.ReconcileReadyQueue(tasksDir, idx) {
-			// Rebuild the index only when reconciliation moved tasks
-			// (promoted to backlog/ or quarantined to failed/).
-			idx = queue.BuildIndex(tasksDir)
-			if surfaceBuildWarnings(idx) {
-				pollHadError = true
-			}
-		}
-
-		deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
-		// Merge in tasks excluded due to failed/ being unavailable so they
-		// are not re-selected on each poll, preventing livelock.
-		for name := range failedDirExcluded {
-			deferred[name] = struct{}{}
-		}
-		if err := queue.WriteQueueManifest(tasksDir, deferred, idx); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
+		claimedTask, claimHadError := pollClaimAndRun(ctx, env, run, tasksDir, agentID, failedDirExcluded, idx)
+		if claimHadError {
 			pollHadError = true
 		}
 
-		claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, idx)
-		var fdErr *queue.FailedDirUnavailableError
-		if errors.As(claimErr, &fdErr) {
-			failedDirExcluded[fdErr.TaskFilename] = struct{}{}
-			fmt.Fprintf(os.Stderr, "warning: excluding retry-exhausted task %s from future polls (failed/ directory unavailable)\n", fdErr.TaskFilename)
-		} else if claimErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not claim task: %v\n", claimErr)
-			pollHadError = true
-		}
-		claimedTask := claimed != nil
-		if claimed != nil {
-			if err := messaging.WriteMessage(tasksDir, messaging.Message{
-				From:   agentID,
-				Type:   "intent",
-				Task:   claimed.Filename,
-				Branch: claimed.Branch,
-				Body:   "Starting work",
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write intent message: %v\n", err)
-			}
-
-			if err := messaging.WritePresence(tasksDir, agentID, claimed.Filename, claimed.Branch); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write presence: %v\n", err)
-			}
-
-			if err := messaging.BuildAndWriteFileClaims(tasksDir, claimed.Filename); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)
-			}
-
-			if err := runOnce(ctx, env, run, claimed); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
-			}
-
-			recoverStuckTask(tasksDir, agentID, claimed)
-
-			// If a shutdown signal was received during the task run, exit
-			// now that the task has been properly recovered. This avoids
-			// starting review or merge work with a cancelled context.
-			if ctx.Err() != nil {
-				return nil
-			}
+		// If a shutdown signal was received during the task run, exit
+		// now that the task has been properly recovered. This avoids
+		// starting review or merge work with a cancelled context.
+		if claimedTask && ctx.Err() != nil {
+			return nil
 		}
 
-		reviewProcessed := false
-		if reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx); reviewTask != nil {
-			reviewProcessed = true
-			// Verify the task branch exists before launching the review agent.
-			if !VerifyReviewBranch(env.repoRoot, reviewTask, agentID) {
-				// Branch missing — failure already recorded.
-			} else {
-				fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
-				if err := runReview(ctx, env, run, reviewTask, branch); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
-				}
-				postReviewAction(tasksDir, agentID, reviewTask)
-			}
-			reviewCleanup()
-		}
-
-		mergeCount := 0
-		if cleanup, ok := merge.AcquireLock(tasksDir); ok {
-			func() {
-				defer cleanup()
-				mergeCount = merge.ProcessQueue(repoRoot, tasksDir, branch)
-				if mergeCount > 0 {
-					fmt.Printf("Merged %d task(s) into %s\n", mergeCount, branch)
-				}
-			}()
-		}
+		reviewProcessed := pollReview(ctx, env, run, tasksDir, branch, agentID, idx)
+		mergeCount := pollMerge(repoRoot, tasksDir, branch)
 
 		didWork := claimedTask || reviewProcessed || mergeCount > 0
 		if didWork {
