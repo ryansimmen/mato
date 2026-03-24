@@ -618,11 +618,18 @@ func TestDoctor_InvalidGlobSyntax(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
+	if report.ExitCode != 2 {
+		t.Errorf("expected exit code 2 (error), got %d", report.ExitCode)
+	}
+
 	found := false
 	for _, cr := range report.Checks {
 		for _, f := range cr.Findings {
 			if f.Code == "tasks.invalid_glob" {
 				found = true
+				if f.Severity != SeverityError {
+					t.Errorf("expected tasks.invalid_glob severity %q, got %q", SeverityError, f.Severity)
+				}
 			}
 		}
 	}
