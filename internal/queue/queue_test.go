@@ -2120,8 +2120,8 @@ func TestCountPromotableWaitingTasks_MatchesReconcile(t *testing.T) {
 
 func TestReconcileReadyQueue_DuplicateWaitingIDPromotesOnce(t *testing.T) {
 	// Two files in waiting/ share the same meta.ID and have no deps.
-	// Only the first (alphabetically) should be promoted; the duplicate
-	// must remain in waiting/.
+	// The first (alphabetically) should be promoted; the duplicate
+	// should be moved to failed/ with a terminal-failure marker.
 	tasksDir := t.TempDir()
 	for _, sub := range AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -2138,7 +2138,7 @@ func TestReconcileReadyQueue_DuplicateWaitingIDPromotesOnce(t *testing.T) {
 	})
 
 	if !moved {
-		t.Fatal("ReconcileReadyQueue moved = false, want true (only the retained file)")
+		t.Fatal("ReconcileReadyQueue moved = false, want true")
 	}
 
 	// First file (aaa-dup.md) should be promoted.
@@ -2146,16 +2146,21 @@ func TestReconcileReadyQueue_DuplicateWaitingIDPromotesOnce(t *testing.T) {
 		t.Fatal("retained file aaa-dup.md should be promoted to backlog/")
 	}
 
-	// Duplicate file (zzz-dup.md) should remain in waiting/.
-	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "zzz-dup.md")); err != nil {
-		t.Fatal("duplicate file zzz-dup.md should remain in waiting/")
+	// Duplicate file (zzz-dup.md) should be in failed/ with terminal-failure marker.
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "zzz-dup.md"))
+	if err != nil {
+		t.Fatal("duplicate file zzz-dup.md should be moved to failed/")
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("duplicate file should have a terminal-failure marker")
 	}
 }
 
 func TestReconcileReadyQueue_DuplicateWaitingIDCycleTargetsRetained(t *testing.T) {
 	// Two files share the same meta.ID and form a self-dependency (cycle).
-	// Only the retained file (first seen) should be moved to failed/; the
-	// duplicate should remain in waiting/ untouched.
+	// The retained file (first seen) should be moved to failed/ with a
+	// cycle-failure marker; the duplicate should be moved to failed/ with
+	// a terminal-failure (duplicate ID) marker.
 	tasksDir := t.TempDir()
 	for _, sub := range AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -2180,11 +2185,13 @@ func TestReconcileReadyQueue_DuplicateWaitingIDCycleTargetsRetained(t *testing.T
 		t.Fatal("retained file should have a cycle-failure marker")
 	}
 
-	// Duplicate file (zzz-self.md) should remain in waiting/ without a cycle-failure marker.
-	dupPath := filepath.Join(tasksDir, DirWaiting, "zzz-self.md")
-	dupData, err := os.ReadFile(dupPath)
+	// Duplicate file (zzz-self.md) should be in failed/ with terminal-failure marker.
+	dupData, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "zzz-self.md"))
 	if err != nil {
-		t.Fatalf("duplicate file zzz-self.md should remain in waiting/: %v", err)
+		t.Fatalf("duplicate file zzz-self.md should be in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(dupData) {
+		t.Fatal("duplicate file should have a terminal-failure marker")
 	}
 	if taskfile.ContainsCycleFailure(dupData) {
 		t.Fatal("duplicate file should NOT have a cycle-failure marker")

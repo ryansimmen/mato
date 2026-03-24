@@ -121,6 +121,28 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		}
 	}
 
+	// Move duplicate waiting files to failed/ with terminal-failure markers.
+	// A file is a duplicate if its task ID appears in RetainedFiles but
+	// its filename is not the retained copy. The first file (by filename
+	// sort) is kept; every subsequent copy is failed.
+	for _, snap := range idx.TasksByState(DirWaiting) {
+		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
+		if !ok || retainedFile == snap.Filename {
+			continue // retained copy or unknown ID — skip
+		}
+		reason := fmt.Sprintf("duplicate waiting task ID %q (retained copy: %s)", snap.Meta.ID, retainedFile)
+		fmt.Fprintf(os.Stderr, "warning: moving duplicate waiting task %s to failed/: %s\n", snap.Filename, reason)
+		if err := taskfile.AppendTerminalFailureRecord(snap.Path, reason); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
+		}
+		failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+		if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+		} else {
+			moved = true
+		}
+	}
+
 	// Move cycle members to failed/ using the cycle-to-failed sequence.
 	// Build a lookup from retained task ID to waiting snapshot for cycle processing.
 	// Only retained files (from deduped diagnostics) are eligible; duplicates are skipped.
