@@ -1041,3 +1041,87 @@ func TestValidateRepoPath_GitRevParseHookable(t *testing.T) {
 		t.Errorf("error = %q, want injected repo error", err.Error())
 	}
 }
+
+func TestRetryCmd_NoArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error with no arguments")
+	}
+}
+
+func TestRetryCmd_SuccessfulRetry(t *testing.T) {
+	tmp := t.TempDir()
+	failedDir := filepath.Join(tmp, ".tasks", "failed")
+	backlogDir := filepath.Join(tmp, ".tasks", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# Fix bug\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "fix-bug.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry command failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(backlogDir, "fix-bug.md")); err != nil {
+		t.Fatal("task should be in backlog after retry")
+	}
+}
+
+func TestRetryCmd_TaskNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, ".tasks", "failed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, ".tasks", "backlog"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "nonexistent"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing task")
+	}
+	if !strings.Contains(err.Error(), "not found in failed/") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRetryCmd_FlagParsing(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"tasks-dir equals form", []string{"retry", "--tasks-dir=/tmp/t", "foo"}},
+		{"tasks-dir space form", []string{"retry", "--tasks-dir", "/tmp/t", "foo"}},
+		{"repo equals form", []string{"retry", "--repo=/tmp/r", "foo"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			// Override RunE to just validate flag parsing.
+			for _, sub := range cmd.Commands() {
+				if sub.Name() == "retry" {
+					sub.RunE = func(cmd *cobra.Command, args []string) error {
+						return nil
+					}
+				}
+			}
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("flag parsing failed: %v", err)
+			}
+		})
+	}
+}

@@ -19,6 +19,7 @@ mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [--dry-run] [copilot
 mato status [--repo <path>] [--tasks-dir <path>]
 mato doctor [--repo <path>] [--tasks-dir <path>] [--fix] [--format json] [--only <check>]
 mato graph [--repo <path>] [--tasks-dir <path>] [--format text|dot|json] [--all]
+mato retry [--repo <path>] [--tasks-dir <path>] <task-name> [task-name...]
 ```
 Run mode creates the queue structure if needed, starts the Docker-based Copilot loop,
 and merges completed work into the target branch. If the target branch does not exist
@@ -85,6 +86,28 @@ mato graph --format json
 
 # Include completed and failed tasks
 mato graph --all
+```
+
+### `mato retry`
+`mato retry` requeues one or more failed tasks back to `backlog/`. It reads
+the task file from `failed/`, strips all failure markers (`<!-- failure: -->`,
+`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- review-rejection: -->`,
+`<!-- terminal-failure: -->`), and writes the cleaned content to `backlog/`.
+The original file in `failed/` is only removed after a successful write,
+ensuring no data loss on collision or write error.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--tasks-dir <path>` | `<repo>/.tasks` | Path to the tasks directory. |
+
+Example usage:
+```bash
+# Retry a single task
+mato retry fix-login-bug
+
+# Retry multiple tasks at once
+mato retry fix-login-bug add-dark-mode
 ```
 
 ## Environment Variables

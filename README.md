@@ -176,6 +176,24 @@ The `--only` flag accepts a comma-separated list of check categories to run
 non-selected checks appear as skipped. Exit code 0 means healthy, 1 means
 warnings only, and 2 means errors were found.
 
+## Retry Command
+
+`mato retry` requeues failed tasks back to backlog for another attempt:
+
+```bash
+# Retry a single task
+mato retry fix-login-bug
+
+# Retry multiple tasks
+mato retry fix-login-bug add-dark-mode
+```
+
+The command strips all failure markers (`<!-- failure: -->`, `<!-- review-failure: -->`,
+`<!-- cycle-failure: -->`, `<!-- review-rejection: -->`, `<!-- terminal-failure: -->`)
+from the task file and writes the cleaned content to `backlog/`. If the task already
+exists in `backlog/`, the command prints an error and leaves the `failed/` copy
+unchanged (no data loss).
+
 ## Docker
 
 `mato` launches an `ubuntu:24.04` container by default (override with `MATO_DOCKER_IMAGE`). The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
