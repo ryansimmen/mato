@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/frontmatter"
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/queue"
@@ -19,22 +20,23 @@ const statusMessageLimit = 50
 
 // statusData holds all the data gathered for the status dashboard.
 type statusData struct {
-	idx             *queue.PollIndex
-	queueCounts     map[string]int
-	runnable        int
-	agents          []statusAgent
-	presenceMap     map[string]messaging.PresenceInfo
-	activeProgress  []progressEntry
-	inProgressTasks []taskEntry
-	readyForReview  []taskEntry
-	readyToMerge    []taskEntry
-	waitingTasks    []waitingTaskSummary
-	deferredDetail  map[string]queue.DeferralInfo
-	failedTasks     []taskEntry
-	completions     []messaging.CompletionDetail
-	recentMessages  []messaging.Message
-	reverseDeps     map[string][]string
-	mergeLockActive bool
+	idx              *queue.PollIndex
+	queueCounts      map[string]int
+	runnable         int
+	runnableBacklog  []taskEntry
+	agents           []statusAgent
+	presenceMap      map[string]messaging.PresenceInfo
+	activeProgress   []progressEntry
+	inProgressTasks  []taskEntry
+	readyForReview   []taskEntry
+	readyToMerge     []taskEntry
+	waitingTasks     []waitingTaskSummary
+	deferredDetail   map[string]queue.DeferralInfo
+	failedTasks      []taskEntry
+	completions      []messaging.CompletionDetail
+	recentMessages   []messaging.Message
+	reverseDeps      map[string][]string
+	mergeLockActive  bool
 }
 
 // progressEntry holds a formatted progress message for an active agent.
@@ -89,6 +91,20 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	data.runnable = data.queueCounts[queue.DirBacklog] - len(deferred)
 	if data.runnable < 0 {
 		data.runnable = 0
+	}
+
+	// Runnable backlog in priority order — same ordering the host uses to
+	// claim the next task, minus conflict-deferred entries.
+	runnableSnaps := idx.BacklogByPriority(deferred)
+	data.runnableBacklog = make([]taskEntry, 0, len(runnableSnaps))
+	for _, snap := range runnableSnaps {
+		data.runnableBacklog = append(data.runnableBacklog, taskEntry{
+			name:       snap.Filename,
+			title:      frontmatter.ExtractTitle(snap.Filename, snap.Body),
+			id:         snap.Meta.ID,
+			priority:   snap.Meta.Priority,
+			maxRetries: snap.Meta.MaxRetries,
+		})
 	}
 
 	// Task lists by state — derived from index.

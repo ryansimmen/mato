@@ -48,10 +48,16 @@ Long flags support both `--flag value` and `--flag=value` forms.
 ### `mato status`
 `mato status` reads the queue directory and reports:
 - counts for `waiting`, `backlog`, `in-progress`, `ready-for-review`, `ready-to-merge`, `completed`, and `failed`
+- runnable backlog in execution order (priority-sorted, conflict-deferred tasks excluded), matching the ordering the host uses to claim work
 - active agents discovered from `.tasks/.locks/*.pid`
 - waiting tasks plus dependency-status summaries
+- conflict-deferred tasks with blocking details
 - the five most recent messages from `.tasks/messages`
-Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, and `--help`/`-h`.
+
+Use `--json` to get machine-readable output. The `runnable_backlog` array in the
+JSON output lists tasks in the same priority order as the text view.
+
+Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, `--json`, and `--help`/`-h`.
 
 ### `mato graph`
 `mato graph` visualizes the task dependency topology. It reuses `PollIndex` and

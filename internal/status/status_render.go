@@ -53,6 +53,23 @@ func renderQueueOverview(w io.Writer, c colorSet, data statusData) {
 	}
 }
 
+func renderRunnableBacklog(w io.Writer, c colorSet, data statusData) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, c.bold("Runnable Backlog (execution order)"))
+	fmt.Fprintln(w, c.bold("──────────────────────────────────"))
+	if len(data.runnableBacklog) == 0 {
+		fmt.Fprintln(w, c.dim("  (none)"))
+		return
+	}
+	for i, task := range data.runnableBacklog {
+		label := task.name
+		if task.title != "" {
+			label = fmt.Sprintf("%s — %s", task.name, task.title)
+		}
+		fmt.Fprintf(w, "  %d. %s  %s\n", i+1, label, c.dim(fmt.Sprintf("(priority %d)", task.priority)))
+	}
+}
+
 func renderActiveAgents(w io.Writer, c colorSet, data statusData) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, c.bold("Active Agents"))

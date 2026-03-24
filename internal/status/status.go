@@ -47,6 +47,7 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 
 	c := newColorSet()
 	renderQueueOverview(w, c, data)
+	renderRunnableBacklog(w, c, data)
 	renderActiveAgents(w, c, data)
 	renderAgentProgress(w, c, data)
 	renderInProgressTasks(w, c, tasksDir, data)
