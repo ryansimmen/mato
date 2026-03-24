@@ -19,9 +19,17 @@ func TestDoctor_Integration_FixCycle(t *testing.T) {
 	})
 	t.Cleanup(func() { doctor.SetInspectHostToolsFn(origTools) })
 
+	origLookPath := doctor.ExportDockerLookPathFn()
+	doctor.SetDockerLookPathFn(func() error { return nil })
+	t.Cleanup(func() { doctor.SetDockerLookPathFn(origLookPath) })
+
 	origDocker := doctor.ExportDockerProbe()
 	doctor.SetDockerProbe(func(ctx context.Context) error { return nil })
 	t.Cleanup(func() { doctor.SetDockerProbe(origDocker) })
+
+	origImageInspect := doctor.ExportDockerImageInspectFn()
+	doctor.SetDockerImageInspectFn(func(ctx context.Context, image string) error { return nil })
+	t.Cleanup(func() { doctor.SetDockerImageInspectFn(origImageInspect) })
 
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
