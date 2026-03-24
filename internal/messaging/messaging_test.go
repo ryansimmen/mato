@@ -2087,6 +2087,111 @@ func TestWriteMessage_BlankFromFallsBackToUnknown(t *testing.T) {
 	}
 }
 
+func TestCleanStalePresence_UnsafeAgentID(t *testing.T) {
+	tests := []struct {
+		name    string
+		agentID string
+	}{
+		{"spaces", "agent one"},
+		{"special chars", "agent@host:1234"},
+		{"unicode", "agënt-ünit"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/active", func(t *testing.T) {
+			tasksDir := t.TempDir()
+			if err := Init(tasksDir); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+
+			if err := WritePresence(tasksDir, tt.agentID, "task.md", "branch"); err != nil {
+				t.Fatalf("WritePresence: %v", err)
+			}
+
+			// Create a lock file using the original (unsanitized) agent ID,
+			// simulating an active agent.
+			lockPath := filepath.Join(tasksDir, ".locks", tt.agentID+".pid")
+			if err := os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+				t.Fatalf("WriteFile lock: %v", err)
+			}
+
+			CleanStalePresence(tasksDir)
+
+			// Presence should NOT be removed because the agent is active.
+			presenceDir := filepath.Join(tasksDir, "messages", "presence")
+			entries, err := os.ReadDir(presenceDir)
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("expected 1 presence file to remain (active agent), got %d", len(entries))
+			}
+		})
+
+		t.Run(tt.name+"/stale", func(t *testing.T) {
+			tasksDir := t.TempDir()
+			if err := Init(tasksDir); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+
+			if err := WritePresence(tasksDir, tt.agentID, "task.md", "branch"); err != nil {
+				t.Fatalf("WritePresence: %v", err)
+			}
+
+			// Create a lock file with a dead PID so cleanup treats it as stale.
+			lockPath := filepath.Join(tasksDir, ".locks", tt.agentID+".pid")
+			if err := os.WriteFile(lockPath, []byte("2147483647"), 0o644); err != nil {
+				t.Fatalf("WriteFile lock: %v", err)
+			}
+
+			CleanStalePresence(tasksDir)
+
+			// Presence should be removed because the agent is stale.
+			presenceDir := filepath.Join(tasksDir, "messages", "presence")
+			entries, err := os.ReadDir(presenceDir)
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			jsonCount := 0
+			for _, e := range entries {
+				if strings.HasSuffix(e.Name(), ".json") {
+					jsonCount++
+				}
+			}
+			if jsonCount != 0 {
+				t.Fatalf("expected stale presence file to be removed, got %d JSON files", jsonCount)
+			}
+		})
+	}
+}
+
+func TestCleanStalePresence_MalformedJSON(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Write a malformed JSON presence file; cleanup should skip it
+	// without panicking.
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	if err := os.WriteFile(filepath.Join(presenceDir, "bad.json"), []byte("{invalid"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	CleanStalePresence(tasksDir)
+
+	// The malformed file should still exist (skipped, not deleted).
+	if _, err := os.Stat(filepath.Join(presenceDir, "bad.json")); err != nil {
+		t.Fatalf("malformed presence file should not be removed: %v", err)
+	}
+}
+
 func TestWritePresence_UnsafeAgentID(t *testing.T) {
 	tests := []struct {
 		name         string

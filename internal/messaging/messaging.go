@@ -276,9 +276,31 @@ func CleanStalePresence(tasksDir string) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
+		path := filepath.Join(presenceDir, entry.Name())
+
+		// Read the JSON payload to get the canonical agent_id rather than
+		// deriving it from the sanitized filename, which loses information
+		// for agent IDs containing non-filename-safe characters.
 		agentID := strings.TrimSuffix(entry.Name(), ".json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "warning: could not read presence file %s: %v\n", entry.Name(), err)
+			continue
+		}
+		var info PresenceInfo
+		if err := json.Unmarshal(data, &info); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse presence file %s: %v\n", entry.Name(), err)
+			continue
+		}
+		if info.AgentID != "" {
+			agentID = info.AgentID
+		}
+
 		if !identity.IsAgentActive(tasksDir, agentID) {
-			if err := os.Remove(filepath.Join(presenceDir, entry.Name())); err != nil && !os.IsNotExist(err) {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				fmt.Fprintf(os.Stderr, "warning: could not remove stale presence file %s: %v\n", entry.Name(), err)
 			}
 		}
