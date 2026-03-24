@@ -1,6 +1,7 @@
 package status
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -37,6 +38,7 @@ type statusData struct {
 	recentMessages   []messaging.Message
 	reverseDeps      map[string][]string
 	mergeLockActive  bool
+	warnings         []string
 }
 
 // progressEntry holds a formatted progress message for an active agent.
@@ -75,7 +77,11 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	data.agents = agents
 
 	// Presence info.
-	data.presenceMap, _ = messaging.ReadAllPresence(tasksDir)
+	presenceMap, presenceErr := messaging.ReadAllPresence(tasksDir)
+	if presenceErr != nil {
+		data.warnings = append(data.warnings, fmt.Sprintf("could not read agent presence: %v", presenceErr))
+	}
+	data.presenceMap = presenceMap
 
 	// Waiting tasks (dependency-blocked) — derived from index.
 	data.waitingTasks = waitingTasksFromIndex(idx)
@@ -117,7 +123,11 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	data.reverseDeps = reverseDepsFromIndex(idx)
 
 	// Completions.
-	data.completions, _ = messaging.ReadAllCompletionDetails(tasksDir)
+	completions, completionsErr := messaging.ReadAllCompletionDetails(tasksDir)
+	if completionsErr != nil {
+		data.warnings = append(data.warnings, fmt.Sprintf("could not read completion details: %v", completionsErr))
+	}
+	data.completions = completions
 
 	// Merge lock.
 	data.mergeLockActive = isMergeLockActive(tasksDir)

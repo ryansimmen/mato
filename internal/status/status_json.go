@@ -25,6 +25,7 @@ type StatusJSON struct {
 	Failed          []FailedTaskJSON  `json:"failed"`
 	Completions     []CompletionJSON  `json:"recent_completions"`
 	Messages        []MessageJSON     `json:"recent_messages"`
+	Warnings        []string          `json:"warnings,omitempty"`
 }
 
 // AgentJSON represents an active agent in JSON output.
@@ -234,6 +235,9 @@ func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 			SentAt: msg.SentAt,
 		})
 	}
+
+	// Warnings.
+	out.Warnings = data.warnings
 
 	return out
 }

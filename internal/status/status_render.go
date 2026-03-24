@@ -313,3 +313,16 @@ func renderRecentMessages(w io.Writer, c colorSet, data statusData) {
 		fmt.Fprintf(w, "  %s %s: %s\n", c.dim("["+msg.SentAt.Local().Format("15:04:05")+"]"), c.yellow(from), line)
 	}
 }
+
+// renderWarnings prints any non-fatal warnings collected during data gathering.
+func renderWarnings(w io.Writer, c colorSet, data statusData) {
+	if len(data.warnings) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, c.bold(c.yellow("Warnings")))
+	fmt.Fprintln(w, c.bold(c.yellow("────────")))
+	for _, warn := range data.warnings {
+		fmt.Fprintf(w, "  %s %s\n", c.yellow("⚠"), warn)
+	}
+}
