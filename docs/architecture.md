@@ -1,5 +1,5 @@
 # Mato Architecture
-This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
+This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.tasks/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
@@ -30,7 +30,7 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 +------------------+     ready-to-merge -> completed
 ```
 High-level flow:
-1. `main.go` parses flags and either starts `runner.Run(...)` or routes to `status.Show(...)`.
+1. `main.go` parses flags and either starts `runner.Run(...)`, bootstraps a repository via `setup.InitRepo(...)`, or routes to subcommands such as `status.Show(...)`.
 2. `runner.Run(...)` creates/maintains the queue, writes `.queue`, and starts agent runs.
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim and pushes `task/<sanitized-filename>`.
 4. The host merge queue squashes that task branch into the target branch and moves the task file to `completed/`.
@@ -48,6 +48,18 @@ High-level flow:
 9. Resolve host tools and config: Docker image, `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity.
 10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.tasks`, the configured target branch, and `/workspace/.tasks/messages`.
 11. Install `SIGINT`/`SIGTERM` handlers.
+
+### Explicit initialization path
+`mato init` uses `setup.InitRepo(repoRoot, branch, tasksDir)` for lightweight repository bootstrap without Docker. This path intentionally stays separate from `runner.Run(...)` so the runtime Docker gate and existing runner ordering do not change. `setup.InitRepo(...)` composes shared helpers such as `git.EnsureBranch(...)`, `git.EnsureIdentity(...)`, `git.EnsureGitignoreContains(...)`, and `messaging.Init(...)` to:
+
+1. Resolve and validate the tasks directory.
+2. Create or switch to the target branch.
+3. Create queue directories, `.tasks/.locks/`, and messaging subdirectories.
+4. Ensure local git identity exists.
+5. Update `.gitignore` when the tasks directory is inside the repository.
+6. Create a bootstrap commit on empty repositories so the target branch becomes a born branch.
+
+Integration coverage verifies that running `mato init` followed by `runner.DryRun(...)` produces a fully valid queue layout.
 ### Polling loop
 The loop in `Run()` polls every 10 seconds. The exact order is:
 ```text

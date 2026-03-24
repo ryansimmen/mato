@@ -171,7 +171,7 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 		}
 	}
 	if missingDirs > 0 {
-		return fmt.Errorf("%d required queue directories missing — run mato once to create them", missingDirs)
+		return fmt.Errorf("%d required queue directories missing — run `mato init` to create them", missingDirs)
 	}
 
 	// Parse all task files and report errors
@@ -344,10 +344,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 // git.ResolveIdentity, and ensures both are set on the local repo for
 // use inside Docker containers.
 func resolveGitIdentity(repoRoot string) (name, email string) {
-	name, email = git.ResolveIdentity(repoRoot)
-	git.Output(repoRoot, "config", "user.name", name)
-	git.Output(repoRoot, "config", "user.email", email)
-	return name, email
+	return git.EnsureIdentity(repoRoot)
 }
 
 // buildEnvAndRunContext assembles the envConfig and runContext from resolved

@@ -1,5 +1,7 @@
 # `mato init` — Implementation Plan
 
+> **Status: Implemented.** This proposal has been fully implemented.
+
 ## 1. Goal
 
 Add a `mato init` subcommand that sets up a repository for mato use in a

@@ -53,6 +53,7 @@ internal/          All library packages:
   process/         Process detection via /proc
   queue/           Task queue management + claiming
   runner/          Agent lifecycle, Docker, embedded prompts
+  setup/           Repository bootstrap and init workflow
   status/          mato status command
   taskfile/        Task file helpers (metadata parsing, active-affects collection)
   testutil/        Shared test helpers (SetupRepo, SetupRepoWithTasks)
