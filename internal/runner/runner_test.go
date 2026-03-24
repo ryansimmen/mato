@@ -1041,6 +1041,39 @@ func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 	}
 }
 
+func TestReviewCandidates_ExhaustedHasTerminalMarker(t *testing.T) {
+	tasksDir := t.TempDir()
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	os.MkdirAll(reviewDir, 0o755)
+	os.MkdirAll(failedDir, 0o755)
+
+	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
+		"---",
+		"priority: 5",
+		"---",
+		"# Exhausted Task",
+		"<!-- review-failure: one -->",
+		"<!-- review-failure: two -->",
+		"<!-- review-failure: three -->",
+		"<!-- branch: task/exhausted -->",
+		"",
+	}, "\n")), 0o644)
+
+	reviewCandidates(tasksDir, nil)
+
+	data, err := os.ReadFile(filepath.Join(failedDir, "exhausted.md"))
+	if err != nil {
+		t.Fatalf("exhausted.md not found in failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("exhausted.md in failed/ should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "review retry budget exhausted") {
+		t.Error("terminal-failure marker should mention review retry budget exhausted")
+	}
+}
+
 func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)

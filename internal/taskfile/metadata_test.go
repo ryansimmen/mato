@@ -423,3 +423,107 @@ func TestCountFailureMarkers_ExcludesCycleFailure(t *testing.T) {
 		t.Fatalf("CountFailureMarkers() = %d, want 1 (should exclude cycle-failure)", got)
 	}
 }
+
+func TestAppendTerminalFailureRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(path, []byte("# Task\n"), 0o644)
+
+	if err := AppendTerminalFailureRecord(path, "unparseable frontmatter"); err != nil {
+		t.Fatalf("AppendTerminalFailureRecord: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "<!-- terminal-failure: mato at") {
+		t.Fatalf("terminal-failure record not found in file: %s", data)
+	}
+	if !strings.Contains(string(data), "unparseable frontmatter") {
+		t.Fatalf("terminal-failure reason not found in file: %s", data)
+	}
+}
+
+func TestAppendTerminalFailureRecord_NonexistentFile(t *testing.T) {
+	err := AppendTerminalFailureRecord(filepath.Join(t.TempDir(), "missing.md"), "reason")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+}
+
+func TestAppendTerminalFailureRecord_SanitizesReason(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(path, []byte("# Task\n"), 0o644)
+
+	if err := AppendTerminalFailureRecord(path, "bad\nreason -->"); err != nil {
+		t.Fatalf("AppendTerminalFailureRecord: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	s := string(data)
+	if strings.Contains(s, "\n<!-- terminal-failure: mato at") && strings.Contains(s, "bad reason —>") {
+		return
+	}
+	t.Fatalf("sanitized terminal-failure not found in file: %s", data)
+}
+
+func TestContainsTerminalFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"present", "# Task\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n", true},
+		{"absent", "# Task\n<!-- failure: agent at T step=WORK error=fail -->\n", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsTerminalFailure([]byte(tt.data)); got != tt.want {
+				t.Fatalf("ContainsTerminalFailure() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountTerminalFailureMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want int
+	}{
+		{"none", "# Task\n", 0},
+		{"one", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n", 1},
+		{"two", "<!-- terminal-failure: mato at T1 — reason1 -->\n<!-- terminal-failure: mato at T2 — reason2 -->\n", 2},
+		{"mixed with failure", "<!-- failure: agent at T step=WORK error=e -->\n<!-- terminal-failure: mato at T — reason -->\n", 1},
+		{"mixed with cycle", "<!-- cycle-failure: mato at T — circular dependency -->\n<!-- terminal-failure: mato at T — reason -->\n", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CountTerminalFailureMarkers([]byte(tt.data)); got != tt.want {
+				t.Fatalf("CountTerminalFailureMarkers() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLastTerminalFailureReason(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{"present", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n", "unparseable frontmatter"},
+		{"absent", "<!-- failure: agent at T step=WORK error=fail -->\n", ""},
+		{"multiple returns last", "<!-- terminal-failure: mato at T — first -->\n<!-- terminal-failure: mato at T — review retry exhausted -->\n", "review retry exhausted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LastTerminalFailureReason([]byte(tt.data)); got != tt.want {
+				t.Fatalf("LastTerminalFailureReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountFailureMarkers_ExcludesTerminalFailure(t *testing.T) {
+	data := []byte("<!-- failure: agent at T step=WORK error=e -->\n<!-- terminal-failure: mato at T — reason -->\n")
+	if got := CountFailureMarkers(data); got != 1 {
+		t.Fatalf("CountFailureMarkers() = %d, want 1 (should exclude terminal-failure)", got)
+	}
+}
