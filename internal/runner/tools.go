@@ -12,6 +12,7 @@ import (
 // Test seams for controlling tool lookups in tests.
 var lookPathFn = exec.LookPath
 var statFn = os.Stat
+var mkdirAllFn = os.MkdirAll
 var userHomeDirFn = os.UserHomeDir
 var gitExecPathFn = func() (string, error) {
 	out, err := exec.Command("git", "--exec-path").Output()
@@ -26,6 +27,7 @@ var gitExecPathFn = func() (string, error) {
 type hostTools struct {
 	copilotPath        string
 	copilotConfigDir   string
+	copilotCacheDir    string
 	gitPath            string
 	gitUploadPackPath  string
 	gitReceivePackPath string
@@ -94,6 +96,11 @@ func discoverHostTools() (hostTools, error) {
 		return hostTools{}, fmt.Errorf("~/.copilot path %s exists but is not a directory", copilotConfigDir)
 	}
 
+	copilotCacheDir := filepath.Join(homeDir, ".cache", "copilot")
+	if err := mkdirAllFn(copilotCacheDir, 0o755); err != nil {
+		return hostTools{}, fmt.Errorf("create copilot cache directory %s: %w", copilotCacheDir, err)
+	}
+
 	ghConfigDir := filepath.Join(homeDir, ".config", "gh")
 	hasGhConfig := false
 	if info, statErr := statFn(ghConfigDir); statErr == nil && info.IsDir() {
@@ -103,6 +110,7 @@ func discoverHostTools() (hostTools, error) {
 	return hostTools{
 		copilotPath:        copilotPath,
 		copilotConfigDir:   copilotConfigDir,
+		copilotCacheDir:    copilotCacheDir,
 		gitPath:            gitPath,
 		gitUploadPackPath:  gitUploadPackPath,
 		gitReceivePackPath: gitReceivePackPath,
@@ -213,6 +221,11 @@ func InspectHostTools() ToolReport {
 		path string
 	}
 	var optDirs []optDir
+
+	if homeErr == nil {
+		copilotCacheDir := filepath.Join(homeDir, ".cache", "copilot")
+		optDirs = append(optDirs, optDir{"copilot cache dir", copilotCacheDir})
+	}
 
 	gitTemplatesDir := "/usr/share/git-core/templates"
 	optDirs = append(optDirs, optDir{"git templates dir", gitTemplatesDir})
