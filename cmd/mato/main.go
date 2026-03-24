@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"mato/internal/doctor"
 	"mato/internal/graph"
+	"mato/internal/queue"
 	"mato/internal/runner"
 	"mato/internal/status"
 
@@ -221,6 +223,7 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newGraphCmd())
+	root.AddCommand(newRetryCmd())
 	return root
 }
 
@@ -376,6 +379,48 @@ func newGraphCmd() *cobra.Command {
 	cmd.Flags().StringVar(&graphTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, dot, or json")
 	cmd.Flags().BoolVar(&showAll, "all", false, "Include completed and failed tasks")
+
+	return cmd
+}
+
+func newRetryCmd() *cobra.Command {
+	var retryRepo string
+	var retryTasksDir string
+
+	cmd := &cobra.Command{
+		Use:           "retry <task-name> [task-name...]",
+		Short:         "Requeue failed tasks back to backlog",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, err := resolveRepo(retryRepo)
+			if err != nil {
+				return err
+			}
+			tasksDir := retryTasksDir
+			if tasksDir == "" {
+				tasksDir = filepath.Join(repo, ".tasks")
+			}
+
+			var firstErr error
+			for _, name := range args {
+				if err := queue.RetryTask(tasksDir, name); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+				}
+				stem := strings.TrimSuffix(name, ".md")
+				fmt.Printf("Requeued %s to backlog\n", stem)
+			}
+			return firstErr
+		},
+	}
+
+	cmd.Flags().StringVar(&retryRepo, "repo", "", "Path to the git repository (default: current directory)")
+	cmd.Flags().StringVar(&retryTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 
 	return cmd
 }
