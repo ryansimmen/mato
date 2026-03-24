@@ -527,3 +527,121 @@ func TestCountFailureMarkers_ExcludesTerminalFailure(t *testing.T) {
 		t.Fatalf("CountFailureMarkers() = %d, want 1 (should exclude terminal-failure)", got)
 	}
 }
+
+func TestStripFailureMarkers(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		notWant []string
+	}{
+		{
+			name: "strips all failure marker types",
+			input: `<!-- branch: task/foo -->
+# Title
+
+Body text.
+
+<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->
+<!-- review-failure: def at 2026-01-02T00:00:00Z step=REVIEW error=timeout -->
+<!-- cycle-failure: mato at 2026-01-03T00:00:00Z — circular dependency -->
+<!-- review-rejection: reviewer at 2026-01-04T00:00:00Z — bad code -->
+<!-- terminal-failure: mato at 2026-01-05T00:00:00Z — unparseable -->
+`,
+			want: "<!-- review-rejection: reviewer at 2026-01-04T00:00:00Z — bad code -->",
+			notWant: []string{
+				"<!-- failure:",
+				"<!-- review-failure:",
+				"<!-- cycle-failure:",
+				"<!-- terminal-failure:",
+			},
+		},
+		{
+			name:  "no markers to strip",
+			input: "# Title\n\nBody.\n",
+			want:  "# Title",
+		},
+		{
+			name: "preserves non-failure comments",
+			input: `<!-- claimed-by: abc -->
+<!-- branch: task/foo -->
+# Title
+<!-- failure: x at 2026-01-01T00:00:00Z step=WORK error=e -->
+`,
+			want:    "<!-- claimed-by: abc -->",
+			notWant: []string{"<!-- failure:"},
+		},
+		{
+			name: "preserves review rejection feedback",
+			input: `# Title
+
+<!-- review-rejection: reviewer at 2026-01-04T00:00:00Z — bad code -->
+
+<!-- terminal-failure: mato at 2026-01-05T00:00:00Z — unparseable -->
+`,
+			want:    "<!-- review-rejection: reviewer at 2026-01-04T00:00:00Z — bad code -->",
+			notWant: []string{"<!-- terminal-failure:"},
+		},
+		{
+			name: "collapses excessive blank lines",
+			input: `# Title
+
+
+<!-- failure: a at T step=WORK error=e -->
+
+
+Body continues.
+`,
+			want: "Body continues.",
+		},
+		{
+			name:  "handles empty input",
+			input: "",
+			want:  "\n",
+		},
+		{
+			name: "strips indented failure markers",
+			input: `# Title
+  <!-- failure: a at T step=WORK error=e -->
+Body.
+`,
+			want:    "Body.",
+			notWant: []string{"<!-- failure:"},
+		},
+		{
+			name: "handles multiple consecutive failure markers",
+			input: `# Title
+<!-- failure: a at T1 step=WORK error=e1 -->
+<!-- failure: b at T2 step=WORK error=e2 -->
+<!-- review-failure: c at T3 step=REVIEW error=e3 -->
+Body.
+`,
+			want:    "Body.",
+			notWant: []string{"<!-- failure:", "<!-- review-failure:"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := StripFailureMarkers(tt.input)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("expected output to contain %q, got:\n%s", tt.want, got)
+			}
+			for _, bad := range tt.notWant {
+				if strings.Contains(got, bad) {
+					t.Errorf("output should not contain %q, got:\n%s", bad, got)
+				}
+			}
+		})
+	}
+}
+
+func TestStripFailureMarkers_TrailingNewline(t *testing.T) {
+	got := StripFailureMarkers("# Title\n")
+	if !strings.HasSuffix(got, "\n") {
+		t.Errorf("result should end with newline, got: %q", got)
+	}
+	// Should not end with multiple newlines.
+	if strings.HasSuffix(got, "\n\n") {
+		t.Errorf("result should not end with double newline, got: %q", got)
+	}
+}
