@@ -21,23 +21,23 @@ const statusMessageLimit = 50
 
 // statusData holds all the data gathered for the status dashboard.
 type statusData struct {
-	queueCounts      map[string]int
-	runnable         int
-	runnableBacklog  []taskEntry
-	agents           []statusAgent
-	presenceMap      map[string]messaging.PresenceInfo
-	activeProgress   []progressEntry
-	inProgressTasks  []taskEntry
-	readyForReview   []taskEntry
-	readyToMerge     []taskEntry
-	waitingTasks     []waitingTaskSummary
-	deferredDetail   map[string]queue.DeferralInfo
-	failedTasks      []taskEntry
-	completions      []messaging.CompletionDetail
-	recentMessages   []messaging.Message
-	reverseDeps      map[string][]string
-	mergeLockActive  bool
-	warnings         []string
+	queueCounts     map[string]int
+	runnable        int
+	runnableBacklog []taskEntry
+	agents          []statusAgent
+	presenceMap     map[string]messaging.PresenceInfo
+	activeProgress  []progressEntry
+	inProgressTasks []taskEntry
+	readyForReview  []taskEntry
+	readyToMerge    []taskEntry
+	waitingTasks    []waitingTaskSummary
+	deferredDetail  map[string]queue.DeferralInfo
+	failedTasks     []taskEntry
+	completions     []messaging.CompletionDetail
+	recentMessages  []messaging.Message
+	reverseDeps     map[string][]string
+	mergeLockActive bool
+	warnings        []string
 }
 
 // progressEntry holds a formatted progress message for an active agent.

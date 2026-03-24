@@ -290,8 +290,8 @@ func TestReconcileReadyQueue_MixedTasks(t *testing.T) {
 
 func TestCountPromotableWaitingTasks(t *testing.T) {
 	tests := []struct {
-		name     string
-		setup    func(tasksDir string)
+		name      string
+		setup     func(tasksDir string)
 		wantCount int
 	}{
 		{

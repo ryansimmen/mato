@@ -320,10 +320,10 @@ func TestWriteDependencyContextFile_WithMatchingCompletion(t *testing.T) {
 
 	// Create a completion detail file for the dependency.
 	detail := messaging.CompletionDetail{
-		TaskID:   "dep-task",
-		TaskFile: "dep-task.md",
-		Branch:   "task/dep-task",
-		Title:    "Dep Task",
+		TaskID:    "dep-task",
+		TaskFile:  "dep-task.md",
+		Branch:    "task/dep-task",
+		Title:     "Dep Task",
 		CommitSHA: "abc123",
 	}
 	if err := messaging.WriteCompletionDetail(tasksDir, detail); err != nil {

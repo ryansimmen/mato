@@ -36,10 +36,10 @@ func TestListTaskFiles(t *testing.T) {
 		{
 			name: "skips non-md files",
 			files: map[string]bool{
-				"alpha.md":  false,
+				"alpha.md":   false,
 				"readme.txt": false,
-				".queue":    false,
-				"beta.md":   false,
+				".queue":     false,
+				"beta.md":    false,
 			},
 			expected: []string{"alpha.md", "beta.md"},
 		},
