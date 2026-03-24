@@ -2237,3 +2237,193 @@ func TestReadMessages_StableSortMixedTimestamps(t *testing.T) {
 		}
 	}
 }
+
+func TestReadRecentMessages_ReturnsAll_WhenUnderLimit(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "agent",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	msgs, err := ReadRecentMessages(tasksDir, 10)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Errorf("got %d messages, want 3", len(msgs))
+	}
+}
+
+func TestReadRecentMessages_LimitsToMostRecent(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	now := time.Now().UTC()
+	for i := 0; i < 10; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "agent",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	msgs, err := ReadRecentMessages(tasksDir, 3)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Errorf("got %d messages, want 3", len(msgs))
+	}
+	// Should contain the 3 most recent messages (m7, m8, m9).
+	for _, msg := range msgs {
+		id := msg.ID
+		if id != "m7" && id != "m8" && id != "m9" {
+			t.Errorf("unexpected message ID %q in bounded result", id)
+		}
+	}
+}
+
+func TestReadRecentMessages_ZeroLimitReadsAll(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	now := time.Now().UTC()
+	for i := 0; i < 5; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "agent",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	msgs, err := ReadRecentMessages(tasksDir, 0)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	if len(msgs) != 5 {
+		t.Errorf("got %d messages, want 5", len(msgs))
+	}
+}
+
+func TestReadRecentMessages_NonExistentDir(t *testing.T) {
+	msgs, err := ReadRecentMessages(filepath.Join(t.TempDir(), "nope"), 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("got %d messages, want 0", len(msgs))
+	}
+}
+
+func TestReadRecentMessages_PreservesOrder(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	now := time.Now().UTC()
+	for i := 0; i < 5; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "agent",
+			Type:   "intent",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	msgs, err := ReadRecentMessages(tasksDir, 3)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	// Messages should be sorted by SentAt ascending.
+	for i := 1; i < len(msgs); i++ {
+		if msgs[i].SentAt.Before(msgs[i-1].SentAt) {
+			t.Errorf("messages not sorted: msgs[%d].SentAt=%v before msgs[%d].SentAt=%v",
+				i, msgs[i].SentAt, i-1, msgs[i-1].SentAt)
+		}
+	}
+}
+
+// setupMessagingDirs creates the messaging directory structure for tests.
+func setupMessagingDirs(t *testing.T, tasksDir string) {
+	t.Helper()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+}
+
+// writeNMessages creates n message files in the events directory.
+func writeNMessages(b *testing.B, tasksDir string, n int) {
+	b.Helper()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		msg := Message{
+			ID:     fmt.Sprintf("bench-%d", i),
+			From:   fmt.Sprintf("agent-%d", i%5),
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("progress %d", i),
+			SentAt: base.Add(time.Duration(i) * time.Second),
+		}
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			b.Fatalf("WriteMessage: %v", err)
+		}
+	}
+}
+
+func BenchmarkReadMessages(b *testing.B) {
+	counts := []int{100, 500, 1000}
+	for _, n := range counts {
+		b.Run(fmt.Sprintf("unbounded_%d", n), func(b *testing.B) {
+			tasksDir := b.TempDir()
+			if err := Init(tasksDir); err != nil {
+				b.Fatalf("Init: %v", err)
+			}
+			writeNMessages(b, tasksDir, n)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := ReadMessages(tasksDir, time.Time{})
+				if err != nil {
+					b.Fatalf("ReadMessages: %v", err)
+				}
+			}
+		})
+		b.Run(fmt.Sprintf("bounded_50_of_%d", n), func(b *testing.B) {
+			tasksDir := b.TempDir()
+			if err := Init(tasksDir); err != nil {
+				b.Fatalf("Init: %v", err)
+			}
+			writeNMessages(b, tasksDir, n)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := ReadRecentMessages(tasksDir, 50)
+				if err != nil {
+					b.Fatalf("ReadRecentMessages: %v", err)
+				}
+			}
+		})
+	}
+}
