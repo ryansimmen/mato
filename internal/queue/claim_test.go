@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mato/internal/testutil"
 )
@@ -1310,5 +1311,212 @@ func TestSelectAndClaimTask_DuplicateManifestEntries(t *testing.T) {
 	}
 	if task2 != nil {
 		t.Fatalf("expected nil (duplicate should not produce extra candidates), got %+v", task2)
+	}
+}
+
+func TestLastFailureTime(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		wantOK  bool
+		wantTS  string
+	}{
+		{
+			name:   "no failures",
+			data:   "# Task\nDo stuff.\n",
+			wantOK: false,
+		},
+		{
+			name:   "single failure with timestamp",
+			data:   "# Task\n<!-- failure: agent-1 at 2026-03-01T10:00:00Z step=WORK error=build_failed -->\n",
+			wantOK: true,
+			wantTS: "2026-03-01T10:00:00Z",
+		},
+		{
+			name: "multiple failures returns last",
+			data: strings.Join([]string{
+				"# Task",
+				"<!-- failure: agent-1 at 2026-03-01T10:00:00Z step=WORK error=first -->",
+				"<!-- failure: agent-2 at 2026-03-01T12:00:00Z step=WORK error=second -->",
+			}, "\n"),
+			wantOK: true,
+			wantTS: "2026-03-01T12:00:00Z",
+		},
+		{
+			name:   "failure without timestamp",
+			data:   "# Task\n<!-- failure: agent-1 -->\n",
+			wantOK: false,
+		},
+		{
+			name:   "review-failure excluded",
+			data:   "# Task\n<!-- review-failure: agent-1 at 2026-03-01T10:00:00Z step=WORK error=oops -->\n",
+			wantOK: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := lastFailureTime([]byte(tt.data))
+			if ok != tt.wantOK {
+				t.Fatalf("lastFailureTime ok = %v, want %v", ok, tt.wantOK)
+			}
+			if tt.wantOK {
+				want, _ := time.Parse(time.RFC3339, tt.wantTS)
+				if !got.Equal(want) {
+					t.Fatalf("lastFailureTime = %v, want %v", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRetryCooldown(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"default", "", defaultRetryCooldown},
+		{"custom valid", "5m", 5 * time.Minute},
+		{"custom seconds", "30s", 30 * time.Second},
+		{"invalid string", "notaduration", defaultRetryCooldown},
+		{"zero", "0s", defaultRetryCooldown},
+		{"negative", "-1m", defaultRetryCooldown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env != "" {
+				t.Setenv("MATO_RETRY_COOLDOWN", tt.env)
+			}
+			got := retryCooldown()
+			if got != tt.want {
+				t.Fatalf("retryCooldown() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectAndClaimTask_RecentFailure_Skipped(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Task with a very recent failure — should be skipped.
+	recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "hot.md"), strings.Join([]string{
+		"# Hot task",
+		fmt.Sprintf("<!-- failure: agent-1 at %s step=WORK error=crash -->", recentTS),
+		"",
+	}, "\n"))
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "hot.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-2", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected nil (task in cooldown), got %+v", task)
+	}
+
+	// Task should still be in backlog, not moved.
+	if _, err := os.Stat(filepath.Join(dir, DirBacklog, "hot.md")); err != nil {
+		t.Fatalf("task should still be in backlog: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_OldFailure_Claimed(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Task with an old failure (well past cooldown) — should be claimed.
+	oldTS := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "cold.md"), strings.Join([]string{
+		"# Cold task",
+		fmt.Sprintf("<!-- failure: agent-1 at %s step=WORK error=crash -->", oldTS),
+		"",
+	}, "\n"))
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "cold.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-2", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task (old failure past cooldown), got nil")
+	}
+	if task.Filename != "cold.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "cold.md")
+	}
+}
+
+func TestSelectAndClaimTask_NoFailures_ClaimedImmediately(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "fresh.md"), "# Fresh task\nDo stuff.\n")
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "fresh.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-3", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task (no failures), got nil")
+	}
+	if task.Filename != "fresh.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "fresh.md")
+	}
+}
+
+func TestSelectAndClaimTask_CustomCooldown(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Failure at 90 seconds ago. Default cooldown is 2m, so it would be
+	// skipped. But with MATO_RETRY_COOLDOWN=1m it should be claimable.
+	ts := time.Now().UTC().Add(-90 * time.Second).Format(time.RFC3339)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "custom.md"), strings.Join([]string{
+		"# Custom cooldown task",
+		fmt.Sprintf("<!-- failure: agent-1 at %s step=WORK error=crash -->", ts),
+		"",
+	}, "\n"))
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "custom.md\n")
+
+	t.Setenv("MATO_RETRY_COOLDOWN", "1m")
+
+	task, err := SelectAndClaimTask(dir, "agent-4", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task (past custom 1m cooldown), got nil")
+	}
+	if task.Filename != "custom.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "custom.md")
+	}
+}
+
+func TestSelectAndClaimTask_RecentFailure_SkipsToNext(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// First task has a recent failure — should be skipped.
+	recentTS := time.Now().UTC().Add(-10 * time.Second).Format(time.RFC3339)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "aaa-hot.md"), strings.Join([]string{
+		"# Hot task",
+		fmt.Sprintf("<!-- failure: agent-1 at %s step=WORK error=crash -->", recentTS),
+		"",
+	}, "\n"))
+	// Second task has no failures — should be claimed.
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "bbb-ok.md"), "# OK task\nDo stuff.\n")
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "aaa-hot.md\nbbb-ok.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-5", nil, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected bbb-ok.md to be claimed, got nil")
+	}
+	if task.Filename != "bbb-ok.md" {
+		t.Fatalf("Filename = %q, want %q (should skip hot task)", task.Filename, "bbb-ok.md")
+	}
+
+	// Hot task should still be in backlog.
+	if _, err := os.Stat(filepath.Join(dir, DirBacklog, "aaa-hot.md")); err != nil {
+		t.Fatalf("hot task should still be in backlog: %v", err)
 	}
 }
