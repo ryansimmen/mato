@@ -46,6 +46,18 @@ type ParseFailure struct {
 	Path     string
 	Err      error
 	Branch   string // from <!-- branch: ... --> comment, extracted before parse failure
+	// ClaimedBy is the agent ID from <!-- claimed-by: ... -->, "" if absent.
+	ClaimedBy string
+	// ClaimedAt is the timestamp from <!-- claimed-by: ... claimed-at: ... -->.
+	ClaimedAt time.Time
+	// FailureCount is the number of <!-- failure: ... --> markers.
+	FailureCount int
+	// LastFailureReason is the reason from the last <!-- failure: ... --> comment.
+	LastFailureReason string
+	// LastCycleFailureReason is the reason from the last <!-- cycle-failure: ... --> comment.
+	LastCycleFailureReason string
+	// LastTerminalFailureReason is the reason from the last <!-- terminal-failure: ... --> comment.
+	LastTerminalFailureReason string
 }
 
 // BuildWarning records a non-fatal filesystem warning encountered while
@@ -178,21 +190,33 @@ func BuildIndex(tasksDir string) *PollIndex {
 			}
 
 			branch, _ := taskfile.ParseBranchComment(data)
+			claimedBy, _ := taskfile.ParseClaimedBy(data)
+			claimedAt, _ := taskfile.ParseClaimedAt(data)
+			failureCount := taskfile.CountFailureMarkers(data)
+			lastFailureReason := taskfile.LastFailureReason(data)
+			lastCycleFailureReason := taskfile.LastCycleFailureReason(data)
+			lastTerminalFailureReason := taskfile.LastTerminalFailureReason(data)
 
 			meta, body, err := frontmatter.ParseTaskData(data, path)
 			if err != nil {
 				idx.parseFailures = append(idx.parseFailures, ParseFailure{
-					Filename: name, State: dir, Path: path, Err: err,
-					Branch: branch,
+					Filename:                  name,
+					State:                     dir,
+					Path:                      path,
+					Err:                       err,
+					Branch:                    branch,
+					ClaimedBy:                 claimedBy,
+					ClaimedAt:                 claimedAt,
+					FailureCount:              failureCount,
+					LastFailureReason:         lastFailureReason,
+					LastCycleFailureReason:    lastCycleFailureReason,
+					LastTerminalFailureReason: lastTerminalFailureReason,
 				})
 				if isActive[dir] && branch != "" {
 					idx.activeBranches[branch] = struct{}{}
 				}
 				continue
 			}
-
-			claimedBy, _ := taskfile.ParseClaimedBy(data)
-			claimedAt, _ := taskfile.ParseClaimedAt(data)
 
 			snap := &TaskSnapshot{
 				Filename:                  name,
@@ -201,13 +225,13 @@ func BuildIndex(tasksDir string) *PollIndex {
 				Meta:                      meta,
 				Body:                      body,
 				Branch:                    branch,
-				FailureCount:              taskfile.CountFailureMarkers(data),
+				FailureCount:              failureCount,
 				ReviewFailureCount:        taskfile.CountReviewFailureMarkers(data),
 				ClaimedBy:                 claimedBy,
 				ClaimedAt:                 claimedAt,
-				LastFailureReason:         taskfile.LastFailureReason(data),
-				LastCycleFailureReason:    taskfile.LastCycleFailureReason(data),
-				LastTerminalFailureReason: taskfile.LastTerminalFailureReason(data),
+				LastFailureReason:         lastFailureReason,
+				LastCycleFailureReason:    lastCycleFailureReason,
+				LastTerminalFailureReason: lastTerminalFailureReason,
 			}
 
 			// Validate glob syntax in affects once and cache the result.

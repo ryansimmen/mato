@@ -623,6 +623,37 @@ func TestRenderRecentMessages_EmptyBody(t *testing.T) {
 	}
 }
 
+func TestRenderWarnings_None(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{}
+
+	renderWarnings(&buf, c, data)
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for empty warnings, got:\n%s", buf.String())
+	}
+}
+
+func TestRenderWarnings_WithWarnings(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{warnings: []string{"could not read agent presence: boom", "could not read completion details: nope"}}
+
+	renderWarnings(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "Warnings") {
+		t.Errorf("output missing header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "could not read agent presence: boom") {
+		t.Errorf("output missing first warning, got:\n%s", output)
+	}
+	if !strings.Contains(output, "could not read completion details: nope") {
+		t.Errorf("output missing second warning, got:\n%s", output)
+	}
+}
+
 func TestRenderReadyForReview_Empty(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
