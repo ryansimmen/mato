@@ -421,6 +421,43 @@ func TestReviewNoPushNoCommitNoMoveInstructions(t *testing.T) {
 	}
 }
 
+// TestReviewMessageBudgetMatchesRuntime verifies that the review prompt
+// accurately describes the message budget: no intent message, one agent
+// progress, one host completion. This prevents the prompt from drifting out
+// of sync with the runtime behavior in review.go.
+func TestReviewMessageBudgetMatchesRuntime(t *testing.T) {
+	data, err := os.ReadFile(reviewInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(review instructions): %v", err)
+	}
+	text := string(data)
+
+	// The prompt must not tell the review agent that the host sends an intent message.
+	// Runtime (review.go) does not send intent for reviews.
+	forbidden := []struct {
+		pattern string
+		reason  string
+	}{
+		{"host sends the `intent`", "review prompt must not claim host sends intent — runtime does not send intent for reviews"},
+		{"host intent", "review prompt must not reference 'host intent' — no intent message is sent for reviews"},
+	}
+	for _, f := range forbidden {
+		if strings.Contains(text, f.pattern) {
+			t.Fatalf("review instructions contain %q: %s", f.pattern, f.reason)
+		}
+	}
+
+	// The prompt must mention that the host sends completion.
+	if !strings.Contains(text, "completion") {
+		t.Fatal("review instructions must mention 'completion' — host sends completion after processing verdict")
+	}
+
+	// The prompt must describe the budget as 2 total messages.
+	if !strings.Contains(text, "2 total messages") {
+		t.Fatal("review instructions must describe '2 total messages' budget (1 agent progress + 1 host completion)")
+	}
+}
+
 // TestReviewVerdictApproveFormat verifies that the real VERDICT state approve
 // block produces a well-formed JSON verdict file.
 func TestReviewVerdictApproveFormat(t *testing.T) {

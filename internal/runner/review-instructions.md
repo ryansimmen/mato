@@ -27,7 +27,7 @@ The host handles all file moves, metadata markers, and completion messages after
 - **Never append HTML comment markers to the task file.** Write your verdict to the JSON verdict file only.
 - Preserve all existing HTML comment patterns exactly when reading the task file.
 - Messaging is best-effort: if reading or writing messages fails, continue the review anyway.
-- Send at most 1 agent-written message: one `progress` for VERIFY_REVIEW. The host sends the `intent` and `completion` messages.
+- Send at most 1 agent-written message: one `progress` for VERIFY_REVIEW. The host sends the `completion` message after processing the verdict. No `intent` message is sent for reviews.
 - Do not stop midway. End only after writing the verdict file.
 ## Workflow State Machine
 Execute states in this exact order:
@@ -172,4 +172,4 @@ VERDICTEOF
 | --- | --- |
 | Verdict file written | Exit. The host will handle retry logic. |
 ## Final Reminder
-Stay disciplined: one review, no code modifications, no pushes, no commits, no file moves, no HTML comment writes, at most 2 total messages (1 host intent + 1 agent progress). Write the verdict JSON file and exit — the host handles everything else.
+Stay disciplined: one review, no code modifications, no pushes, no commits, no file moves, no HTML comment writes, at most 2 total messages (1 agent progress + 1 host completion). Write the verdict JSON file and exit — the host handles everything else.
