@@ -948,6 +948,70 @@ func TestFailedTaskRendering_MixedFailures(t *testing.T) {
 	}
 }
 
+func TestFailedTaskRendering_TerminalFailure(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create a terminal-failed task — has terminal-failure marker but no regular failure markers.
+	content := "---\nid: terminal-task\nmax_retries: 3\n---\n# Terminal task\n\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "terminal-task.md"), []byte(content), 0o644)
+
+	output := captureShow(t, repoRoot)
+
+	// Should show "structural failure: unparseable frontmatter".
+	if !contains(output, "structural failure") {
+		t.Errorf("output should contain 'structural failure' for terminal-failed task, got:\n%s", output)
+	}
+	if !contains(output, "unparseable frontmatter") {
+		t.Errorf("output should contain 'unparseable frontmatter' for terminal-failed task, got:\n%s", output)
+	}
+	// Should NOT show retry budget info.
+	if contains(output, "0/3 retries exhausted") {
+		t.Errorf("output should NOT show '0/3 retries exhausted' for terminal-failed task, got:\n%s", output)
+	}
+}
+
+func TestFailedTaskRendering_TerminalWithRetries(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Create a task with both regular failure and terminal-failure markers.
+	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — build failed -->\n<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — invalid glob syntax -->\n---\nid: mixed-terminal\nmax_retries: 3\n---\n# Mixed terminal task\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "mixed-terminal.md"), []byte(content), 0o644)
+
+	output := captureShow(t, repoRoot)
+
+	// Should show terminal failure as structural.
+	if !contains(output, "structural failure") {
+		t.Errorf("output should contain 'structural failure' for mixed terminal task, got:\n%s", output)
+	}
+	if !contains(output, "invalid glob syntax") {
+		t.Errorf("output should contain 'invalid glob syntax' for mixed terminal task, got:\n%s", output)
+	}
+	// Should also show retry budget info alongside.
+	if !contains(output, "1/3 retries used") {
+		t.Errorf("output should contain '1/3 retries used' for mixed terminal task, got:\n%s", output)
+	}
+	// Should show the last regular failure reason.
+	if !contains(output, "build failed") {
+		t.Errorf("output should contain last regular failure reason 'build failed', got:\n%s", output)
+	}
+}
+
 // failWriter fails every Write call with the given error.
 type failWriter struct {
 	err error
@@ -1390,6 +1454,9 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 	if result.Failed[0].MaxRetries != 2 {
 		t.Errorf("expected max_retries 2, got %d", result.Failed[0].MaxRetries)
 	}
+	if result.Failed[0].FailureKind != "retry" {
+		t.Errorf("expected failure_kind 'retry', got %q", result.Failed[0].FailureKind)
+	}
 
 	// Verify runnable backlog.
 	if len(result.RunnableBacklog) != 1 {
@@ -1518,5 +1585,89 @@ func TestShowJSON_FailedLastReason(t *testing.T) {
 	}
 	if ft.LastReason != "merge conflict" {
 		t.Errorf("expected last_reason 'merge conflict', got %q", ft.LastReason)
+	}
+	if ft.FailureKind != "retry" {
+		t.Errorf("expected failure_kind 'retry', got %q", ft.FailureKind)
+	}
+}
+
+func TestShowJSON_TerminalFailure(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	content := "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n---\nid: terminal-task\nmax_retries: 3\n---\n# Terminal task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "terminal-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(result.Failed))
+	}
+	ft := result.Failed[0]
+	if ft.FailureKind != "terminal" {
+		t.Errorf("expected failure_kind 'terminal', got %q", ft.FailureKind)
+	}
+	if ft.TerminalReason != "unparseable frontmatter" {
+		t.Errorf("expected terminal_reason 'unparseable frontmatter', got %q", ft.TerminalReason)
+	}
+	if ft.FailCount != 0 {
+		t.Errorf("expected fail_count 0, got %d", ft.FailCount)
+	}
+}
+
+func TestShowJSON_CycleFailureKind(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	content := "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n---\nid: cycle-task\nmax_retries: 3\n---\n# Cycle task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "cycle-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(result.Failed))
+	}
+	ft := result.Failed[0]
+	if ft.FailureKind != "cycle" {
+		t.Errorf("expected failure_kind 'cycle', got %q", ft.FailureKind)
+	}
+	if ft.CycleReason != "circular dependency" {
+		t.Errorf("expected cycle_reason 'circular dependency', got %q", ft.CycleReason)
 	}
 }

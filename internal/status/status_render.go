@@ -239,9 +239,25 @@ func renderFailedTasks(w io.Writer, c colorSet, tasksDir string, data statusData
 		}
 
 		cycleReason := lastCycleFailureReason(taskPath)
+		terminalReason := lastTerminalFailureReason(taskPath)
 		failCount := countFailureRecords(taskPath)
 
-		if cycleReason != "" && failCount > 0 {
+		if terminalReason != "" && cycleReason != "" {
+			// Both terminal and cycle failures — show terminal as primary.
+			info := fmt.Sprintf("structural failure: %s; also: %s", terminalReason, cycleReason)
+			fmt.Fprintf(w, "  %s  (%s)\n", label, info)
+		} else if terminalReason != "" && failCount > 0 {
+			// Terminal failure with prior retries.
+			reason := lastFailureReason(taskPath)
+			info := fmt.Sprintf("structural failure: %s; %d/%d retries used", terminalReason, failCount, task.maxRetries)
+			if reason != "" {
+				info += fmt.Sprintf(", last: %s", reason)
+			}
+			fmt.Fprintf(w, "  %s  (%s)\n", label, info)
+		} else if terminalReason != "" {
+			// Terminal failure only — structural, no retry budget shown.
+			fmt.Fprintf(w, "  %s  (structural failure: %s)\n", label, terminalReason)
+		} else if cycleReason != "" && failCount > 0 {
 			// Mixed: both cycle-failure and regular failure markers.
 			// Show cycle reason and retry budget info.
 			reason := lastFailureReason(taskPath)

@@ -513,6 +513,30 @@ func TestLastCycleFailureReason(t *testing.T) {
 	}
 }
 
+func TestLastTerminalFailureReason(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"with terminal", "---\nid: t\n---\n# T\n\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n", "unparseable frontmatter"},
+		{"no terminal", "---\nid: t\n---\n# T\n", ""},
+		{"multiple terminal", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — first reason -->\n<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — second reason -->\n---\nid: t\n---\n# T\n", "second reason"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name+".md")
+			os.WriteFile(path, []byte(tt.content), 0o644)
+			got := lastTerminalFailureReason(path)
+			if got != tt.want {
+				t.Errorf("lastTerminalFailureReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReverseDepsFromIndex_MultipleDeps(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, queue.DirWaiting, "a.md", "---\nid: a\ndepends_on: [x, y]\n---\n# A\n")
