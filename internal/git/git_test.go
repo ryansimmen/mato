@@ -753,3 +753,104 @@ func TestResolveIdentity_PartialConfig(t *testing.T) {
 		t.Errorf("expected default email %q, got %q", "mato@local.invalid", email)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RemoveClone tests
+// ---------------------------------------------------------------------------
+
+func TestRemoveClone_ValidDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// Create some nested content to make it realistic.
+	nested := filepath.Join(dir, "sub", "deep")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "file.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	RemoveClone(dir)
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("expected directory to be removed, but Stat returned: %v", err)
+	}
+}
+
+func TestRemoveClone_NonexistentPath(t *testing.T) {
+	// RemoveClone wraps os.RemoveAll which is a no-op for nonexistent paths.
+	// Verify it does not panic.
+	RemoveClone(filepath.Join(t.TempDir(), "does-not-exist"))
+}
+
+func TestRemoveClone_ReadOnlyNestedFiles(t *testing.T) {
+	dir := t.TempDir()
+	// Simulate git's .git/objects/pack files with 0444 permissions.
+	packDir := filepath.Join(dir, ".git", "objects", "pack")
+	if err := os.MkdirAll(packDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"pack-abc.idx", "pack-abc.pack"} {
+		if err := os.WriteFile(filepath.Join(packDir, name), []byte("x"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	RemoveClone(dir)
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("expected directory with read-only files to be removed, but Stat returned: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CreateClone error-path tests
+// ---------------------------------------------------------------------------
+
+func TestCreateClone_InvalidSource(t *testing.T) {
+	// Cloning a nonexistent path should produce an error that wraps git stderr.
+	_, err := CreateClone("/nonexistent/repo/path")
+	if err == nil {
+		t.Fatal("expected an error when cloning an invalid source")
+	}
+	if !strings.Contains(err.Error(), "clone repo") {
+		t.Errorf("error should wrap clone context, got: %v", err)
+	}
+}
+
+func TestCreateClone_SourceIsFile(t *testing.T) {
+	// If the source is a regular file rather than a directory, git clone fails.
+	file := filepath.Join(t.TempDir(), "not-a-repo.txt")
+	if err := os.WriteFile(file, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := CreateClone(file)
+	if err == nil {
+		t.Fatal("expected an error when cloning from a file path")
+	}
+	if !strings.Contains(err.Error(), "clone repo") {
+		t.Errorf("error should wrap clone context, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Output / repo-validation failure tests
+// ---------------------------------------------------------------------------
+
+func TestOutput_NonRepository(t *testing.T) {
+	// Calling a git command that requires a repository on a plain directory
+	// should return an actionable error.
+	dir := t.TempDir()
+
+	_, err := Output(dir, "rev-parse", "HEAD")
+	if err == nil {
+		t.Fatal("expected error when running git rev-parse in a non-repo directory")
+	}
+	// The error should mention the git subcommand and contain stderr output.
+	if !strings.Contains(err.Error(), "rev-parse") {
+		t.Errorf("error should mention the git subcommand, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error should include git's 'not a git repository' message, got: %v", err)
+	}
+}
