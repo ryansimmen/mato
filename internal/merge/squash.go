@@ -41,10 +41,22 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 
 	// If the squash produced no staged changes, the task branch is already
 	// fully merged into the target (e.g. a prior push succeeded but
-	// post-push bookkeeping failed).  Return success without a duplicate
-	// commit so the caller can finish the bookkeeping.
+	// post-push bookkeeping failed).  Return a mergeResult with recovered
+	// metadata so the caller can write the completion detail that was
+	// missed on the prior run, without creating a duplicate commit.
 	if _, err := git.Output(cloneDir, "diff", "--cached", "--quiet"); err == nil {
-		return nil, nil
+		sha, _ := git.Output(cloneDir, "rev-parse", "HEAD")
+		filesOut, _ := git.Output(cloneDir, "diff", "--name-only", "origin/"+branch+"...origin/"+taskBranch)
+		var filesChanged []string
+		for _, f := range strings.Split(strings.TrimSpace(filesOut), "\n") {
+			if f != "" {
+				filesChanged = append(filesChanged, f)
+			}
+		}
+		return &mergeResult{
+			commitSHA:    strings.TrimSpace(sha),
+			filesChanged: filesChanged,
+		}, nil
 	}
 
 	if _, err := git.Output(cloneDir, "commit", "-m", formatSquashCommitMessage(task, agentLog)); err != nil {
