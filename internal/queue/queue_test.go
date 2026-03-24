@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -489,7 +490,40 @@ func TestRecoverOrphanedTasks_IgnoresNonMd(t *testing.T) {
 	}
 }
 
-func TestRecoverOrphanedTasks_DoesNotOverwriteExistingBacklogTask(t *testing.T) {
+func TestRecoverOrphanedTasks_CollisionIdenticalContent(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirBacklog, DirInProgress} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	content := []byte("# Fix bug\nDo the thing.\n")
+	backlogPath := filepath.Join(tasksDir, DirBacklog, "fix-bug.md")
+	orphanPath := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
+	os.WriteFile(backlogPath, content, 0o644)
+	os.WriteFile(orphanPath, content, 0o644)
+
+	stderr := captureStderr(t, func() {
+		RecoverOrphanedTasks(tasksDir)
+	})
+
+	if !strings.Contains(stderr, "Removed duplicate orphan") {
+		t.Fatalf("expected dedup message, got %q", stderr)
+	}
+	// Orphan should be removed from in-progress.
+	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+		t.Fatal("orphan should be removed from in-progress after dedup")
+	}
+	// Backlog copy should remain unchanged.
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("read backlog task: %v", err)
+	}
+	if !bytes.Equal(data, content) {
+		t.Fatalf("backlog task should be unchanged, got %q", string(data))
+	}
+}
+
+func TestRecoverOrphanedTasks_CollisionDifferentContent(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{DirBacklog, DirInProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -504,18 +538,49 @@ func TestRecoverOrphanedTasks_DoesNotOverwriteExistingBacklogTask(t *testing.T) 
 		RecoverOrphanedTasks(tasksDir)
 	})
 
-	if !strings.Contains(stderr, "destination already exists") {
-		t.Fatalf("expected overwrite warning, got %q", stderr)
+	if !strings.Contains(stderr, "content differs from backlog copy") {
+		t.Fatalf("expected rename message, got %q", stderr)
 	}
-	if _, err := os.Stat(orphanPath); err != nil {
-		t.Fatalf("orphan should stay in in-progress after failed recovery: %v", err)
+	if !strings.Contains(stderr, "Recovered orphaned task") {
+		t.Fatalf("expected recovery message, got %q", stderr)
 	}
+	// Orphan should be removed from in-progress.
+	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+		t.Fatal("orphan should be removed from in-progress after rename")
+	}
+	// Original backlog file should be untouched.
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("read backlog task: %v", err)
 	}
 	if string(data) != "# Existing task\n" {
 		t.Fatalf("existing backlog task should be unchanged, got %q", string(data))
+	}
+	// A recovered file should exist in backlog with the orphan content.
+	entries, err := os.ReadDir(filepath.Join(tasksDir, DirBacklog))
+	if err != nil {
+		t.Fatalf("read backlog dir: %v", err)
+	}
+	var recoveredFile string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "fix-bug-recovered-") {
+			recoveredFile = e.Name()
+			break
+		}
+	}
+	if recoveredFile == "" {
+		t.Fatal("expected a recovered file in backlog, found none")
+	}
+	recoveredData, err := os.ReadFile(filepath.Join(tasksDir, DirBacklog, recoveredFile))
+	if err != nil {
+		t.Fatalf("read recovered file: %v", err)
+	}
+	if !strings.Contains(string(recoveredData), "# Recovered task") {
+		t.Fatalf("recovered file should contain orphan content, got %q", string(recoveredData))
+	}
+	// The recovered file should also have a failure record.
+	if !strings.Contains(string(recoveredData), "<!-- failure: mato-recovery") {
+		t.Fatalf("recovered file should have failure record, got %q", string(recoveredData))
 	}
 }
 
