@@ -1437,3 +1437,78 @@ func TestShowJSON_EmptyTasksDir(t *testing.T) {
 		t.Errorf("expected 0 runnable backlog tasks, got %d", len(result.RunnableBacklog))
 	}
 }
+
+func TestShowJSON_WriterError(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeErr := errors.New("disk full")
+	fw := &failWriter{err: writeErr}
+
+	err := ShowJSON(fw, repoRoot, "")
+	if err == nil {
+		t.Fatal("ShowJSON should return an error when the writer fails")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Errorf("ShowJSON error should wrap the write error, got: %v", err)
+	}
+}
+
+func TestShowJSON_FailedLastReason(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Two failure records — last_reason should be from the most recent one.
+	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=tests failed files_changed=none -->\n" +
+		"<!-- failure: agent-2 at 2026-01-01T00:02:00Z step=COMMIT error=merge conflict files_changed=api.go -->\n" +
+		"---\nid: broken-task\nmax_retries: 3\n---\n# A broken task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "broken-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(result.Failed))
+	}
+	ft := result.Failed[0]
+	if ft.Name != "broken-task.md" {
+		t.Errorf("expected name 'broken-task.md', got %q", ft.Name)
+	}
+	if ft.Title != "A broken task" {
+		t.Errorf("expected title 'A broken task', got %q", ft.Title)
+	}
+	if ft.FailCount != 2 {
+		t.Errorf("expected fail_count 2, got %d", ft.FailCount)
+	}
+	if ft.MaxRetries != 3 {
+		t.Errorf("expected max_retries 3, got %d", ft.MaxRetries)
+	}
+	if ft.LastReason != "merge conflict" {
+		t.Errorf("expected last_reason 'merge conflict', got %q", ft.LastReason)
+	}
+}
