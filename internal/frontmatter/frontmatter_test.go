@@ -129,9 +129,9 @@ func TestParseTaskFile_EmptyFrontmatter(t *testing.T) {
 	}
 }
 
-func TestParseTaskFile_StripsHTMLCommentLines(t *testing.T) {
+func TestParseTaskFile_StripsOnlyManagedCommentLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commented-task.md")
-	content := "<!-- claimed-by: abc -->\n# Title\n<!-- failure: x -->\nBody text\n"
+	content := "<!-- claimed-by: abc -->\n# Title\n<!-- failure: x -->\n<!-- This is a user note -->\nBody text\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
@@ -141,8 +141,53 @@ func TestParseTaskFile_StripsHTMLCommentLines(t *testing.T) {
 		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
-	if body != "# Title\nBody text\n" {
-		t.Fatalf("body = %q, want %q", body, "# Title\nBody text\n")
+	want := "# Title\n<!-- This is a user note -->\nBody text\n"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestParseTaskFile_PreservesNonManagedHTMLComments(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "user HTML comment preserved",
+			content: "# Title\n<!-- TODO: fix later -->\nBody\n",
+			want:    "# Title\n<!-- TODO: fix later -->\nBody\n",
+		},
+		{
+			name:    "example comment in instructions preserved",
+			content: "# Title\nUse `<!-- failure: ... -->` to record failures.\n<!-- An example comment -->\n",
+			want:    "# Title\nUse `<!-- failure: ... -->` to record failures.\n<!-- An example comment -->\n",
+		},
+		{
+			name:    "managed markers still stripped",
+			content: "<!-- branch: task/foo -->\n# Title\n<!-- review-failure: x at T step=REVIEW error=e -->\n<!-- reviewed: x at T — approved -->\n<!-- cycle-failure: mato at T — circular dependency -->\n<!-- terminal-failure: mato at T — reason -->\n<!-- merged: merge-queue at T -->\n<!-- review-rejection: x at T — feedback -->\nBody\n",
+			want:    "# Title\nBody\n",
+		},
+		{
+			name:    "mixed managed and non-managed",
+			content: "<!-- failure: agent at T step=WORK error=e -->\n# Title\n<!-- user note -->\n<!-- branch: task/bar -->\nBody\n",
+			want:    "# Title\n<!-- user note -->\nBody\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "test-task.md")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("os.WriteFile: %v", err)
+			}
+			_, body, err := ParseTaskFile(path)
+			if err != nil {
+				t.Fatalf("ParseTaskFile: %v", err)
+			}
+			if body != tt.want {
+				t.Fatalf("body = %q, want %q", body, tt.want)
+			}
+		})
 	}
 }
 

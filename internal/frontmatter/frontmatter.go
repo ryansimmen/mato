@@ -140,12 +140,40 @@ func TaskFileStem(path string) string {
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
+// managedCommentPrefixes lists the HTML comment markers that the queue
+// scheduler writes at runtime. Only these are stripped from the task body;
+// all other HTML comments are preserved so task authors can use them freely.
+var managedCommentPrefixes = []string{
+	"<!-- claimed-by:",
+	"<!-- branch:",
+	"<!-- failure:",
+	"<!-- review-failure:",
+	"<!-- review-rejection:",
+	"<!-- reviewed:",
+	"<!-- cycle-failure:",
+	"<!-- terminal-failure:",
+	"<!-- merged:",
+}
+
+// isManagedComment reports whether trimmed (a whitespace-trimmed line) is a
+// full-line HTML comment that matches one of the queue-managed marker prefixes.
+func isManagedComment(trimmed string) bool {
+	if !strings.HasPrefix(trimmed, "<!--") || !strings.HasSuffix(trimmed, "-->") {
+		return false
+	}
+	for _, prefix := range managedCommentPrefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func stripHTMLCommentLines(body string) string {
 	lines := strings.Split(body, "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "<!--") && strings.HasSuffix(trimmed, "-->") {
+		if isManagedComment(strings.TrimSpace(line)) {
 			continue
 		}
 		filtered = append(filtered, line)
