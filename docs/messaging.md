@@ -4,7 +4,7 @@
 Mato uses file-based messaging so concurrent task agents can share intent and reduce avoidable conflicts.
 The channel is advisory, not authoritative: task ownership still comes from queue file moves, git remains the source of truth for branches and commits, and merge readiness still comes from moving a task into `ready-to-merge/`.
 
-Both task agents and review agents participate in the messaging system. The review agent sends `progress` and `completion` messages following the same protocol as the task agent. However, the review verdict (approve/reject) is communicated via task file movement and HTML comments (e.g. `<!-- reviewed: ... -->`, `<!-- review-rejection: ... -->`), not via the messaging system.
+Both task agents and review agents participate in the messaging system. The review agent sends only a `progress` message; the host sends the `completion` message after processing the verdict. The review verdict (approve/reject) is communicated via a JSON verdict file, and the host writes HTML comment markers (e.g. `<!-- reviewed: ... -->`, `<!-- review-rejection: ... -->`) for state tracking after reading the verdict.
 
 Messaging is best-effort. If reading or writing messages fails, agents continue the task anyway.
 The host runner enables messaging by creating the directories with `messaging.Init(...)`, injecting `MATO_MESSAGING_ENABLED=1` and `MATO_MESSAGES_DIR=/workspace/.tasks/messages`, and cleaning stale presence and old event files on each loop iteration.
