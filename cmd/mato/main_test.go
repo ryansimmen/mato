@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mato/internal/doctor"
@@ -838,5 +839,205 @@ func TestGraphCmd_EndToEnd(t *testing.T) {
 	cmd.SetArgs([]string{"graph", "--repo", dir, "--format", "text"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("graph end-to-end failed: %v", err)
+	}
+}
+
+// --- Branch validation tests ---
+
+func TestValidateBranch_Valid(t *testing.T) {
+	tests := []struct {
+		name   string
+		branch string
+	}{
+		{"simple name", "main"},
+		{"with slash", "feature/add-tests"},
+		{"default branch", "mato"},
+		{"with dots", "release-1.2.3"},
+		{"with hyphens", "my-branch"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateBranch(tt.branch); err != nil {
+				t.Errorf("validateBranch(%q) returned error: %v", tt.branch, err)
+			}
+		})
+	}
+}
+
+func TestValidateBranch_Invalid(t *testing.T) {
+	tests := []struct {
+		name   string
+		branch string
+	}{
+		{"double dots", "foo..bar"},
+		{"ends with dot-lock", "foo.lock"},
+		{"contains backslash", "foo\\bar"},
+		{"contains space", "foo bar"},
+		{"contains tilde", "foo~1"},
+		{"contains caret", "foo^"},
+		{"contains colon", "foo:bar"},
+		{"starts with dash", "-branch"},
+		{"contains question mark", "foo?bar"},
+		{"contains asterisk", "foo*bar"},
+		{"contains open bracket", "foo[bar"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBranch(tt.branch)
+			if err == nil {
+				t.Errorf("validateBranch(%q) expected error, got nil", tt.branch)
+			}
+			if err != nil && !strings.Contains(err.Error(), "invalid branch name") {
+				t.Errorf("validateBranch(%q) error = %q, want error containing 'invalid branch name'", tt.branch, err.Error())
+			}
+		})
+	}
+}
+
+// --- Repo path validation tests ---
+
+func TestValidateRepoPath_ValidRepo(t *testing.T) {
+	dir := t.TempDir()
+	out, err := runCmd("git", "init", dir)
+	if err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, out)
+	}
+
+	if err := validateRepoPath(dir); err != nil {
+		t.Errorf("validateRepoPath(%q) returned error: %v", dir, err)
+	}
+}
+
+func TestValidateRepoPath_NonexistentPath(t *testing.T) {
+	err := validateRepoPath("/nonexistent/path/that/does/not/exist")
+	if err == nil {
+		t.Fatal("expected error for nonexistent path, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("error = %q, want error containing 'does not exist'", err.Error())
+	}
+}
+
+func TestValidateRepoPath_NotADirectory(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(f, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	err := validateRepoPath(f)
+	if err == nil {
+		t.Fatal("expected error for file path, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("error = %q, want error containing 'not a directory'", err.Error())
+	}
+}
+
+func TestValidateRepoPath_NotAGitRepo(t *testing.T) {
+	dir := t.TempDir()
+
+	err := validateRepoPath(dir)
+	if err == nil {
+		t.Fatal("expected error for non-git directory, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error = %q, want error containing 'not a git repository'", err.Error())
+	}
+}
+
+// --- Root command validation integration tests ---
+
+func TestRootCmd_InvalidBranchRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--branch=foo..bar"})
+	// Override RunE to add validation without calling runner.Run
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		cfg, err := extractKnownFlags(args)
+		if err != nil {
+			return err
+		}
+		resolved, err := resolveRepo(cfg.repo)
+		if err != nil {
+			return err
+		}
+		if err := validateRepoPath(resolved); err != nil {
+			return err
+		}
+		br := resolveBranch(cfg.branch)
+		return validateBranch(br)
+	}
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid branch, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid branch name") {
+		t.Errorf("error = %q, want error containing 'invalid branch name'", err.Error())
+	}
+}
+
+func TestRootCmd_NonRepoPathRejected(t *testing.T) {
+	dir := t.TempDir()
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo=" + dir})
+	// Override RunE to test validation without runner.Run
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		cfg, err := extractKnownFlags(args)
+		if err != nil {
+			return err
+		}
+		resolved, err := resolveRepo(cfg.repo)
+		if err != nil {
+			return err
+		}
+		if err := validateRepoPath(resolved); err != nil {
+			return err
+		}
+		br := resolveBranch(cfg.branch)
+		return validateBranch(br)
+	}
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for non-git repo, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error = %q, want error containing 'not a git repository'", err.Error())
+	}
+}
+
+func TestValidateBranch_GitCheckRefFormatHookable(t *testing.T) {
+	orig := gitCheckRefFormat
+	defer func() { gitCheckRefFormat = orig }()
+
+	gitCheckRefFormat = func(name string) error {
+		return fmt.Errorf("injected error for %s", name)
+	}
+
+	err := validateBranch("anything")
+	if err == nil {
+		t.Fatal("expected injected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "injected error") {
+		t.Errorf("error = %q, want injected error", err.Error())
+	}
+}
+
+func TestValidateRepoPath_GitRevParseHookable(t *testing.T) {
+	orig := gitRevParseGitDir
+	defer func() { gitRevParseGitDir = orig }()
+
+	dir := t.TempDir()
+	gitRevParseGitDir = func(d string) error {
+		return fmt.Errorf("injected repo error for %s", d)
+	}
+
+	err := validateRepoPath(dir)
+	if err == nil {
+		t.Fatal("expected injected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "injected repo error") {
+		t.Errorf("error = %q, want injected repo error", err.Error())
 	}
 }
