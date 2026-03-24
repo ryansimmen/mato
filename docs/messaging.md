@@ -192,10 +192,13 @@ Completion detail files in `completions/` are not garbage-collected; they persis
 Consumers should assume messages can be missing, delayed, duplicated by intent, or already deleted.
 
 ## Filename Convention
-Task agents currently write event files directly from shell with names like `${MSG_ID}.json`, where `MSG_ID` is already embedded inside the JSON payload. That means agent-produced files are typically simple names such as:
+Task agents write event files directly from shell with names like `${MSG_ID}.json`, where `MSG_ID` is already embedded inside the JSON payload. Each progress message includes the state name as its suffix instead of a generic `-progress` tag, so multiple messages from the same agent within the same second never collide. Example agent-produced filenames:
 
 ```text
-20260101T000000Z-agent-7-intent.json
+20260101T000000Z-agent-7-verify-claim.json
+20260101T000000Z-agent-7-work.json
+20260101T000000Z-agent-7-commit.json
+20260101T000000Z-agent-7-verify-review.json
 ```
 
 The Go helper `messaging.WriteMessage(...)` is still available for host-side tooling and tests. When that helper writes an event, the filename is:
