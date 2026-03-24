@@ -58,6 +58,7 @@ Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, and `--help`/
 | `MATO_DOCKER_IMAGE` | host | `ubuntu:24.04` | Docker image used for agent containers. Set this before starting `mato` to use a custom image. |
 | `MATO_DEFAULT_MODEL` | host | `claude-opus-4.6` | Default Copilot model used when `--model` is not passed in copilot args. Set this to change the model without modifying the command line. Priority: explicit `--model` arg > `MATO_DEFAULT_MODEL` > hardcoded default. |
 | `MATO_AGENT_TIMEOUT` | host | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. |
+| `MATO_RETRY_COOLDOWN` | host | `2m` | Minimum time to wait after a task failure before the task can be claimed again. Prevents rapid retry churn when agents crash immediately after launch. Accepts Go duration strings (e.g. `2m`, `5m`, `30s`). Must be positive; invalid or non-positive values fall back to the default. |
 | `MATO_AGENT_ID` | container | generated per run | Agent identity injected by `mato` so the running agent can identify itself. |
 | `MATO_MAX_RETRIES` | container | `3` | Passed to container for reference; the host enforces the retry budget in `queue.SelectAndClaimTask(...)` and `shouldFailTask(...)` (in `taskops.go`). Per-task overrides via `max_retries` frontmatter take precedence. |
 | `MATO_MESSAGING_ENABLED` | container | `1` | Injected by `mato` for agent-side tooling. The embedded prompt already uses hardcoded `.tasks` paths, so this is mainly useful to custom scripts or wrappers. |
@@ -72,7 +73,7 @@ Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, and `--help`/
 | `MATO_REVIEW_MODE` | container | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
 | `MATO_REVIEW_FEEDBACK` | container | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
 | `MATO_REVIEW_VERDICT_PATH` | container | none | Path to the JSON verdict file where the review agent writes its verdict (e.g. `/workspace/.tasks/messages/verdict-my-task.md.json`). Set per-run by the host when launching a review agent. The verdict structure is `{"verdict":"approve\|reject\|error","reason":"..."}`. Not set for task agents. |
-Only `MATO_DOCKER_IMAGE`, `MATO_DEFAULT_MODEL`, and `MATO_AGENT_TIMEOUT` are intended as host-side configuration inputs. The other
+Only `MATO_DOCKER_IMAGE`, `MATO_DEFAULT_MODEL`, `MATO_AGENT_TIMEOUT`, and `MATO_RETRY_COOLDOWN` are intended as host-side configuration inputs. The other
 variables are injected by `mato` inside each container and are normally not set manually.
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
 `depends_on` entries whose completion details are available. It contains a file
