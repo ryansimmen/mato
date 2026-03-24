@@ -113,6 +113,11 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 		t.Errorf("output should contain 'merge queue:    idle', got:\n%s", output)
 	}
 
+	// Verify backlog count appears in queue overview (1 task in backlog/).
+	if !contains(output, "backlog:") {
+		t.Errorf("output should contain 'backlog:' line in queue overview, got:\n%s", output)
+	}
+
 	// Verify runnable backlog section appears with the backlog task.
 	if !contains(output, "Runnable Backlog (execution order)") {
 		t.Errorf("output should contain runnable backlog section header, got:\n%s", output)
@@ -1317,6 +1322,9 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 	}
 	if result.Counts["in_progress"] != 1 {
 		t.Errorf("expected 1 in-progress, got %d", result.Counts["in_progress"])
+	}
+	if result.Counts["backlog"] != 1 {
+		t.Errorf("expected 1 backlog, got %d", result.Counts["backlog"])
 	}
 	if result.Counts["failed"] != 1 {
 		t.Errorf("expected 1 failed, got %d", result.Counts["failed"])
