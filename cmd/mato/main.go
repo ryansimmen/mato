@@ -17,6 +17,7 @@ import (
 	"mato/internal/graph"
 	"mato/internal/queue"
 	"mato/internal/runner"
+	"mato/internal/setup"
 	"mato/internal/status"
 
 	"github.com/spf13/cobra"
@@ -236,8 +237,95 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newGraphCmd())
+	root.AddCommand(newInitCmd())
 	root.AddCommand(newRetryCmd())
 	return root
+}
+
+func newInitCmd() *cobra.Command {
+	var initRepo string
+	var initBranch string
+	var initTasksDir string
+
+	cmd := &cobra.Command{
+		Use:           "init",
+		Short:         "Initialize a repository for mato use",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, err := resolveRepo(initRepo)
+			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
+			repoRoot, err := resolveRepoRoot(repo)
+			if err != nil {
+				return err
+			}
+			branch := resolveBranch(initBranch)
+			if err := validateBranch(branch); err != nil {
+				return err
+			}
+
+			tasksDir := initTasksDir
+			if tasksDir == "" {
+				tasksDir = filepath.Join(repoRoot, ".tasks")
+			} else if !filepath.IsAbs(tasksDir) {
+				tasksDir = filepath.Join(repoRoot, tasksDir)
+			}
+
+			result, err := setup.InitRepo(repoRoot, branch, filepath.Clean(tasksDir))
+			if err != nil {
+				return err
+			}
+			printInitResult(result)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&initRepo, "repo", "", "Path to the git repository (default: current directory)")
+	cmd.Flags().StringVar(&initBranch, "branch", "", "Target branch name (default: mato)")
+	cmd.Flags().StringVar(&initTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
+
+	return cmd
+}
+
+func printInitResult(result *setup.InitResult) {
+	if len(result.DirsCreated) > 0 {
+		for _, rel := range result.DirsCreated {
+			fmt.Printf("Created %s/\n", rel)
+		}
+	} else {
+		fmt.Println(".tasks/ directory structure already exists")
+	}
+
+	if result.GitignoreSkipped {
+		fmt.Println("Skipped .gitignore (tasks directory is outside the repository)")
+	} else {
+		if result.GitignoreUpdated {
+			fmt.Printf("Added %s to .gitignore\n", result.IgnorePattern)
+		} else {
+			fmt.Printf(".gitignore already contains %s\n", result.IgnorePattern)
+		}
+	}
+
+	switch {
+	case result.AlreadyOnBranch:
+		fmt.Printf("Already on branch: %s\n", result.BranchName)
+	case result.BranchExisted:
+		fmt.Printf("Switched to branch: %s\n", result.BranchName)
+	default:
+		fmt.Printf("Created branch: %s\n", result.BranchName)
+	}
+
+	if len(result.DirsCreated) == 0 && !result.GitignoreUpdated && !result.GitignoreSkipped && result.AlreadyOnBranch {
+		fmt.Println("Nothing to do - already initialized.")
+		return
+	}
+	fmt.Printf("Ready to add tasks to %s\n", filepath.Join(result.TasksDir, "backlog")+string(filepath.Separator))
 }
 
 func newStatusCmd() *cobra.Command {

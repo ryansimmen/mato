@@ -1316,10 +1316,10 @@ func TestSelectAndClaimTask_DuplicateManifestEntries(t *testing.T) {
 
 func TestLastFailureTime(t *testing.T) {
 	tests := []struct {
-		name    string
-		data    string
-		wantOK  bool
-		wantTS  string
+		name   string
+		data   string
+		wantOK bool
+		wantTS string
 	}{
 		{
 			name:   "no failures",

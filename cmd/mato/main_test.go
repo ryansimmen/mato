@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -405,6 +406,32 @@ func TestRootCmd_HelpAfterDoubleDashForwarded(t *testing.T) {
 	}
 }
 
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() {
+		os.Stdout = origStdout
+	}()
+
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close write pipe: %v", err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close read pipe: %v", err)
+	}
+	return string(data)
+}
+
 func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 	var capturedArgs []string
 	cmd := newRootCmd()
@@ -422,6 +449,127 @@ func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 	}
 	if capturedArgs[0] != "--model" || capturedArgs[1] != "gpt-5.2" {
 		t.Errorf("forwarded args = %v, want [--model gpt-5.2]", capturedArgs)
+	}
+}
+
+func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot})
+
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("init command failed: %v", err)
+		}
+	})
+
+	for _, rel := range []string{
+		".tasks/backlog",
+		".tasks/waiting",
+		".tasks/in-progress",
+		".tasks/ready-for-review",
+		".tasks/ready-to-merge",
+		".tasks/completed",
+		".tasks/failed",
+		".tasks/.locks",
+		".tasks/messages/events",
+		".tasks/messages/presence",
+		".tasks/messages/completions",
+	} {
+		if _, err := os.Stat(filepath.Join(repoRoot, rel)); err != nil {
+			t.Fatalf("expected %s to exist: %v", rel, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), "/.tasks/") {
+		t.Fatalf(".gitignore should contain /.tasks/, got %q", string(data))
+	}
+	branchOut, err := runCmd("git", "-C", repoRoot, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v\n%s", err, branchOut)
+	}
+	if strings.TrimSpace(branchOut) != "mato" {
+		t.Fatalf("current branch = %q, want %q", strings.TrimSpace(branchOut), "mato")
+	}
+	if !strings.Contains(output, "Ready to add tasks") {
+		t.Fatalf("expected ready message in output, got %q", output)
+	}
+}
+
+func TestInitCmd_Idempotent(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("first init failed: %v", err)
+	}
+
+	cmd = newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("second init failed: %v", err)
+		}
+	})
+	if !strings.Contains(output, "Nothing to do - already initialized.") {
+		t.Fatalf("expected idempotent message, got %q", output)
+	}
+}
+
+func TestInitCmd_InvalidRepo(t *testing.T) {
+	dir := t.TempDir()
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", dir})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for non-git repo")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitCmd_InvalidBranch(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot, "--branch", "foo..bar"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected invalid branch error")
+	}
+	if !strings.Contains(err.Error(), "invalid branch name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitCmd_NoExtraArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "extra"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for extra positional arg")
+	}
+}
+
+func TestInitCmd_RelativeTasksDirResolvedAgainstRepoRoot(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	nested := filepath.Join(repoRoot, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", nested, "--tasks-dir", "custom-tasks"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init command failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "custom-tasks", "backlog")); err != nil {
+		t.Fatalf("expected tasks dir under repo root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(nested, "custom-tasks")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect tasks dir under nested cwd, got %v", err)
 	}
 }
 

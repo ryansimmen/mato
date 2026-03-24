@@ -213,7 +213,7 @@ func TestRenderInProgressTasks_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderInProgressTasks(&buf, c, "", data)
+	renderInProgressTasks(&buf, c, data)
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty in-progress, got:\n%s", buf.String())
@@ -302,10 +302,13 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 	data := statusData{
 		waitingTasks: []waitingTaskSummary{
 			{
-				Name:         "wait-task.md",
-				Title:        "A waiting task",
-				Priority:     10,
-				Dependencies: []string{"dep-a (✗ in-progress)", "dep-b (✓ completed)"},
+				Name:     "wait-task.md",
+				Title:    "A waiting task",
+				Priority: 10,
+				Dependencies: []waitingDep{
+					{ID: "dep-a", Status: "in-progress"},
+					{ID: "dep-b", Status: "completed"},
+				},
 			},
 		},
 	}
@@ -321,6 +324,12 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 	}
 	if !strings.Contains(output, "depends on:") {
 		t.Errorf("output missing 'depends on:', got:\n%s", output)
+	}
+	if !strings.Contains(output, "dep-a (✗ in-progress)") {
+		t.Errorf("output missing dep-a with cross mark, got:\n%s", output)
+	}
+	if !strings.Contains(output, "dep-b (✓ completed)") {
+		t.Errorf("output missing dep-b with check mark, got:\n%s", output)
 	}
 }
 
@@ -400,7 +409,7 @@ func TestRenderFailedTasks_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderFailedTasks(&buf, c, "", data)
+	renderFailedTasks(&buf, c, data)
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty failed tasks, got:\n%s", buf.String())
@@ -614,12 +623,43 @@ func TestRenderRecentMessages_EmptyBody(t *testing.T) {
 	}
 }
 
+func TestRenderWarnings_None(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{}
+
+	renderWarnings(&buf, c, data)
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no output for empty warnings, got:\n%s", buf.String())
+	}
+}
+
+func TestRenderWarnings_WithWarnings(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{warnings: []string{"could not read agent presence: boom", "could not read completion details: nope"}}
+
+	renderWarnings(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "Warnings") {
+		t.Errorf("output missing header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "could not read agent presence: boom") {
+		t.Errorf("output missing first warning, got:\n%s", output)
+	}
+	if !strings.Contains(output, "could not read completion details: nope") {
+		t.Errorf("output missing second warning, got:\n%s", output)
+	}
+}
+
 func TestRenderReadyForReview_Empty(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{}
 
-	renderReadyForReview(&buf, c, "", data)
+	renderReadyForReview(&buf, c, data)
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty ready-for-review, got:\n%s", buf.String())
@@ -707,5 +747,80 @@ func TestRenderRunnableBacklog_NoTitle(t *testing.T) {
 	// Should not have a dangling dash from empty title.
 	if strings.Contains(output, "no-title.md —") {
 		t.Errorf("output should not have dash with empty title, got:\n%s", output)
+	}
+}
+
+func TestRenderFailedTasks_TerminalFailureOnly(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		failedTasks: []taskEntry{{
+			name:                      "terminal.md",
+			title:                     "Terminal task",
+			maxRetries:                3,
+			lastTerminalFailureReason: "unparseable frontmatter",
+		}},
+	}
+
+	renderFailedTasks(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "structural failure: unparseable frontmatter") {
+		t.Errorf("output should show 'structural failure: unparseable frontmatter', got:\n%s", output)
+	}
+	if strings.Contains(output, "retries exhausted") {
+		t.Errorf("output should NOT show retry budget for terminal failure, got:\n%s", output)
+	}
+}
+
+func TestRenderFailedTasks_TerminalWithRegularFailures(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		failedTasks: []taskEntry{{
+			name:                      "mixed.md",
+			title:                     "Mixed task",
+			maxRetries:                3,
+			failureCount:              1,
+			lastFailureReason:         "tests failed",
+			lastTerminalFailureReason: "invalid glob",
+		}},
+	}
+
+	renderFailedTasks(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "structural failure: invalid glob") {
+		t.Errorf("output should show 'structural failure: invalid glob', got:\n%s", output)
+	}
+	if !strings.Contains(output, "1/3 retries used") {
+		t.Errorf("output should show '1/3 retries used' alongside terminal failure, got:\n%s", output)
+	}
+	if !strings.Contains(output, "tests failed") {
+		t.Errorf("output should show last regular failure reason, got:\n%s", output)
+	}
+}
+
+func TestRenderFailedTasks_TerminalAndCycleFailure(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		failedTasks: []taskEntry{{
+			name:                      "both.md",
+			title:                     "Both task",
+			maxRetries:                3,
+			lastCycleFailureReason:    "circular dependency",
+			lastTerminalFailureReason: "review retry exhaustion",
+		}},
+	}
+
+	renderFailedTasks(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "structural failure: review retry exhaustion") {
+		t.Errorf("output should show terminal reason as primary, got:\n%s", output)
+	}
+	if !strings.Contains(output, "circular dependency") {
+		t.Errorf("output should also mention cycle failure, got:\n%s", output)
 	}
 }

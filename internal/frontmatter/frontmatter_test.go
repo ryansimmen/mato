@@ -775,10 +775,10 @@ func TestValidateAffectsGlobs_ValidEntries(t *testing.T) {
 
 func TestParseTaskData_AffectsPathTraversal(t *testing.T) {
 	tests := []struct {
-		name             string
-		affects          string
-		wantAffects      []string
-		wantStrippedLen  int
+		name               string
+		affects            string
+		wantAffects        []string
+		wantStrippedLen    int
 		wantStrippedReason string
 	}{
 		{
@@ -866,6 +866,36 @@ Body.
 	}
 	if meta.StrippedAffects[1].Reason != "absolute path" {
 		t.Errorf("StrippedAffects[1].Reason = %q, want %q", meta.StrippedAffects[1].Reason, "absolute path")
+	}
+}
+
+func TestParseTaskData_SanitizeAffectsNoStderr(t *testing.T) {
+	// Parsing unsafe affects must not write warnings to stderr. The
+	// stripped entries are captured in StrippedAffects for structured
+	// diagnostics (queue build warnings, mato doctor).
+	content := "---\naffects:\n  - /absolute/path\n  - ../../etc/passwd\n---\nBody.\n"
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+
+	_, _, parseErr := ParseTaskData([]byte(content), "stderr-test.md")
+
+	w.Close()
+	os.Stderr = origStderr
+
+	if parseErr != nil {
+		t.Fatalf("ParseTaskData returned error: %v", parseErr)
+	}
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	r.Close()
+	if n > 0 {
+		t.Fatalf("sanitizeAffects wrote to stderr: %s", string(buf[:n]))
 	}
 }
 

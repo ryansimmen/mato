@@ -53,6 +53,7 @@ internal/          All library packages:
   process/         Process detection via /proc
   queue/           Task queue management + claiming
   runner/          Agent lifecycle, Docker, embedded prompts
+  setup/           Repository bootstrap and init workflow
   status/          mato status command
   taskfile/        Task file helpers (metadata parsing, active-affects collection)
   testutil/        Shared test helpers (SetupRepo, SetupRepoWithTasks)
@@ -155,6 +156,8 @@ import (
 
 1. **Research** — Read relevant source before changing anything.
 2. **Implement** — Make changes, run `go build ./...` and `go test ./...`.
+   - Do not ask whether to run routine verification or formatting commands;
+     run the relevant commands proactively and report the results.
 3. **Update docs** — If behavior changed, update this file (`AGENTS.md`) and any affected
    docs: `README.md`, `docs/architecture.md`, `docs/task-format.md`, `docs/messaging.md`,
    `docs/configuration.md`. If task format changed, also update `.github/skills/mato/SKILL.md`.

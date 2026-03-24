@@ -290,8 +290,8 @@ func TestReconcileReadyQueue_MixedTasks(t *testing.T) {
 
 func TestCountPromotableWaitingTasks(t *testing.T) {
 	tests := []struct {
-		name     string
-		setup    func(tasksDir string)
+		name      string
+		setup     func(tasksDir string)
 		wantCount int
 	}{
 		{
@@ -601,5 +601,125 @@ func TestReconcileReadyQueue_DuplicateWithDepsInteraction(t *testing.T) {
 	// Normal task should also be promoted.
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "normal.md")); err != nil {
 		t.Fatalf("normal.md not found in backlog/: %v", err)
+	}
+}
+
+func TestCountPromotableAlignedWithReconcile_ValidGlobs(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirCompleted, "dep.md",
+		"---\nid: dep\n---\n# Dep\n")
+
+	// Two waiting tasks with valid globs and satisfied deps.
+	writeTask(t, tasksDir, DirWaiting, "valid-a.md",
+		"---\nid: valid-a\ndepends_on: [dep]\naffects:\n  - \"src/**/*.go\"\n---\n# Valid A\n")
+	writeTask(t, tasksDir, DirWaiting, "valid-b.md",
+		"---\nid: valid-b\ndepends_on: [dep]\naffects:\n  - internal/queue/\n---\n# Valid B\n")
+
+	idx := BuildIndex(tasksDir)
+	count := CountPromotableWaitingTasks(tasksDir, idx)
+	if count != 2 {
+		t.Fatalf("CountPromotableWaitingTasks() = %d, want 2", count)
+	}
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("ReconcileReadyQueue moved = false, want true")
+	}
+
+	// Both should be in backlog/ after reconciliation.
+	for _, name := range []string{"valid-a.md", "valid-b.md"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, name)); err != nil {
+			t.Errorf("%s not found in backlog/: %v", name, err)
+		}
+	}
+}
+
+func TestCountPromotableAlignedWithReconcile_InvalidGlobs(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirCompleted, "dep.md",
+		"---\nid: dep\n---\n# Dep\n")
+
+	// One valid, one invalid glob — count should only include the valid one.
+	writeTask(t, tasksDir, DirWaiting, "valid.md",
+		"---\nid: valid\ndepends_on: [dep]\naffects:\n  - \"src/**/*.go\"\n---\n# Valid\n")
+	writeTask(t, tasksDir, DirWaiting, "invalid.md",
+		"---\nid: invalid\ndepends_on: [dep]\naffects:\n  - \"[broken\"\n---\n# Invalid\n")
+
+	idx := BuildIndex(tasksDir)
+	count := CountPromotableWaitingTasks(tasksDir, idx)
+	if count != 1 {
+		t.Fatalf("CountPromotableWaitingTasks() = %d, want 1", count)
+	}
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("ReconcileReadyQueue moved = false, want true")
+	}
+
+	// Valid task should be promoted to backlog/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "valid.md")); err != nil {
+		t.Errorf("valid.md not found in backlog/: %v", err)
+	}
+
+	// Invalid task should be quarantined to failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "invalid.md")); err != nil {
+		t.Errorf("invalid.md not found in failed/: %v", err)
+	}
+}
+
+func TestCountPromotableAlignedWithReconcile_AllInvalid(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// All waiting tasks have invalid globs — count should be 0.
+	writeTask(t, tasksDir, DirWaiting, "bad-a.md",
+		"---\nid: bad-a\naffects:\n  - \"[unclosed\"\n---\n# Bad A\n")
+	writeTask(t, tasksDir, DirWaiting, "bad-b.md",
+		"---\nid: bad-b\naffects:\n  - \"[also-bad\"\n---\n# Bad B\n")
+
+	idx := BuildIndex(tasksDir)
+	count := CountPromotableWaitingTasks(tasksDir, idx)
+	if count != 0 {
+		t.Fatalf("CountPromotableWaitingTasks() = %d, want 0", count)
+	}
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("ReconcileReadyQueue moved = false, want true (quarantine moves)")
+	}
+
+	// Both should be in failed/.
+	for _, name := range []string{"bad-a.md", "bad-b.md"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, name)); err != nil {
+			t.Errorf("%s not found in failed/: %v", name, err)
+		}
+	}
+}
+
+func TestBuildIndex_CachesGlobError(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "good.md",
+		"---\nid: good\naffects:\n  - \"src/**/*.go\"\n---\n# Good\n")
+	writeTask(t, tasksDir, DirBacklog, "bad.md",
+		"---\nid: bad\naffects:\n  - \"[invalid\"\n---\n# Bad\n")
+
+	idx := BuildIndex(tasksDir)
+
+	good := idx.Snapshot(DirBacklog, "good.md")
+	if good == nil {
+		t.Fatal("good.md not found in index")
+	}
+	if good.GlobError != nil {
+		t.Errorf("good.md GlobError = %v, want nil", good.GlobError)
+	}
+
+	bad := idx.Snapshot(DirBacklog, "bad.md")
+	if bad == nil {
+		t.Fatal("bad.md not found in index")
+	}
+	if bad.GlobError == nil {
+		t.Error("bad.md GlobError = nil, want non-nil")
 	}
 }

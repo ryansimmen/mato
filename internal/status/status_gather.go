@@ -1,6 +1,7 @@
 package status
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,23 +21,23 @@ const statusMessageLimit = 50
 
 // statusData holds all the data gathered for the status dashboard.
 type statusData struct {
-	idx              *queue.PollIndex
-	queueCounts      map[string]int
-	runnable         int
-	runnableBacklog  []taskEntry
-	agents           []statusAgent
-	presenceMap      map[string]messaging.PresenceInfo
-	activeProgress   []progressEntry
-	inProgressTasks  []taskEntry
-	readyForReview   []taskEntry
-	readyToMerge     []taskEntry
-	waitingTasks     []waitingTaskSummary
-	deferredDetail   map[string]queue.DeferralInfo
-	failedTasks      []taskEntry
-	completions      []messaging.CompletionDetail
-	recentMessages   []messaging.Message
-	reverseDeps      map[string][]string
-	mergeLockActive  bool
+	queueCounts     map[string]int
+	runnable        int
+	runnableBacklog []taskEntry
+	agents          []statusAgent
+	presenceMap     map[string]messaging.PresenceInfo
+	activeProgress  []progressEntry
+	inProgressTasks []taskEntry
+	readyForReview  []taskEntry
+	readyToMerge    []taskEntry
+	waitingTasks    []waitingTaskSummary
+	deferredDetail  map[string]queue.DeferralInfo
+	failedTasks     []taskEntry
+	completions     []messaging.CompletionDetail
+	recentMessages  []messaging.Message
+	reverseDeps     map[string][]string
+	mergeLockActive bool
+	warnings        []string
 }
 
 // progressEntry holds a formatted progress message for an active agent.
@@ -55,7 +56,6 @@ func gatherStatus(tasksDir string) (statusData, error) {
 
 	// Build one index for the entire gather cycle.
 	idx := queue.BuildIndex(tasksDir)
-	data.idx = idx
 
 	// Queue counts derived from the index snapshot.
 	// Include parse-failed files in counts to match old countMarkdownFiles behavior.
@@ -75,7 +75,11 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	data.agents = agents
 
 	// Presence info.
-	data.presenceMap, _ = messaging.ReadAllPresence(tasksDir)
+	presenceMap, presenceErr := messaging.ReadAllPresence(tasksDir)
+	if presenceErr != nil {
+		data.warnings = append(data.warnings, fmt.Sprintf("could not read agent presence: %v", presenceErr))
+	}
+	data.presenceMap = presenceMap
 
 	// Waiting tasks (dependency-blocked) — derived from index.
 	data.waitingTasks = waitingTasksFromIndex(idx)
@@ -117,7 +121,11 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	data.reverseDeps = reverseDepsFromIndex(idx)
 
 	// Completions.
-	data.completions, _ = messaging.ReadAllCompletionDetails(tasksDir)
+	completions, completionsErr := messaging.ReadAllCompletionDetails(tasksDir)
+	if completionsErr != nil {
+		data.warnings = append(data.warnings, fmt.Sprintf("could not read completion details: %v", completionsErr))
+	}
+	data.completions = completions
 
 	// Merge lock.
 	data.mergeLockActive = isMergeLockActive(tasksDir)

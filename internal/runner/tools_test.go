@@ -41,12 +41,12 @@ type fakeFileInfo struct {
 	isDir bool
 }
 
-func (f fakeFileInfo) Name() string      { return f.name }
-func (f fakeFileInfo) Size() int64       { return 0 }
-func (f fakeFileInfo) Mode() os.FileMode { return 0o644 }
+func (f fakeFileInfo) Name() string       { return f.name }
+func (f fakeFileInfo) Size() int64        { return 0 }
+func (f fakeFileInfo) Mode() os.FileMode  { return 0o644 }
 func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
-func (f fakeFileInfo) IsDir() bool       { return f.isDir }
-func (f fakeFileInfo) Sys() any          { return nil }
+func (f fakeFileInfo) IsDir() bool        { return f.isDir }
+func (f fakeFileInfo) Sys() any           { return nil }
 
 // setTestSeams replaces package-level function variables with test doubles
 // and restores originals via t.Cleanup.
@@ -187,8 +187,8 @@ func TestDiscoverHostTools_GhPrefersUsrBinWhenFile(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -208,8 +208,8 @@ func TestDiscoverHostTools_GhFallsBackWhenUsrBinIsDir(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: true},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
+			"/usr/bin/gh":                   {name: "gh", isDir: true},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -253,8 +253,8 @@ func TestDiscoverHostTools_OptionalDirsMissing(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -280,11 +280,11 @@ func TestDiscoverHostTools_OptionalDirsPresent(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
-			"/usr/share/git-core/templates":            {name: "templates", isDir: true},
-			"/etc/ssl/certs":                           {name: "certs", isDir: true},
-			filepath.Join(home, ".config", "gh"):       {name: "gh", isDir: true},
+			"/usr/bin/gh":                        {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):      {name: ".copilot", isDir: true},
+			"/usr/share/git-core/templates":      {name: "templates", isDir: true},
+			"/etc/ssl/certs":                     {name: "certs", isDir: true},
+			filepath.Join(home, ".config", "gh"): {name: "gh", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -334,8 +334,8 @@ func TestDiscoverHostTools_SeamCopilotIsFile(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: false},
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: false},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -431,11 +431,11 @@ func TestInspectHostTools_RequiredVsOptionalClassification(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
-			"/usr/share/git-core/templates":            {name: "templates", isDir: true},
-			"/etc/ssl/certs":                           {name: "certs", isDir: true},
-			filepath.Join(home, ".config", "gh"):       {name: "gh", isDir: true},
+			"/usr/bin/gh":                        {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):      {name: ".copilot", isDir: true},
+			"/usr/share/git-core/templates":      {name: "templates", isDir: true},
+			"/etc/ssl/certs":                     {name: "certs", isDir: true},
+			filepath.Join(home, ".config", "gh"): {name: "gh", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -530,8 +530,8 @@ func TestInspectHostTools_OptionalDirsMissing(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -562,8 +562,8 @@ func TestInspectHostTools_GhPrefersUsrBinWhenFile(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -586,8 +586,8 @@ func TestInspectHostTools_GhFallsBackToPATH(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                              {name: "gh", isDir: true},
-			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
+			"/usr/bin/gh":                   {name: "gh", isDir: true},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,

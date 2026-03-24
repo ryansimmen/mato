@@ -171,6 +171,45 @@ func WriteClaimedByComment(w io.Writer, agentID, claimedAt string) error {
 	return err
 }
 
+// failureMarkerPrefixes lists all failure-related HTML comment prefixes that
+// should be stripped when retrying a task. This is the single source of truth
+// for retry marker cleanup — no other package should define its own list.
+var failureMarkerPrefixes = []string{
+	failurePrefix,
+	reviewFailureStr,
+	cycleFailurePrefix,
+	terminalFailurePrefix,
+}
+
+// StripFailureMarkers removes all failure-related HTML comment lines from
+// content (failure, review-failure, cycle-failure, terminal-failure) while
+// preserving non-failure comments such as review-rejection feedback.
+// It collapses runs of 3+ consecutive newlines down to 2 and normalizes the
+// trailing newline.
+func StripFailureMarkers(content string) string {
+	lines := strings.Split(content, "\n")
+	var kept []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		strip := false
+		for _, prefix := range failureMarkerPrefixes {
+			if strings.HasPrefix(trimmed, prefix) {
+				strip = true
+				break
+			}
+		}
+		if !strip {
+			kept = append(kept, line)
+		}
+	}
+	result := strings.Join(kept, "\n")
+	// Collapse runs of 3+ newlines down to 2.
+	for strings.Contains(result, "\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
+	}
+	return strings.TrimRight(result, "\n") + "\n"
+}
+
 // AppendFailureRecord appends a <!-- failure: ... --> record to the task file
 // at path using O_APPEND for safe concurrent writes.
 func AppendFailureRecord(path, agentID, step, errMsg string) error {

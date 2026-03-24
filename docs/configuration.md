@@ -16,11 +16,13 @@ the host and bind-mounts those executables into agent containers.
 ## CLI Usage
 ```text
 mato [--repo <path>] [--branch <name>] [--tasks-dir <path>] [--dry-run] [copilot-args...]
+mato init [--repo <path>] [--branch <name>] [--tasks-dir <path>]
 mato status [--repo <path>] [--tasks-dir <path>]
 mato doctor [--repo <path>] [--tasks-dir <path>] [--fix] [--format json] [--only <check>]
 mato graph [--repo <path>] [--tasks-dir <path>] [--format text|dot|json] [--all]
 mato retry [--repo <path>] [--tasks-dir <path>] <task-name> [task-name...]
 ```
+`mato init` performs lightweight repository bootstrap without Docker. It resolves the repository root, checks out or creates the target branch, creates the queue, lock, and messaging directories, ensures git identity exists locally, updates `.gitignore` when the tasks directory lives inside the repo, and guarantees the target branch has at least one commit.
 Run mode creates the queue structure if needed, starts the Docker-based Copilot loop,
 and merges completed work into the target branch. If the target branch does not exist
 yet, `mato` creates it.
@@ -60,6 +62,17 @@ array in the JSON output lists tasks in the same priority order as the text
 view.
 
 Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, `--format`, and `--help`/`-h`.
+
+### `mato init`
+`mato init` bootstraps a repository for mato use in one explicit step. It is intended for first-time setup, CI preparation, or dry-run validation flows where users want `.tasks/` and the target branch created without running the full orchestrator.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. The command resolves it to the repository top level. |
+| `--branch <name>` | `mato` | Target branch to create or check out. |
+| `--tasks-dir <path>` | `<repo>/.tasks` | Path to the tasks directory. Relative paths are resolved against the resolved repo root, not the current shell directory. |
+
+If the tasks directory is inside the repository, `mato init` ensures the corresponding ignore pattern (for example `/.tasks/` or `/custom/queue/`) is present in `.gitignore`. If the directory is outside the repository, `.gitignore` is left unchanged.
 
 ### `mato graph`
 `mato graph` visualizes the task dependency topology. It reuses `PollIndex` and
