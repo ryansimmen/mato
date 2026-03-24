@@ -18,6 +18,13 @@ var (
 	branchMultiRe  = regexp.MustCompile(`-{2,}`)
 )
 
+// StrippedAffect records an affects entry that was removed during
+// sanitization, along with the reason it was considered unsafe.
+type StrippedAffect struct {
+	Entry  string
+	Reason string
+}
+
 type TaskMeta struct {
 	ID        string   `yaml:"id"`
 	Priority  int      `yaml:"priority"`
@@ -27,6 +34,10 @@ type TaskMeta struct {
 	// EstimatedComplexity is parsed for external consumers; not used internally.
 	EstimatedComplexity string `yaml:"estimated_complexity"`
 	MaxRetries          int    `yaml:"max_retries"`
+	// StrippedAffects records affects entries that were removed during
+	// sanitization (e.g. absolute paths, path traversal). Not serialized
+	// to YAML; populated at parse time for diagnostic reporting.
+	StrippedAffects []StrippedAffect `yaml:"-"`
 }
 
 // ParseTaskFile reads a task file from disk and parses its YAML frontmatter
@@ -104,7 +115,7 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 		}
 		// Filter empty strings from arrays (YAML can produce them from ["", x])
 		meta.DependsOn = filterEmpty(meta.DependsOn)
-		meta.Affects = sanitizeAffects(filterEmpty(meta.Affects))
+		meta.Affects, meta.StrippedAffects = sanitizeAffects(filterEmpty(meta.Affects))
 		meta.Tags = filterEmpty(meta.Tags)
 		body = strings.Join(lines[end+1:], "\n")
 	}
@@ -245,22 +256,26 @@ func ValidateAffectsGlobs(affects []string) error {
 
 // sanitizeAffects validates affects entries against path traversal. Entries
 // containing ".." path components that escape the repository root or absolute
-// paths are stripped with a warning to stderr. Non-glob, non-directory-prefix
-// entries are cleaned via filepath.Clean so redundant components like
+// paths are stripped and recorded as StrippedAffect values so callers can
+// report the problem explicitly. Non-glob, non-directory-prefix entries are
+// cleaned via filepath.Clean so redundant components like
 // "internal/../internal/foo.go" resolve to "internal/foo.go".
-func sanitizeAffects(affects []string) []string {
+func sanitizeAffects(affects []string) ([]string, []StrippedAffect) {
 	if affects == nil {
-		return nil
+		return nil, nil
 	}
 	out := make([]string, 0, len(affects))
+	var stripped []StrippedAffect
 	for _, af := range affects {
 		cleaned := filepath.Clean(af)
 		if filepath.IsAbs(cleaned) {
 			fmt.Fprintf(os.Stderr, "warning: stripping affects entry %q: absolute path\n", af)
+			stripped = append(stripped, StrippedAffect{Entry: af, Reason: "absolute path"})
 			continue
 		}
 		if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 			fmt.Fprintf(os.Stderr, "warning: stripping affects entry %q: path traversal\n", af)
+			stripped = append(stripped, StrippedAffect{Entry: af, Reason: "path traversal"})
 			continue
 		}
 		// Preserve original value for globs and directory prefixes so their
@@ -272,9 +287,9 @@ func sanitizeAffects(affects []string) []string {
 		}
 	}
 	if len(out) == 0 {
-		return nil
+		out = nil
 	}
-	return out
+	return out, stripped
 }
 
 func filterEmpty(ss []string) []string {

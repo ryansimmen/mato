@@ -476,12 +476,18 @@ func checkTaskParsing(cc *checkContext) CheckReport {
 		})
 	}
 
-	// Invalid glob errors from BuildWarnings — error severity to match the
-	// runtime, which quarantines affected tasks into failed/.
+	// Invalid glob and unsafe affects errors from BuildWarnings — error
+	// severity to match the runtime, which quarantines affected tasks into
+	// failed/.
 	for _, bw := range idx.BuildWarnings() {
-		if strings.Contains(bw.Err.Error(), "glob") || strings.Contains(bw.Err.Error(), "affects") {
+		errMsg := bw.Err.Error()
+		if strings.Contains(errMsg, "glob") || strings.Contains(errMsg, "affects") {
+			code := "tasks.invalid_glob"
+			if strings.Contains(errMsg, "unsafe affects") {
+				code = "tasks.unsafe_affects"
+			}
 			cr.Findings = append(cr.Findings, Finding{
-				Code:     "tasks.invalid_glob",
+				Code:     code,
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("%s: %v", filepath.Base(bw.Path), bw.Err),
 				Path:     bw.Path,

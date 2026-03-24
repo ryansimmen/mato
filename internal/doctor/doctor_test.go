@@ -638,6 +638,52 @@ func TestDoctor_InvalidGlobSyntax(t *testing.T) {
 	}
 }
 
+func TestDoctor_UnsafeAffectsEntries(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Task with absolute path in affects.
+	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "abs-path.md"),
+		"---\nid: abs-path\naffects:\n  - /etc/passwd\n---\nAbsolute path task\n")
+
+	// Task with path traversal in affects.
+	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "traversal.md"),
+		"---\nid: traversal\naffects:\n  - ../../secret\n---\nTraversal task\n")
+
+	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if report.ExitCode != 2 {
+		t.Errorf("expected exit code 2 (error), got %d", report.ExitCode)
+	}
+
+	foundAbs := false
+	foundTraversal := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "tasks.unsafe_affects" {
+				if f.Severity != SeverityError {
+					t.Errorf("expected tasks.unsafe_affects severity %q, got %q", SeverityError, f.Severity)
+				}
+				if strings.Contains(f.Message, "absolute path") {
+					foundAbs = true
+				}
+				if strings.Contains(f.Message, "path traversal") {
+					foundTraversal = true
+				}
+			}
+		}
+	}
+	if !foundAbs {
+		t.Error("expected tasks.unsafe_affects finding for absolute path")
+	}
+	if !foundTraversal {
+		t.Error("expected tasks.unsafe_affects finding for path traversal")
+	}
+}
+
 func TestDoctor_OnlyFilter(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	allOK(t)
