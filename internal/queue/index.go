@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"mato/internal/frontmatter"
 	"mato/internal/taskfile"
@@ -23,6 +24,19 @@ type TaskSnapshot struct {
 	Branch             string // from <!-- branch: ... --> comment, "" if absent
 	FailureCount       int    // <!-- failure: ... --> markers (excluding review-failure)
 	ReviewFailureCount int    // <!-- review-failure: ... --> markers
+	// ClaimedBy is the agent ID from <!-- claimed-by: ... -->, "" if absent.
+	ClaimedBy string
+	// ClaimedAt is the timestamp from <!-- claimed-by: ... claimed-at: ... -->.
+	ClaimedAt time.Time
+	// LastFailureReason is the reason from the last <!-- failure: ... --> comment.
+	LastFailureReason string
+	// LastCycleFailureReason is the reason from the last <!-- cycle-failure: ... --> comment.
+	LastCycleFailureReason string
+	// LastTerminalFailureReason is the reason from the last <!-- terminal-failure: ... --> comment.
+	LastTerminalFailureReason string
+	// GlobError caches the result of ValidateAffectsGlobs, computed once
+	// during index build. nil means all glob patterns are valid.
+	GlobError error
 }
 
 // ParseFailure records a task file that could not be parsed during index build.
@@ -31,6 +45,19 @@ type ParseFailure struct {
 	State    string // directory the file was found in
 	Path     string
 	Err      error
+	Branch   string // from <!-- branch: ... --> comment, extracted before parse failure
+	// ClaimedBy is the agent ID from <!-- claimed-by: ... -->, "" if absent.
+	ClaimedBy string
+	// ClaimedAt is the timestamp from <!-- claimed-by: ... claimed-at: ... -->.
+	ClaimedAt time.Time
+	// FailureCount is the number of <!-- failure: ... --> markers.
+	FailureCount int
+	// LastFailureReason is the reason from the last <!-- failure: ... --> comment.
+	LastFailureReason string
+	// LastCycleFailureReason is the reason from the last <!-- cycle-failure: ... --> comment.
+	LastCycleFailureReason string
+	// LastTerminalFailureReason is the reason from the last <!-- terminal-failure: ... --> comment.
+	LastTerminalFailureReason string
 }
 
 // BuildWarning records a non-fatal filesystem warning encountered while
@@ -163,11 +190,27 @@ func BuildIndex(tasksDir string) *PollIndex {
 			}
 
 			branch, _ := taskfile.ParseBranchComment(data)
+			claimedBy, _ := taskfile.ParseClaimedBy(data)
+			claimedAt, _ := taskfile.ParseClaimedAt(data)
+			failureCount := taskfile.CountFailureMarkers(data)
+			lastFailureReason := taskfile.LastFailureReason(data)
+			lastCycleFailureReason := taskfile.LastCycleFailureReason(data)
+			lastTerminalFailureReason := taskfile.LastTerminalFailureReason(data)
 
 			meta, body, err := frontmatter.ParseTaskData(data, path)
 			if err != nil {
 				idx.parseFailures = append(idx.parseFailures, ParseFailure{
-					Filename: name, State: dir, Path: path, Err: err,
+					Filename:                  name,
+					State:                     dir,
+					Path:                      path,
+					Err:                       err,
+					Branch:                    branch,
+					ClaimedBy:                 claimedBy,
+					ClaimedAt:                 claimedAt,
+					FailureCount:              failureCount,
+					LastFailureReason:         lastFailureReason,
+					LastCycleFailureReason:    lastCycleFailureReason,
+					LastTerminalFailureReason: lastTerminalFailureReason,
 				})
 				if isActive[dir] && branch != "" {
 					idx.activeBranches[branch] = struct{}{}
@@ -176,23 +219,29 @@ func BuildIndex(tasksDir string) *PollIndex {
 			}
 
 			snap := &TaskSnapshot{
-				Filename:           name,
-				State:              dir,
-				Path:               path,
-				Meta:               meta,
-				Body:               body,
-				Branch:             branch,
-				FailureCount:       taskfile.CountFailureMarkers(data),
-				ReviewFailureCount: taskfile.CountReviewFailureMarkers(data),
+				Filename:                  name,
+				State:                     dir,
+				Path:                      path,
+				Meta:                      meta,
+				Body:                      body,
+				Branch:                    branch,
+				FailureCount:              failureCount,
+				ReviewFailureCount:        taskfile.CountReviewFailureMarkers(data),
+				ClaimedBy:                 claimedBy,
+				ClaimedAt:                 claimedAt,
+				LastFailureReason:         lastFailureReason,
+				LastCycleFailureReason:    lastCycleFailureReason,
+				LastTerminalFailureReason: lastTerminalFailureReason,
 			}
 
-			// Validate glob syntax in affects. Invalid globs are
-			// logged as build warnings but the task is still fully
-			// indexed so its affects remain visible to overlap
-			// detection.
-			if err := frontmatter.ValidateAffectsGlobs(meta.Affects); err != nil {
+			// Validate glob syntax in affects once and cache the result.
+			// Invalid globs are logged as build warnings but the task
+			// is still fully indexed so its affects remain visible to
+			// overlap detection.
+			if globErr := frontmatter.ValidateAffectsGlobs(meta.Affects); globErr != nil {
+				snap.GlobError = globErr
 				idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
-					State: dir, Path: path, Err: err,
+					State: dir, Path: path, Err: globErr,
 				})
 			}
 

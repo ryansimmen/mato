@@ -4,34 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/taskfile"
 )
 
-// failureMarkerPatterns matches all failure-related HTML comment markers that
-// should be stripped when retrying a task.
-var failureMarkerPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?m)^\s*<!-- failure:.*-->\s*$`),
-	regexp.MustCompile(`(?m)^\s*<!-- review-failure:.*-->\s*$`),
-	regexp.MustCompile(`(?m)^\s*<!-- cycle-failure:.*-->\s*$`),
-	regexp.MustCompile(`(?m)^\s*<!-- terminal-failure:.*-->\s*$`),
-}
-
-// stripFailureMarkers removes all failure/review-failure/cycle-failure/
-// terminal-failure HTML comment lines from content,
-// then collapses runs of 3+ consecutive newlines down to 2.
+// stripFailureMarkers delegates to the canonical taskfile.StripFailureMarkers
+// implementation. Kept as a thin wrapper to avoid changing call sites.
 func stripFailureMarkers(content string) string {
-	result := content
-	for _, re := range failureMarkerPatterns {
-		result = re.ReplaceAllString(result, "")
-	}
-	// Collapse runs of 3+ newlines down to 2.
-	for strings.Contains(result, "\n\n\n") {
-		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
-	}
-	return strings.TrimRight(result, "\n") + "\n"
+	return taskfile.StripFailureMarkers(content)
 }
 
 func normalizeRetryTaskName(name string) (string, error) {

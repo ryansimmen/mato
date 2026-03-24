@@ -21,7 +21,6 @@ import (
 	"mato/internal/identity"
 	"mato/internal/messaging"
 	"mato/internal/queue"
-	"mato/internal/taskfile"
 )
 
 // Show writes the status dashboard to os.Stdout.
@@ -50,24 +49,32 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 	renderRunnableBacklog(w, c, data)
 	renderActiveAgents(w, c, data)
 	renderAgentProgress(w, c, data)
-	renderInProgressTasks(w, c, tasksDir, data)
-	renderReadyForReview(w, c, tasksDir, data)
+	renderInProgressTasks(w, c, data)
+	renderReadyForReview(w, c, data)
 	renderReadyToMerge(w, c, data)
 	renderDependencyBlocked(w, c, data)
 	renderConflictDeferred(w, c, data)
-	renderFailedTasks(w, c, tasksDir, data)
+	renderFailedTasks(w, c, data)
 	renderRecentCompletions(w, c, data)
 	renderRecentMessages(w, c, data)
+	renderWarnings(w, c, data)
 
 	return nil
 }
 
 type taskEntry struct {
-	name       string
-	title      string
-	id         string
-	priority   int
-	maxRetries int
+	name                      string
+	title                     string
+	id                        string
+	priority                  int
+	maxRetries                int
+	branch                    string
+	claimedBy                 string
+	claimedAt                 time.Time
+	failureCount              int
+	lastFailureReason         string
+	lastCycleFailureReason    string
+	lastTerminalFailureReason string
 }
 
 // listTasksFromIndex derives a sorted task list from the PollIndex snapshot
@@ -79,11 +86,18 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 	tasks := make([]taskEntry, 0, len(snaps))
 	for _, snap := range snaps {
 		tasks = append(tasks, taskEntry{
-			name:       snap.Filename,
-			title:      frontmatter.ExtractTitle(snap.Filename, snap.Body),
-			id:         snap.Meta.ID,
-			priority:   snap.Meta.Priority,
-			maxRetries: snap.Meta.MaxRetries,
+			name:                      snap.Filename,
+			title:                     frontmatter.ExtractTitle(snap.Filename, snap.Body),
+			id:                        snap.Meta.ID,
+			priority:                  snap.Meta.Priority,
+			maxRetries:                snap.Meta.MaxRetries,
+			branch:                    snap.Branch,
+			claimedBy:                 snap.ClaimedBy,
+			claimedAt:                 snap.ClaimedAt,
+			failureCount:              snap.FailureCount,
+			lastFailureReason:         snap.LastFailureReason,
+			lastCycleFailureReason:    snap.LastCycleFailureReason,
+			lastTerminalFailureReason: snap.LastTerminalFailureReason,
 		})
 	}
 	// Include files that failed frontmatter parsing with defaults,
@@ -93,9 +107,16 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 			continue
 		}
 		tasks = append(tasks, taskEntry{
-			name:       pf.Filename,
-			priority:   50,
-			maxRetries: 3,
+			name:                      pf.Filename,
+			priority:                  50,
+			maxRetries:                3,
+			branch:                    pf.Branch,
+			claimedBy:                 pf.ClaimedBy,
+			claimedAt:                 pf.ClaimedAt,
+			failureCount:              pf.FailureCount,
+			lastFailureReason:         pf.LastFailureReason,
+			lastCycleFailureReason:    pf.LastCycleFailureReason,
+			lastTerminalFailureReason: pf.LastTerminalFailureReason,
 		})
 	}
 	sort.Slice(tasks, func(i, j int) bool {
@@ -105,11 +126,6 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 		return tasks[i].name < tasks[j].name
 	})
 	return tasks
-}
-
-func countFailureRecords(path string) int {
-	count, _ := queue.CountFailureLines(path)
-	return count
 }
 
 type statusAgent struct {
@@ -124,11 +140,17 @@ func (a statusAgent) displayName() string {
 	return "agent-" + a.ID
 }
 
+// waitingDep describes a single dependency and its resolution state.
+type waitingDep struct {
+	ID     string
+	Status string // queue directory name (e.g. "completed") or "missing"
+}
+
 type waitingTaskSummary struct {
 	Name         string
 	Title        string
 	Priority     int
-	Dependencies []string
+	Dependencies []waitingDep
 }
 
 func activeAgents(tasksDir string) ([]statusAgent, error) {
@@ -169,34 +191,26 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 	return agents, nil
 }
 
-// waitingTasksFromIndex derives waiting task summaries from the PollIndex snapshot,
-// replacing waitingTasksStatus which performed its own filesystem scans.
+// waitingTasksFromIndex derives waiting task summaries from the PollIndex
+// snapshot. It populates structured dependency data (ID + status) without
+// any presentation formatting so the same model can drive both text and
+// JSON output.
 func waitingTasksFromIndex(idx *queue.PollIndex) []waitingTaskSummary {
 	snaps := idx.TasksByState(queue.DirWaiting)
 
 	// Build ID→state map from the index.
 	stateByID := taskStatesByIDFromIndex(idx)
 
-	greenSym := color.New(color.FgGreen).SprintFunc()
-	redSym := color.New(color.FgRed).SprintFunc()
-
 	waiting := make([]waitingTaskSummary, 0, len(snaps))
 	for _, snap := range snaps {
 		title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
-		deps := make([]string, 0, len(snap.Meta.DependsOn))
+		deps := make([]waitingDep, 0, len(snap.Meta.DependsOn))
 		for _, dep := range snap.Meta.DependsOn {
 			status := stateByID[dep]
 			if status == "" {
 				status = "missing"
 			}
-			symbol := redSym("✗")
-			if status == queue.DirCompleted {
-				symbol = greenSym("✓")
-			}
-			deps = append(deps, fmt.Sprintf("%s (%s %s)", dep, symbol, status))
-		}
-		if len(deps) == 0 {
-			deps = []string{"none"}
+			deps = append(deps, waitingDep{ID: dep, Status: status})
 		}
 		waiting = append(waiting, waitingTaskSummary{
 			Name:         snap.Filename,
@@ -267,48 +281,6 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d sec", sec)
 	}
 	return fmt.Sprintf("%d min", int(d.Minutes()))
-}
-
-// parseBranchComment extracts the branch name from a <!-- branch: ... --> comment.
-func parseBranchComment(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	branch, _ := taskfile.ParseBranchComment(data)
-	return branch
-}
-
-// parseClaimedAt extracts the claimed-at timestamp from a task file's HTML comment.
-func parseClaimedAt(path string) time.Time {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return time.Time{}
-	}
-	t, ok := taskfile.ParseClaimedAt(data)
-	if !ok {
-		return time.Time{}
-	}
-	return t
-}
-
-// lastFailureReason extracts the reason from the last <!-- failure: ... --> comment.
-func lastFailureReason(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return taskfile.LastFailureReason(data)
-}
-
-// lastCycleFailureReason extracts the reason from the last <!-- cycle-failure: ... -->
-// comment. Returns "" if no cycle-failure markers are found.
-func lastCycleFailureReason(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return taskfile.LastCycleFailureReason(data)
 }
 
 func pluralize(n int, singular, plural string) string {

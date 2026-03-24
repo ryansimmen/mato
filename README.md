@@ -21,8 +21,10 @@ copilot login
 # cd into the target repo
 cd /path/to/repo
 
+# Initialize the repo for mato
+mato init
+
 # Create a ready task in backlog/
-mkdir -p .tasks/backlog
 cat > .tasks/backlog/add-retry-logic.md << 'EOF'
 ---
 id: add-retry-logic
@@ -51,6 +53,8 @@ Useful flags:
 - `--branch <name>`: merge target branch (defaults to `mato`); empty and whitespace-only values are rejected
 - `--tasks-dir <path>`: custom task queue location (defaults to `<repo>/.tasks`); empty and whitespace-only values are rejected
 - `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
+
+Use `mato init` to bootstrap `.tasks/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe.
 
 Arguments after a `--` separator are always forwarded to the Copilot CLI without
 interpretation — even `--help` and `-h` (e.g., `mato -- --help` forwards

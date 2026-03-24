@@ -161,39 +161,59 @@ func TestListTasksFromIndex_MalformedFrontmatter(t *testing.T) {
 	}
 }
 
-func TestCountFailureRecords(t *testing.T) {
-	dir := t.TempDir()
+func TestListTasksFromIndex_SnapshotMetadata(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	content := "<!-- claimed-by: agent-abc  claimed-at: 2026-06-15T12:30:00Z -->\n" +
+		"<!-- branch: task/my-task -->\n" +
+		"<!-- failure: agent-abc at 2026-06-15T12:35:00Z — tests failed -->\n" +
+		"<!-- failure: agent-abc at 2026-06-15T12:40:00Z — lint errors -->\n" +
+		"<!-- cycle-failure: mato at 2026-06-15T13:00:00Z — circular dep -->\n" +
+		"<!-- terminal-failure: mato at 2026-06-15T14:00:00Z — invalid glob -->\n" +
+		"---\nid: my-task\npriority: 10\nmax_retries: 5\n---\n# My task\n"
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", content)
 
-	tests := []struct {
-		name    string
-		content string
-		want    int
-	}{
-		{
-			name:    "no failures",
-			content: "# Task\nSome body.\n",
-			want:    0,
-		},
-		{
-			name:    "one failure",
-			content: "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — error -->\n# Task\n",
-			want:    1,
-		},
-		{
-			name:    "multiple failures",
-			content: "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — first -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — second -->\n<!-- failure: agent-3 at 2026-01-01T00:03:00Z — third -->\n# Task\n",
-			want:    3,
-		},
+	idx := queue.BuildIndex(tasksDir)
+	tasks := listTasksFromIndex(idx, queue.DirInProgress)
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := countFailureRecords(path)
-			if got != tt.want {
-				t.Errorf("countFailureRecords() = %d, want %d", got, tt.want)
-			}
-		})
+	task := tasks[0]
+	if task.branch != "task/my-task" {
+		t.Errorf("branch = %q, want %q", task.branch, "task/my-task")
+	}
+	if task.claimedBy != "agent-abc" {
+		t.Errorf("claimedBy = %q, want %q", task.claimedBy, "agent-abc")
+	}
+	want := time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)
+	if !task.claimedAt.Equal(want) {
+		t.Errorf("claimedAt = %v, want %v", task.claimedAt, want)
+	}
+	if task.failureCount != 2 {
+		t.Errorf("failureCount = %d, want 2", task.failureCount)
+	}
+	if task.lastFailureReason != "lint errors" {
+		t.Errorf("lastFailureReason = %q, want %q", task.lastFailureReason, "lint errors")
+	}
+	if task.lastCycleFailureReason != "circular dep" {
+		t.Errorf("lastCycleFailureReason = %q, want %q", task.lastCycleFailureReason, "circular dep")
+	}
+	if task.lastTerminalFailureReason != "invalid glob" {
+		t.Errorf("lastTerminalFailureReason = %q, want %q", task.lastTerminalFailureReason, "invalid glob")
+	}
+}
+
+func TestListTasksFromIndex_ParseFailureBranch(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	content := "<!-- branch: task/bad-task -->\n---\n: invalid yaml [\n---\n"
+	writeTask(t, tasksDir, queue.DirReadyReview, "bad.md", content)
+
+	idx := queue.BuildIndex(tasksDir)
+	tasks := listTasksFromIndex(idx, queue.DirReadyReview)
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].branch != "task/bad-task" {
+		t.Errorf("branch = %q, want %q", tasks[0].branch, "task/bad-task")
 	}
 }
 
@@ -411,103 +431,6 @@ func TestPluralize(t *testing.T) {
 			got := pluralize(tt.n, "task", "tasks")
 			if got != tt.want {
 				t.Errorf("pluralize(%d) = %q, want %q", tt.n, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseBranchComment(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{"with branch", "<!-- branch: task/add-login -->\n# Task\n", "task/add-login"},
-		{"no branch", "# Task\nSome body.\n", ""},
-		{"empty file", "", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := parseBranchComment(path)
-			if got != tt.want {
-				t.Errorf("parseBranchComment() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseBranchComment_MissingFile(t *testing.T) {
-	got := parseBranchComment(filepath.Join(t.TempDir(), "missing.md"))
-	if got != "" {
-		t.Errorf("parseBranchComment(missing) = %q, want empty", got)
-	}
-}
-
-func TestParseClaimedAt_Roundtrip(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "task.md")
-	os.WriteFile(path, []byte("<!-- claimed-by: agent-1  claimed-at: 2026-06-15T12:30:00Z -->\n# Task\n"), 0o644)
-
-	got := parseClaimedAt(path)
-	want := time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)
-	if !got.Equal(want) {
-		t.Errorf("parseClaimedAt() = %v, want %v", got, want)
-	}
-}
-
-func TestParseClaimedAt_MissingFile(t *testing.T) {
-	got := parseClaimedAt(filepath.Join(t.TempDir(), "missing.md"))
-	if !got.IsZero() {
-		t.Errorf("parseClaimedAt(missing) = %v, want zero", got)
-	}
-}
-
-func TestLastFailureReason_Variants(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{"single", "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — broken -->\n# T\n", "broken"},
-		{"last of multiple", "<!-- failure: a1 at 2026-01-01T00:01:00Z — first -->\n<!-- failure: a2 at 2026-01-01T00:02:00Z — second -->\n# T\n", "second"},
-		{"none", "# T\nBody.\n", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := lastFailureReason(path)
-			if got != tt.want {
-				t.Errorf("lastFailureReason() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestLastCycleFailureReason(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{"with cycle", "---\nid: t\n---\n# T\n\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dep -->\n", "circular dep"},
-		{"no cycle", "---\nid: t\n---\n# T\n", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := lastCycleFailureReason(path)
-			if got != tt.want {
-				t.Errorf("lastCycleFailureReason() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -777,13 +700,12 @@ func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
-	// Dependency should show checkmark and "completed" status.
 	dep := tasks[0].Dependencies[0]
-	if !containsSubstring(dep, "✓") {
-		t.Errorf("completed dep should contain ✓, got %q", dep)
+	if dep.ID != "dep-done" {
+		t.Errorf("dep ID = %q, want %q", dep.ID, "dep-done")
 	}
-	if !containsSubstring(dep, queue.DirCompleted) {
-		t.Errorf("completed dep should contain %q, got %q", queue.DirCompleted, dep)
+	if dep.Status != queue.DirCompleted {
+		t.Errorf("dep Status = %q, want %q", dep.Status, queue.DirCompleted)
 	}
 }
 
@@ -797,10 +719,174 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
 	dep := tasks[0].Dependencies[0]
-	if !containsSubstring(dep, "✗") {
-		t.Errorf("missing dep should contain ✗, got %q", dep)
+	if dep.ID != "nonexistent" {
+		t.Errorf("dep ID = %q, want %q", dep.ID, "nonexistent")
 	}
-	if !containsSubstring(dep, "missing") {
-		t.Errorf("missing dep should contain 'missing', got %q", dep)
+	if dep.Status != "missing" {
+		t.Errorf("dep Status = %q, want %q", dep.Status, "missing")
+	}
+}
+
+func TestGatherStatus_PresenceReadError(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Make the presence directory unreadable to trigger an error.
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	if err := os.Chmod(presenceDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(presenceDir, 0o755) })
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus should not return error for presence failure, got: %v", err)
+	}
+
+	if len(data.warnings) == 0 {
+		t.Fatal("expected at least one warning for presence read failure")
+	}
+	found := false
+	for _, w := range data.warnings {
+		if containsSubstring(w, "presence") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning 'presence', got: %v", data.warnings)
+	}
+	if data.presenceMap != nil {
+		t.Errorf("presenceMap should be nil on error, got: %v", data.presenceMap)
+	}
+}
+
+func TestGatherStatus_CompletionReadError(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Make the completions directory unreadable to trigger an error.
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	if err := os.Chmod(completionsDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(completionsDir, 0o755) })
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus should not return error for completion failure, got: %v", err)
+	}
+
+	if len(data.warnings) == 0 {
+		t.Fatal("expected at least one warning for completion read failure")
+	}
+	found := false
+	for _, w := range data.warnings {
+		if containsSubstring(w, "completion") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning 'completion', got: %v", data.warnings)
+	}
+	if data.completions != nil {
+		t.Errorf("completions should be nil on error, got: %v", data.completions)
+	}
+}
+
+func TestGatherStatus_NoWarningsOnSuccess(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	if len(data.warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", data.warnings)
+	}
+}
+
+func TestWaitingTasks_TextAndJSONConsistency(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeTask(t, tasksDir, queue.DirCompleted, "setup.md", "---\nid: setup\n---\n# Setup\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "auth.md", "---\nid: auth\npriority: 10\n---\n# Auth\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "api.md", "---\nid: api\npriority: 20\ndepends_on: [setup, auth, nonexistent]\n---\n# API\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "docs.md", "---\nid: docs\npriority: 30\ndepends_on: [api]\n---\n# Docs\n")
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	// Convert the shared model to JSON representation.
+	jsonOut := statusDataToJSON(data)
+
+	// Verify same number of waiting tasks.
+	if len(data.waitingTasks) != len(jsonOut.Waiting) {
+		t.Fatalf("waiting task count: text=%d, json=%d",
+			len(data.waitingTasks), len(jsonOut.Waiting))
+	}
+
+	// Verify each waiting task's name, title, priority, and
+	// dependency data match between text and JSON representations.
+	for i, wt := range data.waitingTasks {
+		jw := jsonOut.Waiting[i]
+		if wt.Name != jw.Name {
+			t.Errorf("task[%d] name: text=%q, json=%q", i, wt.Name, jw.Name)
+		}
+		if wt.Title != jw.Title {
+			t.Errorf("task[%d] title: text=%q, json=%q", i, wt.Title, jw.Title)
+		}
+		if wt.Priority != jw.Priority {
+			t.Errorf("task[%d] priority: text=%d, json=%d", i, wt.Priority, jw.Priority)
+		}
+		if len(wt.Dependencies) != len(jw.Dependencies) {
+			t.Errorf("task[%d] dep count: text=%d, json=%d",
+				i, len(wt.Dependencies), len(jw.Dependencies))
+			continue
+		}
+		for j, dep := range wt.Dependencies {
+			jd := jw.Dependencies[j]
+			if dep.ID != jd.ID {
+				t.Errorf("task[%d] dep[%d] ID: text=%q, json=%q",
+					i, j, dep.ID, jd.ID)
+			}
+			if dep.Status != jd.Status {
+				t.Errorf("task[%d] dep[%d] status: text=%q, json=%q",
+					i, j, dep.Status, jd.Status)
+			}
+		}
+	}
+
+	// Verify specific expected dependency states.
+	apiTask := data.waitingTasks[0]
+	if apiTask.Name != "api.md" {
+		t.Fatalf("expected first waiting task to be api.md, got %q", apiTask.Name)
+	}
+	depMap := make(map[string]string, len(apiTask.Dependencies))
+	for _, d := range apiTask.Dependencies {
+		depMap[d.ID] = d.Status
+	}
+	if depMap["setup"] != queue.DirCompleted {
+		t.Errorf("setup dep status = %q, want %q", depMap["setup"], queue.DirCompleted)
+	}
+	if depMap["auth"] != queue.DirBacklog {
+		t.Errorf("auth dep status = %q, want %q", depMap["auth"], queue.DirBacklog)
+	}
+	if depMap["nonexistent"] != "missing" {
+		t.Errorf("nonexistent dep status = %q, want %q", depMap["nonexistent"], "missing")
 	}
 }

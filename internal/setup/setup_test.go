@@ -1,0 +1,387 @@
+package setup
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"mato/internal/dirs"
+	"mato/internal/git"
+	"mato/internal/messaging"
+	"mato/internal/testutil"
+)
+
+func TestInitDirs_CreatesAll(t *testing.T) {
+	tasksDir := t.TempDir()
+
+	created, err := initDirs(tasksDir)
+	if err != nil {
+		t.Fatalf("initDirs: %v", err)
+	}
+
+	want := append([]string{}, dirs.All...)
+	want = append(want, dirs.Locks)
+	if len(created) != len(want) {
+		t.Fatalf("created %d dirs, want %d (%v)", len(created), len(want), created)
+	}
+	for _, rel := range want {
+		if _, err := os.Stat(filepath.Join(tasksDir, rel)); err != nil {
+			t.Fatalf("expected %s to exist: %v", rel, err)
+		}
+	}
+}
+
+func TestInitDirs_Idempotent(t *testing.T) {
+	tasksDir := t.TempDir()
+	if _, err := initDirs(tasksDir); err != nil {
+		t.Fatalf("first initDirs: %v", err)
+	}
+
+	created, err := initDirs(tasksDir)
+	if err != nil {
+		t.Fatalf("second initDirs: %v", err)
+	}
+	if len(created) != 0 {
+		t.Fatalf("expected no dirs created on second call, got %v", created)
+	}
+}
+
+func TestInitDirs_PartialExistence(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, rel := range []string{dirs.Backlog, dirs.Locks} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, rel), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+	}
+
+	created, err := initDirs(tasksDir)
+	if err != nil {
+		t.Fatalf("initDirs: %v", err)
+	}
+	for _, rel := range created {
+		if rel == dirs.Backlog || rel == dirs.Locks {
+			t.Fatalf("existing dir %s should not be reported as created", rel)
+		}
+	}
+}
+
+func TestInitDirs_UnwritableParent(t *testing.T) {
+	tasksDir := t.TempDir()
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog)
+	if err := os.WriteFile(backlogPath, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatalf("write backlog file: %v", err)
+	}
+
+	_, err := initDirs(tasksDir)
+	if err == nil {
+		t.Fatal("expected error when queue path is a file")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestComputeIgnorePattern(t *testing.T) {
+	repoRoot := filepath.Join(string(filepath.Separator), "repo")
+	tests := []struct {
+		name     string
+		tasksDir string
+		want     string
+		inside   bool
+	}{
+		{name: "default", tasksDir: filepath.Join(repoRoot, ".tasks"), want: "/.tasks/", inside: true},
+		{name: "nested", tasksDir: filepath.Join(repoRoot, "custom", "queue"), want: "/custom/queue/", inside: true},
+		{name: "outside", tasksDir: filepath.Join(string(filepath.Separator), "tmp", "ext"), want: "", inside: false},
+		{name: "dotdot tasks", tasksDir: filepath.Join(repoRoot, "..tasks"), want: "/..tasks/", inside: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, inside := computeIgnorePattern(repoRoot, tt.tasksDir)
+			if got != tt.want || inside != tt.inside {
+				t.Fatalf("computeIgnorePattern(%q, %q) = (%q, %v), want (%q, %v)", repoRoot, tt.tasksDir, got, inside, tt.want, tt.inside)
+			}
+		})
+	}
+}
+
+func TestInitRepo_DefaultTasksDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	result, err := InitRepo(repoRoot, "mato", filepath.Join(repoRoot, ".tasks"))
+	if err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	if result.TasksDir != filepath.Join(repoRoot, ".tasks") {
+		t.Fatalf("TasksDir = %q, want %q", result.TasksDir, filepath.Join(repoRoot, ".tasks"))
+	}
+	for _, rel := range append(append([]string{}, dirs.All...), dirs.Locks) {
+		if _, err := os.Stat(filepath.Join(result.TasksDir, rel)); err != nil {
+			t.Fatalf("expected %s to exist: %v", rel, err)
+		}
+	}
+	for _, rel := range messaging.MessagingDirs {
+		if _, err := os.Stat(filepath.Join(result.TasksDir, rel)); err != nil {
+			t.Fatalf("expected messaging dir %s to exist: %v", rel, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), "/.tasks/") {
+		t.Fatalf(".gitignore should contain /.tasks/, got %q", string(data))
+	}
+	branch, err := git.Output(repoRoot, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	if strings.TrimSpace(branch) != "mato" {
+		t.Fatalf("current branch = %q, want %q", strings.TrimSpace(branch), "mato")
+	}
+}
+
+func TestInitRepo_Idempotent(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".tasks")
+	if _, err := InitRepo(repoRoot, "mato", tasksDir); err != nil {
+		t.Fatalf("first InitRepo: %v", err)
+	}
+
+	result, err := InitRepo(repoRoot, "mato", tasksDir)
+	if err != nil {
+		t.Fatalf("second InitRepo: %v", err)
+	}
+	if len(result.DirsCreated) != 0 {
+		t.Fatalf("expected no dirs created on second init, got %v", result.DirsCreated)
+	}
+	if result.GitignoreUpdated {
+		t.Fatal("expected GitignoreUpdated=false on second init")
+	}
+	if !result.AlreadyOnBranch {
+		t.Fatal("expected AlreadyOnBranch=true on second init")
+	}
+}
+
+func TestInitRepo_CustomTasksDirInsideRepo(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, "custom", "queue")
+	if err := os.MkdirAll(filepath.Dir(tasksDir), 0o755); err != nil {
+		t.Fatalf("mkdir parent: %v", err)
+	}
+
+	result, err := InitRepo(repoRoot, "mato", tasksDir)
+	if err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	if result.GitignoreSkipped {
+		t.Fatal("expected gitignore update for inside-repo tasks dir")
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), "/custom/queue/") {
+		t.Fatalf(".gitignore should contain /custom/queue/, got %q", string(data))
+	}
+}
+
+func TestInitRepo_CustomTasksDirOutsideRepo(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	outsideParent := t.TempDir()
+	tasksDir := filepath.Join(outsideParent, "tasks")
+
+	result, err := InitRepo(repoRoot, "mato", tasksDir)
+	if err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	if !result.GitignoreSkipped {
+		t.Fatal("expected GitignoreSkipped=true for outside tasks dir")
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".gitignore")); !os.IsNotExist(err) {
+		t.Fatalf(".gitignore should not be created for outside tasks dir, got %v", err)
+	}
+}
+
+func TestInitRepo_RemoteBranchLeavesCleanWorktree(t *testing.T) {
+	remote := testutil.SetupRepo(t)
+	cloneParent := t.TempDir()
+	cloneDir := filepath.Join(cloneParent, "clone")
+	if _, err := git.Output(cloneParent, "clone", remote, cloneDir); err != nil {
+		t.Fatalf("git clone: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, "remote.txt"), []byte("remote\n"), 0o644); err != nil {
+		t.Fatalf("write remote.txt: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "add", "--", "remote.txt"); err != nil {
+		t.Fatalf("git add remote.txt: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "commit", "-m", "add remote branch commit"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "push", "-u", "origin", "mato"); err != nil {
+		t.Fatalf("git push origin mato: %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	if _, err := git.Output(repoRoot, "clone", remote, "."); err != nil {
+		t.Fatalf("git clone working repo: %v", err)
+	}
+
+	if _, err := InitRepo(repoRoot, "mato", filepath.Join(repoRoot, ".tasks")); err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	status, err := git.Output(repoRoot, "status", "--porcelain")
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if strings.TrimSpace(status) != "" {
+		t.Fatalf("expected clean worktree after init, got %q", status)
+	}
+	log, err := git.Output(repoRoot, "log", "--oneline", "-2")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if !strings.Contains(log, "chore: add /.tasks/ to .gitignore") {
+		t.Fatalf("expected gitignore commit on fetched branch, got %q", log)
+	}
+	if !strings.Contains(log, "remote branch commit") {
+		t.Fatalf("expected init to stay on fetched remote-backed branch history, got %q", log)
+	}
+}
+
+func TestInitRepo_TasksDirEqualsRepoRoot(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	_, err := InitRepo(repoRoot, "mato", repoRoot)
+	if err == nil {
+		t.Fatal("expected error when tasks dir equals repo root")
+	}
+	if !strings.Contains(err.Error(), "must not be the repository root") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitRepo_EmptyRepo(t *testing.T) {
+	repoRoot := t.TempDir()
+	if _, err := git.Output(repoRoot, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+
+	result, err := InitRepo(repoRoot, "mato", filepath.Join(repoRoot, ".tasks"))
+	if err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	if result.BranchExisted {
+		t.Fatal("expected BranchExisted=false for empty repo")
+	}
+	head, err := git.Output(repoRoot, "rev-parse", "--verify", "refs/heads/mato")
+	if err != nil {
+		t.Fatalf("verify refs/heads/mato: %v", err)
+	}
+	if strings.TrimSpace(head) == "" {
+		t.Fatal("expected born branch after init")
+	}
+	log, err := git.Output(repoRoot, "log", "--oneline", "-1")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if !strings.Contains(log, "chore: initialize mato") {
+		t.Fatalf("expected bootstrap commit, got %q", log)
+	}
+}
+
+func TestInitRepo_EmptyRepoOutsideTasksDirRejected(t *testing.T) {
+	repoRoot := t.TempDir()
+	if _, err := git.Output(repoRoot, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+
+	_, err := InitRepo(repoRoot, "mato", filepath.Join(t.TempDir(), "tasks"))
+	if err == nil {
+		t.Fatal("expected error for empty repo with outside tasks dir")
+	}
+	if !strings.Contains(err.Error(), "repository has no commits and tasks directory is outside the repository") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInitRepo_EmptyRepoStagedFilesPreserved(t *testing.T) {
+	repoRoot := t.TempDir()
+	if _, err := git.Output(repoRoot, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "notes.txt"), []byte("staged\n"), 0o644); err != nil {
+		t.Fatalf("write notes.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "--", "notes.txt"); err != nil {
+		t.Fatalf("git add notes.txt: %v", err)
+	}
+
+	if _, err := InitRepo(repoRoot, "mato", filepath.Join(repoRoot, ".tasks")); err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	log, err := git.Output(repoRoot, "log", "--oneline", "--name-only", "-1")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if strings.Contains(log, "notes.txt") {
+		t.Fatalf("bootstrap commit should not include staged notes.txt, got %q", log)
+	}
+	status, err := git.Output(repoRoot, "status", "--porcelain")
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if !strings.Contains(status, "A  notes.txt") {
+		t.Fatalf("expected notes.txt to remain staged, got %q", status)
+	}
+}
+
+func TestInitRepo_DirtyGitignoreRejected(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	gitignorePath := filepath.Join(repoRoot, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("*.tmp\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+
+	_, err := InitRepo(repoRoot, "mato", filepath.Join(repoRoot, ".tasks"))
+	if err == nil {
+		t.Fatal("expected error for dirty .gitignore")
+	}
+	if !strings.Contains(err.Error(), "cannot update .gitignore: file has local changes") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	status, statusErr := git.Output(repoRoot, "status", "--porcelain")
+	if statusErr != nil {
+		t.Fatalf("git status: %v", statusErr)
+	}
+	if !strings.Contains(status, " M .gitignore") && !strings.Contains(status, "M  .gitignore") && !strings.Contains(status, "MM .gitignore") && !strings.Contains(status, "?? .gitignore") {
+		t.Fatalf("expected .gitignore to remain dirty, got %q", status)
+	}
+}
+
+func TestInitRepo_GitIdentitySet(t *testing.T) {
+	repoRoot := t.TempDir()
+	if _, err := git.Output(repoRoot, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	emptyHome := t.TempDir()
+	t.Setenv("HOME", emptyHome)
+	t.Setenv("XDG_CONFIG_HOME", emptyHome)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(emptyHome, "nonexistent"))
+	if _, err := InitRepo(repoRoot, "mato", filepath.Join(repoRoot, ".tasks")); err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	name, err := git.Output(repoRoot, "config", "--local", "user.name")
+	if err != nil {
+		t.Fatalf("git config --local user.name: %v", err)
+	}
+	if strings.TrimSpace(name) != "mato" {
+		t.Fatalf("user.name = %q, want %q", strings.TrimSpace(name), "mato")
+	}
+}

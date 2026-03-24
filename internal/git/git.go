@@ -143,6 +143,16 @@ func ResolveIdentity(repoRoot string) (name, email string) {
 	return name, email
 }
 
+// EnsureIdentity ensures git user.name and user.email are set in the local
+// repository config. It resolves values via ResolveIdentity, then best-effort
+// writes them back to the repo-local git config for later commands.
+func EnsureIdentity(repoRoot string) (name, email string) {
+	name, email = ResolveIdentity(repoRoot)
+	_, _ = Output(repoRoot, "config", "user.name", name)
+	_, _ = Output(repoRoot, "config", "user.email", email)
+	return name, email
+}
+
 // CommitGitignore stages .gitignore and commits it with the given message.
 // This is a simple wrapper that lets callers decide when to commit, rather
 // than coupling the commit to the file modification.

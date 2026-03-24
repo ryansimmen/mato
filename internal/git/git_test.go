@@ -754,6 +754,74 @@ func TestResolveIdentity_PartialConfig(t *testing.T) {
 	}
 }
 
+func TestEnsureIdentity_SetsDefaults(t *testing.T) {
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init", repo)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	emptyHome := t.TempDir()
+	t.Setenv("HOME", emptyHome)
+	t.Setenv("XDG_CONFIG_HOME", emptyHome)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(emptyHome, "nonexistent"))
+
+	name, email := EnsureIdentity(repo)
+	if name != "mato" {
+		t.Fatalf("name = %q, want %q", name, "mato")
+	}
+	if email != "mato@local.invalid" {
+		t.Fatalf("email = %q, want %q", email, "mato@local.invalid")
+	}
+
+	storedName, err := Output(repo, "config", "--local", "user.name")
+	if err != nil {
+		t.Fatalf("git config --local user.name: %v", err)
+	}
+	if strings.TrimSpace(storedName) != "mato" {
+		t.Fatalf("stored user.name = %q, want %q", strings.TrimSpace(storedName), "mato")
+	}
+	storedEmail, err := Output(repo, "config", "--local", "user.email")
+	if err != nil {
+		t.Fatalf("git config --local user.email: %v", err)
+	}
+	if strings.TrimSpace(storedEmail) != "mato@local.invalid" {
+		t.Fatalf("stored user.email = %q, want %q", strings.TrimSpace(storedEmail), "mato@local.invalid")
+	}
+}
+
+func TestEnsureIdentity_PreservesExisting(t *testing.T) {
+	_, repo := initBareAndClone(t)
+
+	name, email := EnsureIdentity(repo)
+	if name != "test" {
+		t.Fatalf("name = %q, want %q", name, "test")
+	}
+	if email != "test@test.com" {
+		t.Fatalf("email = %q, want %q", email, "test@test.com")
+	}
+}
+
+func TestEnsureIdentity_Idempotent(t *testing.T) {
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init", repo)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	emptyHome := t.TempDir()
+	t.Setenv("HOME", emptyHome)
+	t.Setenv("XDG_CONFIG_HOME", emptyHome)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(emptyHome, "nonexistent"))
+
+	firstName, firstEmail := EnsureIdentity(repo)
+	secondName, secondEmail := EnsureIdentity(repo)
+	if firstName != secondName || firstEmail != secondEmail {
+		t.Fatalf("EnsureIdentity should be idempotent, got (%q, %q) then (%q, %q)", firstName, firstEmail, secondName, secondEmail)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // RemoveClone tests
 // ---------------------------------------------------------------------------
