@@ -230,8 +230,10 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 		}
 
 		// Skip tasks that failed recently (within cooldown window) to
-		// prevent rapid retry churn after immediate agent crashes.
-		if failures > 0 {
+		// prevent rapid retry churn after immediate agent crashes. Tasks that
+		// already exhausted their retry budget should still move straight to
+		// failed/ without waiting for cooldown.
+		if failures > 0 && failures < maxRetries {
 			rawData, readErr := os.ReadFile(src)
 			if readErr == nil {
 				if lastFail, ok := lastFailureTime(rawData); ok {

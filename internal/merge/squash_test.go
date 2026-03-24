@@ -61,20 +61,20 @@ func TestParseAgentCommitLog(t *testing.T) {
 			wantBody:    "Line one.\nLine two.\nLine three.",
 		},
 		{
-			name: "filters Task: line from body",
-			log:  "feat: implement search\n\nAdds full-text search.\n\nTask: implement-search.md",
+			name:        "filters Task: line from body",
+			log:         "feat: implement search\n\nAdds full-text search.\n\nTask: implement-search.md",
 			wantSubject: "feat: implement search",
 			wantBody:    "Adds full-text search.",
 		},
 		{
-			name: "filters Changed files: section",
-			log: "feat: add auth\n\nJWT-based authentication.\n\nChanged files:\nsrc/auth.go\nsrc/auth_test.go\n",
+			name:        "filters Changed files: section",
+			log:         "feat: add auth\n\nJWT-based authentication.\n\nChanged files:\nsrc/auth.go\nsrc/auth_test.go\n",
 			wantSubject: "feat: add auth",
 			wantBody:    "JWT-based authentication.",
 		},
 		{
-			name: "filters both Task: and Changed files:",
-			log: "fix: race condition\n\nFixed locking issue.\n\nTask: fix-race.md\n\nChanged files:\nqueue.go\n",
+			name:        "filters both Task: and Changed files:",
+			log:         "fix: race condition\n\nFixed locking issue.\n\nTask: fix-race.md\n\nChanged files:\nqueue.go\n",
 			wantSubject: "fix: race condition",
 			wantBody:    "Fixed locking issue.",
 		},
@@ -85,8 +85,8 @@ func TestParseAgentCommitLog(t *testing.T) {
 			wantBody:    "",
 		},
 		{
-			name: "multi-commit log uses only first commit",
-			log:  "feat: primary change\n\nPrimary body.\n\nChanged files:\nfile1.go\n\nfeat: secondary change\n\nSecondary body.",
+			name:        "multi-commit log uses only first commit",
+			log:         "feat: primary change\n\nPrimary body.\n\nChanged files:\nfile1.go\n\nfeat: secondary change\n\nSecondary body.",
 			wantSubject: "feat: primary change",
 			wantBody:    "Primary body.",
 		},
@@ -97,8 +97,8 @@ func TestParseAgentCommitLog(t *testing.T) {
 			wantBody:    "Some explanation.",
 		},
 		{
-			name: "body with Co-authored-by trailer preserved",
-			log:  "feat: add feature\n\nImplementation details.\n\nCo-authored-by: Bot <bot@example.com>",
+			name:        "body with Co-authored-by trailer preserved",
+			log:         "feat: add feature\n\nImplementation details.\n\nCo-authored-by: Bot <bot@example.com>",
 			wantSubject: "feat: add feature",
 			wantBody:    "Implementation details.\n\nCo-authored-by: Bot <bot@example.com>",
 		},
@@ -287,10 +287,10 @@ func TestMergeReadyTask_CleanMerge(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/clean-merge", "feature.txt", "new feature\n", "feat: add feature")
 
 	task := mergeQueueTask{
-		name:   "clean-merge.md",
-		branch: "task/clean-merge",
-		title:  "Clean merge task",
-		id:     "clean-merge",
+		name:    "clean-merge.md",
+		branch:  "task/clean-merge",
+		title:   "Clean merge task",
+		id:      "clean-merge",
 		affects: []string{"feature.txt"},
 	}
 
@@ -444,6 +444,39 @@ func TestMergeReadyTask_PushFailure(t *testing.T) {
 	// Target branch should not have the file since push was refused.
 	if _, err := os.Stat(filepath.Join(repoRoot, "pushfail.txt")); !os.IsNotExist(err) {
 		t.Error("pushfail.txt should not exist on target branch after refused push")
+	}
+}
+
+func TestParseFilesChanged(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{
+			name: "empty input",
+			in:   "",
+			want: nil,
+		},
+		{
+			name: "single file",
+			in:   "foo.go\n",
+			want: []string{"foo.go"},
+		},
+		{
+			name: "multiple files with blank lines",
+			in:   "foo.go\n\nbar.go\n baz.go \n",
+			want: []string{"foo.go", "bar.go", "baz.go"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseFilesChanged(tt.in)
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("parseFilesChanged() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

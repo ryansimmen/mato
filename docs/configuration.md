@@ -55,10 +55,11 @@ Long flags support both `--flag value` and `--flag=value` forms.
 - conflict-deferred tasks with blocking details
 - the five most recent messages from `.tasks/messages`
 
-Use `--json` to get machine-readable output. The `runnable_backlog` array in the
-JSON output lists tasks in the same priority order as the text view.
+Use `--format json` to get machine-readable output. The `runnable_backlog`
+array in the JSON output lists tasks in the same priority order as the text
+view.
 
-Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, `--json`, and `--help`/`-h`.
+Supported flags: `--repo`, `--tasks-dir`, `--watch`, `--interval`, `--format`, and `--help`/`-h`.
 
 ### `mato graph`
 `mato graph` visualizes the task dependency topology. It reuses `PollIndex` and
@@ -89,12 +90,13 @@ mato graph --all
 ```
 
 ### `mato retry`
-`mato retry` requeues one or more failed tasks back to `backlog/`. It reads
-the task file from `failed/`, strips all failure markers (`<!-- failure: -->`,
-`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- review-rejection: -->`,
-`<!-- terminal-failure: -->`), and writes the cleaned content to `backlog/`.
-The original file in `failed/` is only removed after a successful write,
-ensuring no data loss on collision or write error.
+`mato retry` requeues one or more failed tasks back to `backlog/`. It reads the
+task file from `failed/`, strips task-failure markers (`<!-- failure: -->`,
+`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`),
+and writes the cleaned content to `backlog/`. Review feedback markers
+(`<!-- review-rejection: -->`) are preserved so the next attempt can still see
+prior reviewer guidance. The original file in `failed/` is only removed after a
+successful write, ensuring no data loss on collision or write error.
 
 | Flag | Default | Description |
 | --- | --- | --- |

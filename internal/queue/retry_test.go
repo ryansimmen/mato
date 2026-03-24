@@ -59,7 +59,6 @@ Some instructions here.
 		"<!-- failure:",
 		"<!-- review-failure:",
 		"<!-- cycle-failure:",
-		"<!-- review-rejection:",
 		"<!-- terminal-failure:",
 	} {
 		if strings.Contains(result, marker) {
@@ -79,6 +78,9 @@ Some instructions here.
 	}
 	if !strings.Contains(result, "Some instructions here.") {
 		t.Error("task body was stripped")
+	}
+	if !strings.Contains(result, "<!-- review-rejection:") {
+		t.Error("review rejection feedback was stripped but should be preserved")
 	}
 	if !strings.Contains(result, "id: fix-login") {
 		t.Error("frontmatter was stripped")
@@ -171,6 +173,24 @@ func TestRetryTask_AppendsMdExtension(t *testing.T) {
 	}
 }
 
+func TestRetryTask_RejectsPathTraversal(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, DirFailed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, DirBacklog), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RetryTask(tmp, "../../README")
+	if err == nil {
+		t.Fatal("expected error for path traversal name")
+	}
+	if !strings.Contains(err.Error(), "path separators are not allowed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestStripFailureMarkers(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -196,7 +216,6 @@ Body text.
 				"<!-- failure:",
 				"<!-- review-failure:",
 				"<!-- cycle-failure:",
-				"<!-- review-rejection:",
 				"<!-- terminal-failure:",
 			},
 		},
@@ -214,6 +233,17 @@ Body text.
 `,
 			want:    "<!-- claimed-by: abc -->",
 			notWant: []string{"<!-- failure:"},
+		},
+		{
+			name: "preserves review rejection feedback",
+			input: `# Title
+
+<!-- review-rejection: reviewer at 2026-01-04T00:00:00Z — bad code -->
+
+<!-- terminal-failure: mato at 2026-01-05T00:00:00Z — unparseable -->
+`,
+			want:    "<!-- review-rejection: reviewer at 2026-01-04T00:00:00Z — bad code -->",
+			notWant: []string{"<!-- terminal-failure:"},
 		},
 	}
 	for _, tt := range tests {

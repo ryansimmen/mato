@@ -128,8 +128,8 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 - the last 5 coordination messages from `.tasks/messages/events/`
 
 The runnable backlog shows what the host will claim next, in the same priority
-order used by `.tasks/.queue`. Use `--json` to get the same ordered list as
-`runnable_backlog` in the JSON output.
+order used by `.tasks/.queue`. Use `--format json` to get the same ordered list
+as `runnable_backlog` in the JSON output.
 
 Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag
 sets the refresh period (default `2s`). The interval must be a positive duration;
@@ -188,11 +188,13 @@ mato retry fix-login-bug
 mato retry fix-login-bug add-dark-mode
 ```
 
-The command strips all failure markers (`<!-- failure: -->`, `<!-- review-failure: -->`,
-`<!-- cycle-failure: -->`, `<!-- review-rejection: -->`, `<!-- terminal-failure: -->`)
-from the task file and writes the cleaned content to `backlog/`. If the task already
-exists in `backlog/`, the command prints an error and leaves the `failed/` copy
-unchanged (no data loss).
+The command strips task-failure markers (`<!-- failure: -->`,
+`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`)
+from the task file and writes the cleaned content to `backlog/`. Review
+feedback markers (`<!-- review-rejection: -->`) are preserved so the next
+attempt still receives prior reviewer guidance. If the task already exists in
+`backlog/`, the command prints an error and leaves the `failed/` copy unchanged
+(no data loss).
 
 ## Docker
 
