@@ -68,13 +68,14 @@ type Options struct {
 
 // validCheckNames is the set of valid --only filter values.
 var validCheckNames = map[string]bool{
-	"git":    true,
-	"tools":  true,
-	"docker": true,
-	"queue":  true,
-	"tasks":  true,
-	"locks":  true,
-	"deps":   true,
+	"git":     true,
+	"tools":   true,
+	"docker":  true,
+	"queue":   true,
+	"tasks":   true,
+	"locks":   true,
+	"hygiene": true,
+	"deps":    true,
 }
 
 // Run executes all configured checks and returns a report. The context
@@ -174,7 +175,7 @@ func Run(ctx context.Context, repoInput, tasksDir string, opts Options) (Report,
 		}
 
 		// For filesystem checks, ensure tasksDir is available.
-		needsTasksDir := cd.name == "queue" || cd.name == "tasks" || cd.name == "locks" || cd.name == "deps"
+		needsTasksDir := cd.name == "queue" || cd.name == "tasks" || cd.name == "locks" || cd.name == "hygiene" || cd.name == "deps"
 		if needsTasksDir && !cc.hasTasksDir() {
 			msg := "cannot determine tasks directory: no valid git repository and --tasks-dir not set"
 			if cc.repoErr != nil {
