@@ -37,7 +37,7 @@ Notes:
 - Runtime metadata is stored as full-line HTML comments and is auto-managed.
 - The markdown body starts after the frontmatter block.
 - Agents are instructed to ignore frontmatter and these HTML comments when reading the task.
-- The parser strips full-line HTML comment lines from the body it returns.
+- The parser strips only **scheduler-managed** HTML comment lines from the body it returns. The managed prefixes are: `claimed-by`, `branch`, `failure`, `review-failure`, `review-rejection`, `reviewed`, `cycle-failure`, `terminal-failure`, and `merged`. All other HTML comments (e.g. `<!-- TODO: ... -->` or `<!-- example -->`) are preserved in the body so task authors can use them freely in instructions.
 
 ## Frontmatter Fields
 Supported keys come from `TaskMeta`. Unknown keys are currently ignored.
@@ -113,7 +113,7 @@ What they mean:
 - `cycle-failure:` records that the task was detected as part of a circular dependency during dependency resolution. Format: `<!-- cycle-failure: mato at <timestamp> — circular dependency -->`. The task is moved to `failed/` when this marker is appended. Cycle-failure markers do **not** count against the task's `max_retries` budget. To recover, fix the `depends_on` entries to break the cycle and move the task back to `waiting/`.
 - `terminal-failure:` records that the host automatically moved a task to `failed/` due to a non-recoverable structural problem. Format: `<!-- terminal-failure: mato at <timestamp> — <reason> -->`. Written before the task is moved to `failed/` by reconciliation or review candidate selection. Reasons include unparseable YAML frontmatter, invalid glob syntax in `affects`, and review retry budget exhaustion. Terminal-failure markers do **not** count against the task's `max_retries` budget. To recover, fix the underlying issue (e.g. correct the YAML or glob syntax) and move the task back to `waiting/` or `backlog/`.
 - `merged:` records that the merge queue successfully squashed the task branch into the target branch.
-- The host parses `claimed-by` and strips full-line HTML comments from the task body before agent-facing interpretation.
+- The host parses `claimed-by` and strips scheduler-managed HTML comment lines from the task body before agent-facing interpretation. Non-managed HTML comments are preserved.
 
 ## Examples
 ### Full task file with all fields
