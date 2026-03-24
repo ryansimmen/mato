@@ -324,9 +324,11 @@ func Watch(ctx context.Context, repoRoot, tasksDir string, interval time.Duratio
 }
 
 // WatchTo calls ShowTo in a loop, redrawing the given writer without flicker.
-// It buffers all output, then writes it atomically: cursor-home, single write,
-// clear remaining lines. It runs until the context is cancelled or a write
-// error occurs (e.g. stdout closed by a pager or pipe).
+// It buffers all output, then writes it atomically: cursor-home, single write
+// with per-line erase-to-EOL (\033[K), then clear remaining lines below.
+// The per-line erase prevents artifacts when a line shrinks between frames.
+// It runs until the context is cancelled or a write error occurs (e.g. stdout
+// closed by a pager or pipe).
 func WatchTo(ctx context.Context, w io.Writer, repoRoot, tasksDir string, interval time.Duration) error {
 	dim := color.New(color.Faint).SprintFunc()
 	for {
@@ -336,12 +338,16 @@ func WatchTo(ctx context.Context, w io.Writer, repoRoot, tasksDir string, interv
 		}
 		fmt.Fprintf(&buf, "\n%s\n", dim(fmt.Sprintf("Refreshing every %s — press Ctrl+C to stop", interval)))
 
-		// Atomic redraw: move cursor home, write content, clear any leftover
-		// lines below the new output.
+		// Atomic redraw: move cursor home, write content with per-line
+		// clearing, then erase any leftover lines below the new output.
+		// Each \n is preceded by \033[K (erase-to-EOL) so that shorter
+		// replacement lines don't leave trailing artifacts from the
+		// previous frame.
 		if _, err := w.Write([]byte("\033[H")); err != nil {
 			return fmt.Errorf("redraw cursor-home: %w", err)
 		}
-		if _, err := w.Write(buf.Bytes()); err != nil {
+		content := bytes.ReplaceAll(buf.Bytes(), []byte("\n"), []byte("\033[K\n"))
+		if _, err := w.Write(content); err != nil {
 			return fmt.Errorf("redraw content: %w", err)
 		}
 		if _, err := w.Write([]byte("\033[J")); err != nil {

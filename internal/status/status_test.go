@@ -872,6 +872,9 @@ func TestWatch(t *testing.T) {
 	if !contains(output, "\033[J") {
 		t.Errorf("Watch output should contain clear-to-end-of-screen (\\033[J)")
 	}
+	if !contains(output, "\033[K") {
+		t.Errorf("Watch output should contain clear-to-end-of-line (\\033[K) to prevent artifacts when lines shrink")
+	}
 }
 
 func TestFailedTaskRendering_CycleFailure(t *testing.T) {
@@ -982,10 +985,10 @@ func TestWatchTo_RedrawWriteError(t *testing.T) {
 
 // failAfterNWriter succeeds for the first n writes, then fails.
 type failAfterNWriter struct {
-	n      int
-	count  int
-	err    error
-	buf    bytes.Buffer
+	n     int
+	count int
+	err   error
+	buf   bytes.Buffer
 }
 
 func (w *failAfterNWriter) Write(p []byte) (int, error) {
