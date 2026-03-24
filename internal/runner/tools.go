@@ -45,11 +45,11 @@ type hostTools struct {
 func discoverHostTools() (hostTools, error) {
 	copilotPath, err := lookPathFn("copilot")
 	if err != nil {
-		return hostTools{}, fmt.Errorf("find copilot CLI: %w\n  Install: npm install -g @githubnext/github-copilot-cli", err)
+		return hostTools{}, fmt.Errorf("find copilot CLI: %w\n  Install: see docs/configuration.md or https://docs.github.com/en/copilot", err)
 	}
 	gitPath, err := lookPathFn("git")
 	if err != nil {
-		return hostTools{}, fmt.Errorf("find git CLI: %w\n  Install: apt install git (Linux) or brew install git (macOS)", err)
+		return hostTools{}, fmt.Errorf("find git CLI: %w\n  Install: see https://git-scm.com/downloads", err)
 	}
 	gitUploadPackPath, err := findGitHelper("git-upload-pack")
 	if err != nil {
