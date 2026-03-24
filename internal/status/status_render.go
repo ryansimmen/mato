@@ -3,7 +3,6 @@ package status
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -101,7 +100,7 @@ func renderAgentProgress(w io.Writer, c colorSet, data statusData) {
 	}
 }
 
-func renderInProgressTasks(w io.Writer, c colorSet, tasksDir string, data statusData) {
+func renderInProgressTasks(w io.Writer, c colorSet, data statusData) {
 	if len(data.inProgressTasks) == 0 {
 		return
 	}
@@ -110,19 +109,15 @@ func renderInProgressTasks(w io.Writer, c colorSet, tasksDir string, data status
 	fmt.Fprintln(w, c.bold("─────────────────"))
 	now := time.Now().UTC()
 	for _, task := range data.inProgressTasks {
-		taskPath := filepath.Join(tasksDir, queue.DirInProgress, task.name)
-		claimedBy := queue.ParseClaimedBy(taskPath)
-
 		var parts []string
-		if claimedBy != "" {
-			parts = append(parts, fmt.Sprintf("agent %s", claimedBy))
+		if task.claimedBy != "" {
+			parts = append(parts, fmt.Sprintf("agent %s", task.claimedBy))
 		}
-		if claimedAt := parseClaimedAt(taskPath); !claimedAt.IsZero() {
-			parts = append(parts, formatDuration(now.Sub(claimedAt)))
+		if !task.claimedAt.IsZero() {
+			parts = append(parts, formatDuration(now.Sub(task.claimedAt)))
 		}
-		failCount := countFailureRecords(taskPath)
-		if failCount > 0 {
-			parts = append(parts, fmt.Sprintf("%s/%d retries used", c.red(failCount), task.maxRetries))
+		if task.failureCount > 0 {
+			parts = append(parts, fmt.Sprintf("%s/%d retries used", c.red(task.failureCount), task.maxRetries))
 		}
 		taskID := task.id
 		if taskID == "" {
@@ -144,7 +139,7 @@ func renderInProgressTasks(w io.Writer, c colorSet, tasksDir string, data status
 	}
 }
 
-func renderReadyForReview(w io.Writer, c colorSet, tasksDir string, data statusData) {
+func renderReadyForReview(w io.Writer, c colorSet, data statusData) {
 	if len(data.readyForReview) == 0 {
 		return
 	}
@@ -152,14 +147,12 @@ func renderReadyForReview(w io.Writer, c colorSet, tasksDir string, data statusD
 	fmt.Fprintln(w, c.bold("Ready for Review"))
 	fmt.Fprintln(w, c.bold("────────────────"))
 	for _, task := range data.readyForReview {
-		taskPath := filepath.Join(tasksDir, queue.DirReadyReview, task.name)
-		branch := parseBranchComment(taskPath)
 		var parts []string
 		if task.title != "" {
 			parts = append(parts, task.title)
 		}
-		if branch != "" {
-			parts = append(parts, "on "+c.cyan(branch))
+		if task.branch != "" {
+			parts = append(parts, "on "+c.cyan(task.branch))
 		}
 		if len(parts) > 0 {
 			fmt.Fprintf(w, "  %s — %s\n", c.cyan(task.name), strings.Join(parts, " "))
@@ -236,7 +229,7 @@ func renderConflictDeferred(w io.Writer, c colorSet, data statusData) {
 	}
 }
 
-func renderFailedTasks(w io.Writer, c colorSet, tasksDir string, data statusData) {
+func renderFailedTasks(w io.Writer, c colorSet, data statusData) {
 	if len(data.failedTasks) == 0 {
 		return
 	}
@@ -244,45 +237,38 @@ func renderFailedTasks(w io.Writer, c colorSet, tasksDir string, data statusData
 	fmt.Fprintln(w, c.bold("Failed Tasks"))
 	fmt.Fprintln(w, c.bold("────────────"))
 	for _, task := range data.failedTasks {
-		taskPath := filepath.Join(tasksDir, queue.DirFailed, task.name)
 		label := c.red(task.name)
 		if task.title != "" {
 			label = fmt.Sprintf("%s — %s", c.red(task.name), task.title)
 		}
 
-		cycleReason := lastCycleFailureReason(taskPath)
-		terminalReason := lastTerminalFailureReason(taskPath)
-		failCount := countFailureRecords(taskPath)
+		cycleReason := task.lastCycleFailureReason
+		terminalReason := task.lastTerminalFailureReason
+		failCount := task.failureCount
 
 		if terminalReason != "" && cycleReason != "" {
-			// Both terminal and cycle failures — show terminal as primary.
 			info := fmt.Sprintf("structural failure: %s; also: %s", terminalReason, cycleReason)
 			fmt.Fprintf(w, "  %s  (%s)\n", label, info)
 		} else if terminalReason != "" && failCount > 0 {
-			// Terminal failure with prior retries.
-			reason := lastFailureReason(taskPath)
+			reason := task.lastFailureReason
 			info := fmt.Sprintf("structural failure: %s; %d/%d retries used", terminalReason, failCount, task.maxRetries)
 			if reason != "" {
 				info += fmt.Sprintf(", last: %s", reason)
 			}
 			fmt.Fprintf(w, "  %s  (%s)\n", label, info)
 		} else if terminalReason != "" {
-			// Terminal failure only — structural, no retry budget shown.
 			fmt.Fprintf(w, "  %s  (structural failure: %s)\n", label, terminalReason)
 		} else if cycleReason != "" && failCount > 0 {
-			// Mixed: both cycle-failure and regular failure markers.
-			// Show cycle reason and retry budget info.
-			reason := lastFailureReason(taskPath)
+			reason := task.lastFailureReason
 			info := fmt.Sprintf("%s; %d/%d retries used", cycleReason, failCount, task.maxRetries)
 			if reason != "" {
 				info += fmt.Sprintf(", last: %s", reason)
 			}
 			fmt.Fprintf(w, "  %s  (%s)\n", label, info)
 		} else if cycleReason != "" {
-			// Cycle-failed task: show cycle reason instead of retry budget.
 			fmt.Fprintf(w, "  %s  (%s)\n", label, cycleReason)
 		} else {
-			reason := lastFailureReason(taskPath)
+			reason := task.lastFailureReason
 			info := fmt.Sprintf("%d/%d retries exhausted", failCount, task.maxRetries)
 			if reason != "" {
 				info += fmt.Sprintf(", last: %s", reason)

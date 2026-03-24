@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"mato/internal/frontmatter"
 )
@@ -327,6 +328,41 @@ func TestBuildIndex_FailureAndReviewFailureCounts(t *testing.T) {
 	}
 	if snap.Branch != "task/counted" {
 		t.Errorf("Branch = %q, want task/counted", snap.Branch)
+	}
+}
+
+func TestBuildIndex_SnapshotMetadataFields(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+
+	content := "<!-- claimed-by: agent-xyz  claimed-at: 2026-06-15T12:30:00Z -->\n" +
+		"<!-- branch: task/meta-test -->\n" +
+		"<!-- failure: agent-xyz at 2026-06-15T12:35:00Z — build failed -->\n" +
+		"<!-- failure: agent-xyz at 2026-06-15T12:40:00Z — lint errors -->\n" +
+		"<!-- cycle-failure: mato at 2026-06-15T13:00:00Z — circular dep -->\n" +
+		"<!-- terminal-failure: mato at 2026-06-15T14:00:00Z — invalid glob -->\n" +
+		"---\npriority: 10\n---\n# Meta test task\n"
+
+	writeTask(t, tasksDir, DirInProgress, "meta-test.md", content)
+	idx := BuildIndex(tasksDir)
+	snap := idx.Snapshot(DirInProgress, "meta-test.md")
+	if snap == nil {
+		t.Fatal("expected meta-test.md to be indexed")
+	}
+	if snap.ClaimedBy != "agent-xyz" {
+		t.Errorf("ClaimedBy = %q, want %q", snap.ClaimedBy, "agent-xyz")
+	}
+	wantTime := time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)
+	if !snap.ClaimedAt.Equal(wantTime) {
+		t.Errorf("ClaimedAt = %v, want %v", snap.ClaimedAt, wantTime)
+	}
+	if snap.LastFailureReason != "lint errors" {
+		t.Errorf("LastFailureReason = %q, want %q", snap.LastFailureReason, "lint errors")
+	}
+	if snap.LastCycleFailureReason != "circular dep" {
+		t.Errorf("LastCycleFailureReason = %q, want %q", snap.LastCycleFailureReason, "circular dep")
+	}
+	if snap.LastTerminalFailureReason != "invalid glob" {
+		t.Errorf("LastTerminalFailureReason = %q, want %q", snap.LastTerminalFailureReason, "invalid glob")
 	}
 }
 

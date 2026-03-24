@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"mato/internal/frontmatter"
 	"mato/internal/taskfile"
@@ -23,6 +24,16 @@ type TaskSnapshot struct {
 	Branch             string // from <!-- branch: ... --> comment, "" if absent
 	FailureCount       int    // <!-- failure: ... --> markers (excluding review-failure)
 	ReviewFailureCount int    // <!-- review-failure: ... --> markers
+	// ClaimedBy is the agent ID from <!-- claimed-by: ... -->, "" if absent.
+	ClaimedBy string
+	// ClaimedAt is the timestamp from <!-- claimed-by: ... claimed-at: ... -->.
+	ClaimedAt time.Time
+	// LastFailureReason is the reason from the last <!-- failure: ... --> comment.
+	LastFailureReason string
+	// LastCycleFailureReason is the reason from the last <!-- cycle-failure: ... --> comment.
+	LastCycleFailureReason string
+	// LastTerminalFailureReason is the reason from the last <!-- terminal-failure: ... --> comment.
+	LastTerminalFailureReason string
 	// GlobError caches the result of ValidateAffectsGlobs, computed once
 	// during index build. nil means all glob patterns are valid.
 	GlobError error
@@ -34,6 +45,7 @@ type ParseFailure struct {
 	State    string // directory the file was found in
 	Path     string
 	Err      error
+	Branch   string // from <!-- branch: ... --> comment, extracted before parse failure
 }
 
 // BuildWarning records a non-fatal filesystem warning encountered while
@@ -171,6 +183,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 			if err != nil {
 				idx.parseFailures = append(idx.parseFailures, ParseFailure{
 					Filename: name, State: dir, Path: path, Err: err,
+					Branch: branch,
 				})
 				if isActive[dir] && branch != "" {
 					idx.activeBranches[branch] = struct{}{}
@@ -178,15 +191,23 @@ func BuildIndex(tasksDir string) *PollIndex {
 				continue
 			}
 
+			claimedBy, _ := taskfile.ParseClaimedBy(data)
+			claimedAt, _ := taskfile.ParseClaimedAt(data)
+
 			snap := &TaskSnapshot{
-				Filename:           name,
-				State:              dir,
-				Path:               path,
-				Meta:               meta,
-				Body:               body,
-				Branch:             branch,
-				FailureCount:       taskfile.CountFailureMarkers(data),
-				ReviewFailureCount: taskfile.CountReviewFailureMarkers(data),
+				Filename:                  name,
+				State:                     dir,
+				Path:                      path,
+				Meta:                      meta,
+				Body:                      body,
+				Branch:                    branch,
+				FailureCount:              taskfile.CountFailureMarkers(data),
+				ReviewFailureCount:        taskfile.CountReviewFailureMarkers(data),
+				ClaimedBy:                 claimedBy,
+				ClaimedAt:                 claimedAt,
+				LastFailureReason:         taskfile.LastFailureReason(data),
+				LastCycleFailureReason:    taskfile.LastCycleFailureReason(data),
+				LastTerminalFailureReason: taskfile.LastTerminalFailureReason(data),
 			}
 
 			// Validate glob syntax in affects once and cache the result.

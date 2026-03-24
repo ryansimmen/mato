@@ -17,6 +17,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/process"
 	"mato/internal/queue"
+	"mato/internal/taskfile"
 	"mato/internal/testutil"
 )
 
@@ -503,47 +504,38 @@ func TestMergeLockActive(t *testing.T) {
 }
 
 func TestFailureReasonExtraction(t *testing.T) {
-	dir := t.TempDir()
-
 	// Single failure.
-	single := filepath.Join(dir, "single.md")
-	os.WriteFile(single, []byte("<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n# Task\n"), 0o644)
-	if got := lastFailureReason(single); got != "tests failed" {
-		t.Errorf("lastFailureReason(single) = %q, want %q", got, "tests failed")
+	single := []byte("<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n# Task\n")
+	if got := taskfile.LastFailureReason(single); got != "tests failed" {
+		t.Errorf("LastFailureReason(single) = %q, want %q", got, "tests failed")
 	}
 
 	// Multiple failures — should return last.
-	multi := filepath.Join(dir, "multi.md")
-	os.WriteFile(multi, []byte("<!-- failure: agent-1 at 2026-01-01T00:01:00Z — first error -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — second error -->\n# Task\n"), 0o644)
-	if got := lastFailureReason(multi); got != "second error" {
-		t.Errorf("lastFailureReason(multi) = %q, want %q", got, "second error")
+	multi := []byte("<!-- failure: agent-1 at 2026-01-01T00:01:00Z — first error -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — second error -->\n# Task\n")
+	if got := taskfile.LastFailureReason(multi); got != "second error" {
+		t.Errorf("LastFailureReason(multi) = %q, want %q", got, "second error")
 	}
 
 	// No failures.
-	none := filepath.Join(dir, "none.md")
-	os.WriteFile(none, []byte("# Task\n"), 0o644)
-	if got := lastFailureReason(none); got != "" {
-		t.Errorf("lastFailureReason(none) = %q, want empty", got)
+	none := []byte("# Task\n")
+	if got := taskfile.LastFailureReason(none); got != "" {
+		t.Errorf("LastFailureReason(none) = %q, want empty", got)
 	}
 }
 
 func TestParseClaimedAt(t *testing.T) {
-	dir := t.TempDir()
-
 	// Valid claimed-at.
-	valid := filepath.Join(dir, "valid.md")
-	os.WriteFile(valid, []byte("<!-- claimed-by: agent-1  claimed-at: 2026-03-15T10:30:00Z -->\n# Task\n"), 0o644)
-	got := parseClaimedAt(valid)
+	valid := []byte("<!-- claimed-by: agent-1  claimed-at: 2026-03-15T10:30:00Z -->\n# Task\n")
+	got, ok := taskfile.ParseClaimedAt(valid)
 	want := time.Date(2026, 3, 15, 10, 30, 0, 0, time.UTC)
-	if !got.Equal(want) {
-		t.Errorf("parseClaimedAt(valid) = %v, want %v", got, want)
+	if !ok || !got.Equal(want) {
+		t.Errorf("ParseClaimedAt(valid) = %v, %v, want %v, true", got, ok, want)
 	}
 
 	// No claimed-at.
-	none := filepath.Join(dir, "none.md")
-	os.WriteFile(none, []byte("# Task\n"), 0o644)
-	if got := parseClaimedAt(none); !got.IsZero() {
-		t.Errorf("parseClaimedAt(none) = %v, want zero", got)
+	none := []byte("# Task\n")
+	if got, ok := taskfile.ParseClaimedAt(none); ok || !got.IsZero() {
+		t.Errorf("ParseClaimedAt(none) = %v, %v, want zero, false", got, ok)
 	}
 }
 

@@ -21,7 +21,6 @@ import (
 	"mato/internal/identity"
 	"mato/internal/messaging"
 	"mato/internal/queue"
-	"mato/internal/taskfile"
 )
 
 // Show writes the status dashboard to os.Stdout.
@@ -50,12 +49,12 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 	renderRunnableBacklog(w, c, data)
 	renderActiveAgents(w, c, data)
 	renderAgentProgress(w, c, data)
-	renderInProgressTasks(w, c, tasksDir, data)
-	renderReadyForReview(w, c, tasksDir, data)
+	renderInProgressTasks(w, c, data)
+	renderReadyForReview(w, c, data)
 	renderReadyToMerge(w, c, data)
 	renderDependencyBlocked(w, c, data)
 	renderConflictDeferred(w, c, data)
-	renderFailedTasks(w, c, tasksDir, data)
+	renderFailedTasks(w, c, data)
 	renderRecentCompletions(w, c, data)
 	renderRecentMessages(w, c, data)
 	renderWarnings(w, c, data)
@@ -64,11 +63,18 @@ func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
 }
 
 type taskEntry struct {
-	name       string
-	title      string
-	id         string
-	priority   int
-	maxRetries int
+	name                     string
+	title                    string
+	id                       string
+	priority                 int
+	maxRetries               int
+	branch                   string
+	claimedBy                string
+	claimedAt                time.Time
+	failureCount             int
+	lastFailureReason        string
+	lastCycleFailureReason   string
+	lastTerminalFailureReason string
 }
 
 // listTasksFromIndex derives a sorted task list from the PollIndex snapshot
@@ -80,11 +86,18 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 	tasks := make([]taskEntry, 0, len(snaps))
 	for _, snap := range snaps {
 		tasks = append(tasks, taskEntry{
-			name:       snap.Filename,
-			title:      frontmatter.ExtractTitle(snap.Filename, snap.Body),
-			id:         snap.Meta.ID,
-			priority:   snap.Meta.Priority,
-			maxRetries: snap.Meta.MaxRetries,
+			name:                      snap.Filename,
+			title:                     frontmatter.ExtractTitle(snap.Filename, snap.Body),
+			id:                        snap.Meta.ID,
+			priority:                  snap.Meta.Priority,
+			maxRetries:                snap.Meta.MaxRetries,
+			branch:                    snap.Branch,
+			claimedBy:                 snap.ClaimedBy,
+			claimedAt:                 snap.ClaimedAt,
+			failureCount:              snap.FailureCount,
+			lastFailureReason:         snap.LastFailureReason,
+			lastCycleFailureReason:    snap.LastCycleFailureReason,
+			lastTerminalFailureReason: snap.LastTerminalFailureReason,
 		})
 	}
 	// Include files that failed frontmatter parsing with defaults,
@@ -97,6 +110,7 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 			name:       pf.Filename,
 			priority:   50,
 			maxRetries: 3,
+			branch:     pf.Branch,
 		})
 	}
 	sort.Slice(tasks, func(i, j int) bool {
@@ -106,11 +120,6 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 		return tasks[i].name < tasks[j].name
 	})
 	return tasks
-}
-
-func countFailureRecords(path string) int {
-	count, _ := queue.CountFailureLines(path)
-	return count
 }
 
 type statusAgent struct {
@@ -266,59 +275,6 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d sec", sec)
 	}
 	return fmt.Sprintf("%d min", int(d.Minutes()))
-}
-
-// parseBranchComment extracts the branch name from a <!-- branch: ... --> comment.
-func parseBranchComment(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	branch, _ := taskfile.ParseBranchComment(data)
-	return branch
-}
-
-// parseClaimedAt extracts the claimed-at timestamp from a task file's HTML comment.
-func parseClaimedAt(path string) time.Time {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return time.Time{}
-	}
-	t, ok := taskfile.ParseClaimedAt(data)
-	if !ok {
-		return time.Time{}
-	}
-	return t
-}
-
-// lastFailureReason extracts the reason from the last <!-- failure: ... --> comment.
-func lastFailureReason(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return taskfile.LastFailureReason(data)
-}
-
-// lastCycleFailureReason extracts the reason from the last <!-- cycle-failure: ... -->
-// comment. Returns "" if no cycle-failure markers are found.
-func lastCycleFailureReason(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return taskfile.LastCycleFailureReason(data)
-}
-
-// lastTerminalFailureReason extracts the reason from the last
-// <!-- terminal-failure: ... --> comment. Returns "" if no terminal-failure
-// markers are found.
-func lastTerminalFailureReason(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return taskfile.LastTerminalFailureReason(data)
 }
 
 func pluralize(n int, singular, plural string) string {
