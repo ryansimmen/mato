@@ -199,7 +199,19 @@ func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) {
 			label = fmt.Sprintf("%s — %s", task.Name, task.Title)
 		}
 		fmt.Fprintf(w, "  %s\n", label)
-		fmt.Fprintf(w, "    depends on: %s\n", strings.Join(task.Dependencies, ", "))
+		if len(task.Dependencies) == 0 {
+			fmt.Fprintf(w, "    depends on: none\n")
+			continue
+		}
+		depStrs := make([]string, 0, len(task.Dependencies))
+		for _, dep := range task.Dependencies {
+			symbol := c.red("✗")
+			if dep.Status == queue.DirCompleted {
+				symbol = c.green("✓")
+			}
+			depStrs = append(depStrs, fmt.Sprintf("%s (%s %s)", dep.ID, symbol, dep.Status))
+		}
+		fmt.Fprintf(w, "    depends on: %s\n", strings.Join(depStrs, ", "))
 	}
 }
 

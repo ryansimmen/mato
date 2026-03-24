@@ -801,13 +801,12 @@ func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
-	// Dependency should show checkmark and "completed" status.
 	dep := tasks[0].Dependencies[0]
-	if !containsSubstring(dep, "✓") {
-		t.Errorf("completed dep should contain ✓, got %q", dep)
+	if dep.ID != "dep-done" {
+		t.Errorf("dep ID = %q, want %q", dep.ID, "dep-done")
 	}
-	if !containsSubstring(dep, queue.DirCompleted) {
-		t.Errorf("completed dep should contain %q, got %q", queue.DirCompleted, dep)
+	if dep.Status != queue.DirCompleted {
+		t.Errorf("dep Status = %q, want %q", dep.Status, queue.DirCompleted)
 	}
 }
 
@@ -821,11 +820,11 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
 	dep := tasks[0].Dependencies[0]
-	if !containsSubstring(dep, "✗") {
-		t.Errorf("missing dep should contain ✗, got %q", dep)
+	if dep.ID != "nonexistent" {
+		t.Errorf("dep ID = %q, want %q", dep.ID, "nonexistent")
 	}
-	if !containsSubstring(dep, "missing") {
-		t.Errorf("missing dep should contain 'missing', got %q", dep)
+	if dep.Status != "missing" {
+		t.Errorf("dep Status = %q, want %q", dep.Status, "missing")
 	}
 }
 
@@ -914,5 +913,81 @@ func TestGatherStatus_NoWarningsOnSuccess(t *testing.T) {
 
 	if len(data.warnings) != 0 {
 		t.Errorf("expected no warnings, got: %v", data.warnings)
+	}
+}
+
+func TestWaitingTasks_TextAndJSONConsistency(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeTask(t, tasksDir, queue.DirCompleted, "setup.md", "---\nid: setup\n---\n# Setup\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "auth.md", "---\nid: auth\npriority: 10\n---\n# Auth\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "api.md", "---\nid: api\npriority: 20\ndepends_on: [setup, auth, nonexistent]\n---\n# API\n")
+	writeTask(t, tasksDir, queue.DirWaiting, "docs.md", "---\nid: docs\npriority: 30\ndepends_on: [api]\n---\n# Docs\n")
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	// Convert the shared model to JSON representation.
+	jsonOut := statusDataToJSON(data, tasksDir)
+
+	// Verify same number of waiting tasks.
+	if len(data.waitingTasks) != len(jsonOut.Waiting) {
+		t.Fatalf("waiting task count: text=%d, json=%d",
+			len(data.waitingTasks), len(jsonOut.Waiting))
+	}
+
+	// Verify each waiting task's name, title, priority, and
+	// dependency data match between text and JSON representations.
+	for i, wt := range data.waitingTasks {
+		jw := jsonOut.Waiting[i]
+		if wt.Name != jw.Name {
+			t.Errorf("task[%d] name: text=%q, json=%q", i, wt.Name, jw.Name)
+		}
+		if wt.Title != jw.Title {
+			t.Errorf("task[%d] title: text=%q, json=%q", i, wt.Title, jw.Title)
+		}
+		if wt.Priority != jw.Priority {
+			t.Errorf("task[%d] priority: text=%d, json=%d", i, wt.Priority, jw.Priority)
+		}
+		if len(wt.Dependencies) != len(jw.Dependencies) {
+			t.Errorf("task[%d] dep count: text=%d, json=%d",
+				i, len(wt.Dependencies), len(jw.Dependencies))
+			continue
+		}
+		for j, dep := range wt.Dependencies {
+			jd := jw.Dependencies[j]
+			if dep.ID != jd.ID {
+				t.Errorf("task[%d] dep[%d] ID: text=%q, json=%q",
+					i, j, dep.ID, jd.ID)
+			}
+			if dep.Status != jd.Status {
+				t.Errorf("task[%d] dep[%d] status: text=%q, json=%q",
+					i, j, dep.Status, jd.Status)
+			}
+		}
+	}
+
+	// Verify specific expected dependency states.
+	apiTask := data.waitingTasks[0]
+	if apiTask.Name != "api.md" {
+		t.Fatalf("expected first waiting task to be api.md, got %q", apiTask.Name)
+	}
+	depMap := make(map[string]string, len(apiTask.Dependencies))
+	for _, d := range apiTask.Dependencies {
+		depMap[d.ID] = d.Status
+	}
+	if depMap["setup"] != queue.DirCompleted {
+		t.Errorf("setup dep status = %q, want %q", depMap["setup"], queue.DirCompleted)
+	}
+	if depMap["auth"] != queue.DirBacklog {
+		t.Errorf("auth dep status = %q, want %q", depMap["auth"], queue.DirBacklog)
+	}
+	if depMap["nonexistent"] != "missing" {
+		t.Errorf("nonexistent dep status = %q, want %q", depMap["nonexistent"], "missing")
 	}
 }

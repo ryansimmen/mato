@@ -125,11 +125,17 @@ func (a statusAgent) displayName() string {
 	return "agent-" + a.ID
 }
 
+// waitingDep describes a single dependency and its resolution state.
+type waitingDep struct {
+	ID     string
+	Status string // queue directory name (e.g. "completed") or "missing"
+}
+
 type waitingTaskSummary struct {
 	Name         string
 	Title        string
 	Priority     int
-	Dependencies []string
+	Dependencies []waitingDep
 }
 
 func activeAgents(tasksDir string) ([]statusAgent, error) {
@@ -170,34 +176,26 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 	return agents, nil
 }
 
-// waitingTasksFromIndex derives waiting task summaries from the PollIndex snapshot,
-// replacing waitingTasksStatus which performed its own filesystem scans.
+// waitingTasksFromIndex derives waiting task summaries from the PollIndex
+// snapshot. It populates structured dependency data (ID + status) without
+// any presentation formatting so the same model can drive both text and
+// JSON output.
 func waitingTasksFromIndex(idx *queue.PollIndex) []waitingTaskSummary {
 	snaps := idx.TasksByState(queue.DirWaiting)
 
 	// Build ID→state map from the index.
 	stateByID := taskStatesByIDFromIndex(idx)
 
-	greenSym := color.New(color.FgGreen).SprintFunc()
-	redSym := color.New(color.FgRed).SprintFunc()
-
 	waiting := make([]waitingTaskSummary, 0, len(snaps))
 	for _, snap := range snaps {
 		title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
-		deps := make([]string, 0, len(snap.Meta.DependsOn))
+		deps := make([]waitingDep, 0, len(snap.Meta.DependsOn))
 		for _, dep := range snap.Meta.DependsOn {
 			status := stateByID[dep]
 			if status == "" {
 				status = "missing"
 			}
-			symbol := redSym("✗")
-			if status == queue.DirCompleted {
-				symbol = greenSym("✓")
-			}
-			deps = append(deps, fmt.Sprintf("%s (%s %s)", dep, symbol, status))
-		}
-		if len(deps) == 0 {
-			deps = []string{"none"}
+			deps = append(deps, waitingDep{ID: dep, Status: status})
 		}
 		waiting = append(waiting, waitingTaskSummary{
 			Name:         snap.Filename,

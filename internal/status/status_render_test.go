@@ -303,10 +303,13 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 	data := statusData{
 		waitingTasks: []waitingTaskSummary{
 			{
-				Name:         "wait-task.md",
-				Title:        "A waiting task",
-				Priority:     10,
-				Dependencies: []string{"dep-a (✗ in-progress)", "dep-b (✓ completed)"},
+				Name:     "wait-task.md",
+				Title:    "A waiting task",
+				Priority: 10,
+				Dependencies: []waitingDep{
+					{ID: "dep-a", Status: "in-progress"},
+					{ID: "dep-b", Status: "completed"},
+				},
 			},
 		},
 	}
@@ -322,6 +325,12 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 	}
 	if !strings.Contains(output, "depends on:") {
 		t.Errorf("output missing 'depends on:', got:\n%s", output)
+	}
+	if !strings.Contains(output, "dep-a (✗ in-progress)") {
+		t.Errorf("output missing dep-a with cross mark, got:\n%s", output)
+	}
+	if !strings.Contains(output, "dep-b (✓ completed)") {
+		t.Errorf("output missing dep-b with check mark, got:\n%s", output)
 	}
 }
 
