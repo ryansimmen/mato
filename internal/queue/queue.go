@@ -131,7 +131,7 @@ func resolveOrphanCollision(src, dst string) (string, error) {
 		return "", fmt.Errorf("read existing backlog %s: %w", dst, err)
 	}
 
-	if bytes.Equal(srcData, dstData) {
+	if equivalentOrphanContent(srcData, dstData) {
 		if err := os.Remove(src); err != nil {
 			return "", fmt.Errorf("remove duplicate orphan %s: %w", src, err)
 		}
@@ -152,6 +152,27 @@ func resolveOrphanCollision(src, dst string) (string, error) {
 	}
 	fmt.Fprintf(os.Stderr, "Recovered orphan %s as %s (content differs from backlog copy)\n", base, recoveredName)
 	return recoveredDst, nil
+}
+
+func equivalentOrphanContent(srcData, dstData []byte) bool {
+	return bytes.Equal(normalizeOrphanContent(srcData), normalizeOrphanContent(dstData))
+}
+
+func normalizeOrphanContent(data []byte) []byte {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<!-- claimed-by:") || strings.HasPrefix(trimmed, "<!-- branch:") {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	normalized := strings.TrimSpace(strings.Join(filtered, "\n"))
+	if normalized == "" {
+		return nil
+	}
+	return []byte(normalized)
 }
 
 func laterStateDuplicateDir(tasksDir, name string) string {

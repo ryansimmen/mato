@@ -584,6 +584,76 @@ func TestRecoverOrphanedTasks_CollisionDifferentContent(t *testing.T) {
 	}
 }
 
+func TestNormalizeOrphanContent(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			name: "empty input",
+			data: "",
+			want: "",
+		},
+		{
+			name: "removes runtime metadata and trims",
+			data: "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/fix-bug -->\n# Fix bug\n\nDo it.\n",
+			want: "# Fix bug\n\nDo it.",
+		},
+		{
+			name: "normalizes windows newlines",
+			data: "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n\r\nBody\r\n",
+			want: "# Fix bug\n\nBody",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(normalizeOrphanContent([]byte(tt.data)))
+			if got != tt.want {
+				t.Fatalf("normalizeOrphanContent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEquivalentOrphanContent(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want bool
+	}{
+		{
+			name: "same task different runtime metadata",
+			a:    "<!-- claimed-by: a  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/fix-bug -->\n# Fix bug\n",
+			b:    "# Fix bug\n",
+			want: true,
+		},
+		{
+			name: "same task with windows newlines",
+			a:    "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n",
+			b:    "# Fix bug\n",
+			want: true,
+		},
+		{
+			name: "different body remains different",
+			a:    "# Fix bug\n",
+			b:    "# Different task\n",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := equivalentOrphanContent([]byte(tt.a), []byte(tt.b))
+			if got != tt.want {
+				t.Fatalf("equivalentOrphanContent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{DirBacklog, DirInProgress, ".locks"} {

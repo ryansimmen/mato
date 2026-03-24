@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"mato/internal/doctor"
+	"mato/internal/git"
 	"mato/internal/graph"
 	"mato/internal/queue"
 	"mato/internal/runner"
@@ -127,6 +128,18 @@ func resolveBranch(b string) string {
 		return b
 	}
 	return "mato"
+}
+
+var gitShowTopLevel = func(dir string) (string, error) {
+	return git.Output(dir, "rev-parse", "--show-toplevel")
+}
+
+func resolveRepoRoot(dir string) (string, error) {
+	out, err := gitShowTopLevel(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo root for %q: %w", dir, err)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // gitCheckRefFormat is the function used to validate branch names. It
@@ -394,13 +407,17 @@ func newRetryCmd() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repo, err := resolveRepo(retryRepo)
-			if err != nil {
-				return err
-			}
 			tasksDir := retryTasksDir
 			if tasksDir == "" {
-				tasksDir = filepath.Join(repo, ".tasks")
+				repo, err := resolveRepo(retryRepo)
+				if err != nil {
+					return err
+				}
+				repoRoot, err := resolveRepoRoot(repo)
+				if err != nil {
+					return err
+				}
+				tasksDir = filepath.Join(repoRoot, ".tasks")
 			}
 
 			var firstErr error

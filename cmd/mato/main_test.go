@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"mato/internal/doctor"
+	"mato/internal/testutil"
 
 	"github.com/spf13/cobra"
 )
@@ -1123,5 +1124,76 @@ func TestRetryCmd_FlagParsing(t *testing.T) {
 				t.Fatalf("flag parsing failed: %v", err)
 			}
 		})
+	}
+}
+
+func TestRetryCmd_DefaultTasksDirUsesRepoRoot(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	subdir := filepath.Join(repoRoot, "nested")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	failedDir := filepath.Join(repoRoot, ".tasks", "failed")
+	backlogDir := filepath.Join(repoRoot, ".tasks", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(failedDir, "fix-bug.md"), []byte("# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldWD)
+	})
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry command failed from subdir: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(backlogDir, "fix-bug.md")); err != nil {
+		t.Fatalf("task should be requeued to repo-root backlog: %v", err)
+	}
+}
+
+func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
+	tmp := t.TempDir()
+	failedDir := filepath.Join(tmp, ".tasks", "failed")
+	backlogDir := filepath.Join(tmp, ".tasks", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# Fix bug\n\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — add tests -->\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "fix-bug.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry command failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(backlogDir, "fix-bug.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "<!-- review-rejection:") {
+		t.Fatal("review rejection feedback should be preserved")
 	}
 }
