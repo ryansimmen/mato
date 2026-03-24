@@ -161,39 +161,59 @@ func TestListTasksFromIndex_MalformedFrontmatter(t *testing.T) {
 	}
 }
 
-func TestCountFailureRecords(t *testing.T) {
-	dir := t.TempDir()
+func TestListTasksFromIndex_SnapshotMetadata(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	content := "<!-- claimed-by: agent-abc  claimed-at: 2026-06-15T12:30:00Z -->\n" +
+		"<!-- branch: task/my-task -->\n" +
+		"<!-- failure: agent-abc at 2026-06-15T12:35:00Z — tests failed -->\n" +
+		"<!-- failure: agent-abc at 2026-06-15T12:40:00Z — lint errors -->\n" +
+		"<!-- cycle-failure: mato at 2026-06-15T13:00:00Z — circular dep -->\n" +
+		"<!-- terminal-failure: mato at 2026-06-15T14:00:00Z — invalid glob -->\n" +
+		"---\nid: my-task\npriority: 10\nmax_retries: 5\n---\n# My task\n"
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", content)
 
-	tests := []struct {
-		name    string
-		content string
-		want    int
-	}{
-		{
-			name:    "no failures",
-			content: "# Task\nSome body.\n",
-			want:    0,
-		},
-		{
-			name:    "one failure",
-			content: "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — error -->\n# Task\n",
-			want:    1,
-		},
-		{
-			name:    "multiple failures",
-			content: "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — first -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z — second -->\n<!-- failure: agent-3 at 2026-01-01T00:03:00Z — third -->\n# Task\n",
-			want:    3,
-		},
+	idx := queue.BuildIndex(tasksDir)
+	tasks := listTasksFromIndex(idx, queue.DirInProgress)
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := countFailureRecords(path)
-			if got != tt.want {
-				t.Errorf("countFailureRecords() = %d, want %d", got, tt.want)
-			}
-		})
+	task := tasks[0]
+	if task.branch != "task/my-task" {
+		t.Errorf("branch = %q, want %q", task.branch, "task/my-task")
+	}
+	if task.claimedBy != "agent-abc" {
+		t.Errorf("claimedBy = %q, want %q", task.claimedBy, "agent-abc")
+	}
+	want := time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)
+	if !task.claimedAt.Equal(want) {
+		t.Errorf("claimedAt = %v, want %v", task.claimedAt, want)
+	}
+	if task.failureCount != 2 {
+		t.Errorf("failureCount = %d, want 2", task.failureCount)
+	}
+	if task.lastFailureReason != "lint errors" {
+		t.Errorf("lastFailureReason = %q, want %q", task.lastFailureReason, "lint errors")
+	}
+	if task.lastCycleFailureReason != "circular dep" {
+		t.Errorf("lastCycleFailureReason = %q, want %q", task.lastCycleFailureReason, "circular dep")
+	}
+	if task.lastTerminalFailureReason != "invalid glob" {
+		t.Errorf("lastTerminalFailureReason = %q, want %q", task.lastTerminalFailureReason, "invalid glob")
+	}
+}
+
+func TestListTasksFromIndex_ParseFailureBranch(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	content := "<!-- branch: task/bad-task -->\n---\n: invalid yaml [\n---\n"
+	writeTask(t, tasksDir, queue.DirReadyReview, "bad.md", content)
+
+	idx := queue.BuildIndex(tasksDir)
+	tasks := listTasksFromIndex(idx, queue.DirReadyReview)
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].branch != "task/bad-task" {
+		t.Errorf("branch = %q, want %q", tasks[0].branch, "task/bad-task")
 	}
 }
 
@@ -411,127 +431,6 @@ func TestPluralize(t *testing.T) {
 			got := pluralize(tt.n, "task", "tasks")
 			if got != tt.want {
 				t.Errorf("pluralize(%d) = %q, want %q", tt.n, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseBranchComment(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{"with branch", "<!-- branch: task/add-login -->\n# Task\n", "task/add-login"},
-		{"no branch", "# Task\nSome body.\n", ""},
-		{"empty file", "", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := parseBranchComment(path)
-			if got != tt.want {
-				t.Errorf("parseBranchComment() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseBranchComment_MissingFile(t *testing.T) {
-	got := parseBranchComment(filepath.Join(t.TempDir(), "missing.md"))
-	if got != "" {
-		t.Errorf("parseBranchComment(missing) = %q, want empty", got)
-	}
-}
-
-func TestParseClaimedAt_Roundtrip(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "task.md")
-	os.WriteFile(path, []byte("<!-- claimed-by: agent-1  claimed-at: 2026-06-15T12:30:00Z -->\n# Task\n"), 0o644)
-
-	got := parseClaimedAt(path)
-	want := time.Date(2026, 6, 15, 12, 30, 0, 0, time.UTC)
-	if !got.Equal(want) {
-		t.Errorf("parseClaimedAt() = %v, want %v", got, want)
-	}
-}
-
-func TestParseClaimedAt_MissingFile(t *testing.T) {
-	got := parseClaimedAt(filepath.Join(t.TempDir(), "missing.md"))
-	if !got.IsZero() {
-		t.Errorf("parseClaimedAt(missing) = %v, want zero", got)
-	}
-}
-
-func TestLastFailureReason_Variants(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{"single", "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — broken -->\n# T\n", "broken"},
-		{"last of multiple", "<!-- failure: a1 at 2026-01-01T00:01:00Z — first -->\n<!-- failure: a2 at 2026-01-01T00:02:00Z — second -->\n# T\n", "second"},
-		{"none", "# T\nBody.\n", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := lastFailureReason(path)
-			if got != tt.want {
-				t.Errorf("lastFailureReason() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestLastCycleFailureReason(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{"with cycle", "---\nid: t\n---\n# T\n\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dep -->\n", "circular dep"},
-		{"no cycle", "---\nid: t\n---\n# T\n", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := lastCycleFailureReason(path)
-			if got != tt.want {
-				t.Errorf("lastCycleFailureReason() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestLastTerminalFailureReason(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{"with terminal", "---\nid: t\n---\n# T\n\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n", "unparseable frontmatter"},
-		{"no terminal", "---\nid: t\n---\n# T\n", ""},
-		{"multiple terminal", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — first reason -->\n<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — second reason -->\n---\nid: t\n---\n# T\n", "second reason"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, tt.name+".md")
-			os.WriteFile(path, []byte(tt.content), 0o644)
-			got := lastTerminalFailureReason(path)
-			if got != tt.want {
-				t.Errorf("lastTerminalFailureReason() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -933,7 +832,7 @@ func TestWaitingTasks_TextAndJSONConsistency(t *testing.T) {
 	}
 
 	// Convert the shared model to JSON representation.
-	jsonOut := statusDataToJSON(data, tasksDir)
+	jsonOut := statusDataToJSON(data)
 
 	// Verify same number of waiting tasks.
 	if len(data.waitingTasks) != len(jsonOut.Waiting) {

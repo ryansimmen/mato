@@ -106,7 +106,7 @@ func ShowJSON(w io.Writer, repoRoot, tasksDir string) error {
 		return err
 	}
 
-	out := statusDataToJSON(data, tasksDir)
+	out := statusDataToJSON(data)
 
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -114,7 +114,7 @@ func ShowJSON(w io.Writer, repoRoot, tasksDir string) error {
 }
 
 // statusDataToJSON converts the gathered statusData into a StatusJSON value.
-func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
+func statusDataToJSON(data statusData) StatusJSON {
 	out := StatusJSON{
 		Counts: map[string]int{
 			"backlog":        data.queueCounts[queue.DirBacklog],
@@ -158,13 +158,12 @@ func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 	out.InProgress = make([]TaskSummaryJSON, 0, len(data.inProgressTasks))
 	for _, task := range data.inProgressTasks {
 		ts := TaskSummaryJSON{
-			Name:     task.name,
-			Title:    task.title,
-			Priority: task.priority,
+			Name:      task.name,
+			Title:     task.title,
+			Priority:  task.priority,
+			ClaimedBy: task.claimedBy,
+			Branch:    task.branch,
 		}
-		taskPath := filepath.Join(tasksDir, queue.DirInProgress, task.name)
-		ts.ClaimedBy = queue.ParseClaimedBy(taskPath)
-		ts.Branch = parseBranchComment(taskPath)
 		out.InProgress = append(out.InProgress, ts)
 	}
 
@@ -194,9 +193,8 @@ func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 			Name:     task.name,
 			Title:    task.title,
 			Priority: task.priority,
+			Branch:   task.branch,
 		}
-		taskPath := filepath.Join(tasksDir, queue.DirReadyReview, task.name)
-		ts.Branch = parseBranchComment(taskPath)
 		out.ReadyReview = append(out.ReadyReview, ts)
 	}
 
@@ -213,22 +211,19 @@ func statusDataToJSON(data statusData, tasksDir string) StatusJSON {
 	// Failed tasks.
 	out.Failed = make([]FailedTaskJSON, 0, len(data.failedTasks))
 	for _, task := range data.failedTasks {
-		taskPath := filepath.Join(tasksDir, queue.DirFailed, task.name)
-		terminalReason := lastTerminalFailureReason(taskPath)
-		cycleReason := lastCycleFailureReason(taskPath)
 		ft := FailedTaskJSON{
 			Name:           task.name,
 			Title:          task.title,
-			FailCount:      countFailureRecords(taskPath),
+			FailCount:      task.failureCount,
 			MaxRetries:     task.maxRetries,
-			LastReason:     lastFailureReason(taskPath),
-			TerminalReason: terminalReason,
-			CycleReason:    cycleReason,
+			LastReason:     task.lastFailureReason,
+			TerminalReason: task.lastTerminalFailureReason,
+			CycleReason:    task.lastCycleFailureReason,
 		}
 		switch {
-		case terminalReason != "":
+		case task.lastTerminalFailureReason != "":
 			ft.FailureKind = "terminal"
-		case cycleReason != "":
+		case task.lastCycleFailureReason != "":
 			ft.FailureKind = "cycle"
 		default:
 			ft.FailureKind = "retry"

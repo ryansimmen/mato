@@ -2,7 +2,6 @@ package status
 
 import (
 	"bytes"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -214,7 +213,7 @@ func TestRenderInProgressTasks_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderInProgressTasks(&buf, c, "", data)
+	renderInProgressTasks(&buf, c, data)
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty in-progress, got:\n%s", buf.String())
@@ -410,7 +409,7 @@ func TestRenderFailedTasks_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderFailedTasks(&buf, c, "", data)
+	renderFailedTasks(&buf, c, data)
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty failed tasks, got:\n%s", buf.String())
@@ -629,7 +628,7 @@ func TestRenderReadyForReview_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderReadyForReview(&buf, c, "", data)
+	renderReadyForReview(&buf, c, data)
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty ready-for-review, got:\n%s", buf.String())
@@ -721,22 +720,18 @@ func TestRenderRunnableBacklog_NoTitle(t *testing.T) {
 }
 
 func TestRenderFailedTasks_TerminalFailureOnly(t *testing.T) {
-	dir := t.TempDir()
-	failedDir := dir + "/" + queue.DirFailed
-	if err := os.MkdirAll(failedDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	content := "---\nid: t1\nmax_retries: 3\n---\n# Terminal task\n\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n"
-	os.WriteFile(failedDir+"/terminal.md", []byte(content), 0o644)
-
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		failedTasks: []taskEntry{{name: "terminal.md", title: "Terminal task", maxRetries: 3}},
+		failedTasks: []taskEntry{{
+			name:                      "terminal.md",
+			title:                     "Terminal task",
+			maxRetries:                3,
+			lastTerminalFailureReason: "unparseable frontmatter",
+		}},
 	}
 
-	renderFailedTasks(&buf, c, dir, data)
+	renderFailedTasks(&buf, c, data)
 	output := buf.String()
 
 	if !strings.Contains(output, "structural failure: unparseable frontmatter") {
@@ -748,22 +743,20 @@ func TestRenderFailedTasks_TerminalFailureOnly(t *testing.T) {
 }
 
 func TestRenderFailedTasks_TerminalWithRegularFailures(t *testing.T) {
-	dir := t.TempDir()
-	failedDir := dir + "/" + queue.DirFailed
-	if err := os.MkdirAll(failedDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — invalid glob -->\n---\nid: t2\nmax_retries: 3\n---\n# Mixed task\n"
-	os.WriteFile(failedDir+"/mixed.md", []byte(content), 0o644)
-
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		failedTasks: []taskEntry{{name: "mixed.md", title: "Mixed task", maxRetries: 3}},
+		failedTasks: []taskEntry{{
+			name:                      "mixed.md",
+			title:                     "Mixed task",
+			maxRetries:                3,
+			failureCount:              1,
+			lastFailureReason:         "tests failed",
+			lastTerminalFailureReason: "invalid glob",
+		}},
 	}
 
-	renderFailedTasks(&buf, c, dir, data)
+	renderFailedTasks(&buf, c, data)
 	output := buf.String()
 
 	if !strings.Contains(output, "structural failure: invalid glob") {
@@ -778,22 +771,19 @@ func TestRenderFailedTasks_TerminalWithRegularFailures(t *testing.T) {
 }
 
 func TestRenderFailedTasks_TerminalAndCycleFailure(t *testing.T) {
-	dir := t.TempDir()
-	failedDir := dir + "/" + queue.DirFailed
-	if err := os.MkdirAll(failedDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	content := "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — review retry exhaustion -->\n---\nid: t3\nmax_retries: 3\n---\n# Both task\n"
-	os.WriteFile(failedDir+"/both.md", []byte(content), 0o644)
-
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		failedTasks: []taskEntry{{name: "both.md", title: "Both task", maxRetries: 3}},
+		failedTasks: []taskEntry{{
+			name:                      "both.md",
+			title:                     "Both task",
+			maxRetries:                3,
+			lastCycleFailureReason:    "circular dependency",
+			lastTerminalFailureReason: "review retry exhaustion",
+		}},
 	}
 
-	renderFailedTasks(&buf, c, dir, data)
+	renderFailedTasks(&buf, c, data)
 	output := buf.String()
 
 	if !strings.Contains(output, "structural failure: review retry exhaustion") {
