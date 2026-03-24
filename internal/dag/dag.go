@@ -15,11 +15,11 @@ import (
 // used by Kahn's algorithm to maintain deterministic processing order.
 type stringHeap []string
 
-func (h stringHeap) Len() int            { return len(h) }
-func (h stringHeap) Less(i, j int) bool  { return h[i] < h[j] }
-func (h stringHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *stringHeap) Push(x any)         { *h = append(*h, x.(string)) }
-func (h *stringHeap) Pop() any           { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
+func (h stringHeap) Len() int           { return len(h) }
+func (h stringHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h stringHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *stringHeap) Push(x any)        { *h = append(*h, x.(string)) }
+func (h *stringHeap) Pop() any          { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
 
 // Node represents a waiting task in the dependency graph.
 type Node struct {

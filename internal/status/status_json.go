@@ -266,5 +266,3 @@ func statusDataToJSON(data statusData) StatusJSON {
 
 	return out
 }
-
-

@@ -775,10 +775,10 @@ func TestValidateAffectsGlobs_ValidEntries(t *testing.T) {
 
 func TestParseTaskData_AffectsPathTraversal(t *testing.T) {
 	tests := []struct {
-		name             string
-		affects          string
-		wantAffects      []string
-		wantStrippedLen  int
+		name               string
+		affects            string
+		wantAffects        []string
+		wantStrippedLen    int
 		wantStrippedReason string
 	}{
 		{
