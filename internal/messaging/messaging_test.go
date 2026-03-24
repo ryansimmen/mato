@@ -2192,6 +2192,42 @@ func TestCleanStalePresence_MalformedJSON(t *testing.T) {
 	}
 }
 
+func TestCleanStalePresence_RejectsAgentIDWithPathSeparator(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	data, err := json.Marshal(PresenceInfo{
+		AgentID:   "../escape",
+		Task:      "task.md",
+		Branch:    "branch",
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(presenceDir, "evil.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile presence: %v", err)
+	}
+
+	// Without agent ID validation, cleanup would treat ../escape as a live
+	// lock file outside .locks and incorrectly preserve the presence entry.
+	if err := os.WriteFile(filepath.Join(tasksDir, "escape.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("WriteFile sibling lock: %v", err)
+	}
+
+	CleanStalePresence(tasksDir)
+
+	if _, err := os.Stat(filepath.Join(presenceDir, "evil.json")); !os.IsNotExist(err) {
+		t.Fatalf("presence file for separator-containing agent ID should be removed, stat err = %v", err)
+	}
+}
+
 func TestWritePresence_UnsafeAgentID(t *testing.T) {
 	tests := []struct {
 		name         string
