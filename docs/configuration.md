@@ -22,6 +22,7 @@ mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato retry [--repo <path>] <task-name> [task-name...]
 ```
+Valid `--only` check names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
 The task queue location is fixed at `<repo>/.mato`.
 `mato init` performs lightweight repository bootstrap without Docker. It resolves the repository root, checks out or creates the target branch, creates the `.mato/` queue, lock, and messaging directories, ensures git identity exists locally, updates `.gitignore` with `/.mato/`, and guarantees the target branch has at least one commit.
 Run mode creates the queue structure if needed, starts the Docker-based Copilot loop,
@@ -55,8 +56,30 @@ retry_cooldown: 5m
 - Empty and whitespace-only string values are treated as unset.
 - `.yml` is not supported; the filename must be `.mato.yaml`.
 
+## Which Surface To Use
+Use the narrowest surface that matches the scope of the setting:
+
+| Need | Use | Why |
+| --- | --- | --- |
+| Change behavior for one command invocation | CLI flags | Best for one-off overrides and scripts that should be explicit at the call site. |
+| Set personal defaults on one machine without committing them | host configuration environment variables | Best for shell profiles, `direnv`, CI, and local wrappers. |
+| Set shared defaults for everyone who works in the repo | `.mato.yaml` | Best for committed, repo-local defaults such as branch or Docker image. |
+| Control scheduling behavior for one task | task frontmatter | Best for task-specific metadata such as priority, dependencies, touched files, or retry budget. |
+| Inspect runtime state inside a container or custom script | injected container runtime variables | These are outputs of `mato` at runtime, not normal user configuration inputs. |
+
+`mato` intentionally does not mirror every setting across every surface. For example,
+`--repo` is CLI-only because repo selection happens before `.mato.yaml` can be
+discovered, and task frontmatter stays separate from repo config because it is
+task-specific scheduling metadata.
+
 ## Precedence
 Settings resolve in this order: CLI flag > environment variable > `.mato.yaml` > hardcoded default.
+
+Only settings that exist on more than one surface participate in this precedence
+chain. Task frontmatter is separate from CLI/env/config resolution and controls
+per-task scheduling behavior. It can still override runtime defaults that `mato`
+passes into containers as reference values; for example, task `max_retries`
+frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 
 | Setting | CLI Flag | Env Var | Config File | Default |
 | --- | --- | --- | --- | --- |
@@ -130,6 +153,20 @@ mato graph --format json
 mato graph --all
 ```
 
+### `mato doctor`
+`mato doctor` runs structured health checks on the repository and task queue.
+It loads `.mato.yaml` and resolves the Docker image using the same precedence as
+the run command (env var > config file > default), so the docker check verifies the
+image users will actually run with. A malformed `.mato.yaml` is a hard error — doctor
+will not silently fall back to defaults and produce misleading results.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--fix` | `false` | Auto-repair safe issues (stale locks, orphaned tasks, missing dirs). |
+| `--format` | `text` | Output format: `text` or `json`. |
+| `--only <check>` | all checks | Run only specified checks (repeatable). Valid names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`. |
+
 ### `mato retry`
 `mato retry` requeues one or more failed tasks back to `backlog/`. It reads the
 task file from `failed/`, strips task-failure markers (`<!-- failure: -->`,
@@ -152,30 +189,43 @@ mato retry fix-login-bug
 mato retry fix-login-bug add-dark-mode
 ```
 
-## Environment Variables
-| Variable | Scope | Default | Description |
-| --- | --- | --- | --- |
-| `MATO_BRANCH` | host | `mato` | Default target branch for `mato`, `mato --dry-run`, and `mato init` when `--branch` is not passed. Overrides `.mato.yaml` `branch`. Empty is treated as unset; whitespace-only values are rejected. |
-| `MATO_DOCKER_IMAGE` | host | `ubuntu:24.04` | Docker image used for agent containers. Overrides `.mato.yaml` `docker_image`. |
-| `MATO_DEFAULT_MODEL` | host | `claude-opus-4.6` | Default Copilot model used when `--model` is not passed in copilot args. Overrides `.mato.yaml` `default_model`. Priority: explicit `--model` arg > `MATO_DEFAULT_MODEL` > `.mato.yaml` > hardcoded default. |
-| `MATO_AGENT_TIMEOUT` | host | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. Overrides `.mato.yaml` `agent_timeout`. |
-| `MATO_RETRY_COOLDOWN` | host | `2m` | Minimum time to wait after a task failure before the task can be claimed again. Prevents rapid retry churn when agents crash immediately after launch. Accepts Go duration strings (e.g. `2m`, `5m`, `30s`). Non-positive or invalid env values are ignored and fall back to config/default. Overrides `.mato.yaml` `retry_cooldown` when valid. |
-| `MATO_AGENT_ID` | container | generated per run | Agent identity injected by `mato` so the running agent can identify itself. |
-| `MATO_MAX_RETRIES` | container | `3` | Passed to container for reference; the host enforces the retry budget in `queue.SelectAndClaimTask(...)` and `shouldFailTask(...)` (in `taskops.go`). Per-task overrides via `max_retries` frontmatter take precedence. |
-| `MATO_MESSAGING_ENABLED` | container | `1` | Injected by `mato` for agent-side tooling. The embedded prompt already uses hardcoded `.mato` paths, so this is mainly useful to custom scripts or wrappers. |
-| `MATO_MESSAGES_DIR` | container | `/workspace/.mato/messages` | Injected path to the shared messages directory for custom tooling. The embedded prompt separately hardcodes the same `/workspace/.mato/messages` path. |
-| `MATO_TASK_FILE` | container | none | Claimed task filename (e.g. `my-task.md`). Set per-run by the host after claiming a task. |
-| `MATO_TASK_BRANCH` | container | none | Derived task branch name (e.g. `task/my-task`). Set per-run by the host after claiming a task. |
-| `MATO_TASK_TITLE` | container | none | Extracted from the first non-empty, non-HTML-comment body line in the task file (heading markers stripped if present; leading full-line `<!-- ... -->` comments are skipped), falling back to filename stem. Set per-run by the host after claiming a task. |
-| `MATO_TASK_PATH` | container | none | Absolute path to the task file in `in-progress/` (e.g. `/workspace/.mato/in-progress/my-task.md`). Set per-run by the host after claiming a task. |
-| `MATO_DEPENDENCY_CONTEXT` | container | none | Path to a JSON file containing completion details for resolved `depends_on` tasks (e.g. `/workspace/.mato/messages/dependency-context-my-task.md.json`). Each element contains `task_id`, `task_file`, `branch`, `commit_sha`, `files_changed`, `title`, and `merged_at`. Set per-run by the host only when the claimed task has `depends_on` entries with available completion data in `.mato/messages/completions/`. Written to a file instead of passed inline to avoid ARG_MAX / Docker env var size limits. |
-| `MATO_FILE_CLAIMS` | container | none | Path to the file-claims JSON index inside the container (e.g. `/workspace/.mato/messages/file-claims.json`). The host writes this index before agent launch via `messaging.BuildAndWriteFileClaims(...)`. It maps active `affects:` entries to `{task, status}` objects; keys ending with `/` are directory-prefix claims that apply to all files underneath, and keys containing glob metacharacters (`*`, `?`, `[`, `{`) are glob-pattern claims that apply to any matching file. |
-| `MATO_PREVIOUS_FAILURES` | container | none | Injected when the task file contains previous `<!-- failure: ... -->` records. Contains newline-separated failure lines extracted by `extractFailureLines(...)`. Agents can read this during `VERIFY_CLAIM` to understand why earlier attempts failed and avoid repeating the same mistakes. |
-| `MATO_REVIEW_MODE` | container | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
-| `MATO_REVIEW_FEEDBACK` | container | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
-| `MATO_REVIEW_VERDICT_PATH` | container | none | Path to the JSON verdict file where the review agent writes its verdict (e.g. `/workspace/.mato/messages/verdict-my-task.md.json`). Set per-run by the host when launching a review agent. The verdict structure is `{"verdict":"approve\|reject\|error","reason":"..."}`. Not set for task agents. |
-Only `MATO_BRANCH`, `MATO_DOCKER_IMAGE`, `MATO_DEFAULT_MODEL`, `MATO_AGENT_TIMEOUT`, and `MATO_RETRY_COOLDOWN` are intended as host-side configuration inputs. They can also be set in `.mato.yaml`, but env vars take precedence. The other
-variables are injected by `mato` inside each container and are normally not set manually.
+## Host Configuration Environment Variables
+These are the only environment variables intended to be set by users on the host.
+They override `.mato.yaml` when both are present. If you want a shared repo
+default, prefer `.mato.yaml`; if you want a personal default, prefer these env
+vars.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MATO_BRANCH` | `mato` | Default target branch for `mato`, `mato --dry-run`, and `mato init` when `--branch` is not passed. Overrides `.mato.yaml` `branch`. Empty is treated as unset; whitespace-only values are rejected. |
+| `MATO_DOCKER_IMAGE` | `ubuntu:24.04` | Docker image used for agent containers. Overrides `.mato.yaml` `docker_image`. |
+| `MATO_DEFAULT_MODEL` | `claude-opus-4.6` | Default Copilot model used when `--model` is not passed in copilot args. Overrides `.mato.yaml` `default_model`. Priority: explicit `--model` arg > `MATO_DEFAULT_MODEL` > `.mato.yaml` > hardcoded default. |
+| `MATO_AGENT_TIMEOUT` | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. Overrides `.mato.yaml` `agent_timeout`. |
+| `MATO_RETRY_COOLDOWN` | `2m` | Minimum time to wait after a task failure before the task can be claimed again. Prevents rapid retry churn when agents crash immediately after launch. Accepts Go duration strings (e.g. `2m`, `5m`, `30s`). Must be positive; invalid values cause an error. Overrides `.mato.yaml` `retry_cooldown`. |
+
+## Injected Container Runtime Variables
+These variables are set by `mato` inside agent or review containers at runtime.
+They are documented for debugging and custom tooling; users normally do not set
+them manually. Think of them as runtime outputs of `mato`, not configuration
+inputs.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MATO_AGENT_ID` | generated per run | Agent identity injected by `mato` so the running agent can identify itself. |
+| `MATO_MAX_RETRIES` | `3` | Passed to container for reference; the host enforces the retry budget in `queue.SelectAndClaimTask(...)` and `shouldFailTask(...)` (in `taskops.go`). Per-task overrides via `max_retries` frontmatter take precedence. |
+| `MATO_MESSAGING_ENABLED` | `1` | Injected by `mato` for agent-side tooling. The embedded prompt already uses hardcoded `.mato` paths, so this is mainly useful to custom scripts or wrappers. |
+| `MATO_MESSAGES_DIR` | `/workspace/.mato/messages` | Injected path to the shared messages directory for custom tooling. The embedded prompt separately hardcodes the same `/workspace/.mato/messages` path. |
+| `MATO_TASK_FILE` | none | Claimed task filename (e.g. `my-task.md`). Set per-run by the host after claiming a task. |
+| `MATO_TASK_BRANCH` | none | Derived task branch name (e.g. `task/my-task`). Set per-run by the host after claiming a task. |
+| `MATO_TASK_TITLE` | none | Extracted from the first non-empty, non-HTML-comment body line in the task file (heading markers stripped if present; leading full-line `<!-- ... -->` comments are skipped), falling back to filename stem. Set per-run by the host after claiming a task. |
+| `MATO_TASK_PATH` | none | Absolute path to the task file in `in-progress/` (e.g. `/workspace/.mato/in-progress/my-task.md`). Set per-run by the host after claiming a task. |
+| `MATO_DEPENDENCY_CONTEXT` | none | Path to a JSON file containing completion details for resolved `depends_on` tasks (e.g. `/workspace/.mato/messages/dependency-context-my-task.md.json`). Each element contains `task_id`, `task_file`, `branch`, `commit_sha`, `files_changed`, `title`, and `merged_at`. Set per-run by the host only when the claimed task has `depends_on` entries with available completion data in `.mato/messages/completions/`. Written to a file instead of passed inline to avoid ARG_MAX / Docker env var size limits. |
+| `MATO_FILE_CLAIMS` | none | Path to the file-claims JSON index inside the container (e.g. `/workspace/.mato/messages/file-claims.json`). The host writes this index before agent launch via `messaging.BuildAndWriteFileClaims(...)`. It maps active `affects:` entries to `{task, status}` objects; keys ending with `/` are directory-prefix claims that apply to all files underneath, and keys containing glob metacharacters (`*`, `?`, `[`, `{`) are glob-pattern claims that apply to any matching file. |
+| `MATO_PREVIOUS_FAILURES` | none | Injected when the task file contains previous `<!-- failure: ... -->` records. Contains newline-separated failure lines extracted by `extractFailureLines(...)`. Agents can read this during `VERIFY_CLAIM` to understand why earlier attempts failed and avoid repeating the same mistakes. |
+| `MATO_REVIEW_MODE` | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
+| `MATO_REVIEW_FEEDBACK` | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
+| `MATO_REVIEW_VERDICT_PATH` | none | Path to the JSON verdict file where the review agent writes its verdict (e.g. `/workspace/.mato/messages/verdict-my-task.md.json`). Set per-run by the host when launching a review agent. The verdict structure is `{"verdict":"approve\|reject\|error","reason":"..."}`. Not set for task agents. |
+
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
 `depends_on` entries whose completion details are available. It contains a file
 path (not inline JSON) to avoid shell ARG_MAX limits with many dependencies.
@@ -188,8 +238,9 @@ failure records from prior attempts.
 review rejection records from prior review attempts.
 
 ## Docker Configuration
-Each agent run uses `docker run --rm` with either `-it` (when stdin is a terminal) or
-`-i` (when stdin is not a terminal, e.g. CI, cron, systemd). The working directory is
+Each agent run uses `docker run --rm --init` with either `-it` (when stdin is a terminal) or
+`-i` (when stdin is not a terminal, e.g. CI, cron, systemd). The `--init` flag ensures an
+init process reaps zombie child processes inside the container. The working directory is
 `/workspace` and user mapping `--user <host-uid>:<host-gid>` preserves host file
 ownership.
 
@@ -206,9 +257,11 @@ ownership.
 | host `gh` binary | `/usr/local/bin/gh` (ro) | Makes GitHub CLI available in the container. |
 | host `GOROOT` | `/usr/local/go` (ro) | Provides the Go toolchain in the container. |
 | host `~/.copilot` | `$HOME/.copilot` | For Copilot authentication and package data. |
+| host `~/.cache/copilot` | `$HOME/.cache/copilot` | Copilot cache data. |
 | host `~/go/pkg/mod` | `$HOME/go/pkg/mod` | Shares Go module cache. |
 | host `~/.cache/go-build` | `$HOME/.cache/go-build` | Shares Go build cache. |
 | host `~/.config/gh` | `$HOME/.config/gh` (ro) | Mounted only if it exists, to forward `gh` authentication/config. |
+| host git-templates dir | same absolute host path (ro) | Mounted only if Git's `init.templateDir` is configured, to preserve Git hooks and templates. |
 | host `/etc/ssl/certs` | `/etc/ssl/certs` (ro) | Mounted only if present, to preserve CA trust. |
 
 ### Container environment and runtime behavior
@@ -228,7 +281,7 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | Target | Description |
 | --- | --- |
 | `build` | Build `bin/mato` with `go build -o bin/mato ./cmd/mato`. |
-| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` Copilot skill to `~/.copilot/skills/mato/`. The skill is a task planner that breaks down work into actionable task files. |
+| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when `opencode` is on `PATH`, `~/.config/opencode/skills/mato/`. The skill is a task planner that breaks down work into actionable task files. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |

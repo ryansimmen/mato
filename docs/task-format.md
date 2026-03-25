@@ -44,15 +44,33 @@ Supported keys come from `TaskMeta`. Unknown keys are currently ignored.
 Strings may be quoted with `'` or `"`.
 Arrays may be written as inline lists (`[a, b]`) or block lists.
 
+Most tasks need only markdown instructions plus a few common scheduler fields
+(`priority`, `depends_on`, and `affects`).
+
+### Common scheduler fields
+
 | Field | Type | Default | Reference |
 | --- | --- | --- | --- |
 | `id` | string | filename without `.md` | Stable task ID. If omitted, `my-task.md` becomes `my-task`. Use this in `depends_on`. Completed deps match either explicit `id` or filename stem. |
 | `priority` | int | `50` | Lower numbers are higher priority. `.queue` is generated from `backlog/` sorted by priority ascending, then filename ascending. |
 | `depends_on` | string array | empty | IDs that must be completed before a waiting task can be promoted into `backlog/`. No dependencies means the task is immediately ready. Circular dependencies (including self-dependencies) are detected and the affected tasks are moved to `failed/` with a `<!-- cycle-failure: -->` marker. |
 | `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). Exact strings are compared literally; an entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Combining glob metacharacters with a trailing `/` is invalid and treated as a fatal task error: the queue moves such tasks to `failed/`, and `mato doctor` reports them at error severity (exit code 2). Unsafe path entries — absolute paths (e.g. `/etc/passwd`) and path-traversal entries that escape the repository root (e.g. `../../secret`) — are stripped during parsing and reported by `mato doctor` at error severity (code `tasks.unsafe_affects`). The stripped entries are recorded in structured metadata so diagnostics can report exactly which entries were removed and why. |
+
+### Advanced scheduler fields
+
+| Field | Type | Default | Reference |
+| --- | --- | --- | --- |
+| `max_retries` | int | `3` | Maximum number of `<!-- failure: ... -->` records before the task moves to `failed/`. Must be a non-negative integer (≥ 0); negative values are rejected at parse time. A task with `max_retries: 3` is moved to `failed/` once it accumulates 3 failure records (i.e. `failures >= max_retries`). The host merge queue reads this per-task from frontmatter (authoritative). The agent uses a global default via `MATO_MAX_RETRIES` env var (safety net). |
+
+### Informational fields
+
+| Field | Type | Default | Reference |
+| --- | --- | --- | --- |
 | `tags` | string array | empty | Free-form categorization labels. Parsed today, but not used by queue reconciliation. |
 | `estimated_complexity` | string | empty | Human hint for task size. Use `simple`, `medium`, or `complex` by convention; current parsing does not enforce these values. |
-| `max_retries` | int | `3` | Maximum number of `<!-- failure: ... -->` records before the task moves to `failed/`. Must be a non-negative integer (≥ 0); negative values are rejected at parse time. A task with `max_retries: 3` is moved to `failed/` once it accumulates 3 failure records (i.e. `failures >= max_retries`). The host merge queue reads this per-task from frontmatter (authoritative). The agent uses a global default via `MATO_MAX_RETRIES` env var (safety net). |
+
+These are safe to omit. They are currently for human communication and tooling,
+not queue behavior.
 
 ### Frontmatter syntax examples
 Inline arrays:
