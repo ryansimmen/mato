@@ -33,8 +33,10 @@ var taskInstructions string
 var reviewInstructions string
 
 // defaultAgentTimeout is the default execution timeout for Docker agent
-// containers. Override with MATO_AGENT_TIMEOUT (Go duration string).
+// containers.
 const defaultAgentTimeout = 30 * time.Minute
+
+const defaultCopilotModel = "claude-opus-4.6"
 
 // gracefulShutdownDelay is the time to wait after sending SIGTERM to a
 // Docker container before escalating to SIGKILL.
@@ -84,6 +86,15 @@ type idleHeartbeat struct {
 	lastActivityTime     time.Time
 	lastHeartbeatTime    time.Time
 	startTime            time.Time
+}
+
+// RunOptions holds fully resolved configuration values for a mato run.
+// Zero values mean "use hardcoded default."
+type RunOptions struct {
+	DockerImage   string
+	DefaultModel  string
+	AgentTimeout  time.Duration
+	RetryCooldown time.Duration
 }
 
 // newIdleHeartbeat creates an idleHeartbeat initialised with the given time.
@@ -254,7 +265,7 @@ func DryRun(repoRoot, branch string) error {
 	return nil
 }
 
-func Run(repoRoot, branch string, copilotArgs []string) error {
+func Run(repoRoot, branch string, copilotArgs []string, opts RunOptions) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
@@ -303,17 +314,12 @@ func Run(repoRoot, branch string, copilotArgs []string) error {
 		}
 	}
 
-	agentTimeout, err := parseAgentTimeout(os.Getenv("MATO_AGENT_TIMEOUT"))
-	if err != nil {
-		return err
-	}
-
 	tools, err := discoverHostTools()
 	if err != nil {
 		return err
 	}
 
-	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, copilotArgs, repoRoot, tasksDir, agentTimeout)
+	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, copilotArgs, repoRoot, tasksDir, opts)
 
 	if err := ensureDockerImage(cfg.image); err != nil {
 		return err
@@ -323,7 +329,7 @@ func Run(repoRoot, branch string, copilotArgs []string) error {
 	defer cancel()
 	defer signal.Stop(signalChan(ctx))
 
-	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID)
+	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown)
 }
 
 // resolveGitIdentity reads git user.name and user.email from the local
@@ -336,10 +342,15 @@ func resolveGitIdentity(repoRoot string) (name, email string) {
 
 // buildEnvAndRunContext assembles the envConfig and runContext from resolved
 // host tools, agent identity, and runtime settings.
-func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail string, copilotArgs []string, repoRoot, tasksDir string, timeout time.Duration) (envConfig, runContext) {
-	image := os.Getenv("MATO_DOCKER_IMAGE")
+func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail string, copilotArgs []string, repoRoot, tasksDir string, opts RunOptions) (envConfig, runContext) {
+	image := opts.DockerImage
 	if image == "" {
 		image = "ubuntu:24.04"
+	}
+	model := resolveDefaultModel(opts.DefaultModel)
+	timeout := opts.AgentTimeout
+	if timeout <= 0 {
+		timeout = defaultAgentTimeout
 	}
 	workdir := "/workspace"
 
@@ -370,6 +381,7 @@ func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, git
 		repoRoot:           repoRoot,
 		tasksDir:           tasksDir,
 		targetBranch:       branch,
+		defaultModel:       model,
 		isTTY:              isTerminal(os.Stdin),
 	}
 
@@ -454,7 +466,7 @@ func pollReconcile(tasksDir string) (*queue.PollIndex, bool) {
 // failedDirExcluded map may be mutated when a FailedDirUnavailableError is
 // encountered. It returns whether a task was claimed and whether any
 // non-fatal error occurred.
-func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (claimed bool, hadError bool) {
+func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex) (claimed bool, hadError bool) {
 	deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
 	for name := range failedDirExcluded {
 		deferred[name] = struct{}{}
@@ -464,7 +476,7 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 		hadError = true
 	}
 
-	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, idx)
+	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, cooldown, idx)
 	var fdErr *queue.FailedDirUnavailableError
 	if errors.As(claimErr, &fdErr) {
 		failedDirExcluded[fdErr.TaskFilename] = struct{}{}
@@ -545,7 +557,7 @@ func pollMerge(repoRoot, tasksDir, branch string) int {
 // handles reviews, and processes merges. It runs until the context is
 // cancelled (via signal). The loop delegates to focused helpers for each
 // concern and manages idle/backoff state locally.
-func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, tasksDir, branch, agentID string) error {
+func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, tasksDir, branch, agentID string, cooldown time.Duration) error {
 	heartbeat := newIdleHeartbeat(time.Now())
 	failedDirExcluded := make(map[string]struct{})
 	consecutiveErrors := 0
@@ -563,7 +575,7 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			pollHadError = true
 		}
 
-		claimedTask, claimHadError := pollClaimAndRun(ctx, env, run, tasksDir, agentID, failedDirExcluded, idx)
+		claimedTask, claimHadError := pollClaimAndRun(ctx, env, run, tasksDir, agentID, failedDirExcluded, cooldown, idx)
 		if claimHadError {
 			pollHadError = true
 		}

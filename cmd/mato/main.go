@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/config"
 	"mato/internal/dirs"
 	"mato/internal/doctor"
 	"mato/internal/git"
@@ -129,6 +130,74 @@ func resolveBranch(b string) string {
 	return "mato"
 }
 
+func resolveConfigBranch(cfg config.Config, flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if cfg.Branch != nil {
+		return *cfg.Branch
+	}
+	return resolveBranch("")
+}
+
+func resolveRunOptions(cfg config.Config) (runner.RunOptions, error) {
+	var opts runner.RunOptions
+
+	if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
+		opts.DockerImage = v
+	} else if cfg.DockerImage != nil {
+		opts.DockerImage = *cfg.DockerImage
+	}
+
+	if v := os.Getenv("MATO_DEFAULT_MODEL"); v != "" {
+		opts.DefaultModel = v
+	} else if cfg.DefaultModel != nil {
+		opts.DefaultModel = *cfg.DefaultModel
+	}
+
+	if v := os.Getenv("MATO_AGENT_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return opts, fmt.Errorf("parse MATO_AGENT_TIMEOUT %q: %w", v, err)
+		}
+		if d <= 0 {
+			return opts, fmt.Errorf("MATO_AGENT_TIMEOUT must be positive, got %v", d)
+		}
+		opts.AgentTimeout = d
+	} else if cfg.AgentTimeout != nil {
+		d, err := time.ParseDuration(*cfg.AgentTimeout)
+		if err != nil {
+			return opts, fmt.Errorf("invalid agent_timeout %q in .mato.yaml: %w", *cfg.AgentTimeout, err)
+		}
+		if d <= 0 {
+			return opts, fmt.Errorf("agent_timeout in .mato.yaml must be positive, got %v", d)
+		}
+		opts.AgentTimeout = d
+	}
+
+	if v := os.Getenv("MATO_RETRY_COOLDOWN"); v != "" {
+		// Keep env parsing lenient for retry cooldown to preserve the pre-config
+		// behavior from queue.retryCooldown(): invalid or non-positive env values
+		// are ignored and fall back to config/default instead of aborting the run.
+		// In contrast, config-file values are treated as deliberate repository
+		// settings and therefore validated strictly when effective.
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			opts.RetryCooldown = d
+		}
+	} else if cfg.RetryCooldown != nil {
+		d, err := time.ParseDuration(*cfg.RetryCooldown)
+		if err != nil {
+			return opts, fmt.Errorf("invalid retry_cooldown %q in .mato.yaml: %w", *cfg.RetryCooldown, err)
+		}
+		if d <= 0 {
+			return opts, fmt.Errorf("retry_cooldown in .mato.yaml must be positive, got %v", d)
+		}
+		opts.RetryCooldown = d
+	}
+
+	return opts, nil
+}
+
 var gitShowTopLevel = func(dir string) (string, error) {
 	return git.Output(dir, "rev-parse", "--show-toplevel")
 }
@@ -183,6 +252,14 @@ func validateRepoPath(dir string) error {
 	return gitRevParseGitDir(dir)
 }
 
+// runFn is the function used to start the orchestrator loop. Defaults to
+// runner.Run and can be replaced in tests to observe resolved values.
+var runFn = runner.Run
+
+// dryRunFn is the function used for dry-run validation. Defaults to
+// runner.DryRun and can be replaced in tests.
+var dryRunFn = runner.DryRun
+
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "mato [copilot-args...]",
@@ -214,14 +291,30 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 			if err := validateRepoPath(resolved); err != nil {
 				return err
 			}
-			br := resolveBranch(cfg.branch)
-			if err := validateBranch(br); err != nil {
+			repoRoot, err := resolveRepoRoot(resolved)
+			if err != nil {
+				return err
+			}
+			fileCfg, err := config.Load(repoRoot)
+			if err != nil {
 				return err
 			}
 			if cfg.dryRun {
-				return runner.DryRun(resolved, br)
+				br := resolveConfigBranch(fileCfg, cfg.branch)
+				if err := validateBranch(br); err != nil {
+					return err
+				}
+				return dryRunFn(repoRoot, br)
 			}
-			return runner.Run(resolved, br, cfg.copilotArgs)
+			opts, err := resolveRunOptions(fileCfg)
+			if err != nil {
+				return err
+			}
+			br := resolveConfigBranch(fileCfg, cfg.branch)
+			if err := validateBranch(br); err != nil {
+				return err
+			}
+			return runFn(repoRoot, br, cfg.copilotArgs, opts)
 		},
 	}
 
@@ -261,7 +354,11 @@ func newInitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			branch := resolveBranch(initBranch)
+			fileCfg, err := config.Load(repoRoot)
+			if err != nil {
+				return err
+			}
+			branch := resolveConfigBranch(fileCfg, initBranch)
 			if err := validateBranch(branch); err != nil {
 				return err
 			}

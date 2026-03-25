@@ -38,6 +38,35 @@ unrecognized flags such as `--branch`.
 Use `--` to stop `mato` flag parsing and forward the remaining arguments verbatim to
 Copilot CLI. In run mode, unrecognized arguments are also passed through to Copilot.
 
+## Config File
+`mato` optionally loads `.mato.yaml` from the repository root (next to `.git/`).
+All fields are optional:
+
+```yaml
+branch: main
+docker_image: ubuntu:24.04
+default_model: claude-sonnet-4
+agent_timeout: 45m
+retry_cooldown: 5m
+```
+
+- Config is repo-local only; there is no global config file.
+- Unknown YAML keys are ignored for forward compatibility.
+- Empty and whitespace-only string values are treated as unset.
+- `.yml` is not supported; the filename must be `.mato.yaml`.
+
+## Precedence
+Settings resolve in this order: CLI flag > environment variable > `.mato.yaml` > hardcoded default.
+
+| Setting | CLI Flag | Env Var | Config File | Default |
+| --- | --- | --- | --- | --- |
+| repo | `--repo` | — | — | current directory |
+| branch | `--branch` | — | `branch` | `mato` |
+| docker image | — | `MATO_DOCKER_IMAGE` | `docker_image` | `ubuntu:24.04` |
+| default model | forwarded `--model` | `MATO_DEFAULT_MODEL` | `default_model` | `claude-opus-4.6` |
+| agent timeout | — | `MATO_AGENT_TIMEOUT` | `agent_timeout` | `30m` |
+| retry cooldown | — | `MATO_RETRY_COOLDOWN` | `retry_cooldown` | `2m` |
+
 ## CLI Flags
 Long flags support both `--flag value` and `--flag=value` forms.
 | Flag | Applies to | Default | Description |
@@ -126,10 +155,10 @@ mato retry fix-login-bug add-dark-mode
 ## Environment Variables
 | Variable | Scope | Default | Description |
 | --- | --- | --- | --- |
-| `MATO_DOCKER_IMAGE` | host | `ubuntu:24.04` | Docker image used for agent containers. Set this before starting `mato` to use a custom image. |
-| `MATO_DEFAULT_MODEL` | host | `claude-opus-4.6` | Default Copilot model used when `--model` is not passed in copilot args. Set this to change the model without modifying the command line. Priority: explicit `--model` arg > `MATO_DEFAULT_MODEL` > hardcoded default. |
-| `MATO_AGENT_TIMEOUT` | host | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. |
-| `MATO_RETRY_COOLDOWN` | host | `2m` | Minimum time to wait after a task failure before the task can be claimed again. Prevents rapid retry churn when agents crash immediately after launch. Accepts Go duration strings (e.g. `2m`, `5m`, `30s`). Must be positive; invalid or non-positive values fall back to the default. |
+| `MATO_DOCKER_IMAGE` | host | `ubuntu:24.04` | Docker image used for agent containers. Overrides `.mato.yaml` `docker_image`. |
+| `MATO_DEFAULT_MODEL` | host | `claude-opus-4.6` | Default Copilot model used when `--model` is not passed in copilot args. Overrides `.mato.yaml` `default_model`. Priority: explicit `--model` arg > `MATO_DEFAULT_MODEL` > `.mato.yaml` > hardcoded default. |
+| `MATO_AGENT_TIMEOUT` | host | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. Overrides `.mato.yaml` `agent_timeout`. |
+| `MATO_RETRY_COOLDOWN` | host | `2m` | Minimum time to wait after a task failure before the task can be claimed again. Prevents rapid retry churn when agents crash immediately after launch. Accepts Go duration strings (e.g. `2m`, `5m`, `30s`). Non-positive or invalid env values are ignored and fall back to config/default. Overrides `.mato.yaml` `retry_cooldown` when valid. |
 | `MATO_AGENT_ID` | container | generated per run | Agent identity injected by `mato` so the running agent can identify itself. |
 | `MATO_MAX_RETRIES` | container | `3` | Passed to container for reference; the host enforces the retry budget in `queue.SelectAndClaimTask(...)` and `shouldFailTask(...)` (in `taskops.go`). Per-task overrides via `max_retries` frontmatter take precedence. |
 | `MATO_MESSAGING_ENABLED` | container | `1` | Injected by `mato` for agent-side tooling. The embedded prompt already uses hardcoded `.mato` paths, so this is mainly useful to custom scripts or wrappers. |
@@ -144,7 +173,7 @@ mato retry fix-login-bug add-dark-mode
 | `MATO_REVIEW_MODE` | container | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
 | `MATO_REVIEW_FEEDBACK` | container | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
 | `MATO_REVIEW_VERDICT_PATH` | container | none | Path to the JSON verdict file where the review agent writes its verdict (e.g. `/workspace/.mato/messages/verdict-my-task.md.json`). Set per-run by the host when launching a review agent. The verdict structure is `{"verdict":"approve\|reject\|error","reason":"..."}`. Not set for task agents. |
-Only `MATO_DOCKER_IMAGE`, `MATO_DEFAULT_MODEL`, `MATO_AGENT_TIMEOUT`, and `MATO_RETRY_COOLDOWN` are intended as host-side configuration inputs. The other
+Only `MATO_DOCKER_IMAGE`, `MATO_DEFAULT_MODEL`, `MATO_AGENT_TIMEOUT`, and `MATO_RETRY_COOLDOWN` are intended as host-side configuration inputs. They can also be set in `.mato.yaml`, but env vars take precedence. The other
 variables are injected by `mato` inside each container and are normally not set manually.
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
 `depends_on` entries whose completion details are available. It contains a file
@@ -188,8 +217,8 @@ ownership.
 - `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=*` allow Git to trust mounted worktrees even if ownership looks unusual.
 - If Git user name/email are configured on the host repository or globally, `mato` forwards them as `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL`.
 - The container command is `copilot -p <embedded prompt> --autopilot --allow-all`.
-- If no model is present in forwarded Copilot arguments, `mato` adds `--model` using the value of `MATO_DEFAULT_MODEL` (defaulting to `claude-opus-4.6`) automatically.
-When choosing a custom `MATO_DOCKER_IMAGE`, use an image compatible with the mounted
+- If no model is present in forwarded Copilot arguments, `mato` adds `--model` using the resolved default model from env/config/default precedence.
+When choosing a custom Docker image via `MATO_DOCKER_IMAGE` or `.mato.yaml`, use an image compatible with the mounted
 host binaries and standard Linux filesystem layout expected above.
 
 ## Makefile Targets

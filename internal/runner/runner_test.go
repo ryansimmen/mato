@@ -177,18 +177,16 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	}
 }
 
-func TestDefaultModel(t *testing.T) {
-	t.Run("returns hardcoded default when env unset", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "")
-		if got := defaultModel(); got != "claude-opus-4.6" {
-			t.Fatalf("defaultModel() = %q, want %q", got, "claude-opus-4.6")
+func TestResolveDefaultModel(t *testing.T) {
+	t.Run("returns hardcoded default when unset", func(t *testing.T) {
+		if got := resolveDefaultModel(""); got != "claude-opus-4.6" {
+			t.Fatalf("resolveDefaultModel(empty) = %q, want %q", got, "claude-opus-4.6")
 		}
 	})
 
-	t.Run("returns env var when set", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "claude-sonnet-4.5")
-		if got := defaultModel(); got != "claude-sonnet-4.5" {
-			t.Fatalf("defaultModel() = %q, want %q", got, "claude-sonnet-4.5")
+	t.Run("returns configured model when set", func(t *testing.T) {
+		if got := resolveDefaultModel("claude-sonnet-4.5"); got != "claude-sonnet-4.5" {
+			t.Fatalf("resolveDefaultModel(...) = %q, want %q", got, "claude-sonnet-4.5")
 		}
 	})
 }
@@ -213,24 +211,24 @@ func TestBuildDockerArgs_ModelPriority(t *testing.T) {
 	}
 
 	t.Run("hardcoded default when no env and no args", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "")
 		args := buildDockerArgs(baseEnv, baseRun, nil, nil)
 		if m := findModelValue(args); m != "claude-opus-4.6" {
 			t.Fatalf("expected hardcoded default, got %q", m)
 		}
 	})
 
-	t.Run("env var overrides hardcoded default", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "custom-model")
-		args := buildDockerArgs(baseEnv, baseRun, nil, nil)
+	t.Run("configured default overrides hardcoded default", func(t *testing.T) {
+		env := baseEnv
+		env.defaultModel = "custom-model"
+		args := buildDockerArgs(env, baseRun, nil, nil)
 		if m := findModelValue(args); m != "custom-model" {
-			t.Fatalf("expected env var model, got %q", m)
+			t.Fatalf("expected configured model, got %q", m)
 		}
 	})
 
-	t.Run("explicit --model arg overrides env var", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "custom-model")
+	t.Run("explicit --model arg overrides configured default", func(t *testing.T) {
 		env := baseEnv
+		env.defaultModel = "custom-model"
 		env.copilotArgs = []string{"--model", "explicit-model"}
 		args := buildDockerArgs(env, baseRun, nil, nil)
 		// When --model is in copilotArgs, buildDockerArgs should NOT inject a default.
@@ -1379,64 +1377,48 @@ func TestRunOnce_TimeoutKillsCommand(t *testing.T) {
 	}
 }
 
-func TestParseAgentTimeout(t *testing.T) {
+func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 	tests := []struct {
-		name    string
-		envVal  string
-		want    time.Duration
-		wantErr bool
+		name string
+		opts RunOptions
+		want time.Duration
 	}{
 		{
-			name:   "default when unset",
-			envVal: "",
-			want:   defaultAgentTimeout,
+			name: "default when unset",
+			want: defaultAgentTimeout,
 		},
 		{
-			name:   "valid duration 1h",
-			envVal: "1h",
-			want:   time.Hour,
+			name: "valid duration 1h",
+			opts: RunOptions{AgentTimeout: time.Hour},
+			want: time.Hour,
 		},
 		{
-			name:   "valid duration 45m",
-			envVal: "45m",
-			want:   45 * time.Minute,
+			name: "valid duration 45m",
+			opts: RunOptions{AgentTimeout: 45 * time.Minute},
+			want: 45 * time.Minute,
 		},
 		{
-			name:   "valid duration 2h30m",
-			envVal: "2h30m",
-			want:   2*time.Hour + 30*time.Minute,
+			name: "valid duration 2h30m",
+			opts: RunOptions{AgentTimeout: 2*time.Hour + 30*time.Minute},
+			want: 2*time.Hour + 30*time.Minute,
 		},
 		{
-			name:    "invalid duration",
-			envVal:  "notaduration",
-			wantErr: true,
+			name: "sub-second duration",
+			opts: RunOptions{AgentTimeout: 500 * time.Millisecond},
+			want: 500 * time.Millisecond,
 		},
 		{
-			name:    "negative duration",
-			envVal:  "-5m",
-			wantErr: true,
-		},
-		{
-			name:    "zero duration",
-			envVal:  "0s",
-			wantErr: true,
+			name: "large duration",
+			opts: RunOptions{AgentTimeout: 100 * time.Hour},
+			want: 100 * time.Hour,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseAgentTimeout(tt.envVal)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error for %q, got nil", tt.envVal)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error for %q: %v", tt.envVal, err)
-			}
-			if got != tt.want {
-				t.Fatalf("parseAgentTimeout(%q) = %v, want %v", tt.envVal, got, tt.want)
+			_, run := buildEnvAndRunContext("main", hostTools{homeDir: "/home/test"}, "agent", "name", "email", nil, "/repo", "/repo/.mato", tt.opts)
+			if run.timeout != tt.want {
+				t.Fatalf("timeout = %v, want %v", run.timeout, tt.want)
 			}
 		})
 	}
@@ -3110,7 +3092,7 @@ func TestPollClaimAndRun_NoTasksAvailable(t *testing.T) {
 
 	var claimed, hadError bool
 	captureStdoutStderr(t, func() {
-		claimed, hadError = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+		claimed, hadError = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
 	})
 
 	if claimed {
@@ -3133,7 +3115,7 @@ func TestPollClaimAndRun_FailedDirUnavailableExclusion(t *testing.T) {
 	idx := queue.BuildIndex(tasksDir)
 
 	captureStdoutStderr(t, func() {
-		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
 	})
 
 	if _, ok := failedDirExcluded["already-excluded.md"]; !ok {
@@ -3164,7 +3146,7 @@ func TestPollClaimAndRun_DeferredOverlapSkipped(t *testing.T) {
 
 	var claimed bool
 	captureStdoutStderr(t, func() {
-		claimed, _ = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+		claimed, _ = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
 	})
 
 	if claimed {
@@ -3304,7 +3286,7 @@ func TestResolveGitIdentity_SetsLocalConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRun_InvalidRepoPath(t *testing.T) {
-	err := Run("/nonexistent/path/that/does/not/exist", "mato", nil)
+	err := Run("/nonexistent/path/that/does/not/exist", "mato", nil, RunOptions{})
 	if err == nil {
 		t.Fatal("expected error for invalid repo path")
 	}
@@ -3327,7 +3309,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	}
 
 	env, run := buildEnvAndRunContext("main", tools, "agent-123", "Test User", "test@test.com",
-		[]string{"--verbose"}, "/repo", "/repo/.mato", 45*time.Minute)
+		[]string{"--verbose"}, "/repo", "/repo/.mato", RunOptions{AgentTimeout: 45 * time.Minute})
 
 	if env.image == "" {
 		t.Error("expected default docker image to be set")
@@ -3356,19 +3338,26 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 }
 
 func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
-	t.Setenv("MATO_DOCKER_IMAGE", "custom:latest")
-
 	tools := hostTools{homeDir: "/home/test"}
-	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.mato", time.Hour)
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{DockerImage: "custom:latest", AgentTimeout: time.Hour})
 
 	if env.image != "custom:latest" {
 		t.Errorf("expected custom image %q, got %q", "custom:latest", env.image)
 	}
 }
 
+func TestBuildEnvAndRunContext_DefaultModelOverride(t *testing.T) {
+	tools := hostTools{homeDir: "/home/test"}
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{DefaultModel: "claude-sonnet-4", AgentTimeout: time.Hour})
+
+	if env.defaultModel != "claude-sonnet-4" {
+		t.Fatalf("defaultModel = %q, want %q", env.defaultModel, "claude-sonnet-4")
+	}
+}
+
 func TestBuildEnvAndRunContext_PromptPlaceholders(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", nil, "/r", "/r/.mato", time.Hour)
+	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{AgentTimeout: time.Hour})
 
 	if strings.Contains(run.prompt, "TASKS_DIR_PLACEHOLDER") {
 		t.Error("prompt still contains TASKS_DIR_PLACEHOLDER")
@@ -3394,7 +3383,7 @@ func TestPollLoop_ExitsOnCancelledContext(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
 	run := runContext{agentID: "test-agent"}
 
-	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent")
+	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0)
 	if err != nil {
 		t.Fatalf("expected nil error from cancelled pollLoop, got: %v", err)
 	}
