@@ -61,7 +61,7 @@ Settings resolve in this order: CLI flag > environment variable > `.mato.yaml` >
 | Setting | CLI Flag | Env Var | Config File | Default |
 | --- | --- | --- | --- | --- |
 | repo | `--repo` | — | — | current directory |
-| branch | `--branch` | — | `branch` | `mato` |
+| branch | `--branch` | `MATO_BRANCH` | `branch` | `mato` |
 | docker image | — | `MATO_DOCKER_IMAGE` | `docker_image` | `ubuntu:24.04` |
 | default model | forwarded `--model` | `MATO_DEFAULT_MODEL` | `default_model` | `claude-opus-4.6` |
 | agent timeout | — | `MATO_AGENT_TIMEOUT` | `agent_timeout` | `30m` |
@@ -155,6 +155,7 @@ mato retry fix-login-bug add-dark-mode
 ## Environment Variables
 | Variable | Scope | Default | Description |
 | --- | --- | --- | --- |
+| `MATO_BRANCH` | host | `mato` | Default target branch for `mato`, `mato --dry-run`, and `mato init` when `--branch` is not passed. Overrides `.mato.yaml` `branch`. Empty is treated as unset; whitespace-only values are rejected. |
 | `MATO_DOCKER_IMAGE` | host | `ubuntu:24.04` | Docker image used for agent containers. Overrides `.mato.yaml` `docker_image`. |
 | `MATO_DEFAULT_MODEL` | host | `claude-opus-4.6` | Default Copilot model used when `--model` is not passed in copilot args. Overrides `.mato.yaml` `default_model`. Priority: explicit `--model` arg > `MATO_DEFAULT_MODEL` > `.mato.yaml` > hardcoded default. |
 | `MATO_AGENT_TIMEOUT` | host | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. Overrides `.mato.yaml` `agent_timeout`. |
@@ -173,7 +174,7 @@ mato retry fix-login-bug add-dark-mode
 | `MATO_REVIEW_MODE` | container | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
 | `MATO_REVIEW_FEEDBACK` | container | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
 | `MATO_REVIEW_VERDICT_PATH` | container | none | Path to the JSON verdict file where the review agent writes its verdict (e.g. `/workspace/.mato/messages/verdict-my-task.md.json`). Set per-run by the host when launching a review agent. The verdict structure is `{"verdict":"approve\|reject\|error","reason":"..."}`. Not set for task agents. |
-Only `MATO_DOCKER_IMAGE`, `MATO_DEFAULT_MODEL`, `MATO_AGENT_TIMEOUT`, and `MATO_RETRY_COOLDOWN` are intended as host-side configuration inputs. They can also be set in `.mato.yaml`, but env vars take precedence. The other
+Only `MATO_BRANCH`, `MATO_DOCKER_IMAGE`, `MATO_DEFAULT_MODEL`, `MATO_AGENT_TIMEOUT`, and `MATO_RETRY_COOLDOWN` are intended as host-side configuration inputs. They can also be set in `.mato.yaml`, but env vars take precedence. The other
 variables are injected by `mato` inside each container and are normally not set manually.
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
 `depends_on` entries whose completion details are available. It contains a file

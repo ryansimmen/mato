@@ -48,24 +48,47 @@ func TestResolveRepo(t *testing.T) {
 	}
 }
 
-func TestResolveBranch(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"explicit branch", "develop", "develop"},
-		{"empty defaults to mato", "", "mato"},
-	}
+func TestResolveEnvBranch(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("MATO_BRANCH", "")
+		branch, ok, err := resolveEnvBranch()
+		if err != nil {
+			t.Fatalf("resolveEnvBranch: %v", err)
+		}
+		if ok || branch != "" {
+			t.Fatalf("got (%q, %v), want (empty, false)", branch, ok)
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := resolveBranch(tt.input)
-			if got != tt.want {
-				t.Errorf("resolveBranch(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
+	t.Run("set", func(t *testing.T) {
+		t.Setenv("MATO_BRANCH", "main")
+		branch, ok, err := resolveEnvBranch()
+		if err != nil {
+			t.Fatalf("resolveEnvBranch: %v", err)
+		}
+		if !ok || branch != "main" {
+			t.Fatalf("got (%q, %v), want (%q, true)", branch, ok, "main")
+		}
+	})
+
+	t.Run("empty treated as unset", func(t *testing.T) {
+		t.Setenv("MATO_BRANCH", "")
+		branch, ok, err := resolveEnvBranch()
+		if err != nil {
+			t.Fatalf("resolveEnvBranch: %v", err)
+		}
+		if ok || branch != "" {
+			t.Fatalf("got (%q, %v), want (empty, false)", branch, ok)
+		}
+	})
+
+	t.Run("whitespace rejected", func(t *testing.T) {
+		t.Setenv("MATO_BRANCH", "   ")
+		_, _, err := resolveEnvBranch()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
 }
 
 func TestExtractKnownFlags(t *testing.T) {
@@ -1050,7 +1073,10 @@ func TestRootCmd_InvalidBranchRejected(t *testing.T) {
 		if err := validateRepoPath(resolved); err != nil {
 			return err
 		}
-		br := resolveBranch(cfg.branch)
+		br, err := resolveConfigBranch(configFixture(nil), cfg.branch)
+		if err != nil {
+			return err
+		}
 		return validateBranch(br)
 	}
 	err := cmd.Execute()
@@ -1080,7 +1106,10 @@ func TestRootCmd_NonRepoPathRejected(t *testing.T) {
 		if err := validateRepoPath(resolved); err != nil {
 			return err
 		}
-		br := resolveBranch(cfg.branch)
+		br, err := resolveConfigBranch(configFixture(nil), cfg.branch)
+		if err != nil {
+			return err
+		}
 		return validateBranch(br)
 	}
 	err := cmd.Execute()
@@ -1286,20 +1315,34 @@ func TestResolveConfigBranch(t *testing.T) {
 		name string
 		cfg  *string
 		flag string
+		env  string
 		want string
 	}{
-		{name: "flag wins", cfg: &branch, flag: "feature", want: "feature"},
+		{name: "flag wins", cfg: &branch, flag: "feature", env: "env-branch", want: "feature"},
+		{name: "env wins over config", cfg: &branch, env: "env-branch", want: "env-branch"},
 		{name: "config used", cfg: &branch, want: "main"},
 		{name: "default fallback", want: "mato"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolveConfigBranch(configFixture(tt.cfg), tt.flag)
+			t.Setenv("MATO_BRANCH", tt.env)
+			got, err := resolveConfigBranch(configFixture(tt.cfg), tt.flag)
+			if err != nil {
+				t.Fatalf("resolveConfigBranch: %v", err)
+			}
 			if got != tt.want {
 				t.Fatalf("resolveConfigBranch(...) = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveConfigBranch_WhitespaceEnvRejected(t *testing.T) {
+	t.Setenv("MATO_BRANCH", "  ")
+	_, err := resolveConfigBranch(configFixture(nil), "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
 	}
 }
 
@@ -1384,9 +1427,31 @@ func TestConfigFile_BranchFromConfig(t *testing.T) {
 	}
 }
 
+func TestConfigFile_BranchFromEnv(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "main")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+		if branch != "main" {
+			t.Fatalf("branch = %q, want %q", branch, "main")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
 func TestConfigFile_BranchFlagOverridesConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	writeRepoConfig(t, repoRoot, "branch: main\n")
+	t.Setenv("MATO_BRANCH", "env-branch")
 
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
@@ -1400,6 +1465,28 @@ func TestConfigFile_BranchFlagOverridesConfig(t *testing.T) {
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"--repo", repoRoot, "--branch", "feature"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_BranchEnvOverridesConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: config-branch\n")
+	t.Setenv("MATO_BRANCH", "env-branch")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+		if branch != "env-branch" {
+			t.Fatalf("branch = %q, want %q", branch, "env-branch")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -1547,6 +1634,21 @@ func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
 	cmd.SetArgs([]string{"--repo", repoRoot, "--dry-run"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_WhitespaceEnvBranchRejected(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "   ")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "MATO_BRANCH must not be whitespace-only") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
