@@ -9,6 +9,8 @@ import (
 	"mato/internal/git"
 )
 
+var gitOutput = git.Output
+
 func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult, error) {
 	cloneDir, err := git.CreateClone(repoRoot)
 	if err != nil {
@@ -19,23 +21,23 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	if err := configureMergeCloneIdentity(repoRoot, cloneDir); err != nil {
 		return nil, err
 	}
-	if _, err := git.Output(cloneDir, "fetch", "origin"); err != nil {
+	if _, err := gitOutput(cloneDir, "fetch", "origin"); err != nil {
 		return nil, fmt.Errorf("fetch origin: %w", err)
 	}
-	if _, err := git.Output(cloneDir, "checkout", "-B", branch, "origin/"+branch); err != nil {
+	if _, err := gitOutput(cloneDir, "checkout", "-B", branch, "origin/"+branch); err != nil {
 		return nil, fmt.Errorf("checkout target branch %s: %w", branch, err)
 	}
 
 	taskBranch := taskBranchName(task)
-	if _, err := git.Output(cloneDir, "rev-parse", "--verify", "origin/"+taskBranch); err != nil {
+	if _, err := gitOutput(cloneDir, "rev-parse", "--verify", "origin/"+taskBranch); err != nil {
 		return nil, fmt.Errorf("%w: task branch %s not found on origin (agent may not have pushed)", errTaskBranchNotPushed, taskBranch)
 	}
 
 	// Extract the agent's commit messages before squashing so we can
 	// incorporate them into the squash commit for richer context.
-	agentLog, _ := git.Output(cloneDir, "log", "--format=%B", "origin/"+branch+"..origin/"+taskBranch)
+	agentLog, _ := gitOutput(cloneDir, "log", "--format=%B", "origin/"+branch+"..origin/"+taskBranch)
 
-	if _, err := git.Output(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
+	if _, err := gitOutput(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", errSquashMergeConflict, taskBranch, err)
 	}
 
@@ -44,7 +46,7 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	// post-push bookkeeping failed).  Return a mergeResult with recovered
 	// metadata so the caller can write the completion detail that was
 	// missed on the prior run, without creating a duplicate commit.
-	if _, err := git.Output(cloneDir, "diff", "--cached", "--quiet"); err == nil {
+	if _, err := gitOutput(cloneDir, "diff", "--cached", "--quiet"); err == nil {
 		sha, filesChanged := recoverMergedTaskMetadata(cloneDir, branch, task)
 		return &mergeResult{
 			commitSHA:    sha,
@@ -52,16 +54,16 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 		}, nil
 	}
 
-	if _, err := git.Output(cloneDir, "commit", "-m", formatSquashCommitMessage(task, agentLog)); err != nil {
+	if _, err := gitOutput(cloneDir, "commit", "-m", formatSquashCommitMessage(task, agentLog)); err != nil {
 		return nil, fmt.Errorf("commit squash merge: %w", err)
 	}
-	if _, err := git.Output(cloneDir, "push", "origin", branch); err != nil {
+	if _, err := gitOutput(cloneDir, "push", "origin", branch); err != nil {
 		return nil, fmt.Errorf("%w: push %s: %v", errPushAfterSquashFailed, branch, err)
 	}
 
 	// Capture merge result for completion detail.
-	sha, _ := git.Output(cloneDir, "rev-parse", "HEAD")
-	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", "HEAD~1..HEAD")
+	sha, _ := gitOutput(cloneDir, "rev-parse", "HEAD")
+	filesOut, _ := gitOutput(cloneDir, "diff", "--name-only", "HEAD~1..HEAD")
 	filesChanged := parseFilesChanged(filesOut)
 
 	return &mergeResult{
@@ -75,8 +77,8 @@ func recoverMergedTaskMetadata(cloneDir, branch string, task mergeQueueTask) (st
 		return sha, filesChangedForCommit(cloneDir, sha)
 	}
 
-	sha, _ := git.Output(cloneDir, "rev-parse", "HEAD")
-	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", "origin/"+branch+"...origin/"+taskBranchName(task))
+	sha, _ := gitOutput(cloneDir, "rev-parse", "HEAD")
+	filesOut, _ := gitOutput(cloneDir, "diff", "--name-only", "origin/"+branch+"...origin/"+taskBranchName(task))
 	return strings.TrimSpace(sha), parseFilesChanged(filesOut)
 }
 
@@ -84,7 +86,7 @@ func findMergedTaskCommit(cloneDir, branch, taskID string) string {
 	if taskID == "" {
 		return ""
 	}
-	out, err := git.Output(cloneDir, "log", "origin/"+branch, "--format=%H", "-F", "--grep", "Task-ID: "+taskID)
+	out, err := gitOutput(cloneDir, "log", "origin/"+branch, "--format=%H", "-F", "--grep", "Task-ID: "+taskID)
 	if err != nil {
 		return ""
 	}
@@ -100,7 +102,7 @@ func filesChangedForCommit(cloneDir, sha string) []string {
 	if sha == "" {
 		return nil
 	}
-	out, err := git.Output(cloneDir, "show", "--pretty=", "--name-only", sha)
+	out, err := gitOutput(cloneDir, "show", "--pretty=", "--name-only", sha)
 	if err != nil {
 		return nil
 	}
@@ -242,10 +244,13 @@ func taskBranchName(task mergeQueueTask) string {
 func cleanupTaskBranch(repoRoot, branchName string) {
 	// Clean up the stale task branch so the next agent can push a fresh one.
 	// Cleanup is best-effort: log warnings but never abort the merge flow.
-	if _, err := git.Output(repoRoot, "branch", "-D", branchName); err != nil {
+	if _, err := gitOutput(repoRoot, "branch", "-D", branchName); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not delete local task branch %s: %v\n", branchName, err)
 	}
-	if _, err := git.Output(repoRoot, "push", "origin", "--delete", branchName); err != nil {
+	if _, err := gitOutput(repoRoot, "push", "origin", "--delete", branchName); err != nil {
+		if strings.Contains(err.Error(), "remote ref does not exist") {
+			return
+		}
 		fmt.Fprintf(os.Stderr, "warning: could not delete remote task branch %s: %v\n", branchName, err)
 	}
 }
