@@ -2775,10 +2775,6 @@ func TestReadRecentMessages_EqualTimestampTieBreakParity(t *testing.T) {
 	if len(allMsgs) != 5 {
 		t.Fatalf("ReadMessages returned %d, want 5", len(allMsgs))
 	}
-	// ReadRecentMessages with limit 3 should return the 3 most recent by
-	// filename. Both readers sort by (sent_at, id), so the bounded result
-	// should be a contiguous suffix of the unbounded result when all
-	// sent_at values are equal (alphabetically last 3 IDs).
 	if len(recentMsgs) != 3 {
 		t.Fatalf("ReadRecentMessages returned %d, want 3", len(recentMsgs))
 	}
@@ -2791,12 +2787,14 @@ func TestReadRecentMessages_EqualTimestampTieBreakParity(t *testing.T) {
 		}
 	}
 
-	// The bounded result picks the 3 lexically-last filenames, then sorts
-	// by (sent_at, id). Verify consistent ordering within the bounded set.
-	for i := 1; i < len(recentMsgs); i++ {
-		if recentMsgs[i].ID < recentMsgs[i-1].ID {
-			t.Errorf("ReadRecentMessages not sorted by ID tie-break: [%d]=%q > [%d]=%q",
-				i-1, recentMsgs[i-1].ID, i, recentMsgs[i].ID)
+	// ReadRecentMessages with limit 3 should select the 3 lexically-last
+	// filenames, then apply the same final (sent_at, id) ordering as
+	// ReadMessages. When all timestamps are equal, that should be the
+	// contiguous suffix of the unbounded result.
+	wantRecent := wantAll[len(wantAll)-3:]
+	for i, want := range wantRecent {
+		if recentMsgs[i].ID != want {
+			t.Errorf("ReadRecentMessages[%d].ID = %q, want %q", i, recentMsgs[i].ID, want)
 		}
 	}
 }
@@ -2979,13 +2977,28 @@ func TestCleanStalePresence_WritePresence_Interleaving(t *testing.T) {
 		}
 	}
 
-	// After interleaving, the presence directory should contain only valid
-	// JSON files (if any). Verify by reading all presence.
-	presence, err := ReadAllPresence(tasksDir)
+	// After interleaving, every on-disk JSON file should still be readable.
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	entries, err := os.ReadDir(presenceDir)
 	if err != nil {
-		t.Fatalf("ReadAllPresence after interleaving: %v", err)
+		t.Fatalf("ReadDir presence: %v", err)
 	}
-	for agentID, info := range presence {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+
+		data, readErr := os.ReadFile(filepath.Join(presenceDir, entry.Name()))
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s): %v", entry.Name(), readErr)
+		}
+
+		var info PresenceInfo
+		if unmarshalErr := json.Unmarshal(data, &info); unmarshalErr != nil {
+			t.Fatalf("Unmarshal(%s): %v", entry.Name(), unmarshalErr)
+		}
+
+		agentID := strings.TrimSuffix(entry.Name(), ".json")
 		if info.AgentID == "" {
 			t.Errorf("presence for %q has empty AgentID", agentID)
 		}
