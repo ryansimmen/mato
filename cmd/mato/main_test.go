@@ -851,6 +851,111 @@ func TestDoctorCmd_FlagParsing(t *testing.T) {
 	}
 }
 
+func TestDoctorCmd_DockerImageFromConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: custom:latest\n")
+
+	// Ensure the env var is NOT set so config file is used.
+	t.Setenv("MATO_DOCKER_IMAGE", "")
+
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedOpts.DockerImage != "custom:latest" {
+		t.Errorf("DockerImage = %q, want %q", capturedOpts.DockerImage, "custom:latest")
+	}
+}
+
+func TestDoctorCmd_DockerImageEnvOverridesConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: from-config:1.0\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "from-env:2.0")
+
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedOpts.DockerImage != "from-env:2.0" {
+		t.Errorf("DockerImage = %q, want %q", capturedOpts.DockerImage, "from-env:2.0")
+	}
+}
+
+func TestDoctorCmd_MalformedConfigReturnsError(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	// Write invalid YAML that config.Load will reject.
+	writeRepoConfig(t, repoRoot, ":\n  bad yaml: [unbalanced\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "")
+
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
+		t.Fatal("doctorRunFn should not be called when config is malformed")
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for malformed .mato.yaml, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse config file") {
+		t.Errorf("error = %q, want config parse error", err.Error())
+	}
+}
+
+func TestDoctorCmd_EnvImageBypassesMalformedConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, ":\n  bad yaml: [unbalanced\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "env-override:3.0")
+
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected success when env var set, got: %v", err)
+	}
+
+	if capturedOpts.DockerImage != "env-override:3.0" {
+		t.Errorf("DockerImage = %q, want %q", capturedOpts.DockerImage, "env-override:3.0")
+	}
+}
+
 // --- Graph subcommand tests ---
 
 // runCmd executes an external command and returns its combined output.
@@ -1388,14 +1493,25 @@ func TestResolveRunOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid env cooldown ignored", func(t *testing.T) {
+	t.Run("invalid env cooldown rejected", func(t *testing.T) {
 		t.Setenv("MATO_RETRY_COOLDOWN", "bad")
-		opts, err := resolveRunOptions(configFixture(nil))
-		if err != nil {
-			t.Fatalf("resolveRunOptions: %v", err)
+		_, err := resolveRunOptions(configFixture(nil))
+		if err == nil {
+			t.Fatal("expected error for invalid MATO_RETRY_COOLDOWN, got nil")
 		}
-		if opts.RetryCooldown != 0 {
-			t.Fatalf("RetryCooldown = %v, want 0", opts.RetryCooldown)
+		if !strings.Contains(err.Error(), "MATO_RETRY_COOLDOWN") {
+			t.Fatalf("error should mention MATO_RETRY_COOLDOWN: %v", err)
+		}
+	})
+
+	t.Run("non-positive env cooldown rejected", func(t *testing.T) {
+		t.Setenv("MATO_RETRY_COOLDOWN", "-5m")
+		_, err := resolveRunOptions(configFixture(nil))
+		if err == nil {
+			t.Fatal("expected error for non-positive MATO_RETRY_COOLDOWN, got nil")
+		}
+		if !strings.Contains(err.Error(), "positive") {
+			t.Fatalf("error should mention positive: %v", err)
 		}
 	})
 }

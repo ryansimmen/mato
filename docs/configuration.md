@@ -22,6 +22,7 @@ mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato retry [--repo <path>] <task-name> [task-name...]
 ```
+Valid `--only` check names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
 The task queue location is fixed at `<repo>/.mato`.
 `mato init` performs lightweight repository bootstrap without Docker. It resolves the repository root, checks out or creates the target branch, creates the `.mato/` queue, lock, and messaging directories, ensures git identity exists locally, updates `.gitignore` with `/.mato/`, and guarantees the target branch has at least one commit.
 Run mode creates the queue structure if needed, starts the Docker-based Copilot loop,
@@ -152,6 +153,20 @@ mato graph --format json
 mato graph --all
 ```
 
+### `mato doctor`
+`mato doctor` runs structured health checks on the repository and task queue.
+It loads `.mato.yaml` and resolves the Docker image using the same precedence as
+the run command (env var > config file > default), so the docker check verifies the
+image users will actually run with. A malformed `.mato.yaml` is a hard error — doctor
+will not silently fall back to defaults and produce misleading results.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--fix` | `false` | Auto-repair safe issues (stale locks, orphaned tasks, missing dirs). |
+| `--format` | `text` | Output format: `text` or `json`. |
+| `--only <check>` | all checks | Run only specified checks (repeatable). Valid names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`. |
+
 ### `mato retry`
 `mato retry` requeues one or more failed tasks back to `backlog/`. It reads the
 task file from `failed/`, strips task-failure markers (`<!-- failure: -->`,
@@ -186,7 +201,7 @@ vars.
 | `MATO_DOCKER_IMAGE` | `ubuntu:24.04` | Docker image used for agent containers. Overrides `.mato.yaml` `docker_image`. |
 | `MATO_DEFAULT_MODEL` | `claude-opus-4.6` | Default Copilot model used when `--model` is not passed in copilot args. Overrides `.mato.yaml` `default_model`. Priority: explicit `--model` arg > `MATO_DEFAULT_MODEL` > `.mato.yaml` > hardcoded default. |
 | `MATO_AGENT_TIMEOUT` | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. Overrides `.mato.yaml` `agent_timeout`. |
-| `MATO_RETRY_COOLDOWN` | `2m` | Minimum time to wait after a task failure before the task can be claimed again. Prevents rapid retry churn when agents crash immediately after launch. Accepts Go duration strings (e.g. `2m`, `5m`, `30s`). Non-positive or invalid env values are ignored and fall back to config/default. Overrides `.mato.yaml` `retry_cooldown` when valid. |
+| `MATO_RETRY_COOLDOWN` | `2m` | Minimum time to wait after a task failure before the task can be claimed again. Prevents rapid retry churn when agents crash immediately after launch. Accepts Go duration strings (e.g. `2m`, `5m`, `30s`). Must be positive; invalid values cause an error. Overrides `.mato.yaml` `retry_cooldown`. |
 
 ## Injected Container Runtime Variables
 These variables are set by `mato` inside agent or review containers at runtime.
@@ -223,8 +238,9 @@ failure records from prior attempts.
 review rejection records from prior review attempts.
 
 ## Docker Configuration
-Each agent run uses `docker run --rm` with either `-it` (when stdin is a terminal) or
-`-i` (when stdin is not a terminal, e.g. CI, cron, systemd). The working directory is
+Each agent run uses `docker run --rm --init` with either `-it` (when stdin is a terminal) or
+`-i` (when stdin is not a terminal, e.g. CI, cron, systemd). The `--init` flag ensures an
+init process reaps zombie child processes inside the container. The working directory is
 `/workspace` and user mapping `--user <host-uid>:<host-gid>` preserves host file
 ownership.
 
@@ -241,9 +257,11 @@ ownership.
 | host `gh` binary | `/usr/local/bin/gh` (ro) | Makes GitHub CLI available in the container. |
 | host `GOROOT` | `/usr/local/go` (ro) | Provides the Go toolchain in the container. |
 | host `~/.copilot` | `$HOME/.copilot` | For Copilot authentication and package data. |
+| host `~/.cache/copilot` | `$HOME/.cache/copilot` | Copilot cache data. |
 | host `~/go/pkg/mod` | `$HOME/go/pkg/mod` | Shares Go module cache. |
 | host `~/.cache/go-build` | `$HOME/.cache/go-build` | Shares Go build cache. |
 | host `~/.config/gh` | `$HOME/.config/gh` (ro) | Mounted only if it exists, to forward `gh` authentication/config. |
+| host git-templates dir | same absolute host path (ro) | Mounted only if Git's `init.templateDir` is configured, to preserve Git hooks and templates. |
 | host `/etc/ssl/certs` | `/etc/ssl/certs` (ro) | Mounted only if present, to preserve CA trust. |
 
 ### Container environment and runtime behavior

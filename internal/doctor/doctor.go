@@ -64,9 +64,10 @@ type Report struct {
 
 // Options configures a doctor run.
 type Options struct {
-	Fix    bool
-	Format string   // "text" or "json"
-	Only   []string // optional check name filter
+	Fix         bool
+	Format      string   // "text" or "json"
+	Only        []string // optional check name filter
+	DockerImage string   // resolved docker image (env > config > default)
 }
 
 // validCheckNames is the set of valid --only filter values.
