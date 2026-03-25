@@ -2508,6 +2508,502 @@ func TestReadRecentMessages_PreservesOrder(t *testing.T) {
 	}
 }
 
+// --- Edge-case tests for cleanup, bounded reads, and filename collisions ---
+
+func TestCleanOldMessages_UsesMtimeNotSentAt(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Write two messages. Their sent_at values suggest that "old-by-sentat"
+	// was sent long ago and "new-by-sentat" was sent recently. However, we
+	// override their file mtimes to the opposite: old-by-sentat gets a
+	// recent mtime, and new-by-sentat gets an old mtime.
+	oldSentAt := Message{
+		ID: "old-by-sentat", From: "agent", Type: "intent",
+		Task: "t.md", Branch: "b", Body: "old sent_at",
+		SentAt: time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC),
+	}
+	newSentAt := Message{
+		ID: "new-by-sentat", From: "agent", Type: "intent",
+		Task: "t.md", Branch: "b", Body: "new sent_at",
+		SentAt: time.Date(2099, time.December, 31, 23, 59, 59, 0, time.UTC),
+	}
+	for _, msg := range []Message{oldSentAt, newSentAt} {
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
+		}
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	oldFile := findEventFile(t, eventsDir, "old-by-sentat")
+	newFile := findEventFile(t, eventsDir, "new-by-sentat")
+
+	now := time.Now()
+	// old-by-sentat → recent mtime (should survive cleanup)
+	if err := os.Chtimes(oldFile, now, now); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	// new-by-sentat → old mtime (should be cleaned up)
+	if err := os.Chtimes(newFile, now.Add(-72*time.Hour), now.Add(-72*time.Hour)); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	CleanOldMessages(tasksDir, 24*time.Hour)
+
+	if _, err := os.Stat(oldFile); err != nil {
+		t.Fatalf("file with recent mtime (old sent_at) should survive: %v", err)
+	}
+	if _, err := os.Stat(newFile); !os.IsNotExist(err) {
+		t.Fatal("file with old mtime (new sent_at) should be removed")
+	}
+}
+
+func TestCleanOldMessages_NonPositiveMaxAge(t *testing.T) {
+	tests := []struct {
+		name   string
+		maxAge time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -5 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasksDir := t.TempDir()
+			if err := Init(tasksDir); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+
+			msg := Message{
+				ID: "msg1", From: "agent", Type: "intent",
+				Task: "t.md", Branch: "b", Body: "body",
+				SentAt: time.Now().UTC(),
+			}
+			if err := WriteMessage(tasksDir, msg); err != nil {
+				t.Fatalf("WriteMessage: %v", err)
+			}
+
+			eventsDir := filepath.Join(tasksDir, "messages", "events")
+			file := findEventFile(t, eventsDir, "msg1")
+
+			// Set mtime to 1 second ago to avoid filesystem precision issues.
+			past := time.Now().Add(-1 * time.Second)
+			if err := os.Chtimes(file, past, past); err != nil {
+				t.Fatalf("Chtimes: %v", err)
+			}
+
+			CleanOldMessages(tasksDir, tt.maxAge)
+
+			// With zero or negative maxAge the cutoff = now - maxAge which is
+			// now or in the future. So files with mtime in the past are
+			// cleaned. This documents current behavior.
+			if _, err := os.Stat(file); !os.IsNotExist(err) {
+				t.Fatalf("expected file to be removed with maxAge=%v, but it still exists", tt.maxAge)
+			}
+		})
+	}
+}
+
+func TestReadRecentMessages_SkipsMalformedFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	valid := Message{
+		ID: "valid-msg", From: "agent", Type: "intent",
+		Task: "task.md", Branch: "branch", Body: "ok",
+		SentAt: time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC),
+	}
+	if err := WriteMessage(tasksDir, valid); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	// Write a malformed JSON file that sorts before the valid file.
+	if err := os.WriteFile(filepath.Join(eventsDir, "00000000T000000.000000000Z-broken.json"), []byte("{invalid"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Write another malformed file that sorts after.
+	if err := os.WriteFile(filepath.Join(eventsDir, "zzz-broken.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := ReadRecentMessages(tasksDir, 10)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 valid message, got %d", len(got))
+	}
+	if got[0].ID != "valid-msg" {
+		t.Fatalf("got ID %q, want %q", got[0].ID, "valid-msg")
+	}
+}
+
+func TestReadRecentMessages_ToleratesDeletedFiles(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	const total = 5
+	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
+	payload := strings.Repeat("data-", 256*1024)
+	wantByID := make(map[string]Message, total)
+	for i := 0; i < total; i++ {
+		msg := Message{
+			ID:     "rmsg-" + strconv.Itoa(i),
+			From:   "writer",
+			Type:   "intent",
+			Task:   "task-" + strconv.Itoa(i),
+			Branch: "branch",
+			Body:   payload + strconv.Itoa(i),
+			SentAt: base.Add(time.Duration(i) * time.Millisecond),
+		}
+		wantByID[msg.ID] = msg
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
+		}
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != total {
+		t.Fatalf("expected %d files, got %d", total, len(entries))
+	}
+
+	errCh := make(chan error, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 10; i++ {
+			msgs, readErr := ReadRecentMessages(tasksDir, total+5)
+			if readErr != nil {
+				errCh <- fmt.Errorf("ReadRecentMessages iteration %d: %w", i, readErr)
+				return
+			}
+			if len(msgs) > total {
+				errCh <- fmt.Errorf("iteration %d: got %d messages, want <= %d", i, len(msgs), total)
+				return
+			}
+			for _, msg := range msgs {
+				want, ok := wantByID[msg.ID]
+				if !ok {
+					errCh <- fmt.Errorf("iteration %d: unexpected ID %q", i, msg.ID)
+					return
+				}
+				if msg.Body != want.Body {
+					errCh <- fmt.Errorf("iteration %d: body mismatch for %q", i, msg.ID)
+					return
+				}
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		time.Sleep(1 * time.Millisecond)
+		for _, entry := range entries {
+			if rmErr := os.Remove(filepath.Join(eventsDir, entry.Name())); rmErr != nil && !os.IsNotExist(rmErr) {
+				errCh <- fmt.Errorf("Remove(%s): %w", entry.Name(), rmErr)
+				return
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for chErr := range errCh {
+		if chErr != nil {
+			t.Fatal(chErr)
+		}
+	}
+
+	final, err := ReadRecentMessages(tasksDir, total+5)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages final: %v", err)
+	}
+	if len(final) != 0 {
+		t.Fatalf("final count = %d, want 0", len(final))
+	}
+}
+
+func TestReadRecentMessages_EqualTimestampTieBreakParity(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	sameTime := time.Date(2024, time.July, 4, 12, 0, 0, 0, time.UTC)
+	ids := []string{"charlie", "alpha", "bravo", "delta", "echo"}
+	for _, id := range ids {
+		msg := Message{
+			ID: id, From: "agent", Type: "intent",
+			Task: "task.md", Branch: "b", Body: "body",
+			SentAt: sameTime,
+		}
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", id, err)
+		}
+	}
+
+	// Read all via both methods.
+	allMsgs, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	recentMsgs, err := ReadRecentMessages(tasksDir, 3)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages: %v", err)
+	}
+
+	if len(allMsgs) != 5 {
+		t.Fatalf("ReadMessages returned %d, want 5", len(allMsgs))
+	}
+	// ReadRecentMessages with limit 3 should return the 3 most recent by
+	// filename. Both readers sort by (sent_at, id), so the bounded result
+	// should be a contiguous suffix of the unbounded result when all
+	// sent_at values are equal (alphabetically last 3 IDs).
+	if len(recentMsgs) != 3 {
+		t.Fatalf("ReadRecentMessages returned %d, want 3", len(recentMsgs))
+	}
+
+	// The unbounded sort order should be alpha, bravo, charlie, delta, echo.
+	wantAll := []string{"alpha", "bravo", "charlie", "delta", "echo"}
+	for i, want := range wantAll {
+		if allMsgs[i].ID != want {
+			t.Errorf("ReadMessages[%d].ID = %q, want %q", i, allMsgs[i].ID, want)
+		}
+	}
+
+	// The bounded result picks the 3 lexically-last filenames, then sorts
+	// by (sent_at, id). Verify consistent ordering within the bounded set.
+	for i := 1; i < len(recentMsgs); i++ {
+		if recentMsgs[i].ID < recentMsgs[i-1].ID {
+			t.Errorf("ReadRecentMessages not sorted by ID tie-break: [%d]=%q > [%d]=%q",
+				i-1, recentMsgs[i-1].ID, i, recentMsgs[i].ID)
+		}
+	}
+}
+
+func TestWritePresence_SanitizedFilenameCollision(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Two agent IDs that differ only in characters replaced by sanitization.
+	// messageFilePart replaces non-[a-zA-Z0-9._-] with "-" and trims.
+	agentA := "agent!one"
+	agentB := "agent@one"
+
+	// Verify they actually collide.
+	sanitizedA := messageFilePart(agentA, "unknown")
+	sanitizedB := messageFilePart(agentB, "unknown")
+	if sanitizedA != sanitizedB {
+		t.Fatalf("expected collision: %q vs %q", sanitizedA, sanitizedB)
+	}
+
+	if err := WritePresence(tasksDir, agentA, "task-a.md", "branch-a"); err != nil {
+		t.Fatalf("WritePresence(agentA): %v", err)
+	}
+	if err := WritePresence(tasksDir, agentB, "task-b.md", "branch-b"); err != nil {
+		t.Fatalf("WritePresence(agentB): %v", err)
+	}
+
+	// Both map to the same filename, so the second write overwrites the first.
+	presenceDir := filepath.Join(tasksDir, "messages", "presence")
+	entries, err := os.ReadDir(presenceDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	jsonFiles := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			jsonFiles++
+		}
+	}
+	// Document that collision causes overwrite: only 1 file on disk.
+	if jsonFiles != 1 {
+		t.Errorf("expected 1 presence file (collision overwrites), got %d", jsonFiles)
+	}
+
+	// The surviving entry should be the last writer (agentB).
+	presence, err := ReadAllPresence(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllPresence: %v", err)
+	}
+	if len(presence) != 1 {
+		t.Fatalf("expected 1 presence entry, got %d", len(presence))
+	}
+	for _, info := range presence {
+		if info.AgentID != agentB {
+			t.Errorf("surviving presence has AgentID=%q, want %q (last writer wins)", info.AgentID, agentB)
+		}
+		if info.Task != "task-b.md" {
+			t.Errorf("surviving presence has Task=%q, want %q", info.Task, "task-b.md")
+		}
+	}
+}
+
+func TestWriteMessage_SanitizedFilenameCollision(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Two messages with the same SentAt and Type, but From and ID values
+	// that differ only in characters replaced by sanitization.
+	sameTime := time.Date(2024, time.June, 15, 10, 0, 0, 0, time.UTC)
+
+	msgA := Message{
+		ID: "id!1", From: "agent!x", Type: "intent",
+		Task: "task.md", Branch: "b", Body: "first",
+		SentAt: sameTime,
+	}
+	msgB := Message{
+		ID: "id@1", From: "agent@x", Type: "intent",
+		Task: "task.md", Branch: "b", Body: "second",
+		SentAt: sameTime,
+	}
+
+	// Verify the filename parts actually collide.
+	if messageFilePart(msgA.From, "unknown") != messageFilePart(msgB.From, "unknown") {
+		t.Fatal("From parts should collide")
+	}
+	if messageFilePart(msgA.ID, "message") != messageFilePart(msgB.ID, "message") {
+		t.Fatal("ID parts should collide")
+	}
+
+	if err := WriteMessage(tasksDir, msgA); err != nil {
+		t.Fatalf("WriteMessage(A): %v", err)
+	}
+	if err := WriteMessage(tasksDir, msgB); err != nil {
+		t.Fatalf("WriteMessage(B): %v", err)
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+
+	jsonFiles := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			jsonFiles++
+		}
+	}
+
+	// The two messages map to the same filename, so the second overwrites
+	// the first. This documents the current lossy behavior.
+	if jsonFiles != 1 {
+		t.Errorf("expected 1 event file (collision overwrites), got %d", jsonFiles)
+	}
+
+	// Only the second message should survive.
+	msgs, err := ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message after collision, got %d", len(msgs))
+	}
+	if msgs[0].Body != "second" {
+		t.Errorf("surviving message Body=%q, want %q (last writer wins)", msgs[0].Body, "second")
+	}
+}
+
+func TestCleanStalePresence_WritePresence_Interleaving(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Pre-populate presence for several agents. None have lock files, so
+	// CleanStalePresence will try to remove them all.
+	agents := []string{"agent-a", "agent-b", "agent-c", "agent-d"}
+	for _, a := range agents {
+		if err := WritePresence(tasksDir, a, a+"-task.md", a+"-branch"); err != nil {
+			t.Fatalf("WritePresence(%s): %v", a, err)
+		}
+	}
+
+	// Concurrently run cleanup and a fresh write. The fresh write should
+	// succeed regardless of cleanup activity, and cleanup should not return
+	// errors or leave malformed JSON.
+	var wg sync.WaitGroup
+	errCh := make(chan error, 20)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 5; i++ {
+			CleanStalePresence(tasksDir)
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 5; i++ {
+			if writeErr := WritePresence(tasksDir, "fresh-agent", "fresh-task.md", "fresh-branch"); writeErr != nil {
+				errCh <- fmt.Errorf("WritePresence iteration %d: %w", i, writeErr)
+				return
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	wg.Wait()
+	close(errCh)
+	for chErr := range errCh {
+		if chErr != nil {
+			t.Fatal(chErr)
+		}
+	}
+
+	// After interleaving, the presence directory should contain only valid
+	// JSON files (if any). Verify by reading all presence.
+	presence, err := ReadAllPresence(tasksDir)
+	if err != nil {
+		t.Fatalf("ReadAllPresence after interleaving: %v", err)
+	}
+	for agentID, info := range presence {
+		if info.AgentID == "" {
+			t.Errorf("presence for %q has empty AgentID", agentID)
+		}
+		if info.UpdatedAt.IsZero() {
+			t.Errorf("presence for %q has zero UpdatedAt", agentID)
+		}
+		// Verify the JSON is well-formed by re-marshaling.
+		data, marshalErr := json.Marshal(info)
+		if marshalErr != nil {
+			t.Errorf("re-marshal presence for %q: %v", agentID, marshalErr)
+		}
+		var roundtrip PresenceInfo
+		if unmarshalErr := json.Unmarshal(data, &roundtrip); unmarshalErr != nil {
+			t.Errorf("roundtrip unmarshal for %q: %v", agentID, unmarshalErr)
+		}
+	}
+}
+
 // setupMessagingDirs creates the messaging directory structure for tests.
 func setupMessagingDirs(t *testing.T, tasksDir string) {
 	t.Helper()
