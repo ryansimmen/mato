@@ -2732,6 +2732,416 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	}
 }
 
+func TestDryRun_ExecutionOrder(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Create backlog tasks with different priorities and overlapping affects
+	// to verify ordering and deferred exclusion.
+	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n---\n# Task A\n"
+	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n---\n# Task B\n"
+	taskC := "---\nid: task-c\npriority: 5\naffects:\n  - other.go\n---\n# Task C\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	// Execution Order should list task-c (priority 5) then task-a (priority 10).
+	// task-b is deferred (overlaps with task-a on shared.go) and excluded.
+	if !strings.Contains(stdout, "=== Execution Order ===") {
+		t.Fatal("missing Execution Order section")
+	}
+	if !strings.Contains(stdout, "1. task-c.md (priority 5)") {
+		t.Errorf("expected task-c first in execution order, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "2. task-a.md (priority 10)") {
+		t.Errorf("expected task-a second in execution order, got:\n%s", stdout)
+	}
+	if first := strings.Index(stdout, "1. task-c.md (priority 5)"); first == -1 {
+		t.Errorf("expected task-c line in execution order, got:\n%s", stdout)
+	} else if second := strings.Index(stdout, "2. task-a.md (priority 10)"); second == -1 {
+		t.Errorf("expected task-a line in execution order, got:\n%s", stdout)
+	} else if first > second {
+		t.Errorf("execution order lines out of order, got:\n%s", stdout)
+	}
+	// Deferred task-b should NOT appear in execution order.
+	if strings.Contains(stdout, "task-b.md (priority") {
+		t.Errorf("deferred task-b should not appear in execution order, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_BacklogTaskSummary(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Runnable task with affects and depends_on.
+	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n  - file-b.go\ndepends_on:\n  - dep-x\n---\n# Task A\n"
+	// Deferred task (overlaps with task-a).
+	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - file-a.go\n---\n# Task B\n"
+	// Task with no affects or depends_on.
+	taskC := "---\nid: task-c\npriority: 5\n---\n# Task C\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "=== Backlog Task Summary ===") {
+		t.Fatal("missing Backlog Task Summary section")
+	}
+
+	// Check runnable vs deferred labels.
+	if !strings.Contains(stdout, "task-a.md [runnable]") {
+		t.Errorf("task-a should be marked runnable, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "task-b.md [deferred]") {
+		t.Errorf("task-b should be marked deferred, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "task-c.md [runnable]") {
+		t.Errorf("task-c should be marked runnable, got:\n%s", stdout)
+	}
+
+	// Check frontmatter fields.
+	if !strings.Contains(stdout, "affects: file-a.go, file-b.go") {
+		t.Errorf("task-a affects not shown correctly, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "depends_on: dep-x") {
+		t.Errorf("task-a depends_on not shown correctly, got:\n%s", stdout)
+	}
+	// Task with no affects/depends_on should show "none".
+	if !strings.Contains(stdout, "affects: none") {
+		t.Errorf("task-c should show affects: none, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "depends_on: none") {
+		t.Errorf("task-c should show depends_on: none, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_DependencySummary(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// completed dependency
+	depCompleted := "---\nid: dep-completed\npriority: 5\n---\n# Completed\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "dep-completed.md"), []byte(depCompleted), 0o644)
+
+	// waiting dependency
+	depWaiting := "---\nid: dep-waiting\npriority: 5\ndepends_on:\n  - dep-completed\n---\n# Waiting\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "dep-waiting.md"), []byte(depWaiting), 0o644)
+
+	// failed dependency
+	depFailed := "---\nid: dep-failed\npriority: 5\n---\n# Failed\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "dep-failed.md"), []byte(depFailed), 0o644)
+
+	// The main waiting task that depends on completed, waiting, failed, and unknown deps.
+	mainTask := "---\nid: main-task\npriority: 10\ndepends_on:\n  - dep-completed\n  - dep-waiting\n  - dep-failed\n  - dep-nonexistent\n---\n# Main Task\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "main-task.md"), []byte(mainTask), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "=== Dependency Summary ===") {
+		t.Fatal("missing Dependency Summary section")
+	}
+
+	// Verify state labels for each dependency.
+	if !strings.Contains(stdout, "- dep-completed (completed)") {
+		t.Errorf("dep-completed should be labeled completed, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "- dep-waiting (waiting)") {
+		t.Errorf("dep-waiting should be labeled waiting, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "- dep-failed (failed)") {
+		t.Errorf("dep-failed should be labeled failed, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "- dep-nonexistent (unknown)") {
+		t.Errorf("dep-nonexistent should be labeled unknown, got:\n%s", stdout)
+	}
+
+	// Verify diagnostics subsection for unknown dependency.
+	if !strings.Contains(stdout, "WARNING main-task depends on unknown id") {
+		t.Errorf("diagnostics should warn about unknown dep, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_DependencySummary_Ambiguous(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Create a task ID that exists in both completed and non-completed (backlog).
+	ambigCompleted := "---\nid: ambig-dep\npriority: 5\n---\n# Ambig Completed\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "ambig-dep.md"), []byte(ambigCompleted), 0o644)
+
+	ambigBacklog := "---\nid: ambig-dep\npriority: 5\n---\n# Ambig Backlog\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "ambig-dep-v2.md"), []byte(ambigBacklog), 0o644)
+
+	// Waiting task that depends on the ambiguous ID.
+	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - ambig-dep\n---\n# Waiter\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "- ambig-dep (ambiguous)") {
+		t.Errorf("ambig-dep should be labeled ambiguous, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "WARNING id \"ambig-dep\" is ambiguous") {
+		t.Errorf("diagnostics should warn about ambiguous id, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_DependencySummary_ActiveAndBacklogStates(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	backlogTask := "---\nid: dep-backlog\npriority: 5\n---\n# Backlog\n"
+	inProgressTask := "---\nid: dep-in-progress\npriority: 5\n---\n# In Progress\n"
+	reviewTask := "---\nid: dep-review\npriority: 5\n---\n# Review\n"
+	mergeTask := "---\nid: dep-merge\npriority: 5\n---\n# Merge\n"
+	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - dep-backlog\n  - dep-in-progress\n  - dep-review\n  - dep-merge\n---\n# Waiter\n"
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep-backlog.md"), []byte(backlogTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "dep-in-progress.md"), []byte(inProgressTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "dep-review.md"), []byte(reviewTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "dep-merge.md"), []byte(mergeTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "- dep-backlog (backlog)") {
+		t.Errorf("dep-backlog should be labeled backlog, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "- dep-in-progress (in-progress)") {
+		t.Errorf("dep-in-progress should be labeled in-progress, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "- dep-review (ready-for-review)") {
+		t.Errorf("dep-review should be labeled ready-for-review, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "- dep-merge (ready-to-merge)") {
+		t.Errorf("dep-merge should be labeled ready-to-merge, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_DependencySummary_DuplicateWaitingIDIsAmbiguous(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	dupA := "---\nid: dup-dep\npriority: 5\n---\n# Duplicate A\n"
+	dupB := "---\nid: dup-dep\npriority: 6\n---\n# Duplicate B\n"
+	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - dup-dep\n---\n# Waiter\n"
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "dup-a.md"), []byte(dupA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "dup-b.md"), []byte(dupB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "- dup-dep (ambiguous)") {
+		t.Errorf("duplicate waiting id should be labeled ambiguous, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "WARNING duplicate waiting id \"dup-dep\"") {
+		t.Errorf("diagnostics should warn about duplicate waiting id, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_DependencySummary_ParseFailedTargetUsesQueueState(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	badBacklog := "---\npriority: not-a-number\n---\n# Broken Backlog Task\n"
+	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - parse-target\n---\n# Waiter\n"
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "parse-target.md"), []byte(badBacklog), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "ERROR backlog/parse-target.md") {
+		t.Errorf("parse-target parse error should be reported, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "- parse-target (backlog)") {
+		t.Errorf("parse-failed dependency target should retain backlog state, got:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "WARNING waiter depends on unknown id \"parse-target\"") {
+		t.Errorf("parse-failed dependency target should not be reported as unknown, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_AffectsConflictDetail(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n  - unique-a.go\n---\n# Task A\n"
+	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n  - unique-b.go\n---\n# Task B\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "=== Affects Conflict Detection ===") {
+		t.Fatal("missing Affects Conflict Detection section")
+	}
+	if !strings.Contains(stdout, "DEFERRED task-b.md") {
+		t.Errorf("task-b should be deferred, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "blocked by task-a.md") {
+		t.Errorf("should show blocking task, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "shared.go") {
+		t.Errorf("should show conflicting affects entry, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_ParseErrorsWithValidTasks(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Valid backlog task.
+	validTask := "---\nid: valid-task\npriority: 10\naffects:\n  - file.go\n---\n# Valid Task\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "valid-task.md"), []byte(validTask), 0o644)
+
+	// Invalid backlog task (parse error).
+	badTask := "---\npriority: not-a-number\n---\n# Bad Task\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badTask), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	// Parse error should be reported.
+	if !strings.Contains(stdout, "ERROR backlog/bad-task.md") {
+		t.Errorf("parse error should be reported, got:\n%s", stdout)
+	}
+
+	// Valid task should still appear in Execution Order and Backlog Task Summary.
+	if !strings.Contains(stdout, "=== Execution Order ===") {
+		t.Fatal("missing Execution Order section")
+	}
+	if !strings.Contains(stdout, "valid-task.md (priority 10)") {
+		t.Errorf("valid task should appear in execution order despite parse error in another task, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "=== Backlog Task Summary ===") {
+		t.Fatal("missing Backlog Task Summary section")
+	}
+	if !strings.Contains(stdout, "valid-task.md [runnable]") {
+		t.Errorf("valid task should appear in backlog summary, got:\n%s", stdout)
+	}
+	// Bad task should NOT appear in Backlog Task Summary (it failed parsing).
+	if strings.Contains(stdout, "bad-task.md [runnable]") || strings.Contains(stdout, "bad-task.md [deferred]") {
+		t.Errorf("bad-task should not appear in backlog summary, got:\n%s", stdout)
+	}
+
+	// Queue Summary should count both valid and broken files (2 total in backlog).
+	if !strings.Contains(stdout, "backlog              2") {
+		t.Errorf("queue summary should count 2 backlog files (valid + broken), got:\n%s", stdout)
+	}
+}
+
 func TestSurfaceBuildWarnings_NoWarnings(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, d := range queue.AllDirs {
@@ -2817,6 +3227,37 @@ func TestSurfaceBuildWarnings_GlobWarningDoesNotTriggerPollError(t *testing.T) {
 
 	if !strings.Contains(stderr, "warning: index build:") {
 		t.Errorf("expected warning logged on stderr even for glob issues, got: %s", stderr)
+	}
+}
+
+func TestDryRun_SurfacesBuildWarnings(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskContent := "---\nid: bad-glob\npriority: 10\naffects:\n  - \"[invalid\"\n---\n# Bad Glob\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-glob.md"), []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("write task: %v", err)
+	}
+
+	_, stderr := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stderr, "warning: index build:") {
+		t.Errorf("expected dry-run to surface build warning on stderr, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "bad-glob.md") {
+		t.Errorf("expected dry-run warning to mention bad-glob.md, got: %s", stderr)
 	}
 }
 
