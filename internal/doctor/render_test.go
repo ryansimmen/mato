@@ -293,9 +293,9 @@ func TestRenderText_FixedFindings(t *testing.T) {
 		Checks: []CheckReport{
 			{Name: "queue", Status: CheckRan, Findings: []Finding{
 				{Code: "queue.missing_dir", Severity: SeverityWarning, Fixable: true, Fixed: true,
-					Message: "missing directory", Path: ".tasks/waiting"},
+					Message: "missing directory", Path: ".mato/waiting"},
 				{Code: "queue.missing_dir", Severity: SeverityWarning, Fixable: true,
-					Message: "missing directory", Path: ".tasks/backlog"},
+					Message: "missing directory", Path: ".mato/backlog"},
 			}},
 		},
 		Summary:  Summary{Warnings: 1, Fixed: 1},
@@ -432,14 +432,14 @@ func TestRenderJSON_RoundTrip(t *testing.T) {
 	report := Report{
 		RepoInput: ".",
 		RepoRoot:  "/repo",
-		TasksDir:  "/repo/.tasks",
+		TasksDir:  "/repo/.mato",
 		Checks: []CheckReport{
 			{Name: "git", Status: CheckRan, Findings: []Finding{
 				{Code: "git.repo_root", Severity: SeverityInfo, Message: "repo root: /repo"},
 			}},
 			{Name: "queue", Status: CheckRan, Findings: []Finding{
 				{Code: "queue.missing_dir", Severity: SeverityWarning, Fixable: true,
-					Message: "missing", Path: ".tasks/waiting"},
+					Message: "missing", Path: ".mato/waiting"},
 			}},
 			{Name: "docker", Status: CheckSkipped, Findings: []Finding{}},
 		},
@@ -479,8 +479,8 @@ func TestRenderJSON_RoundTrip(t *testing.T) {
 	if !f.Fixable {
 		t.Error("expected fixable=true")
 	}
-	if f.Path != ".tasks/waiting" {
-		t.Errorf("path: got %q, want %q", f.Path, ".tasks/waiting")
+	if f.Path != ".mato/waiting" {
+		t.Errorf("path: got %q, want %q", f.Path, ".mato/waiting")
 	}
 }
 

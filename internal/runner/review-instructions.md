@@ -7,7 +7,7 @@ The host handles all file moves, metadata markers, and completion messages after
 - Target branch: TARGET_BRANCH_PLACEHOLDER
 ## Folder Structure
 ```text
-.tasks/
+.mato/
 ├── waiting/             # blocked by dependencies; do not touch
 ├── backlog/             # claimable tasks
 ├── in-progress/         # claimed by one agent

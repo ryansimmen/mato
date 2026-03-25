@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/identity"
@@ -143,21 +144,14 @@ func formatDurationShort(d time.Duration) string {
 // DryRun validates the task queue setup without launching Docker containers.
 // It runs one iteration of queue management (dependency promotion, overlap
 // detection, manifest writing) and reports the results, then exits.
-func DryRun(repoRoot, branch, tasksDirOverride string) error {
+func DryRun(repoRoot, branch string) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
 
-	tasksDir := tasksDirOverride
-	if tasksDir == "" {
-		tasksDir = filepath.Join(repoRoot, ".tasks")
-	}
-	tasksDir, err = validateTasksDir(tasksDir)
-	if err != nil {
-		return err
-	}
+	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	subdirs := queue.AllDirs
 
@@ -260,7 +254,7 @@ func DryRun(repoRoot, branch, tasksDirOverride string) error {
 	return nil
 }
 
-func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error {
+func Run(repoRoot, branch string, copilotArgs []string) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
@@ -271,14 +265,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 		return err
 	}
 
-	tasksDir := tasksDirOverride
-	if tasksDir == "" {
-		tasksDir = filepath.Join(repoRoot, ".tasks")
-	}
-	tasksDir, err = validateTasksDir(tasksDir)
-	if err != nil {
-		return err
-	}
+	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	if err := checkDocker(); err != nil {
 		return err
@@ -286,7 +273,7 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 	for _, sub := range queue.AllDirs {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
-			return fmt.Errorf("create .tasks subdirectory %s: %w", sub, err)
+			return fmt.Errorf("create %s subdirectory %s: %w", dirs.Root, sub, err)
 		}
 	}
 	if err := messaging.Init(tasksDir); err != nil {
@@ -306,12 +293,12 @@ func Run(repoRoot, branch, tasksDirOverride string, copilotArgs []string) error 
 
 	gitName, gitEmail := resolveGitIdentity(repoRoot)
 
-	changed, err := git.EnsureGitignoreContains(repoRoot, "/.tasks/")
+	changed, err := git.EnsureGitignoreContains(repoRoot, "/"+dirs.Root+"/")
 	if err != nil {
 		return err
 	}
 	if changed {
-		if err := git.CommitGitignore(repoRoot, "chore: add /.tasks/ to .gitignore"); err != nil {
+		if err := git.CommitGitignore(repoRoot, "chore: add /"+dirs.Root+"/ to .gitignore"); err != nil {
 			return err
 		}
 	}
@@ -356,9 +343,9 @@ func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, git
 	}
 	workdir := "/workspace"
 
-	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/.tasks")
+	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/"+dirs.Root)
 	prompt = strings.ReplaceAll(prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
-	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/.tasks/messages")
+	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/"+dirs.Root+"/messages")
 
 	env := envConfig{
 		image:              image,

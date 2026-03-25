@@ -7,7 +7,7 @@ The host manages branch creation before you start and handles pushing the branch
 - Target branch: TARGET_BRANCH_PLACEHOLDER
 ## Folder Structure
 ```text
-.tasks/
+.mato/
 ├── waiting/             # blocked by dependencies; do not claim from here
 ├── backlog/             # claimable tasks
 ├── in-progress/         # claimed by one agent

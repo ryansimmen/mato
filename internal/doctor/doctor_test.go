@@ -81,7 +81,7 @@ func TestDoctor_HealthyRepo(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "test-task.md"),
 		"---\nid: test-task\npriority: 10\n---\nDo something\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestDoctor_NotAGitRepo(t *testing.T) {
 	dir := t.TempDir()
 	allOK(t)
 
-	report, err := Run(context.Background(), dir, "", Options{Format: "text"})
+	report, err := Run(context.Background(), dir, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestDoctor_MissingQueueDir(t *testing.T) {
 	// Remove a directory to trigger the check.
 	os.RemoveAll(filepath.Join(tasksDir, "waiting"))
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestDoctor_MissingQueueDir_Fix(t *testing.T) {
 
 	os.RemoveAll(filepath.Join(tasksDir, "waiting"))
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestDoctor_MalformedTask(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "broken.md"),
 		"---\n  bad yaml: [unclosed\n---\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestDoctor_StalePIDLock(t *testing.T) {
 	// Write a .pid file with a dead PID.
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "deadbeef.pid"), "999999:0")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestDoctor_StalePIDLock_Fix(t *testing.T) {
 	pidFile := filepath.Join(tasksDir, ".locks", "deadbeef.pid")
 	testutil.WriteFile(t, pidFile, "999999:0")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestDoctor_StaleReviewLock(t *testing.T) {
 	lockFile := filepath.Join(tasksDir, ".locks", "review-test.md.lock")
 	testutil.WriteFile(t, lockFile, "999999:0")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestDoctor_StaleReviewLock_Fix(t *testing.T) {
 	lockFile := filepath.Join(tasksDir, ".locks", "review-test.md.lock")
 	testutil.WriteFile(t, lockFile, "999999:0")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestDoctor_OrphanedInProgress(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "orphan.md"),
 		"<!-- claimed-by: deadbeef -->\n---\nid: orphan\n---\nOrphan task\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestDoctor_UnclaimedInProgress(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "unclaimed.md"),
 		"---\nid: unclaimed\n---\nUnclaimed task\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestDoctor_UnclaimedInProgress_Fix(t *testing.T) {
 	testutil.WriteFile(t, inProgressFile,
 		"---\nid: unclaimed\n---\nUnclaimed task\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestDoctor_OrphanedInProgress_Fix(t *testing.T) {
 	testutil.WriteFile(t, inProgressFile,
 		"<!-- claimed-by: deadbeef -->\n---\nid: orphan\n---\nOrphan task\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestDoctor_SelfDependency(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "waiting", "self-dep.md"),
 		"---\nid: self-dep\ndepends_on:\n  - self-dep\n---\nSelf dep\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestDoctor_CircularDependency(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "waiting", "b.md"),
 		"---\nid: b\ndepends_on:\n  - a\n---\nTask B\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestDoctor_UnknownDependencyID(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "waiting", "dep-unknown.md"),
 		"---\nid: dep-unknown\ndepends_on:\n  - nonexistent\n---\nDep unknown\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -561,7 +561,7 @@ func TestDoctor_AmbiguousID(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "waiting", "amb-task.md"),
 		"---\nid: amb-task\n---\nWaiting\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestDoctor_DuplicateWaitingID(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "waiting", "dup2.md"),
 		"---\nid: dup-id\n---\nSecond\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestDoctor_InvalidGlobSyntax(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "bad-glob.md"),
 		"---\nid: bad-glob\naffects:\n  - \"internal/*/\"\n---\nBad glob\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -650,7 +650,7 @@ func TestDoctor_UnsafeAffectsEntries(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "traversal.md"),
 		"---\nid: traversal\naffects:\n  - ../../secret\n---\nTraversal task\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -685,10 +685,10 @@ func TestDoctor_UnsafeAffectsEntries(t *testing.T) {
 }
 
 func TestDoctor_OnlyFilter(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+	report, err := Run(context.Background(), repoRoot, Options{
 		Format: "text",
 		Only:   []string{"git", "queue"},
 	})
@@ -711,10 +711,10 @@ func TestDoctor_OnlyFilter(t *testing.T) {
 }
 
 func TestDoctor_OnlyFilter_InvalidName(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+	report, err := Run(context.Background(), repoRoot, Options{
 		Format: "text",
 		Only:   []string{"bogus"},
 	})
@@ -743,8 +743,8 @@ func TestDoctor_OnlyFilter_PrereqFailure(t *testing.T) {
 	dir := t.TempDir()
 	allOK(t)
 
-	// --only queue without --tasks-dir and with bad repo.
-	report, err := Run(context.Background(), dir, "", Options{
+	// --only queue with a bad repo.
+	report, err := Run(context.Background(), dir, Options{
 		Format: "text",
 		Only:   []string{"queue"},
 	})
@@ -770,7 +770,7 @@ func TestDoctor_OnlyFilter_PrereqFailure(t *testing.T) {
 }
 
 func TestDoctor_DockerTimeout(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	stubTools(t, func() runner.ToolReport {
 		return runner.ToolReport{}
 	})
@@ -779,7 +779,7 @@ func TestDoctor_DockerTimeout(t *testing.T) {
 		return fmt.Errorf("docker daemon unreachable: timeout")
 	})
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -806,7 +806,7 @@ func TestDoctor_FixReporting(t *testing.T) {
 	os.RemoveAll(filepath.Join(tasksDir, "waiting"))
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "dead.pid"), "999999:0")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -827,7 +827,7 @@ func TestDoctor_FixJSONValid(t *testing.T) {
 
 	os.RemoveAll(filepath.Join(tasksDir, "waiting"))
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "json"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "json"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -844,10 +844,10 @@ func TestDoctor_FixJSONValid(t *testing.T) {
 }
 
 func TestDoctor_JSONIncludesExitCode(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "json"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "json"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -868,13 +868,13 @@ func TestDoctor_JSONIncludesExitCode(t *testing.T) {
 }
 
 func TestDoctor_ContextCancellation(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	_, err := Run(ctx, repoRoot, tasksDir, Options{Format: "text"})
+	_, err := Run(ctx, repoRoot, Options{Format: "text"})
 	if err == nil {
 		t.Error("expected error from cancelled context")
 	}
@@ -884,7 +884,7 @@ func TestRenderText(t *testing.T) {
 	report := Report{
 		RepoInput: "/repo",
 		RepoRoot:  "/repo",
-		TasksDir:  "/repo/.tasks",
+		TasksDir:  "/repo/.mato",
 		Checks: []CheckReport{
 			{Name: "git", Status: CheckRan, Findings: []Finding{
 				{Code: "git.repo_root", Severity: SeverityInfo, Message: "repo root: /repo"},
@@ -920,7 +920,7 @@ func TestRenderJSON(t *testing.T) {
 	report := Report{
 		RepoInput: "/repo",
 		RepoRoot:  "/repo",
-		TasksDir:  "/repo/.tasks",
+		TasksDir:  "/repo/.mato",
 		Checks: []CheckReport{
 			{Name: "git", Status: CheckRan, Findings: []Finding{
 				{Code: "git.repo_root", Severity: SeverityInfo, Message: "repo root: /repo"},
@@ -997,7 +997,7 @@ func TestDoctor_StaleDuplicate(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "completed", "dup-task.md"),
 		"---\nid: dup-task\n---\nDup task\n")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1024,7 +1024,7 @@ func TestDoctor_ActiveAgent(t *testing.T) {
 	identity := process.LockIdentity(pid)
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "liveid.pid"), identity)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1045,55 +1045,15 @@ func TestDoctor_ActiveAgent(t *testing.T) {
 	}
 }
 
-func TestDoctor_ExplicitTasksDir(t *testing.T) {
-	// Non-git dir but with explicit --tasks-dir.
-	dir := t.TempDir()
-	allOK(t)
-
-	tasksDir := filepath.Join(dir, ".tasks")
-	for _, sub := range []string{"waiting", "backlog", "in-progress", "ready-for-review", "ready-to-merge", "completed", "failed", ".locks", "messages/events", "messages/presence", "messages/completions"} {
-		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-	}
-
-	report, err := Run(context.Background(), dir, tasksDir, Options{Format: "text"})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	// git check should fail, but queue/tasks/locks/deps should work.
-	gitFailed := false
-	queueRan := false
-	for _, cr := range report.Checks {
-		if cr.Name == "git" {
-			for _, f := range cr.Findings {
-				if f.Code == "git.not_a_repo" {
-					gitFailed = true
-				}
-			}
-		}
-		if cr.Name == "queue" && cr.Status == CheckRan {
-			queueRan = true
-		}
-	}
-	if !gitFailed {
-		t.Error("expected git check to fail for non-git dir")
-	}
-	if !queueRan {
-		t.Error("expected queue check to run with explicit --tasks-dir")
-	}
-}
-
 func TestDoctor_MissingTasksRoot_Fix(t *testing.T) {
-	// A git repo without .tasks should have a fixable missing-root finding.
+	// A git repo without .mato should have a fixable missing-root finding.
 	repoRoot := testutil.SetupRepo(t)
 	allOK(t)
 
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 
 	// Without --fix: should report missing_tasks_root as fixable.
-	report, err := Run(context.Background(), repoRoot, "", Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1116,13 +1076,13 @@ func TestDoctor_MissingTasksRoot_Fix(t *testing.T) {
 		t.Error("missing_tasks_root should not be fixed without --fix")
 	}
 
-	// Confirm .tasks still does not exist.
+	// Confirm .mato still does not exist.
 	if _, statErr := os.Stat(tasksDir); !os.IsNotExist(statErr) {
-		t.Fatalf(".tasks should not exist yet, stat: %v", statErr)
+		t.Fatalf(".mato should not exist yet, stat: %v", statErr)
 	}
 
-	// With --fix: should create .tasks and subdirectories.
-	report2, err := Run(context.Background(), repoRoot, "", Options{Format: "text", Fix: true})
+	// With --fix: should create .mato and subdirectories.
+	report2, err := Run(context.Background(), repoRoot, Options{Format: "text", Fix: true})
 	if err != nil {
 		t.Fatalf("Run --fix: %v", err)
 	}
@@ -1153,13 +1113,13 @@ func TestDoctor_MissingTasksRoot_Fix(t *testing.T) {
 		t.Error("expected at least one queue.missing_dir to be fixed")
 	}
 
-	// Verify .tasks now exists.
+	// Verify .mato now exists.
 	info, statErr := os.Stat(tasksDir)
 	if statErr != nil {
-		t.Fatalf(".tasks should exist after --fix, stat: %v", statErr)
+		t.Fatalf(".mato should exist after --fix, stat: %v", statErr)
 	}
 	if !info.IsDir() {
-		t.Error(".tasks should be a directory")
+		t.Error(".mato should be a directory")
 	}
 }
 
@@ -1171,7 +1131,7 @@ func TestDoctor_GitResolveFailed(t *testing.T) {
 
 	badPath := filepath.Join(t.TempDir(), "nonexistent-subdir")
 
-	report, err := Run(context.Background(), badPath, "", Options{Format: "text"})
+	report, err := Run(context.Background(), badPath, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1235,7 +1195,7 @@ func TestDoctor_UnreadableLocksDir(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1258,7 +1218,7 @@ func TestDoctor_UnreadableLocksDir(t *testing.T) {
 }
 
 func TestDoctor_ToolsMissingCopilotDir(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	stubTools(t, func() runner.ToolReport {
 		return runner.ToolReport{Findings: []runner.ToolFinding{
 			{Name: ".copilot", Path: "", Required: true, Found: false, Message: ".copilot directory not found"},
@@ -1267,7 +1227,7 @@ func TestDoctor_ToolsMissingCopilotDir(t *testing.T) {
 	})
 	stubDocker(t, func(ctx context.Context) error { return nil })
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1303,7 +1263,7 @@ func TestDoctor_ToolsMissingCopilotDir(t *testing.T) {
 }
 
 func TestDoctor_ToolsMissingOptionalAndRequired(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	stubTools(t, func() runner.ToolReport {
 		return runner.ToolReport{Findings: []runner.ToolFinding{
 			{Name: "copilot", Path: "", Required: true, Found: false, Message: "copilot not found"},
@@ -1313,7 +1273,7 @@ func TestDoctor_ToolsMissingOptionalAndRequired(t *testing.T) {
 	})
 	stubDocker(t, func(ctx context.Context) error { return nil })
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1355,7 +1315,7 @@ func TestDoctor_ToolsMissingOptionalAndRequired(t *testing.T) {
 }
 
 func TestDoctor_ToolsAllFound(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	stubTools(t, func() runner.ToolReport {
 		return runner.ToolReport{Findings: []runner.ToolFinding{
 			{Name: "copilot", Path: "/usr/bin/copilot", Required: true, Found: true, Message: "copilot: /usr/bin/copilot"},
@@ -1365,7 +1325,7 @@ func TestDoctor_ToolsAllFound(t *testing.T) {
 	})
 	stubDocker(t, func(ctx context.Context) error { return nil })
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

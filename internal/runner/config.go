@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 
 	"golang.org/x/term"
@@ -132,7 +133,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"run", "--rm", "--init", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", run.cloneDir, env.workdir),
-		"-v", fmt.Sprintf("%s:%s/.tasks", env.tasksDir, env.workdir),
+		"-v", fmt.Sprintf("%s:%s/%s", env.tasksDir, env.workdir, dirs.Root),
 		"-v", fmt.Sprintf("%s:%s", env.repoRoot, env.repoRoot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", env.gitPath),
@@ -146,7 +147,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	args = append(args,
 		"-e", "MATO_AGENT_ID="+run.agentID,
 		"-e", "MATO_MESSAGING_ENABLED=1",
-		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", env.workdir),
+		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/%s/messages", env.workdir, dirs.Root),
 	)
 	for _, e := range extraEnvs {
 		args = append(args, "-e", e)
@@ -193,24 +194,6 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	}
 	args = append(args, env.copilotArgs...)
 	return args
-}
-
-// validateTasksDir resolves tasksDir to an absolute path and verifies
-// that its parent directory exists. Returns the resolved absolute path.
-func validateTasksDir(tasksDir string) (string, error) {
-	abs, err := filepath.Abs(tasksDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve tasks directory to absolute path: %w", err)
-	}
-	parent := filepath.Dir(abs)
-	info, err := os.Stat(parent)
-	if err != nil {
-		return "", fmt.Errorf("tasks directory parent %s does not exist: %w", parent, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("tasks directory parent %s is not a directory", parent)
-	}
-	return abs, nil
 }
 
 // defaultModel returns the Copilot model to use when --model is not

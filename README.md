@@ -1,6 +1,6 @@
 # Multi Agent Task Orchestrator (mato)
 
-Runs autonomous Copilot agents against a filesystem-backed task queue in Docker. Agents claim work, coordinate through `.tasks/`, commit on task branches, and the host pushes task branches and squash-merges completed work into the target branch. Every task branch is automatically reviewed by an AI review agent before merging. The review agent checks for bugs, logic errors, regressions, and convention violations. See [Architecture](docs/architecture.md) for details.
+Runs autonomous Copilot agents against a filesystem-backed task queue in Docker. Agents claim work, coordinate through `.mato/`, commit on task branches, and the host pushes task branches and squash-merges completed work into the target branch. Every task branch is automatically reviewed by an AI review agent before merging. The review agent checks for bugs, logic errors, regressions, and convention violations. See [Architecture](docs/architecture.md) for details.
 
 ## Requirements
 
@@ -25,7 +25,7 @@ cd /path/to/repo
 mato init
 
 # Create a ready task in backlog/
-cat > .tasks/backlog/add-retry-logic.md << 'EOF'
+cat > .mato/backlog/add-retry-logic.md << 'EOF'
 ---
 id: add-retry-logic
 priority: 10
@@ -51,10 +51,9 @@ Useful flags:
 
 - `--repo <path>`: target repository (defaults to the current directory); empty and whitespace-only values are rejected
 - `--branch <name>`: merge target branch (defaults to `mato`); empty and whitespace-only values are rejected
-- `--tasks-dir <path>`: custom task queue location (defaults to `<repo>/.tasks`); empty and whitespace-only values are rejected
 - `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
 
-Use `mato init` to bootstrap `.tasks/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe.
+Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe.
 
 Arguments after a `--` separator are always forwarded to the Copilot CLI without
 interpretation — even `--help` and `-h` (e.g., `mato -- --help` forwards
@@ -87,7 +86,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 ## Queue Layout
 
 ```text
-<repo>/.tasks/
+<repo>/.mato/
 ├── waiting/         # blocked tasks waiting on dependencies
 ├── backlog/         # ready to run
 ├── in-progress/     # claimed by an active agent
@@ -109,7 +108,7 @@ Tasks that accumulate `max_retries` failure records (default 3) are moved to `fa
 1. Add tasks to `waiting/` or `backlog/`.
 2. Mato promotes ready tasks into `backlog/`, orders them by priority, and defers overlapping `affects` conflicts (exact paths, directory prefixes, and glob patterns).
 3. An agent claims a backlog task, works in an isolated clone on a host-created `task/<name>` branch, and commits. The host pushes the branch after the agent exits.
-4. Agents communicate through `.tasks/messages/` so concurrent runs can share intent and completion events.
+4. Agents communicate through `.mato/messages/` so concurrent runs can share intent and completion events.
 5. A review agent automatically evaluates each completed task branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with feedback for the next attempt.
 6. The host merge queue processes `ready-to-merge/` and squash-merges finished task branches into the target branch.
 7. Tasks move to `completed/` on success. Missing branches move to `failed/`, merge conflicts requeue to `backlog/` for a fresh attempt, and push failures are retried in `ready-to-merge/`.
@@ -129,10 +128,10 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 - active agents from `.locks/`
 - waiting tasks with dependency progress
 - conflict-deferred tasks with blocking details
-- the last 5 coordination messages from `.tasks/messages/events/`
+- the last 5 coordination messages from `.mato/messages/events/`
 
 The runnable backlog shows what the host will claim next, in the same priority
-order used by `.tasks/.queue`. Use `--format json` to get the same ordered list
+order used by `.mato/.queue`. Use `--format json` to get the same ordered list
 as `runnable_backlog` in the JSON output.
 
 Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag

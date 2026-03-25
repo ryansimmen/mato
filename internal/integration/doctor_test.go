@@ -41,7 +41,7 @@ func TestDoctor_Integration_FixCycle(t *testing.T) {
 		"<!-- claimed-by: deadbeef -->\n---\nid: orphan\n---\nOrphan task\n")
 
 	// Step 1: Run without --fix. Expect warnings (exit code 1).
-	report1, err := doctor.Run(context.Background(), repoRoot, tasksDir, doctor.Options{Format: "text"})
+	report1, err := doctor.Run(context.Background(), repoRoot, doctor.Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run without --fix: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestDoctor_Integration_FixCycle(t *testing.T) {
 	}
 
 	// Step 2: Run with --fix. Expect repairs.
-	report2, err := doctor.Run(context.Background(), repoRoot, tasksDir, doctor.Options{Fix: true, Format: "text"})
+	report2, err := doctor.Run(context.Background(), repoRoot, doctor.Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run with --fix: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestDoctor_Integration_FixCycle(t *testing.T) {
 	}
 
 	// Step 3: Run again. Everything should be clean (exit 0).
-	report3, err := doctor.Run(context.Background(), repoRoot, tasksDir, doctor.Options{Format: "text"})
+	report3, err := doctor.Run(context.Background(), repoRoot, doctor.Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run post-fix: %v", err)
 	}
