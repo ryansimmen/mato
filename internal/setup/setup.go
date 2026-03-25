@@ -18,13 +18,14 @@ const ignorePattern = "/" + dirs.Root + "/"
 
 // InitResult describes what repository initialization changed.
 type InitResult struct {
-	DirsCreated      []string
-	GitignoreUpdated bool
-	IgnorePattern    string
-	BranchName       string
-	BranchExisted    bool
-	AlreadyOnBranch  bool
-	TasksDir         string
+	DirsCreated        []string
+	GitignoreUpdated   bool
+	IgnorePattern      string
+	BranchName         string
+	BranchSource       git.BranchSource
+	LocalBranchExisted bool
+	AlreadyOnBranch    bool
+	TasksDir           string
 }
 
 // InitRepo performs the full non-Docker initialization of a mato repository.
@@ -47,12 +48,16 @@ func InitRepo(repoRoot, branch string) (*InitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	result.BranchExisted = branchExisted
+	result.LocalBranchExisted = branchExisted
 
 	if !result.AlreadyOnBranch {
-		if err := git.EnsureBranch(repoRoot, branch); err != nil {
+		branchResult, err := git.EnsureBranch(repoRoot, branch)
+		if err != nil {
 			return nil, err
 		}
+		result.BranchSource = branchResult.Source
+	} else {
+		result.BranchSource = git.BranchSourceLocal
 	}
 
 	hasCommit, err := repoHasCommit(repoRoot)

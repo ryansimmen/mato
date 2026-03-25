@@ -50,37 +50,159 @@ func RemoveClone(dir string) {
 	os.RemoveAll(dir)
 }
 
+// BranchSource describes how EnsureBranch resolved the target branch.
+type BranchSource string
+
+const (
+	BranchSourceLocal                 BranchSource = "local"
+	BranchSourceRemote                BranchSource = "remote"
+	BranchSourceRemoteCached          BranchSource = "remote_cached"
+	BranchSourceHeadRemoteMissing     BranchSource = "head_remote_missing"
+	BranchSourceHeadRemoteUnavailable BranchSource = "head_remote_unavailable"
+)
+
+// EnsureBranchResult describes how EnsureBranch resolved the target branch.
+type EnsureBranchResult struct {
+	Branch string
+	Source BranchSource
+}
+
+// DescribeBranchSource returns a human-readable description of a branch source.
+func DescribeBranchSource(branch string, source BranchSource) string {
+	switch source {
+	case BranchSourceLocal:
+		return "existing local branch"
+	case BranchSourceRemote:
+		return fmt.Sprintf("live origin/%s", branch)
+	case BranchSourceRemoteCached:
+		return fmt.Sprintf("cached origin/%s (origin unavailable)", branch)
+	case BranchSourceHeadRemoteMissing:
+		return fmt.Sprintf("current HEAD (origin/%s not found on remote)", branch)
+	case BranchSourceHeadRemoteUnavailable:
+		return "current HEAD (origin unavailable)"
+	default:
+		return "unknown"
+	}
+}
+
+// SourceDescription returns a human-readable description of the branch source.
+func (r EnsureBranchResult) SourceDescription() string {
+	return DescribeBranchSource(r.Branch, r.Source)
+}
+
+type remoteBranchStatus struct {
+	available bool
+	exists    bool
+}
+
 // EnsureBranch ensures the target branch exists and checks it out.
-// It prefers the remote-tracking branch (origin/<branch>) as the starting point
-// when the local branch is missing, falling back to HEAD only when neither exists.
+// It prefers the live remote branch (origin/<branch>) as the starting point
+// when the local branch is missing. If the remote is reachable and the branch is
+// absent there, it creates the branch from HEAD and ignores any stale cached
+// remote-tracking ref. If origin is unavailable, it falls back to a cached
+// remote-tracking ref before using HEAD.
 //
-// Before checking for the remote-tracking ref, it fetches the branch from origin
-// so that refs/remotes/origin/<branch> is up to date. If the fetch fails (e.g.
-// offline, no remote configured), the function falls back to whatever
-// remote-tracking ref is already cached locally, or ultimately to HEAD.
-func EnsureBranch(repoRoot, branch string) error {
+// Before using the remote-tracking ref, it verifies the branch against the live
+// remote so deleted remote branches are not silently resurrected from stale
+// local metadata.
+func EnsureBranch(repoRoot, branch string) (EnsureBranchResult, error) {
+	result := EnsureBranchResult{Branch: branch}
+
 	// If the local branch already exists, just check it out.
-	if _, err := Output(repoRoot, "rev-parse", "--verify", "refs/heads/"+branch); err == nil {
+	if ok, err := refExists(repoRoot, "refs/heads/"+branch); err != nil {
+		return result, err
+	} else if ok {
 		if _, err := Output(repoRoot, "checkout", branch); err != nil {
-			return fmt.Errorf("checkout branch %s: %w", branch, err)
+			return result, fmt.Errorf("checkout branch %s: %w", branch, err)
 		}
-		return nil
+		result.Source = BranchSourceLocal
+		return result, nil
 	}
-	// Fetch the specific branch from origin to refresh the remote-tracking ref.
-	// Failure is non-fatal: the repo may be offline or have no remote.
-	_, _ = Output(repoRoot, "fetch", "--quiet", "origin", branch)
-	// If the remote-tracking branch exists, create the local branch from it.
-	if _, err := Output(repoRoot, "rev-parse", "--verify", "refs/remotes/origin/"+branch); err == nil {
+
+	remoteStatus, err := queryRemoteBranch(repoRoot, "origin", branch)
+	if err != nil {
+		return result, err
+	}
+
+	if remoteStatus.available && remoteStatus.exists {
+		if _, err := Output(repoRoot, "fetch", "--quiet", "origin", branch); err != nil {
+			return result, fmt.Errorf("fetch branch %s from origin after confirming it exists: %w", branch, err)
+		}
+		ok, err := refExists(repoRoot, "refs/remotes/origin/"+branch)
+		if err != nil {
+			return result, err
+		}
+		if !ok {
+			return result, fmt.Errorf("remote branch origin/%s was reported by ls-remote, but refs/remotes/origin/%s is missing after fetch", branch, branch)
+		}
 		if _, err := Output(repoRoot, "checkout", "-b", branch, "origin/"+branch); err != nil {
-			return fmt.Errorf("create branch %s from origin/%s: %w", branch, branch, err)
+			return result, fmt.Errorf("create branch %s from origin/%s: %w", branch, branch, err)
 		}
-		return nil
+		result.Source = BranchSourceRemote
+		return result, nil
 	}
-	// Neither local nor remote exists; create from HEAD.
+
+	if remoteStatus.available {
+		if _, err := Output(repoRoot, "checkout", "-b", branch); err != nil {
+			return result, fmt.Errorf("create branch %s from HEAD: %w", branch, err)
+		}
+		result.Source = BranchSourceHeadRemoteMissing
+		return result, nil
+	}
+
+	if ok, err := refExists(repoRoot, "refs/remotes/origin/"+branch); err != nil {
+		return result, err
+	} else if ok {
+		if _, err := Output(repoRoot, "checkout", "-b", branch, "origin/"+branch); err != nil {
+			return result, fmt.Errorf("create branch %s from cached origin/%s: %w", branch, branch, err)
+		}
+		result.Source = BranchSourceRemoteCached
+		return result, nil
+	}
+
 	if _, err := Output(repoRoot, "checkout", "-b", branch); err != nil {
-		return fmt.Errorf("create branch %s: %w", branch, err)
+		return result, fmt.Errorf("create branch %s from HEAD: %w", branch, err)
 	}
-	return nil
+	result.Source = BranchSourceHeadRemoteUnavailable
+	return result, nil
+}
+
+func refExists(repoRoot, ref string) (bool, error) {
+	_, err := Output(repoRoot, "show-ref", "--verify", "--quiet", ref)
+	if err == nil {
+		return true, nil
+	}
+	code, ok := exitCode(err)
+	if ok && code == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("check ref %s: %w", ref, err)
+}
+
+func queryRemoteBranch(repoRoot, remote, branch string) (remoteBranchStatus, error) {
+	_, err := Output(repoRoot, "ls-remote", "--exit-code", "--heads", remote, "refs/heads/"+branch)
+	if err == nil {
+		return remoteBranchStatus{available: true, exists: true}, nil
+	}
+	code, ok := exitCode(err)
+	if ok {
+		if code == 2 {
+			return remoteBranchStatus{available: true, exists: false}, nil
+		}
+		// Any other ls-remote exit code means the branch existence check could not
+		// complete reliably (for example auth, DNS, or transport failure), so the
+		// caller should treat the remote as unavailable and fall back accordingly.
+		return remoteBranchStatus{available: false, exists: false}, nil
+	}
+	return remoteBranchStatus{}, fmt.Errorf("query remote branch %s/%s: %w", remote, branch, err)
+}
+
+func exitCode(err error) (int, bool) {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 0, false
+	}
+	return exitErr.ExitCode(), true
 }
 
 // EnsureGitignoreContains ensures the given pattern is present in the repo's
