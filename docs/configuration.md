@@ -119,6 +119,8 @@ Supported flags: `--repo`, `--watch`, `--interval`, `--format`, and `--help`/`-h
 ### `mato init`
 `mato init` bootstraps a repository for mato use in one explicit step. It is intended for first-time setup, CI preparation, or dry-run validation flows where users want `.mato/` and the target branch created without running the full orchestrator.
 
+When the target branch does not already exist locally, `mato init` checks the live `origin` branch before creating it. If the remote branch exists, `mato init` creates the local branch from `origin/<branch>`. If the remote is reachable and the branch does not exist there, `mato init` creates the branch from the current `HEAD` and ignores any stale cached `origin/<branch>` ref. If `origin` is unavailable, `mato init` may still fall back to a cached `origin/<branch>` ref and reports that choice in its output.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. The command resolves it to the repository top level. |

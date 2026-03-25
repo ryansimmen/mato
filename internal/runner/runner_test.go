@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/process"
 	"mato/internal/queue"
@@ -2921,6 +2922,87 @@ func TestSetupSignalContext_PrintsShutdownMessage(t *testing.T) {
 
 	if !strings.Contains(stdout, "Shutting down, waiting for current task to finish...") {
 		t.Fatalf("expected shutdown message in stdout, got: %q", stdout)
+	}
+}
+
+func TestReportBranchResolution_SkipsLocalBranch(t *testing.T) {
+	stdout, stderr := captureStdoutStderr(t, func() {
+		reportBranchResolution(git.EnsureBranchResult{Branch: "mato", Source: git.BranchSourceLocal})
+	})
+
+	if stdout != "" {
+		t.Fatalf("expected no stdout, got %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got %q", stderr)
+	}
+}
+
+func TestReportBranchResolution_PrintsExpectedStdoutMessage(t *testing.T) {
+	tests := []struct {
+		name   string
+		result git.EnsureBranchResult
+		want   string
+	}{
+		{
+			name:   "live remote",
+			result: git.EnsureBranchResult{Branch: "mato", Source: git.BranchSourceRemote},
+			want:   "Using branch mato (live origin/mato)",
+		},
+		{
+			name:   "head remote missing",
+			result: git.EnsureBranchResult{Branch: "mato", Source: git.BranchSourceHeadRemoteMissing},
+			want:   "Using branch mato (current HEAD (origin/mato not found on remote))",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr := captureStdoutStderr(t, func() {
+				reportBranchResolution(tt.result)
+			})
+
+			if !strings.Contains(stdout, tt.want) {
+				t.Fatalf("expected stdout branch message %q, got %q", tt.want, stdout)
+			}
+			if stderr != "" {
+				t.Fatalf("expected no stderr, got %q", stderr)
+			}
+		})
+	}
+}
+
+func TestReportBranchResolution_WarnsForCachedOrUnavailableBranch(t *testing.T) {
+	tests := []struct {
+		name   string
+		result git.EnsureBranchResult
+		want   string
+	}{
+		{
+			name:   "cached remote",
+			result: git.EnsureBranchResult{Branch: "mato", Source: git.BranchSourceRemoteCached},
+			want:   "warning: using branch mato (cached origin/mato (origin unavailable))",
+		},
+		{
+			name:   "head remote unavailable",
+			result: git.EnsureBranchResult{Branch: "mato", Source: git.BranchSourceHeadRemoteUnavailable},
+			want:   "warning: using branch mato (current HEAD (origin unavailable))",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr := captureStdoutStderr(t, func() {
+				reportBranchResolution(tt.result)
+			})
+
+			if stdout != "" {
+				t.Fatalf("expected no stdout, got %q", stdout)
+			}
+			if !strings.Contains(stderr, tt.want) {
+				t.Fatalf("expected stderr warning %q, got %q", tt.want, stderr)
+			}
+		})
 	}
 }
 

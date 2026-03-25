@@ -55,7 +55,7 @@ Useful flags:
 
 You can also set `MATO_BRANCH` for a host-side branch default that overrides `.mato.yaml` but is still overridden by `--branch`.
 
-Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe.
+Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe. When the branch is missing locally, `mato init` tells you whether it reused a local branch, created from live `origin/<branch>`, created from current `HEAD` because the remote branch was missing, or fell back to a cached remote-tracking ref because `origin` was unavailable.
 
 You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `default_model`, `agent_timeout`, and `retry_cooldown`. CLI flags still win over config, and host env vars still win over both.
 

@@ -414,11 +414,11 @@ func printInitResult(result *setup.InitResult) {
 
 	switch {
 	case result.AlreadyOnBranch:
-		fmt.Printf("Already on branch: %s\n", result.BranchName)
-	case result.BranchExisted:
-		fmt.Printf("Switched to branch: %s\n", result.BranchName)
+		fmt.Printf("Already on branch: %s (%s)\n", result.BranchName, branchSourceDescription(result))
+	case result.LocalBranchExisted || result.BranchSource == git.BranchSourceRemote || result.BranchSource == git.BranchSourceRemoteCached:
+		fmt.Printf("Switched to branch: %s (%s)\n", result.BranchName, branchSourceDescription(result))
 	default:
-		fmt.Printf("Created branch: %s\n", result.BranchName)
+		fmt.Printf("Created branch: %s from %s\n", result.BranchName, branchSourceDescription(result))
 	}
 
 	if len(result.DirsCreated) == 0 && !result.GitignoreUpdated && result.AlreadyOnBranch {
@@ -426,6 +426,10 @@ func printInitResult(result *setup.InitResult) {
 		return
 	}
 	fmt.Printf("Ready to add tasks to %s\n", filepath.Join(result.TasksDir, "backlog")+string(filepath.Separator))
+}
+
+func branchSourceDescription(result *setup.InitResult) string {
+	return git.DescribeBranchSource(result.BranchName, result.BranchSource)
 }
 
 func newStatusCmd() *cobra.Command {
