@@ -23,6 +23,9 @@ func TestInitRepo_EndToEnd(t *testing.T) {
 	if result.BranchName != "mato" {
 		t.Fatalf("BranchName = %q, want %q", result.BranchName, "mato")
 	}
+	if result.BranchSource != git.BranchSourceHeadRemoteUnavailable {
+		t.Fatalf("BranchSource = %q, want %q", result.BranchSource, git.BranchSourceHeadRemoteUnavailable)
+	}
 	if _, err := os.Stat(filepath.Join(tasksDir, "backlog")); err != nil {
 		t.Fatalf("expected backlog dir: %v", err)
 	}

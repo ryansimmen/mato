@@ -272,8 +272,12 @@ func TestEnsureBranch_PrefersRemoteTrackingBranch(t *testing.T) {
 	}
 
 	// EnsureBranch should create local mato from origin/mato, not HEAD.
-	if err := EnsureBranch(clone2, "mato"); err != nil {
+	result, err := EnsureBranch(clone2, "mato")
+	if err != nil {
 		t.Fatalf("EnsureBranch: %v", err)
+	}
+	if result.Source != BranchSourceRemote {
+		t.Fatalf("Source = %q, want %q", result.Source, BranchSourceRemote)
 	}
 
 	// Verify we're on the mato branch.
@@ -309,8 +313,12 @@ func TestEnsureBranch_FallsBackToHEAD(t *testing.T) {
 	}
 	headBefore = strings.TrimSpace(headBefore)
 
-	if err := EnsureBranch(clone, "newbranch"); err != nil {
+	result, err := EnsureBranch(clone, "newbranch")
+	if err != nil {
 		t.Fatalf("EnsureBranch: %v", err)
+	}
+	if result.Source != BranchSourceHeadRemoteMissing {
+		t.Fatalf("Source = %q, want %q", result.Source, BranchSourceHeadRemoteMissing)
 	}
 
 	branch, err := Output(clone, "branch", "--show-current")
@@ -339,8 +347,12 @@ func TestEnsureBranch_LocalBranchExists(t *testing.T) {
 		t.Fatalf("git branch existing: %v\n%s", err, out)
 	}
 
-	if err := EnsureBranch(clone, "existing"); err != nil {
+	result, err := EnsureBranch(clone, "existing")
+	if err != nil {
 		t.Fatalf("EnsureBranch: %v", err)
+	}
+	if result.Source != BranchSourceLocal {
+		t.Fatalf("Source = %q, want %q", result.Source, BranchSourceLocal)
 	}
 
 	branch, err := Output(clone, "branch", "--show-current")
@@ -403,8 +415,12 @@ func TestEnsureBranch_FetchesRemoteBranchCreatedAfterClone(t *testing.T) {
 	}
 
 	// EnsureBranch should fetch and create the local branch from origin.
-	if err := EnsureBranch(clone, "latebranch"); err != nil {
+	result, err := EnsureBranch(clone, "latebranch")
+	if err != nil {
 		t.Fatalf("EnsureBranch: %v", err)
+	}
+	if result.Source != BranchSourceRemote {
+		t.Fatalf("Source = %q, want %q", result.Source, BranchSourceRemote)
 	}
 
 	// Verify we're on the latebranch.
@@ -442,8 +458,12 @@ func TestEnsureBranch_FetchFailsFallsBackToHEAD(t *testing.T) {
 	headBefore = strings.TrimSpace(headBefore)
 
 	// EnsureBranch should still work, falling back to HEAD.
-	if err := EnsureBranch(clone, "orphan"); err != nil {
+	result, err := EnsureBranch(clone, "orphan")
+	if err != nil {
 		t.Fatalf("EnsureBranch: %v", err)
+	}
+	if result.Source != BranchSourceHeadRemoteUnavailable {
+		t.Fatalf("Source = %q, want %q", result.Source, BranchSourceHeadRemoteUnavailable)
 	}
 
 	branch, err := Output(clone, "branch", "--show-current")
@@ -460,6 +480,232 @@ func TestEnsureBranch_FetchFailsFallsBackToHEAD(t *testing.T) {
 	}
 	if strings.TrimSpace(headAfter) != headBefore {
 		t.Errorf("expected HEAD (%s) to match original HEAD (%s)", strings.TrimSpace(headAfter), headBefore)
+	}
+}
+
+func TestEnsureBranch_RemoteDeletedIgnoresStaleCachedRef(t *testing.T) {
+	bare, clone := initBareAndClone(t)
+
+	cmd := exec.Command("git", "-C", clone, "checkout", "-b", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkout -b mato: %v\n%s", err, out)
+	}
+	matoFile := filepath.Join(clone, "mato.txt")
+	if err := os.WriteFile(matoFile, []byte("mato content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", clone, "add", "mato.txt")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone, "commit", "-m", "mato commit")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone, "push", "origin", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git push mato: %v\n%s", err, out)
+	}
+
+	clone2 := t.TempDir()
+	cmd = exec.Command("git", "clone", bare, clone2)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("second clone: %v\n%s", err, out)
+	}
+	for _, kv := range [][2]string{{"user.name", "test"}, {"user.email", "test@test.com"}} {
+		cmd = exec.Command("git", "-C", clone2, "config", kv[0], kv[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", kv[0], err, out)
+		}
+	}
+
+	cmd = exec.Command("git", "-C", clone2, "ls-remote", "--heads", "origin", "refs/heads/mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("prime remote branch cache: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone2, "fetch", "origin", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fetch mato: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command("git", "-C", clone, "push", "origin", "--delete", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("delete remote mato: %v\n%s", err, out)
+	}
+
+	headBefore, err := Output(clone2, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	headBefore = strings.TrimSpace(headBefore)
+
+	result, err := EnsureBranch(clone2, "mato")
+	if err != nil {
+		t.Fatalf("EnsureBranch: %v", err)
+	}
+	if result.Source != BranchSourceHeadRemoteMissing {
+		t.Fatalf("Source = %q, want %q", result.Source, BranchSourceHeadRemoteMissing)
+	}
+
+	headAfter, err := Output(clone2, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD after: %v", err)
+	}
+	if strings.TrimSpace(headAfter) != headBefore {
+		t.Fatalf("expected HEAD to stay on pre-init commit %s, got %s", headBefore, strings.TrimSpace(headAfter))
+	}
+	show, err := Output(clone2, "show", "HEAD:mato.txt")
+	if err == nil {
+		t.Fatalf("expected stale remote branch file to be absent, got %q", show)
+	}
+	if _, err := Output(clone2, "rev-parse", "refs/remotes/origin/mato"); err != nil {
+		t.Fatalf("expected stale cached origin/mato ref to remain for regression coverage: %v", err)
+	}
+	branch, err := Output(clone2, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	if strings.TrimSpace(branch) != "mato" {
+		t.Fatalf("expected current branch mato, got %q", strings.TrimSpace(branch))
+	}
+}
+
+func TestEnsureBranch_OfflineUsesCachedRemoteRef(t *testing.T) {
+	bare, clone := initBareAndClone(t)
+
+	cmd := exec.Command("git", "-C", clone, "checkout", "-b", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkout -b mato: %v\n%s", err, out)
+	}
+	matoFile := filepath.Join(clone, "mato.txt")
+	if err := os.WriteFile(matoFile, []byte("mato content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", clone, "add", "mato.txt")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone, "commit", "-m", "mato commit")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone, "push", "origin", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git push mato: %v\n%s", err, out)
+	}
+
+	clone2 := t.TempDir()
+	cmd = exec.Command("git", "clone", bare, clone2)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("second clone: %v\n%s", err, out)
+	}
+	for _, kv := range [][2]string{{"user.name", "test"}, {"user.email", "test@test.com"}} {
+		cmd = exec.Command("git", "-C", clone2, "config", kv[0], kv[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", kv[0], err, out)
+		}
+	}
+	cmd = exec.Command("git", "-C", clone2, "fetch", "origin", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fetch mato: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone2, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing-remote.git"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("remote set-url origin: %v\n%s", err, out)
+	}
+
+	remoteMato, err := Output(clone2, "rev-parse", "refs/remotes/origin/mato")
+	if err != nil {
+		t.Fatalf("rev-parse refs/remotes/origin/mato: %v", err)
+	}
+	remoteMato = strings.TrimSpace(remoteMato)
+
+	result, err := EnsureBranch(clone2, "mato")
+	if err != nil {
+		t.Fatalf("EnsureBranch: %v", err)
+	}
+	if result.Source != BranchSourceRemoteCached {
+		t.Fatalf("Source = %q, want %q", result.Source, BranchSourceRemoteCached)
+	}
+	headAfter, err := Output(clone2, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD after: %v", err)
+	}
+	if strings.TrimSpace(headAfter) != remoteMato {
+		t.Fatalf("expected HEAD to match cached origin/mato %s, got %s", remoteMato, strings.TrimSpace(headAfter))
+	}
+}
+
+func TestEnsureBranch_FetchFailureAfterRemoteConfirmationReturnsError(t *testing.T) {
+	bare, clone := initBareAndClone(t)
+
+	cmd := exec.Command("git", "-C", clone, "checkout", "-b", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkout -b mato: %v\n%s", err, out)
+	}
+	matoFile := filepath.Join(clone, "mato.txt")
+	if err := os.WriteFile(matoFile, []byte("mato content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "-C", clone, "add", "mato.txt")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone, "commit", "-m", "mato commit")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	cmd = exec.Command("git", "-C", clone, "push", "origin", "mato")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git push mato: %v\n%s", err, out)
+	}
+
+	clone2 := t.TempDir()
+	cmd = exec.Command("git", "clone", bare, clone2)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("second clone: %v\n%s", err, out)
+	}
+	for _, kv := range [][2]string{{"user.name", "test"}, {"user.email", "test@test.com"}} {
+		cmd = exec.Command("git", "-C", clone2, "config", kv[0], kv[1])
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", kv[0], err, out)
+		}
+	}
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal("git not found in PATH")
+	}
+	wrapperDir := t.TempDir()
+	wrapper := filepath.Join(wrapperDir, "git")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"-C\" ] && [ \"$3\" = \"fetch\" ]; then\n" +
+		"  echo 'simulated fetch failure' >&2\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"if [ \"$1\" = \"fetch\" ]; then\n" +
+		"  echo 'simulated fetch failure' >&2\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"exec " + realGit + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", wrapperDir+string(filepath.ListSeparator)+os.Getenv("PATH"))
+
+	_, err = EnsureBranch(clone2, "mato")
+	if err == nil {
+		t.Fatal("expected EnsureBranch to fail when fetch fails after live remote confirmation")
+	}
+	if !strings.Contains(err.Error(), "fetch branch mato from origin after confirming it exists") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	branch, err := Output(clone2, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch --show-current: %v", err)
+	}
+	if strings.TrimSpace(branch) != "master" && strings.TrimSpace(branch) != "main" {
+		t.Fatalf("expected to remain on original branch, got %q", strings.TrimSpace(branch))
 	}
 }
 

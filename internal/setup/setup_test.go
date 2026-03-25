@@ -116,6 +116,9 @@ func TestInitRepo_DefaultTasksDir(t *testing.T) {
 	if strings.TrimSpace(branch) != "mato" {
 		t.Fatalf("current branch = %q, want %q", strings.TrimSpace(branch), "mato")
 	}
+	if result.BranchSource != git.BranchSourceHeadRemoteUnavailable {
+		t.Fatalf("BranchSource = %q, want %q", result.BranchSource, git.BranchSourceHeadRemoteUnavailable)
+	}
 }
 
 func TestInitRepo_Idempotent(t *testing.T) {
@@ -136,6 +139,9 @@ func TestInitRepo_Idempotent(t *testing.T) {
 	}
 	if !result.AlreadyOnBranch {
 		t.Fatal("expected AlreadyOnBranch=true on second init")
+	}
+	if result.BranchSource != git.BranchSourceLocal {
+		t.Fatalf("BranchSource = %q, want %q", result.BranchSource, git.BranchSourceLocal)
 	}
 }
 
@@ -167,7 +173,8 @@ func TestInitRepo_RemoteBranchLeavesCleanWorktree(t *testing.T) {
 		t.Fatalf("git clone working repo: %v", err)
 	}
 
-	if _, err := InitRepo(repoRoot, "mato"); err != nil {
+	result, err := InitRepo(repoRoot, "mato")
+	if err != nil {
 		t.Fatalf("InitRepo: %v", err)
 	}
 	status, err := git.Output(repoRoot, "status", "--porcelain")
@@ -187,6 +194,9 @@ func TestInitRepo_RemoteBranchLeavesCleanWorktree(t *testing.T) {
 	if !strings.Contains(log, "remote branch commit") {
 		t.Fatalf("expected init to stay on fetched remote-backed branch history, got %q", log)
 	}
+	if result.BranchSource != git.BranchSourceRemote {
+		t.Fatalf("BranchSource = %q, want %q", result.BranchSource, git.BranchSourceRemote)
+	}
 }
 
 func TestInitRepo_EmptyRepo(t *testing.T) {
@@ -199,8 +209,8 @@ func TestInitRepo_EmptyRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitRepo: %v", err)
 	}
-	if result.BranchExisted {
-		t.Fatal("expected BranchExisted=false for empty repo")
+	if result.LocalBranchExisted {
+		t.Fatal("expected LocalBranchExisted=false for empty repo")
 	}
 	head, err := git.Output(repoRoot, "rev-parse", "--verify", "refs/heads/mato")
 	if err != nil {
@@ -215,6 +225,9 @@ func TestInitRepo_EmptyRepo(t *testing.T) {
 	}
 	if !strings.Contains(log, "chore: initialize mato") {
 		t.Fatalf("expected bootstrap commit, got %q", log)
+	}
+	if result.BranchSource != git.BranchSourceHeadRemoteUnavailable {
+		t.Fatalf("BranchSource = %q, want %q", result.BranchSource, git.BranchSourceHeadRemoteUnavailable)
 	}
 }
 

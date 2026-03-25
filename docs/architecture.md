@@ -38,7 +38,7 @@ High-level flow:
 ### Startup
 `runner.Run(repoRoot, branch, copilotArgs, opts)` performs host initialization in this order:
 1. Resolve `repoRoot` with `git rev-parse --show-toplevel`.
-2. Ensure the target branch exists with `git.EnsureBranch(...)`; if the local branch exists, check it out; otherwise fetch the branch from `origin` (non-fatal on failure), then if `origin/<branch>` exists create the local branch from the remote-tracking ref; otherwise create it from `HEAD`.
+2. Ensure the target branch exists with `git.EnsureBranch(...)`; if the local branch exists, check it out; otherwise query the live `origin` branch first. If `origin/<branch>` exists, fetch it and create the local branch from the refreshed remote-tracking ref. If the remote is reachable and the branch is absent there, create the branch from `HEAD` and ignore any stale cached `origin/<branch>` ref. If `origin` is unavailable, fall back to a cached `origin/<branch>` ref when present; otherwise create from `HEAD`.
 3. Resolve `tasksDir` as `<repoRoot>/.mato`.
 4. Create queue directories: `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`.
 5. Create messaging directories with `messaging.Init(...)`: `.mato/messages/events/`, `.mato/messages/completions/`, and `.mato/messages/presence/`.
