@@ -55,8 +55,30 @@ retry_cooldown: 5m
 - Empty and whitespace-only string values are treated as unset.
 - `.yml` is not supported; the filename must be `.mato.yaml`.
 
+## Which Surface To Use
+Use the narrowest surface that matches the scope of the setting:
+
+| Need | Use | Why |
+| --- | --- | --- |
+| Change behavior for one command invocation | CLI flags | Best for one-off overrides and scripts that should be explicit at the call site. |
+| Set personal defaults on one machine without committing them | host configuration environment variables | Best for shell profiles, `direnv`, CI, and local wrappers. |
+| Set shared defaults for everyone who works in the repo | `.mato.yaml` | Best for committed, repo-local defaults such as branch or Docker image. |
+| Control scheduling behavior for one task | task frontmatter | Best for task-specific metadata such as priority, dependencies, touched files, or retry budget. |
+| Inspect runtime state inside a container or custom script | injected container runtime variables | These are outputs of `mato` at runtime, not normal user configuration inputs. |
+
+`mato` intentionally does not mirror every setting across every surface. For example,
+`--repo` is CLI-only because repo selection happens before `.mato.yaml` can be
+discovered, and task frontmatter stays separate from repo config because it is
+task-specific scheduling metadata.
+
 ## Precedence
 Settings resolve in this order: CLI flag > environment variable > `.mato.yaml` > hardcoded default.
+
+Only settings that exist on more than one surface participate in this precedence
+chain. Task frontmatter is separate from CLI/env/config resolution and controls
+per-task scheduling behavior. It can still override runtime defaults that `mato`
+passes into containers as reference values; for example, task `max_retries`
+frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 
 | Setting | CLI Flag | Env Var | Config File | Default |
 | --- | --- | --- | --- | --- |
@@ -154,7 +176,9 @@ mato retry fix-login-bug add-dark-mode
 
 ## Host Configuration Environment Variables
 These are the only environment variables intended to be set by users on the host.
-They override `.mato.yaml` when both are present.
+They override `.mato.yaml` when both are present. If you want a shared repo
+default, prefer `.mato.yaml`; if you want a personal default, prefer these env
+vars.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -167,7 +191,8 @@ They override `.mato.yaml` when both are present.
 ## Injected Container Runtime Variables
 These variables are set by `mato` inside agent or review containers at runtime.
 They are documented for debugging and custom tooling; users normally do not set
-them manually.
+them manually. Think of them as runtime outputs of `mato`, not configuration
+inputs.
 
 | Variable | Default | Description |
 | --- | --- | --- |
