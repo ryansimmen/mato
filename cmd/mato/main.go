@@ -123,21 +123,31 @@ func resolveRepo(repo string) (string, error) {
 	return wd, nil
 }
 
-func resolveBranch(b string) string {
-	if b != "" {
-		return b
+func resolveEnvBranch() (string, bool, error) {
+	raw, ok := os.LookupEnv("MATO_BRANCH")
+	if !ok || raw == "" {
+		return "", false, nil
 	}
-	return "mato"
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false, fmt.Errorf("MATO_BRANCH must not be whitespace-only")
+	}
+	return trimmed, true, nil
 }
 
-func resolveConfigBranch(cfg config.Config, flagValue string) string {
+func resolveConfigBranch(cfg config.Config, flagValue string) (string, error) {
 	if flagValue != "" {
-		return flagValue
+		return flagValue, nil
+	}
+	if envBranch, ok, err := resolveEnvBranch(); err != nil {
+		return "", err
+	} else if ok {
+		return envBranch, nil
 	}
 	if cfg.Branch != nil {
-		return *cfg.Branch
+		return *cfg.Branch, nil
 	}
-	return resolveBranch("")
+	return "mato", nil
 }
 
 func resolveRunOptions(cfg config.Config) (runner.RunOptions, error) {
@@ -300,7 +310,10 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 				return err
 			}
 			if cfg.dryRun {
-				br := resolveConfigBranch(fileCfg, cfg.branch)
+				br, err := resolveConfigBranch(fileCfg, cfg.branch)
+				if err != nil {
+					return err
+				}
 				if err := validateBranch(br); err != nil {
 					return err
 				}
@@ -310,7 +323,10 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 			if err != nil {
 				return err
 			}
-			br := resolveConfigBranch(fileCfg, cfg.branch)
+			br, err := resolveConfigBranch(fileCfg, cfg.branch)
+			if err != nil {
+				return err
+			}
 			if err := validateBranch(br); err != nil {
 				return err
 			}
@@ -358,7 +374,10 @@ func newInitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			branch := resolveConfigBranch(fileCfg, initBranch)
+			branch, err := resolveConfigBranch(fileCfg, initBranch)
+			if err != nil {
+				return err
+			}
 			if err := validateBranch(branch); err != nil {
 				return err
 			}
