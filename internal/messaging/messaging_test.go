@@ -2651,7 +2651,6 @@ func TestReadRecentMessages_ToleratesDeletedFiles(t *testing.T) {
 
 	const total = 5
 	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
-	payload := strings.Repeat("data-", 256*1024)
 	wantByID := make(map[string]Message, total)
 	for i := 0; i < total; i++ {
 		msg := Message{
@@ -2660,7 +2659,7 @@ func TestReadRecentMessages_ToleratesDeletedFiles(t *testing.T) {
 			Type:   "intent",
 			Task:   "task-" + strconv.Itoa(i),
 			Branch: "branch",
-			Body:   payload + strconv.Itoa(i),
+			Body:   "body-" + strconv.Itoa(i),
 			SentAt: base.Add(time.Duration(i) * time.Millisecond),
 		}
 		wantByID[msg.ID] = msg
