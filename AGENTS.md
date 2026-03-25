@@ -165,6 +165,12 @@ import (
 4. **Verify** — `go build ./... && go vet ./... && go test -count=1 ./...`
 5. **Commit** — Conventional commit messages (`feat:`, `fix:`, `docs:`, etc.).
 
+### Pull Request Safety
+
+- Before editing or describing an existing PR, verify it is **open** with `gh pr view` and confirm its `headRefName` matches the branch you are working on.
+- Never update the title/body of a merged or closed PR just because its number or past branch name seems related to the current work.
+- If the current branch has no open PR, create a new one instead of reusing an old merged PR.
+
 ## Key Architecture
 
 - Tasks are markdown files with YAML frontmatter, managed in a filesystem queue.
