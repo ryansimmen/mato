@@ -23,7 +23,7 @@ import (
 
 func TestShowWithPopulatedTasksDir(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
@@ -72,7 +72,7 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = originalStdout }()
 
-	callErr := Show(repoRoot, "")
+	callErr := Show(repoRoot)
 	w.Close()
 	out, readErr := io.ReadAll(r)
 	if readErr != nil {
@@ -189,7 +189,7 @@ func TestActiveAgentsLegacyPIDOnly(t *testing.T) {
 
 func TestShowIncludesPresenceInfo(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -220,7 +220,7 @@ func TestShowIncludesPresenceInfo(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = originalStdout }()
 
-	callErr := Show(repoRoot, "")
+	callErr := Show(repoRoot)
 	w.Close()
 	out, err := io.ReadAll(r)
 	if err != nil {
@@ -254,7 +254,7 @@ func TestShowIncludesPresenceInfo(t *testing.T) {
 
 func TestShowIncludesProgressSection(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -311,7 +311,7 @@ func TestShowIncludesProgressSection(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = originalStdout }()
 
-	callErr := Show(repoRoot, "")
+	callErr := Show(repoRoot)
 	w.Close()
 	out, err := io.ReadAll(r)
 	if err != nil {
@@ -350,7 +350,7 @@ func TestShowIncludesProgressSection(t *testing.T) {
 
 func TestTimeInState(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -380,7 +380,7 @@ func TestTimeInState(t *testing.T) {
 
 func TestRetryBudgetInProgress(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -405,7 +405,7 @@ func TestRetryBudgetInProgress(t *testing.T) {
 
 func TestReverseDependencies(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -438,7 +438,7 @@ func TestReverseDependencies(t *testing.T) {
 
 func TestRecentCompletions(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -480,7 +480,7 @@ func TestRecentCompletions(t *testing.T) {
 
 func TestMergeLockActive(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -589,7 +589,7 @@ func captureShow(t *testing.T, repoRoot string) string {
 	os.Stdout = w
 	defer func() { os.Stdout = originalStdout }()
 
-	callErr := Show(repoRoot, "")
+	callErr := Show(repoRoot)
 	w.Close()
 	out, readErr := io.ReadAll(r)
 	if readErr != nil {
@@ -603,7 +603,7 @@ func captureShow(t *testing.T, repoRoot string) string {
 
 func TestProgressFilteredToActiveAgents(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -654,7 +654,7 @@ func TestProgressFilteredToActiveAgents(t *testing.T) {
 
 func TestRecentMessagesAgentPrefix(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -686,7 +686,7 @@ func TestRecentMessagesAgentPrefix(t *testing.T) {
 
 func TestReadyForReviewSection(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -722,7 +722,7 @@ func TestReadyForReviewSection(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = originalStdout }()
 
-	callErr := Show(repoRoot, "")
+	callErr := Show(repoRoot)
 	w.Close()
 	out, readErr := io.ReadAll(r)
 	if readErr != nil {
@@ -781,7 +781,7 @@ func containsSubstring(s, substr string) bool {
 
 func TestShowToBuffer(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -797,7 +797,7 @@ func TestShowToBuffer(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := ShowTo(&buf, repoRoot, ""); err != nil {
+	if err := ShowTo(&buf, repoRoot); err != nil {
 		t.Fatalf("ShowTo: %v", err)
 	}
 
@@ -815,7 +815,7 @@ func TestShowToBuffer(t *testing.T) {
 
 func TestWatch(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -842,7 +842,7 @@ func TestWatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- Watch(ctx, repoRoot, tasksDir, 100*time.Millisecond)
+		errCh <- Watch(ctx, repoRoot, 100*time.Millisecond)
 	}()
 
 	// Let Watch run for at least one refresh cycle.
@@ -884,7 +884,7 @@ func TestWatch(t *testing.T) {
 
 func TestFailedTaskRendering_CycleFailure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
@@ -910,7 +910,7 @@ func TestFailedTaskRendering_CycleFailure(t *testing.T) {
 
 func TestFailedTaskRendering_MixedFailures(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
@@ -942,7 +942,7 @@ func TestFailedTaskRendering_MixedFailures(t *testing.T) {
 
 func TestFailedTaskRendering_TerminalFailure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
@@ -972,7 +972,7 @@ func TestFailedTaskRendering_TerminalFailure(t *testing.T) {
 
 func TestFailedTaskRendering_TerminalWithRetries(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
@@ -1015,7 +1015,7 @@ func (w *failWriter) Write(p []byte) (int, error) {
 
 func TestWatchTo_RedrawWriteError(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1033,7 +1033,7 @@ func TestWatchTo_RedrawWriteError(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- WatchTo(ctx, fw, repoRoot, tasksDir, 100*time.Millisecond)
+		errCh <- WatchTo(ctx, fw, repoRoot, 100*time.Millisecond)
 	}()
 
 	select {
@@ -1070,7 +1070,7 @@ func (w *failAfterNWriter) Write(p []byte) (int, error) {
 
 func TestWatchTo_PartialRedrawFailure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1089,7 +1089,7 @@ func TestWatchTo_PartialRedrawFailure(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- WatchTo(ctx, fw, repoRoot, tasksDir, 100*time.Millisecond)
+		errCh <- WatchTo(ctx, fw, repoRoot, 100*time.Millisecond)
 	}()
 
 	select {
@@ -1107,7 +1107,7 @@ func TestWatchTo_PartialRedrawFailure(t *testing.T) {
 
 func TestWatchTo_ReturnsNilOnCancel(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1126,7 +1126,7 @@ func TestWatchTo_ReturnsNilOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- WatchTo(ctx, &buf, repoRoot, tasksDir, 50*time.Millisecond)
+		errCh <- WatchTo(ctx, &buf, repoRoot, 50*time.Millisecond)
 	}()
 
 	// Let WatchTo run for a few iterations.
@@ -1153,7 +1153,7 @@ func TestWatchTo_ReturnsNilOnCancel(t *testing.T) {
 
 func TestRunnableBacklogSection(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1203,7 +1203,7 @@ func TestRunnableBacklogSection(t *testing.T) {
 
 func TestRunnableBacklogExcludesDeferred(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1248,7 +1248,7 @@ func TestRunnableBacklogExcludesDeferred(t *testing.T) {
 
 func TestRunnableBacklogEmpty(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1271,7 +1271,7 @@ func TestRunnableBacklogEmpty(t *testing.T) {
 
 func TestRunnableBacklogJSON_Ordering(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1294,7 +1294,7 @@ func TestRunnableBacklogJSON_Ordering(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+	if err := ShowJSON(&buf, repoRoot); err != nil {
 		t.Fatalf("ShowJSON: %v", err)
 	}
 
@@ -1336,7 +1336,7 @@ func extractSection(output, startHeader, endHeader string) string {
 
 func TestShowJSON_ValidOutput(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1362,7 +1362,7 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+	if err := ShowJSON(&buf, repoRoot); err != nil {
 		t.Fatalf("ShowJSON: %v", err)
 	}
 
@@ -1467,7 +1467,7 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 
 func TestShowJSON_EmptyTasksDir(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1478,7 +1478,7 @@ func TestShowJSON_EmptyTasksDir(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+	if err := ShowJSON(&buf, repoRoot); err != nil {
 		t.Fatalf("ShowJSON: %v", err)
 	}
 
@@ -1507,7 +1507,7 @@ func TestShowJSON_EmptyTasksDir(t *testing.T) {
 
 func TestShowJSON_WriterError(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1520,7 +1520,7 @@ func TestShowJSON_WriterError(t *testing.T) {
 	writeErr := errors.New("disk full")
 	fw := &failWriter{err: writeErr}
 
-	err := ShowJSON(fw, repoRoot, "")
+	err := ShowJSON(fw, repoRoot)
 	if err == nil {
 		t.Fatal("ShowJSON should return an error when the writer fails")
 	}
@@ -1531,7 +1531,7 @@ func TestShowJSON_WriterError(t *testing.T) {
 
 func TestShowJSON_FailedLastReason(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1550,7 +1550,7 @@ func TestShowJSON_FailedLastReason(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+	if err := ShowJSON(&buf, repoRoot); err != nil {
 		t.Fatalf("ShowJSON: %v", err)
 	}
 
@@ -1585,7 +1585,7 @@ func TestShowJSON_FailedLastReason(t *testing.T) {
 
 func TestShowJSON_TerminalFailure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1601,7 +1601,7 @@ func TestShowJSON_TerminalFailure(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+	if err := ShowJSON(&buf, repoRoot); err != nil {
 		t.Fatalf("ShowJSON: %v", err)
 	}
 
@@ -1627,7 +1627,7 @@ func TestShowJSON_TerminalFailure(t *testing.T) {
 
 func TestShowJSON_ParseFailedTerminalFailure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1643,7 +1643,7 @@ func TestShowJSON_ParseFailedTerminalFailure(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+	if err := ShowJSON(&buf, repoRoot); err != nil {
 		t.Fatalf("ShowJSON: %v", err)
 	}
 
@@ -1669,7 +1669,7 @@ func TestShowJSON_ParseFailedTerminalFailure(t *testing.T) {
 
 func TestShow_ParseFailedInProgressTaskPreservesClaimMetadata(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1708,7 +1708,7 @@ func TestShowJSON_WarningsIncluded(t *testing.T) {
 
 func TestShowJSON_CycleFailureKind(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
@@ -1724,7 +1724,7 @@ func TestShowJSON_CycleFailureKind(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := ShowJSON(&buf, repoRoot, ""); err != nil {
+	if err := ShowJSON(&buf, repoRoot); err != nil {
 		t.Fatalf("ShowJSON: %v", err)
 	}
 

@@ -19,11 +19,10 @@ intervention.
 ## Steps to fix
 
 1. Add `pause` and `resume` subcommands to `cmd/mato/main.go`:
-   - `mato pause [--repo <path>] [--tasks-dir <path>]` — creates a
-     `.tasks/.paused` sentinel file containing a timestamp and optional
-     reason.
-   - `mato resume [--repo <path>] [--tasks-dir <path>]` — removes the
-     `.tasks/.paused` sentinel file.
+   - `mato pause [--repo <path>]` — creates a `.mato/.paused` sentinel file
+     containing a timestamp and optional reason.
+   - `mato resume [--repo <path>]` — removes the `.mato/.paused` sentinel
+     file.
 
 2. In the poll loop (`runner.go`), check for the `.paused` file before
    calling `SelectAndClaimTask`. If paused:

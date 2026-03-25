@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/merge"
 	"mato/internal/queue"
@@ -176,9 +177,9 @@ func createPromptClone(t *testing.T, repoRoot, tasksDir string) string {
 	t.Cleanup(func() { git.RemoveClone(cloneDir) })
 
 	configureCloneIdentity(t, cloneDir)
-	appendGitExclude(t, cloneDir, "/.tasks", "/.tasks/")
+	appendGitExclude(t, cloneDir, "/"+dirs.Root, "/"+dirs.Root+"/")
 
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 	if err := os.Symlink(tasksDir, cloneTasksDir); err != nil {
 		t.Fatalf("os.Symlink(%s, %s): %v", tasksDir, cloneTasksDir, err)
 	}
@@ -269,7 +270,7 @@ func quotedPath(path string) string {
 func TestPromptVerifyClaim(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, nil)
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, 0, nil)
 	if claimed != nil {
 		t.Fatalf("expected no task (backlog empty), got %+v", claimed)
 	}
@@ -278,7 +279,7 @@ func TestPromptVerifyClaim(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirBacklog, "task-beta.md", "# Task Beta\nDo beta.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\n")
 
-	claimed, err = queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, nil)
+	claimed, err = queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -287,7 +288,7 @@ func TestPromptVerifyClaim(t *testing.T) {
 	}
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	script := strings.Join([]string{
 		promptPreamble(t),
@@ -342,12 +343,12 @@ func TestPromptHostCreatesBranch(t *testing.T) {
 		promptPreamble(t),
 		`BRANCH="task/my-task"`,
 		`FILENAME="my-task.md"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", queue.DirInProgress, "my-task.md")),
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, dirs.Root, queue.DirInProgress, "my-task.md")),
 		`TASK_TITLE="My Task"`,
 		`echo "hello world" > hello.txt`,
 		promptStateBlock(t, "COMMIT"),
 	}, "\n\n")
-	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, dirs.Root), "mato")
 
 	out, err := runBash(t, cloneDir, nil, script)
 	if err != nil {
@@ -384,13 +385,13 @@ func TestPromptCommitIncludesDescription(t *testing.T) {
 		promptPreamble(t),
 		`BRANCH="task/my-task"`,
 		`FILENAME="my-task.md"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", queue.DirInProgress, "my-task.md")),
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, dirs.Root, queue.DirInProgress, "my-task.md")),
 		`TASK_TITLE="My Task"`,
 		`echo "aaa" > a.txt`,
 		`echo "bbb" > b.txt`,
 		promptStateBlock(t, "COMMIT"),
 	}, "\n\n")
-	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, dirs.Root), "mato")
 
 	out, err := runBash(t, cloneDir, nil, script)
 	if err != nil {
@@ -544,12 +545,12 @@ func TestPromptOnFailure(t *testing.T) {
 	script := strings.Join([]string{
 		promptPreamble(t),
 		`FILENAME="my-task.md"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", queue.DirInProgress, "my-task.md")),
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, dirs.Root, queue.DirInProgress, "my-task.md")),
 		`FAIL_STEP="WORK"`,
 		`FAIL_REASON="test failure"`,
 		promptStateBlock(t, "ON_FAILURE"),
 	}, "\n\n")
-	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, dirs.Root), "mato")
 
 	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-5"}, script)
 	if err != nil {
@@ -588,12 +589,12 @@ func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
 	script := strings.Join([]string{
 		promptPreamble(t),
 		`FILENAME="my-task.md"`,
-		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, ".tasks", queue.DirInProgress, "my-task.md")),
+		"TASK_PATH=" + quotedPath(filepath.Join(cloneDir, dirs.Root, queue.DirInProgress, "my-task.md")),
 		`FAIL_STEP="WORK"`,
 		`FAIL_REASON="test failure"`,
 		promptStateBlock(t, "ON_FAILURE"),
 	}, "\n\n")
-	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, ".tasks"), "mato")
+	script = substitutePromptPlaceholders(script, filepath.Join(cloneDir, dirs.Root), "mato")
 
 	out, err := runBash(t, cloneDir, []string{"MATO_AGENT_ID=test-agent-6"}, script)
 	if err != nil {
@@ -620,7 +621,7 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\ntask-gamma.md\n")
 
 	// Both agents claim via Go; each gets a different task.
-	claimedA, err := queue.SelectAndClaimTask(tasksDir, "agent-a", nil, nil)
+	claimedA, err := queue.SelectAndClaimTask(tasksDir, "agent-a", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("claim agent-a: %v", err)
 	}
@@ -628,7 +629,7 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 		t.Fatal("agent-a got no task")
 	}
 
-	claimedB, err := queue.SelectAndClaimTask(tasksDir, "agent-b", nil, nil)
+	claimedB, err := queue.SelectAndClaimTask(tasksDir, "agent-b", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("claim agent-b: %v", err)
 	}
@@ -666,7 +667,7 @@ func TestPromptVerifyClaimDependencyContext(t *testing.T) {
 	}
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	script := strings.Join([]string{
 		promptPreamble(t),
@@ -713,7 +714,7 @@ func TestPromptVerifyClaimFileClaims(t *testing.T) {
 	}
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	script := strings.Join([]string{
 		promptPreamble(t),
@@ -753,7 +754,7 @@ func TestPromptVerifyClaimPreviousFailures(t *testing.T) {
 		"<!-- claimed-by: fail-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Fail Task\nRetry work.\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	script := strings.Join([]string{
 		promptPreamble(t),
@@ -794,7 +795,7 @@ func TestPromptVerifyClaimReviewFeedback(t *testing.T) {
 		"<!-- claimed-by: review-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Review Task\nAddress review.\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	script := strings.Join([]string{
 		promptPreamble(t),
@@ -829,7 +830,7 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirBacklog, "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "add-hello.md\n")
 
-	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-8", nil, nil)
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-8", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -838,7 +839,7 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	}
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	// Host creates the task branch before the agent runs.
 	mustGitOutput(t, cloneDir, "checkout", "-b", claimed.Branch)
@@ -912,7 +913,7 @@ func TestPromptProgressMessagesAreDistinct(t *testing.T) {
 			"# Progress Test\nTest progress messages.\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	// Run the messaging snippets from all three state blocks back-to-back.
 	// Extract just the message-writing portions of each state block.

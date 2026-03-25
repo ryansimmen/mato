@@ -114,7 +114,7 @@ func TestGraph_LinearDependencyChain(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := graph.ShowTo(&buf, repoRoot, tasksDir, tt.format, tt.showAll); err != nil {
+			if err := graph.ShowTo(&buf, repoRoot, tt.format, tt.showAll); err != nil {
 				t.Fatalf("graph.ShowTo(%s, showAll=%v): %v", tt.format, tt.showAll, err)
 			}
 			tt.check(t, buf.String())
@@ -133,7 +133,7 @@ func TestGraph_AliasResolution(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "use-id.md", "---\nid: use-id\npriority: 3\ndepends_on: [db-setup]\n---\n# Use meta ID\n")
 
 	var buf bytes.Buffer
-	if err := graph.ShowTo(&buf, repoRoot, tasksDir, "json", true); err != nil {
+	if err := graph.ShowTo(&buf, repoRoot, "json", true); err != nil {
 		t.Fatalf("graph.ShowTo: %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestGraph_AmbiguousIDs(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "dependent.md", "---\nid: dependent\ndepends_on: [shared]\n---\n# Dependent\n")
 
 	var buf bytes.Buffer
-	if err := graph.ShowTo(&buf, repoRoot, tasksDir, "json", true); err != nil {
+	if err := graph.ShowTo(&buf, repoRoot, "json", true); err != nil {
 		t.Fatalf("graph.ShowTo: %v", err)
 	}
 
@@ -213,7 +213,7 @@ func TestGraph_AllFormatsValid(t *testing.T) {
 	for _, format := range []string{"text", "dot", "json"} {
 		t.Run(format, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := graph.ShowTo(&buf, repoRoot, tasksDir, format, false); err != nil {
+			if err := graph.ShowTo(&buf, repoRoot, format, false); err != nil {
 				t.Fatalf("ShowTo(%s): %v", format, err)
 			}
 			output := buf.String()
@@ -249,7 +249,7 @@ func TestGraph_ShowAllDifference(t *testing.T) {
 
 	// showAll=false: only active tasks.
 	var bufDefault bytes.Buffer
-	if err := graph.ShowTo(&bufDefault, repoRoot, tasksDir, "json", false); err != nil {
+	if err := graph.ShowTo(&bufDefault, repoRoot, "json", false); err != nil {
 		t.Fatalf("ShowTo(showAll=false): %v", err)
 	}
 	var dataDefault graph.GraphData
@@ -259,7 +259,7 @@ func TestGraph_ShowAllDifference(t *testing.T) {
 
 	// showAll=true: all tasks.
 	var bufAll bytes.Buffer
-	if err := graph.ShowTo(&bufAll, repoRoot, tasksDir, "json", true); err != nil {
+	if err := graph.ShowTo(&bufAll, repoRoot, "json", true); err != nil {
 		t.Fatalf("ShowTo(showAll=true): %v", err)
 	}
 	var dataAll graph.GraphData
@@ -286,7 +286,7 @@ func TestGraph_EmptyRepo(t *testing.T) {
 	for _, format := range []string{"text", "dot", "json"} {
 		t.Run(format, func(t *testing.T) {
 			var buf bytes.Buffer
-			err := graph.ShowTo(&buf, repoRoot, "", format, false)
+			err := graph.ShowTo(&buf, repoRoot, format, false)
 			if err != nil {
 				t.Fatalf("ShowTo(%s) on empty repo should succeed, got: %v", format, err)
 			}

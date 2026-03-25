@@ -28,7 +28,7 @@ func writeTask(t *testing.T, tasksDir, state, filename, content string) {
 // setupTasksDir creates all queue subdirectories.
 func setupTasksDir(t *testing.T) string {
 	t.Helper()
-	tasksDir := filepath.Join(t.TempDir(), ".tasks")
+	tasksDir := filepath.Join(t.TempDir(), ".mato")
 	for _, dir := range queue.AllDirs {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
@@ -558,7 +558,7 @@ func TestBuild_ParseFailures(t *testing.T) {
 
 func TestBuild_ShowTo_DirReadError(t *testing.T) {
 	repoDir := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoDir, ".tasks")
+	tasksDir := filepath.Join(repoDir, ".mato")
 
 	// Create only some dirs — make one unreadable to simulate dir-level error.
 	for _, dir := range queue.AllDirs {
@@ -575,7 +575,7 @@ func TestBuild_ShowTo_DirReadError(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(waitingDir, 0o755) })
 
 	var buf bytes.Buffer
-	err := ShowTo(&buf, repoDir, tasksDir, "json", false)
+	err := ShowTo(&buf, repoDir, "json", false)
 	if err == nil {
 		t.Fatal("expected error for unreadable directory")
 	}
@@ -586,7 +586,7 @@ func TestBuild_ShowTo_DirReadError(t *testing.T) {
 
 func TestBuild_ShowTo_GlobWarningNoError(t *testing.T) {
 	repoDir := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoDir, ".tasks")
+	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, dir := range queue.AllDirs {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
@@ -598,7 +598,7 @@ func TestBuild_ShowTo_GlobWarningNoError(t *testing.T) {
 	writeTask(t, tasksDir, "in-progress", "glob-task.md", "---\nid: glob-task\npriority: 10\naffects:\n  - \"internal/[invalid\"\n---\n# Glob Task\n")
 
 	var buf bytes.Buffer
-	err := ShowTo(&buf, repoDir, tasksDir, "json", false)
+	err := ShowTo(&buf, repoDir, "json", false)
 	if err != nil {
 		t.Fatalf("ShowTo should not fail for glob warning: %v", err)
 	}

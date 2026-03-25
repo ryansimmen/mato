@@ -25,7 +25,7 @@ type checkContext struct {
 	repoInput string
 	repoRoot  string // populated by resolveRepo on success
 	repoErr   error  // populated by resolveRepo on failure
-	tasksDir  string // set from --tasks-dir or derived from repoRoot
+	tasksDir  string // derived from repoRoot
 	opts      Options
 	idx       *queue.PollIndex // lazily built, shared across checks
 }
@@ -356,7 +356,7 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 	// Check if tasksDir itself exists.
 	if info, err := os.Stat(cc.tasksDir); err != nil {
 		if os.IsNotExist(err) {
-			// Missing root .tasks is fixable — create it along with
+			// Missing root .mato is fixable — create it along with
 			// all expected subdirectories below.
 			f := Finding{
 				Code:     "queue.missing_tasks_root",
@@ -824,7 +824,7 @@ func scanOrphanedMessages(tasksDir string, fix bool) []Finding {
 	return findings
 }
 
-// scanStaleMergeLock checks whether .tasks/.locks/merge.lock is held by
+// scanStaleMergeLock checks whether .mato/.locks/merge.lock is held by
 // a dead process.
 func scanStaleMergeLock(tasksDir string, fix bool) []Finding {
 	var findings []Finding

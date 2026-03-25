@@ -7,11 +7,11 @@ The channel is advisory, not authoritative: task ownership still comes from queu
 Both task agents and review agents participate in the messaging system. The review agent sends only a `progress` message; the host sends the `completion` message after processing the verdict. The review verdict (approve/reject) is communicated via a JSON verdict file, and the host writes HTML comment markers (e.g. `<!-- reviewed: ... -->`, `<!-- review-rejection: ... -->`) for state tracking after reading the verdict.
 
 Messaging is best-effort. If reading or writing messages fails, agents continue the task anyway.
-The host runner enables messaging by creating the directories with `messaging.Init(...)`, injecting `MATO_MESSAGING_ENABLED=1` and `MATO_MESSAGES_DIR=/workspace/.tasks/messages`, and cleaning stale presence and old event files on each loop iteration.
+The host runner enables messaging by creating the directories with `messaging.Init(...)`, injecting `MATO_MESSAGING_ENABLED=1` and `MATO_MESSAGES_DIR=/workspace/.mato/messages`, and cleaning stale presence and old event files on each loop iteration.
 
 ## Directory Layout
 ```text
-.tasks/
+.mato/
 └── messages/
     ├── events/        # inter-agent event messages
     ├── completions/   # host-written completion details for merged tasks
@@ -67,7 +67,7 @@ Valid types (defined in `messaging.go`):
 - `completion`
 
 ## File Claims
-The host writes a file-claims index to `.tasks/messages/file-claims.json` before each agent launch. This index tells agents which files are actively claimed by other tasks.
+The host writes a file-claims index to `.mato/messages/file-claims.json` before each agent launch. This index tells agents which files are actively claimed by other tasks.
 
 ### Who writes it
 The host calls `messaging.BuildAndWriteFileClaims(tasksDir, excludeTask)` immediately after claiming a task, before launching the agent container. The just-claimed task is excluded so the agent does not see its own `affects:` entries as conflicts.
@@ -109,7 +109,7 @@ Messaging maps directly to the task-agent state machine. Each step emits a `prog
 The review agent has a simpler message flow than the task agent:
 - **Host (before review start)**: no `intent` message is sent for reviews
 - `VERIFY_REVIEW`: write one `progress`
-- **Host (after review exit)**: `postReviewAction` reads the JSON verdict file at `.tasks/messages/verdict-<filename>.json`, writes the appropriate HTML comment marker to the task file, moves the task, and sends one `completion` message — either `"Review approved, ready for merge"` or `"Review rejected"`
+- **Host (after review exit)**: `postReviewAction` reads the JSON verdict file at `.mato/messages/verdict-<filename>.json`, writes the appropriate HTML comment marker to the task file, moves the task, and sends one `completion` message — either `"Review approved, ready for merge"` or `"Review rejected"`
 
 The review verdict is communicated via a JSON file (`{"verdict":"approve"}` or `{"verdict":"reject","reason":"..."}`) written by the review agent to the path specified in `MATO_REVIEW_VERDICT_PATH`. The host reads this file, writes the HTML comment markers for state tracking, and handles all file moves. If no verdict file exists (agent crashed), the host falls back to checking for HTML markers in the task file before recording a review-failure.
 
@@ -126,7 +126,7 @@ Treat messages as coordination hints, not as locks, leases, or durable state.
 
 ## Completion Details
 
-When the host merge queue successfully squash-merges a task branch, it writes a completion detail file to `.tasks/messages/completions/` using a collision-resistant encoding of the task ID. These files capture what happened during the merge so that dependent tasks can benefit from the context.
+When the host merge queue successfully squash-merges a task branch, it writes a completion detail file to `.mato/messages/completions/` using a collision-resistant encoding of the task ID. These files capture what happened during the merge so that dependent tasks can benefit from the context.
 
 ### Who writes it
 
@@ -161,7 +161,7 @@ Field meanings:
 
 ### How dependent tasks use it
 
-When the host claims a task that has `depends_on` entries, `runner.writeDependencyContextFile(...)` reads the completion detail file for each resolved dependency and writes them as a JSON array to `.tasks/messages/dependency-context-<filename>.json`. If any completion files are found, the host injects the file path as the `MATO_DEPENDENCY_CONTEXT` environment variable. The agent prompt reads this file during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks. The context file is cleaned up after the agent container exits.
+When the host claims a task that has `depends_on` entries, `runner.writeDependencyContextFile(...)` reads the completion detail file for each resolved dependency and writes them as a JSON array to `.mato/messages/dependency-context-<filename>.json`. If any completion files are found, the host injects the file path as the `MATO_DEPENDENCY_CONTEXT` environment variable. The agent prompt reads this file during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks. The context file is cleaned up after the agent container exits.
 
 ### Filename encoding
 
@@ -175,14 +175,14 @@ For backward compatibility, `ReadCompletionDetail` tries the new encoded filenam
 - `messaging.ReadCompletionDetail(tasksDir, taskID)` reads and parses the JSON file. It tries the collision-resistant filename first, then falls back to the legacy sanitized name. Returns `os.ErrNotExist` if neither file is found.
 
 ## Presence
-Presence files live in `.tasks/messages/presence/` and are host-managed.
+Presence files live in `.mato/messages/presence/` and are host-managed.
 The host runner calls `messaging.WritePresence(tasksDir, agentID, taskFile, branch)` immediately after claiming a task, writing JSON with `agent_id`, `task`, `branch`, and `updated_at` to `<sanitized-agent-id>.json`. Task agents should not edit `presence/` directly.
 
-`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It reads the `agent_id` field from each presence JSON payload to obtain the canonical (unsanitized) agent ID, then checks `.tasks/.locks/<agent>.pid` through `identity.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Using the JSON payload avoids mismatches when the agent ID differs from the sanitized filename (e.g., IDs containing spaces or special characters). Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
+`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It reads the `agent_id` field from each presence JSON payload to obtain the canonical (unsanitized) agent ID, then checks `.mato/.locks/<agent>.pid` through `identity.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Using the JSON payload avoids mismatches when the agent ID differs from the sanitized filename (e.g., IDs containing spaces or special characters). Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
 
 ## Garbage Collection
 `messaging.CleanOldMessages(tasksDir, 24*time.Hour)` garbage-collects event files.
-The runner calls it once per main loop iteration, deleting `.tasks/messages/events/*.json` files older than 24 hours.
+The runner calls it once per main loop iteration, deleting `.mato/messages/events/*.json` files older than 24 hours.
 Age is based on file modification time, not the JSON `sent_at` value. Unreadable entries are skipped silently.
 
 Completion detail files in `completions/` are not garbage-collected; they persist for the lifetime of the task queue so that dependent tasks can read them regardless of when they run.

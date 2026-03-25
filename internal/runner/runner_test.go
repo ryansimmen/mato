@@ -177,18 +177,16 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	}
 }
 
-func TestDefaultModel(t *testing.T) {
-	t.Run("returns hardcoded default when env unset", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "")
-		if got := defaultModel(); got != "claude-opus-4.6" {
-			t.Fatalf("defaultModel() = %q, want %q", got, "claude-opus-4.6")
+func TestResolveDefaultModel(t *testing.T) {
+	t.Run("returns hardcoded default when unset", func(t *testing.T) {
+		if got := resolveDefaultModel(""); got != "claude-opus-4.6" {
+			t.Fatalf("resolveDefaultModel(empty) = %q, want %q", got, "claude-opus-4.6")
 		}
 	})
 
-	t.Run("returns env var when set", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "claude-sonnet-4.5")
-		if got := defaultModel(); got != "claude-sonnet-4.5" {
-			t.Fatalf("defaultModel() = %q, want %q", got, "claude-sonnet-4.5")
+	t.Run("returns configured model when set", func(t *testing.T) {
+		if got := resolveDefaultModel("claude-sonnet-4.5"); got != "claude-sonnet-4.5" {
+			t.Fatalf("resolveDefaultModel(...) = %q, want %q", got, "claude-sonnet-4.5")
 		}
 	})
 }
@@ -213,24 +211,24 @@ func TestBuildDockerArgs_ModelPriority(t *testing.T) {
 	}
 
 	t.Run("hardcoded default when no env and no args", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "")
 		args := buildDockerArgs(baseEnv, baseRun, nil, nil)
 		if m := findModelValue(args); m != "claude-opus-4.6" {
 			t.Fatalf("expected hardcoded default, got %q", m)
 		}
 	})
 
-	t.Run("env var overrides hardcoded default", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "custom-model")
-		args := buildDockerArgs(baseEnv, baseRun, nil, nil)
+	t.Run("configured default overrides hardcoded default", func(t *testing.T) {
+		env := baseEnv
+		env.defaultModel = "custom-model"
+		args := buildDockerArgs(env, baseRun, nil, nil)
 		if m := findModelValue(args); m != "custom-model" {
-			t.Fatalf("expected env var model, got %q", m)
+			t.Fatalf("expected configured model, got %q", m)
 		}
 	})
 
-	t.Run("explicit --model arg overrides env var", func(t *testing.T) {
-		t.Setenv("MATO_DEFAULT_MODEL", "custom-model")
+	t.Run("explicit --model arg overrides configured default", func(t *testing.T) {
 		env := baseEnv
+		env.defaultModel = "custom-model"
 		env.copilotArgs = []string{"--model", "explicit-model"}
 		args := buildDockerArgs(env, baseRun, nil, nil)
 		// When --model is in copilotArgs, buildDockerArgs should NOT inject a default.
@@ -1379,64 +1377,48 @@ func TestRunOnce_TimeoutKillsCommand(t *testing.T) {
 	}
 }
 
-func TestParseAgentTimeout(t *testing.T) {
+func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 	tests := []struct {
-		name    string
-		envVal  string
-		want    time.Duration
-		wantErr bool
+		name string
+		opts RunOptions
+		want time.Duration
 	}{
 		{
-			name:   "default when unset",
-			envVal: "",
-			want:   defaultAgentTimeout,
+			name: "default when unset",
+			want: defaultAgentTimeout,
 		},
 		{
-			name:   "valid duration 1h",
-			envVal: "1h",
-			want:   time.Hour,
+			name: "valid duration 1h",
+			opts: RunOptions{AgentTimeout: time.Hour},
+			want: time.Hour,
 		},
 		{
-			name:   "valid duration 45m",
-			envVal: "45m",
-			want:   45 * time.Minute,
+			name: "valid duration 45m",
+			opts: RunOptions{AgentTimeout: 45 * time.Minute},
+			want: 45 * time.Minute,
 		},
 		{
-			name:   "valid duration 2h30m",
-			envVal: "2h30m",
-			want:   2*time.Hour + 30*time.Minute,
+			name: "valid duration 2h30m",
+			opts: RunOptions{AgentTimeout: 2*time.Hour + 30*time.Minute},
+			want: 2*time.Hour + 30*time.Minute,
 		},
 		{
-			name:    "invalid duration",
-			envVal:  "notaduration",
-			wantErr: true,
+			name: "sub-second duration",
+			opts: RunOptions{AgentTimeout: 500 * time.Millisecond},
+			want: 500 * time.Millisecond,
 		},
 		{
-			name:    "negative duration",
-			envVal:  "-5m",
-			wantErr: true,
-		},
-		{
-			name:    "zero duration",
-			envVal:  "0s",
-			wantErr: true,
+			name: "large duration",
+			opts: RunOptions{AgentTimeout: 100 * time.Hour},
+			want: 100 * time.Hour,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseAgentTimeout(tt.envVal)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error for %q, got nil", tt.envVal)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error for %q: %v", tt.envVal, err)
-			}
-			if got != tt.want {
-				t.Fatalf("parseAgentTimeout(%q) = %v, want %v", tt.envVal, got, tt.want)
+			_, run := buildEnvAndRunContext("main", hostTools{homeDir: "/home/test"}, "agent", "name", "email", nil, "/repo", "/repo/.mato", tt.opts)
+			if run.timeout != tt.want {
+				t.Fatalf("timeout = %v, want %v", run.timeout, tt.want)
 			}
 		})
 	}
@@ -2578,64 +2560,6 @@ func TestPollBackoff_ExponentialProgression(t *testing.T) {
 	}
 }
 
-func TestValidateTasksDir(t *testing.T) {
-	t.Run("relative path resolved to absolute", func(t *testing.T) {
-		dir := t.TempDir()
-		rel := filepath.Join(dir, "subdir", ".tasks")
-		// Create the parent so validation passes.
-		os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
-
-		got, err := validateTasksDir(rel)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !filepath.IsAbs(got) {
-			t.Errorf("expected absolute path, got %q", got)
-		}
-	})
-
-	t.Run("nonexistent parent returns error", func(t *testing.T) {
-		dir := t.TempDir()
-		bad := filepath.Join(dir, "no-such-parent", "deep", ".tasks")
-
-		_, err := validateTasksDir(bad)
-		if err == nil {
-			t.Fatal("expected error for nonexistent parent, got nil")
-		}
-		if !strings.Contains(err.Error(), "does not exist") {
-			t.Errorf("error should mention 'does not exist', got: %v", err)
-		}
-	})
-
-	t.Run("parent is a file returns error", func(t *testing.T) {
-		dir := t.TempDir()
-		filePath := filepath.Join(dir, "not-a-dir")
-		os.WriteFile(filePath, []byte("x"), 0o644)
-		bad := filepath.Join(filePath, ".tasks")
-
-		_, err := validateTasksDir(bad)
-		if err == nil {
-			t.Fatal("expected error when parent is a file, got nil")
-		}
-		if !strings.Contains(err.Error(), "not a directory") {
-			t.Errorf("error should mention 'not a directory', got: %v", err)
-		}
-	})
-
-	t.Run("valid absolute path passes", func(t *testing.T) {
-		dir := t.TempDir()
-		tasksDir := filepath.Join(dir, ".tasks")
-
-		got, err := validateTasksDir(tasksDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got != tasksDir {
-			t.Errorf("expected %q, got %q", tasksDir, got)
-		}
-	})
-}
-
 func TestDryRun_BasicValidation(t *testing.T) {
 	// Create a git repo
 	repoDir := t.TempDir()
@@ -2648,7 +2572,7 @@ func TestDryRun_BasicValidation(t *testing.T) {
 	cmd = exec.Command("git", "-C", repoDir, "config", "user.name", "Test")
 	cmd.Run()
 
-	tasksDir := filepath.Join(repoDir, ".tasks")
+	tasksDir := filepath.Join(repoDir, ".mato")
 	subdirs := queue.AllDirs
 	for _, sub := range subdirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -2658,7 +2582,7 @@ func TestDryRun_BasicValidation(t *testing.T) {
 	taskContent := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n---\n# Task A\nDo something.\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskContent), 0o644)
 
-	err := DryRun(repoDir, "main", tasksDir)
+	err := DryRun(repoDir, "main")
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2676,7 +2600,7 @@ func TestDryRun_DetectsParseErrors(t *testing.T) {
 		t.Fatalf("git init: %v (%s)", err, out)
 	}
 
-	tasksDir := filepath.Join(repoDir, ".tasks")
+	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
@@ -2686,7 +2610,7 @@ func TestDryRun_DetectsParseErrors(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badContent), 0o644)
 
 	// DryRun should succeed (parse errors are reported, not fatal)
-	err := DryRun(repoDir, "main", tasksDir)
+	err := DryRun(repoDir, "main")
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2699,7 +2623,7 @@ func TestDryRun_DetectsOverlaps(t *testing.T) {
 		t.Fatalf("git init: %v (%s)", err, out)
 	}
 
-	tasksDir := filepath.Join(repoDir, ".tasks")
+	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
@@ -2710,7 +2634,7 @@ func TestDryRun_DetectsOverlaps(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 
-	err := DryRun(repoDir, "main", tasksDir)
+	err := DryRun(repoDir, "main")
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2728,12 +2652,12 @@ func TestDryRun_MissingDirectories(t *testing.T) {
 		t.Fatalf("git init: %v (%s)", err, out)
 	}
 
-	tasksDir := filepath.Join(repoDir, ".tasks")
+	tasksDir := filepath.Join(repoDir, ".mato")
 	os.MkdirAll(tasksDir, 0o755)
 	// Only create some subdirs, leaving others missing
 	os.MkdirAll(filepath.Join(tasksDir, queue.DirBacklog), 0o755)
 
-	err := DryRun(repoDir, "main", tasksDir)
+	err := DryRun(repoDir, "main")
 	if err == nil {
 		t.Fatal("DryRun should return error when directories are missing")
 	}
@@ -2749,7 +2673,7 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 		t.Fatalf("git init: %v (%s)", err, out)
 	}
 
-	tasksDir := filepath.Join(repoDir, ".tasks")
+	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
@@ -2762,7 +2686,7 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 	waitingContent := "---\nid: child-task\npriority: 10\ndepends_on:\n  - dep-task\n---\n# Child Task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "child-task.md"), []byte(waitingContent), 0o644)
 
-	err := DryRun(repoDir, "main", tasksDir)
+	err := DryRun(repoDir, "main")
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2783,7 +2707,7 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 		t.Fatalf("git init: %v (%s)", err, out)
 	}
 
-	tasksDir := filepath.Join(repoDir, ".tasks")
+	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
@@ -2793,7 +2717,7 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(taskContent), 0o644)
 
 	// DryRun should complete without attempting to claim or launch Docker
-	err := DryRun(repoDir, "main", tasksDir)
+	err := DryRun(repoDir, "main")
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -3168,7 +3092,7 @@ func TestPollClaimAndRun_NoTasksAvailable(t *testing.T) {
 
 	var claimed, hadError bool
 	captureStdoutStderr(t, func() {
-		claimed, hadError = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+		claimed, hadError = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
 	})
 
 	if claimed {
@@ -3191,7 +3115,7 @@ func TestPollClaimAndRun_FailedDirUnavailableExclusion(t *testing.T) {
 	idx := queue.BuildIndex(tasksDir)
 
 	captureStdoutStderr(t, func() {
-		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
 	})
 
 	if _, ok := failedDirExcluded["already-excluded.md"]; !ok {
@@ -3222,7 +3146,7 @@ func TestPollClaimAndRun_DeferredOverlapSkipped(t *testing.T) {
 
 	var claimed bool
 	captureStdoutStderr(t, func() {
-		claimed, _ = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, idx)
+		claimed, _ = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
 	})
 
 	if claimed {
@@ -3362,36 +3286,9 @@ func TestResolveGitIdentity_SetsLocalConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRun_InvalidRepoPath(t *testing.T) {
-	err := Run("/nonexistent/path/that/does/not/exist", "mato", "", nil)
+	err := Run("/nonexistent/path/that/does/not/exist", "mato", nil, RunOptions{})
 	if err == nil {
 		t.Fatal("expected error for invalid repo path")
-	}
-}
-
-func TestRun_InvalidTasksDirOverride(t *testing.T) {
-	// Create a valid git repo but specify a tasks dir with a non-existent parent.
-	dir := t.TempDir()
-	if _, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v", err)
-	}
-	if _, err := exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").CombinedOutput(); err != nil {
-		t.Fatalf("git config: %v", err)
-	}
-	if _, err := exec.Command("git", "-C", dir, "config", "user.name", "Test").CombinedOutput(); err != nil {
-		t.Fatalf("git config: %v", err)
-	}
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644)
-	exec.Command("git", "-C", dir, "add", "-A").Run()
-	exec.Command("git", "-C", dir, "commit", "-m", "init").Run()
-	exec.Command("git", "-C", dir, "checkout", "-b", "mato").Run()
-
-	// tasksDir parent doesn't exist.
-	err := Run(dir, "mato", "/nonexistent/parent/path/.tasks", nil)
-	if err == nil {
-		t.Fatal("expected error for invalid tasks dir")
-	}
-	if !strings.Contains(err.Error(), "does not exist") && !strings.Contains(err.Error(), "tasks directory") {
-		t.Fatalf("expected tasks directory error, got: %v", err)
 	}
 }
 
@@ -3412,7 +3309,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	}
 
 	env, run := buildEnvAndRunContext("main", tools, "agent-123", "Test User", "test@test.com",
-		[]string{"--verbose"}, "/repo", "/repo/.tasks", 45*time.Minute)
+		[]string{"--verbose"}, "/repo", "/repo/.mato", RunOptions{AgentTimeout: 45 * time.Minute})
 
 	if env.image == "" {
 		t.Error("expected default docker image to be set")
@@ -3441,19 +3338,26 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 }
 
 func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
-	t.Setenv("MATO_DOCKER_IMAGE", "custom:latest")
-
 	tools := hostTools{homeDir: "/home/test"}
-	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.tasks", time.Hour)
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{DockerImage: "custom:latest", AgentTimeout: time.Hour})
 
 	if env.image != "custom:latest" {
 		t.Errorf("expected custom image %q, got %q", "custom:latest", env.image)
 	}
 }
 
+func TestBuildEnvAndRunContext_DefaultModelOverride(t *testing.T) {
+	tools := hostTools{homeDir: "/home/test"}
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{DefaultModel: "claude-sonnet-4", AgentTimeout: time.Hour})
+
+	if env.defaultModel != "claude-sonnet-4" {
+		t.Fatalf("defaultModel = %q, want %q", env.defaultModel, "claude-sonnet-4")
+	}
+}
+
 func TestBuildEnvAndRunContext_PromptPlaceholders(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", nil, "/r", "/r/.tasks", time.Hour)
+	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{AgentTimeout: time.Hour})
 
 	if strings.Contains(run.prompt, "TASKS_DIR_PLACEHOLDER") {
 		t.Error("prompt still contains TASKS_DIR_PLACEHOLDER")
@@ -3479,7 +3383,7 @@ func TestPollLoop_ExitsOnCancelledContext(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
 	run := runContext{agentID: "test-agent"}
 
-	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent")
+	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0)
 	if err != nil {
 		t.Fatalf("expected nil error from cancelled pollLoop, got: %v", err)
 	}

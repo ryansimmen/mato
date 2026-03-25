@@ -466,7 +466,7 @@ func TestEnsureBranch_FetchFailsFallsBackToHEAD(t *testing.T) {
 func TestEnsureGitignoreContains_CreatesNewGitignore(t *testing.T) {
 	dir := t.TempDir()
 
-	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
+	changed, err := EnsureGitignoreContains(dir, "/.mato/")
 	if err != nil {
 		t.Fatalf("EnsureGitignoreContains: %v", err)
 	}
@@ -478,8 +478,8 @@ func TestEnsureGitignoreContains_CreatesNewGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	if !strings.Contains(string(data), "/.tasks/") {
-		t.Errorf("expected .gitignore to contain /.tasks/, got: %s", data)
+	if !strings.Contains(string(data), "/.mato/") {
+		t.Errorf("expected .gitignore to contain /.mato/, got: %s", data)
 	}
 	// Verify file ends with newline.
 	if len(data) > 0 && data[len(data)-1] != '\n' {
@@ -496,7 +496,7 @@ func TestEnsureGitignoreContains_AppendsToFileWithoutTrailingNewline(t *testing.
 		t.Fatal(err)
 	}
 
-	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
+	changed, err := EnsureGitignoreContains(dir, "/.mato/")
 	if err != nil {
 		t.Fatalf("EnsureGitignoreContains: %v", err)
 	}
@@ -515,15 +515,15 @@ func TestEnsureGitignoreContains_AppendsToFileWithoutTrailingNewline(t *testing.
 	if lines[0] != "*.log" {
 		t.Errorf("expected first line '*.log', got %q", lines[0])
 	}
-	if lines[1] != "/.tasks/" {
-		t.Errorf("expected second line '/.tasks/', got %q", lines[1])
+	if lines[1] != "/.mato/" {
+		t.Errorf("expected second line '/.mato/', got %q", lines[1])
 	}
 }
 
 func TestEnsureGitignoreContains_AtomicWritePreservesPermissions(t *testing.T) {
 	dir := t.TempDir()
 
-	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
+	changed, err := EnsureGitignoreContains(dir, "/.mato/")
 	if err != nil {
 		t.Fatalf("EnsureGitignoreContains: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestEnsureGitignoreContains_AtomicWritePreservesPermissions(t *testing.T) {
 func TestEnsureGitignoreContains_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 
-	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
+	changed, err := EnsureGitignoreContains(dir, "/.mato/")
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
@@ -554,7 +554,7 @@ func TestEnsureGitignoreContains_Idempotent(t *testing.T) {
 	}
 
 	// Second call should be a no-op.
-	changed, err = EnsureGitignoreContains(dir, "/.tasks/")
+	changed, err = EnsureGitignoreContains(dir, "/.mato/")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -567,9 +567,9 @@ func TestEnsureGitignoreContains_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count := strings.Count(string(data), "/.tasks/")
+	count := strings.Count(string(data), "/.mato/")
 	if count != 1 {
-		t.Errorf("expected exactly 1 occurrence of /.tasks/, got %d in: %s", count, data)
+		t.Errorf("expected exactly 1 occurrence of /.mato/, got %d in: %s", count, data)
 	}
 }
 
@@ -588,7 +588,7 @@ func TestEnsureGitignoreContains_UnreadableGitignoreReturnsError(t *testing.T) {
 		os.Chmod(gitignorePath, 0o644)
 	})
 
-	_, err := EnsureGitignoreContains(dir, "/.tasks/")
+	_, err := EnsureGitignoreContains(dir, "/.mato/")
 	if err == nil {
 		t.Fatal("expected error for unreadable .gitignore, got nil")
 	}
@@ -601,11 +601,11 @@ func TestEnsureGitignoreContains_ReturnsFalseWhenAlreadyPresent(t *testing.T) {
 	dir := t.TempDir()
 
 	gitignorePath := filepath.Join(dir, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("/.tasks/\n"), 0o644); err != nil {
+	if err := os.WriteFile(gitignorePath, []byte("/.mato/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	changed, err := EnsureGitignoreContains(dir, "/.tasks/")
+	changed, err := EnsureGitignoreContains(dir, "/.mato/")
 	if err != nil {
 		t.Fatalf("EnsureGitignoreContains: %v", err)
 	}
@@ -619,11 +619,11 @@ func TestCommitGitignore(t *testing.T) {
 
 	// Create a .gitignore to commit.
 	gitignorePath := filepath.Join(repo, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("/.tasks/\n"), 0o644); err != nil {
+	if err := os.WriteFile(gitignorePath, []byte("/.mato/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := CommitGitignore(repo, "chore: add /.tasks/ to .gitignore"); err != nil {
+	if err := CommitGitignore(repo, "chore: add /.mato/ to .gitignore"); err != nil {
 		t.Fatalf("CommitGitignore: %v", err)
 	}
 
@@ -635,7 +635,7 @@ func TestCommitGitignore(t *testing.T) {
 	if !strings.Contains(out, ".gitignore") {
 		t.Errorf("expected .gitignore in commit, got: %s", out)
 	}
-	if !strings.Contains(out, "chore: add /.tasks/ to .gitignore") {
+	if !strings.Contains(out, "chore: add /.mato/ to .gitignore") {
 		t.Errorf("expected commit message, got: %s", out)
 	}
 }
@@ -655,7 +655,7 @@ func TestCommitGitignore_DoesNotCommitUnrelatedStagedFiles(t *testing.T) {
 
 	// Create .gitignore and commit only it.
 	gitignorePath := filepath.Join(repo, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("/.tasks/\n"), 0o644); err != nil {
+	if err := os.WriteFile(gitignorePath, []byte("/.mato/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

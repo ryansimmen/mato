@@ -10,8 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"mato/internal/config"
 	"mato/internal/doctor"
+	"mato/internal/runner"
 	"mato/internal/testutil"
 
 	"github.com/spf13/cobra"
@@ -45,24 +48,47 @@ func TestResolveRepo(t *testing.T) {
 	}
 }
 
-func TestResolveBranch(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"explicit branch", "develop", "develop"},
-		{"empty defaults to mato", "", "mato"},
-	}
+func TestResolveEnvBranch(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("MATO_BRANCH", "")
+		branch, ok, err := resolveEnvBranch()
+		if err != nil {
+			t.Fatalf("resolveEnvBranch: %v", err)
+		}
+		if ok || branch != "" {
+			t.Fatalf("got (%q, %v), want (empty, false)", branch, ok)
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := resolveBranch(tt.input)
-			if got != tt.want {
-				t.Errorf("resolveBranch(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
+	t.Run("set", func(t *testing.T) {
+		t.Setenv("MATO_BRANCH", "main")
+		branch, ok, err := resolveEnvBranch()
+		if err != nil {
+			t.Fatalf("resolveEnvBranch: %v", err)
+		}
+		if !ok || branch != "main" {
+			t.Fatalf("got (%q, %v), want (%q, true)", branch, ok, "main")
+		}
+	})
+
+	t.Run("empty treated as unset", func(t *testing.T) {
+		t.Setenv("MATO_BRANCH", "")
+		branch, ok, err := resolveEnvBranch()
+		if err != nil {
+			t.Fatalf("resolveEnvBranch: %v", err)
+		}
+		if ok || branch != "" {
+			t.Fatalf("got (%q, %v), want (empty, false)", branch, ok)
+		}
+	})
+
+	t.Run("whitespace rejected", func(t *testing.T) {
+		t.Setenv("MATO_BRANCH", "   ")
+		_, _, err := resolveEnvBranch()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
 }
 
 func TestExtractKnownFlags(t *testing.T) {
@@ -71,7 +97,6 @@ func TestExtractKnownFlags(t *testing.T) {
 		args       []string
 		wantRepo   string
 		wantBranch string
-		wantTasks  string
 		wantDryRun bool
 		wantExtra  []string
 	}{
@@ -98,18 +123,6 @@ func TestExtractKnownFlags(t *testing.T) {
 			args:       []string{"--branch", "develop"},
 			wantBranch: "develop",
 			wantExtra:  []string{},
-		},
-		{
-			name:      "tasks-dir equals syntax",
-			args:      []string{"--tasks-dir=/custom/tasks"},
-			wantTasks: "/custom/tasks",
-			wantExtra: []string{},
-		},
-		{
-			name:      "tasks-dir space syntax",
-			args:      []string{"--tasks-dir", "/custom/tasks"},
-			wantTasks: "/custom/tasks",
-			wantExtra: []string{},
 		},
 		{
 			name:       "dry-run flag",
@@ -152,15 +165,6 @@ func TestExtractKnownFlags(t *testing.T) {
 			args:       []string{"--repo=/tmp/repo", "--dry-run=false"},
 			wantRepo:   "/tmp/repo",
 			wantDryRun: false,
-			wantExtra:  []string{},
-		},
-		{
-			name:       "all flags combined",
-			args:       []string{"--repo=/tmp/repo", "--branch=develop", "--tasks-dir=/tasks", "--dry-run"},
-			wantRepo:   "/tmp/repo",
-			wantBranch: "develop",
-			wantTasks:  "/tasks",
-			wantDryRun: true,
 			wantExtra:  []string{},
 		},
 		{
@@ -218,9 +222,6 @@ func TestExtractKnownFlags(t *testing.T) {
 			if cfg.branch != tt.wantBranch {
 				t.Errorf("branch = %q, want %q", cfg.branch, tt.wantBranch)
 			}
-			if cfg.tasksDir != tt.wantTasks {
-				t.Errorf("tasksDir = %q, want %q", cfg.tasksDir, tt.wantTasks)
-			}
 			if cfg.dryRun != tt.wantDryRun {
 				t.Errorf("dryRun = %v, want %v", cfg.dryRun, tt.wantDryRun)
 			}
@@ -248,16 +249,6 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			wantErr: "flag --repo requires a value, got flag --model",
 		},
 		{
-			name:    "branch followed by another flag",
-			args:    []string{"--branch", "--tasks-dir", ".tasks"},
-			wantErr: "flag --branch requires a value, got flag --tasks-dir",
-		},
-		{
-			name:    "tasks-dir at end of args",
-			args:    []string{"--tasks-dir"},
-			wantErr: "flag --tasks-dir requires a value",
-		},
-		{
 			name:    "repo at end of args",
 			args:    []string{"--repo"},
 			wantErr: "flag --repo requires a value",
@@ -276,11 +267,6 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			name:    "branch equals empty value",
 			args:    []string{"--branch="},
 			wantErr: "flag --branch requires a value",
-		},
-		{
-			name:    "tasks-dir equals empty value",
-			args:    []string{"--tasks-dir="},
-			wantErr: "flag --tasks-dir requires a value",
 		},
 		{
 			name:    "dry-run invalid boolean",
@@ -303,11 +289,6 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			wantErr: "flag --branch requires a value",
 		},
 		{
-			name:    "tasks-dir whitespace-only equals form",
-			args:    []string{"--tasks-dir=  "},
-			wantErr: "flag --tasks-dir requires a value",
-		},
-		{
 			name:    "repo whitespace-only space form",
 			args:    []string{"--repo", "   "},
 			wantErr: "flag --repo requires a value",
@@ -316,11 +297,6 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			name:    "branch whitespace-only space form",
 			args:    []string{"--branch", " \t "},
 			wantErr: "flag --branch requires a value",
-		},
-		{
-			name:    "tasks-dir whitespace-only space form",
-			args:    []string{"--tasks-dir", "  "},
-			wantErr: "flag --tasks-dir requires a value",
 		},
 	}
 
@@ -432,6 +408,13 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(data)
 }
 
+func writeRepoConfig(t *testing.T, repoRoot, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repoRoot, ".mato.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write .mato.yaml: %v", err)
+	}
+}
+
 func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 	var capturedArgs []string
 	cmd := newRootCmd()
@@ -464,17 +447,17 @@ func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
 	})
 
 	for _, rel := range []string{
-		".tasks/backlog",
-		".tasks/waiting",
-		".tasks/in-progress",
-		".tasks/ready-for-review",
-		".tasks/ready-to-merge",
-		".tasks/completed",
-		".tasks/failed",
-		".tasks/.locks",
-		".tasks/messages/events",
-		".tasks/messages/presence",
-		".tasks/messages/completions",
+		".mato/backlog",
+		".mato/waiting",
+		".mato/in-progress",
+		".mato/ready-for-review",
+		".mato/ready-to-merge",
+		".mato/completed",
+		".mato/failed",
+		".mato/.locks",
+		".mato/messages/events",
+		".mato/messages/presence",
+		".mato/messages/completions",
 	} {
 		if _, err := os.Stat(filepath.Join(repoRoot, rel)); err != nil {
 			t.Fatalf("expected %s to exist: %v", rel, err)
@@ -484,8 +467,8 @@ func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	if !strings.Contains(string(data), "/.tasks/") {
-		t.Fatalf(".gitignore should contain /.tasks/, got %q", string(data))
+	if !strings.Contains(string(data), "/.mato/") {
+		t.Fatalf(".gitignore should contain /.mato/, got %q", string(data))
 	}
 	branchOut, err := runCmd("git", "-C", repoRoot, "branch", "--show-current")
 	if err != nil {
@@ -550,26 +533,6 @@ func TestInitCmd_NoExtraArgs(t *testing.T) {
 	cmd.SetArgs([]string{"init", "extra"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("expected error for extra positional arg")
-	}
-}
-
-func TestInitCmd_RelativeTasksDirResolvedAgainstRepoRoot(t *testing.T) {
-	repoRoot := testutil.SetupRepo(t)
-	nested := filepath.Join(repoRoot, "nested")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatalf("mkdir nested: %v", err)
-	}
-
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"init", "--repo", nested, "--tasks-dir", "custom-tasks"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("init command failed: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "custom-tasks", "backlog")); err != nil {
-		t.Fatalf("expected tasks dir under repo root: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(nested, "custom-tasks")); !os.IsNotExist(err) {
-		t.Fatalf("did not expect tasks dir under nested cwd, got %v", err)
 	}
 }
 
@@ -685,8 +648,6 @@ func TestStatusCmd_FlagParsing(t *testing.T) {
 	}{
 		{"status help", []string{"status", "--help"}},
 		{"status with repo", []string{"status", "--repo=/tmp/repo"}},
-		{"status with tasks-dir", []string{"status", "--tasks-dir=/tmp/tasks"}},
-		{"status with repo and tasks-dir", []string{"status", "--repo=/tmp/repo", "--tasks-dir=/tmp/tasks"}},
 		{"status with text format", []string{"status", "--format=text"}},
 	}
 
@@ -756,7 +717,7 @@ func TestDoctorCmd_OnlyFlagsPassedThrough(t *testing.T) {
 	orig := doctorRunFn
 	defer func() { doctorRunFn = orig }()
 
-	doctorRunFn = func(_ context.Context, _, _ string, opts doctor.Options) (doctor.Report, error) {
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
 		capturedOpts = opts
 		return doctor.Report{}, nil
 	}
@@ -794,7 +755,7 @@ func TestDoctorCmd_ExitCodeBecomesExitError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+			doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
 				return doctor.Report{ExitCode: tt.exitCode}, nil
 			}
 
@@ -820,7 +781,7 @@ func TestDoctorCmd_ExitCodeZeroNoError(t *testing.T) {
 	orig := doctorRunFn
 	defer func() { doctorRunFn = orig }()
 
-	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
 		return doctor.Report{ExitCode: 0}, nil
 	}
 
@@ -836,7 +797,7 @@ func TestDoctorCmd_HardFailurePropagated(t *testing.T) {
 	defer func() { doctorRunFn = orig }()
 
 	hardErr := fmt.Errorf("context canceled")
-	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
 		return doctor.Report{}, hardErr
 	}
 
@@ -861,7 +822,7 @@ func TestDoctorCmd_FlagParsing(t *testing.T) {
 	orig := doctorRunFn
 	defer func() { doctorRunFn = orig }()
 
-	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
 		return doctor.Report{}, nil
 	}
 
@@ -871,11 +832,10 @@ func TestDoctorCmd_FlagParsing(t *testing.T) {
 	}{
 		{"doctor help", []string{"doctor", "--help"}},
 		{"doctor with repo", []string{"doctor", "--repo=/tmp/repo"}},
-		{"doctor with tasks-dir", []string{"doctor", "--tasks-dir=/tmp/tasks"}},
 		{"doctor with fix", []string{"doctor", "--fix"}},
 		{"doctor with json format", []string{"doctor", "--format=json"}},
 		{"doctor with text format", []string{"doctor", "--format=text"}},
-		{"doctor with all flags", []string{"doctor", "--repo=/tmp/repo", "--tasks-dir=/tmp/tasks", "--fix", "--format=json", "--only=git"}},
+		{"doctor with all flags", []string{"doctor", "--repo=/tmp/repo", "--fix", "--format=json", "--only=git"}},
 	}
 
 	for _, tt := range tests {
@@ -933,7 +893,6 @@ func TestGraphCmd_FlagParsing(t *testing.T) {
 		args []string
 	}{
 		{"graph with repo", []string{"graph", "--repo=/tmp/repo"}},
-		{"graph with tasks-dir", []string{"graph", "--tasks-dir=/tmp/tasks"}},
 		{"graph with text format", []string{"graph", "--format=text"}},
 		{"graph with dot format", []string{"graph", "--format=dot"}},
 		{"graph with json format", []string{"graph", "--format=json"}},
@@ -974,7 +933,7 @@ func TestGraphCmd_EndToEnd(t *testing.T) {
 	}
 
 	// Create a minimal tasks directory with one task.
-	tasksDir := filepath.Join(dir, ".tasks")
+	tasksDir := filepath.Join(dir, ".mato")
 	backlog := filepath.Join(tasksDir, "backlog")
 	if err := os.MkdirAll(backlog, 0o755); err != nil {
 		t.Fatalf("mkdir backlog: %v", err)
@@ -1114,7 +1073,10 @@ func TestRootCmd_InvalidBranchRejected(t *testing.T) {
 		if err := validateRepoPath(resolved); err != nil {
 			return err
 		}
-		br := resolveBranch(cfg.branch)
+		br, err := resolveConfigBranch(configFixture(nil), cfg.branch)
+		if err != nil {
+			return err
+		}
 		return validateBranch(br)
 	}
 	err := cmd.Execute()
@@ -1144,7 +1106,10 @@ func TestRootCmd_NonRepoPathRejected(t *testing.T) {
 		if err := validateRepoPath(resolved); err != nil {
 			return err
 		}
-		br := resolveBranch(cfg.branch)
+		br, err := resolveConfigBranch(configFixture(nil), cfg.branch)
+		if err != nil {
+			return err
+		}
 		return validateBranch(br)
 	}
 	err := cmd.Execute()
@@ -1201,9 +1166,9 @@ func TestRetryCmd_NoArgs(t *testing.T) {
 }
 
 func TestRetryCmd_SuccessfulRetry(t *testing.T) {
-	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, ".tasks", "failed")
-	backlogDir := filepath.Join(tmp, ".tasks", "backlog")
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1217,7 +1182,7 @@ func TestRetryCmd_SuccessfulRetry(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "fix-bug"})
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "fix-bug"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("retry command failed: %v", err)
 	}
@@ -1228,16 +1193,16 @@ func TestRetryCmd_SuccessfulRetry(t *testing.T) {
 }
 
 func TestRetryCmd_TaskNotFound(t *testing.T) {
-	tmp := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmp, ".tasks", "failed"), 0o755); err != nil {
+	repoRoot := testutil.SetupRepo(t)
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".mato", "failed"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmp, ".tasks", "backlog"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".mato", "backlog"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "nonexistent"})
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "nonexistent"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for missing task")
@@ -1252,8 +1217,6 @@ func TestRetryCmd_FlagParsing(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"tasks-dir equals form", []string{"retry", "--tasks-dir=/tmp/t", "foo"}},
-		{"tasks-dir space form", []string{"retry", "--tasks-dir", "/tmp/t", "foo"}},
 		{"repo equals form", []string{"retry", "--repo=/tmp/r", "foo"}},
 	}
 	for _, tt := range tests {
@@ -1281,8 +1244,8 @@ func TestRetryCmd_DefaultTasksDirUsesRepoRoot(t *testing.T) {
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	failedDir := filepath.Join(repoRoot, ".tasks", "failed")
-	backlogDir := filepath.Join(repoRoot, ".tasks", "backlog")
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1316,9 +1279,9 @@ func TestRetryCmd_DefaultTasksDirUsesRepoRoot(t *testing.T) {
 }
 
 func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
-	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, ".tasks", "failed")
-	backlogDir := filepath.Join(tmp, ".tasks", "backlog")
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1332,7 +1295,7 @@ func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "fix-bug"})
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "fix-bug"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("retry command failed: %v", err)
 	}
@@ -1343,5 +1306,380 @@ func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- review-rejection:") {
 		t.Fatal("review rejection feedback should be preserved")
+	}
+}
+
+func TestResolveConfigBranch(t *testing.T) {
+	branch := "main"
+	tests := []struct {
+		name string
+		cfg  *string
+		flag string
+		env  string
+		want string
+	}{
+		{name: "flag wins", cfg: &branch, flag: "feature", env: "env-branch", want: "feature"},
+		{name: "env wins over config", cfg: &branch, env: "env-branch", want: "env-branch"},
+		{name: "config used", cfg: &branch, want: "main"},
+		{name: "default fallback", want: "mato"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MATO_BRANCH", tt.env)
+			got, err := resolveConfigBranch(configFixture(tt.cfg), tt.flag)
+			if err != nil {
+				t.Fatalf("resolveConfigBranch: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolveConfigBranch(...) = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveConfigBranch_WhitespaceEnvRejected(t *testing.T) {
+	t.Setenv("MATO_BRANCH", "  ")
+	_, err := resolveConfigBranch(configFixture(nil), "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestResolveRunOptions(t *testing.T) {
+	stringPtr := func(v string) *string { return &v }
+
+	t.Run("uses config values when env unset", func(t *testing.T) {
+		opts, err := resolveRunOptions(configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("45m"), stringPtr("5m")))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.DockerImage != "custom:latest" || opts.DefaultModel != "claude-sonnet-4" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+			t.Fatalf("opts = %+v", opts)
+		}
+	})
+
+	t.Run("env overrides invalid config", func(t *testing.T) {
+		t.Setenv("MATO_AGENT_TIMEOUT", "1h")
+		t.Setenv("MATO_RETRY_COOLDOWN", "90s")
+		opts, err := resolveRunOptions(configFixtureWithValues(nil, nil, stringPtr("bad"), stringPtr("also-bad")))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.AgentTimeout != time.Hour || opts.RetryCooldown != 90*time.Second {
+			t.Fatalf("opts = %+v", opts)
+		}
+	})
+
+	t.Run("invalid effective config errors", func(t *testing.T) {
+		_, err := resolveRunOptions(configFixtureWithValues(nil, nil, stringPtr("bad"), nil))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("invalid effective env timeout errors", func(t *testing.T) {
+		t.Setenv("MATO_AGENT_TIMEOUT", "bad")
+		_, err := resolveRunOptions(configFixture(nil))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("invalid env cooldown ignored", func(t *testing.T) {
+		t.Setenv("MATO_RETRY_COOLDOWN", "bad")
+		opts, err := resolveRunOptions(configFixture(nil))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.RetryCooldown != 0 {
+			t.Fatalf("RetryCooldown = %v, want 0", opts.RetryCooldown)
+		}
+	})
+}
+
+func TestConfigFile_BranchFromConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	called := false
+	runFn = func(repoRootArg, branch string, copilotArgs []string, opts runner.RunOptions) error {
+		called = true
+		if repoRootArg != repoRoot {
+			t.Fatalf("repoRoot = %q, want %q", repoRootArg, repoRoot)
+		}
+		if branch != "main" {
+			t.Fatalf("branch = %q, want %q", branch, "main")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !called {
+		t.Fatal("expected runFn to be called")
+	}
+}
+
+func TestConfigFile_BranchFromEnv(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "main")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+		if branch != "main" {
+			t.Fatalf("branch = %q, want %q", branch, "main")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_BranchFlagOverridesConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+	t.Setenv("MATO_BRANCH", "env-branch")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+		if branch != "feature" {
+			t.Fatalf("branch = %q, want %q", branch, "feature")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot, "--branch", "feature"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_BranchEnvOverridesConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: config-branch\n")
+	t.Setenv("MATO_BRANCH", "env-branch")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+		if branch != "env-branch" {
+			t.Fatalf("branch = %q, want %q", branch, "env-branch")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_MissingConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, branch string, _ []string, opts runner.RunOptions) error {
+		if branch != "mato" {
+			t.Fatalf("branch = %q, want %q", branch, "mato")
+		}
+		if opts != (runner.RunOptions{}) {
+			t.Fatalf("opts = %+v, want zero value", opts)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_InvalidYAML(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: [\n")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse config file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConfigFile_InvalidAgentTimeout_RunMode(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "agent_timeout: not-a-duration\n")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid agent_timeout") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConfigFile_InvalidTimeout_EnvOverride(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "agent_timeout: not-a-duration\n")
+	t.Setenv("MATO_AGENT_TIMEOUT", "1h")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
+		if opts.AgentTimeout != time.Hour {
+			t.Fatalf("AgentTimeout = %v, want %v", opts.AgentTimeout, time.Hour)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_InvalidCooldown_EnvOverride(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "retry_cooldown: not-a-duration\n")
+	t.Setenv("MATO_RETRY_COOLDOWN", "90s")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
+		if opts.RetryCooldown != 90*time.Second {
+			t.Fatalf("RetryCooldown = %v, want %v", opts.RetryCooldown, 90*time.Second)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, strings.Join([]string{
+		"docker_image: custom:latest",
+		"default_model: claude-sonnet-4",
+		"agent_timeout: 45m",
+		"retry_cooldown: 5m",
+		"",
+	}, "\n"))
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
+		if opts.DockerImage != "custom:latest" || opts.DefaultModel != "claude-sonnet-4" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+			t.Fatalf("opts = %+v", opts)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+
+	origDryRunFn := dryRunFn
+	defer func() { dryRunFn = origDryRunFn }()
+
+	dryRunFn = func(_ string, branch string) error {
+		if branch != "main" {
+			t.Fatalf("branch = %q, want %q", branch, "main")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot, "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_WhitespaceEnvBranchRejected(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "   ")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "MATO_BRANCH must not be whitespace-only") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConfigFile_InitUsesConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	branchOut, err := runCmd("git", "-C", repoRoot, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v\n%s", err, branchOut)
+	}
+	if strings.TrimSpace(branchOut) != "main" {
+		t.Fatalf("current branch = %q, want %q", strings.TrimSpace(branchOut), "main")
+	}
+}
+
+func configFixture(branch *string) config.Config {
+	return config.Config{Branch: branch}
+}
+
+func configFixtureWithValues(dockerImage, defaultModel, agentTimeout, retryCooldown *string) config.Config {
+	return config.Config{
+		DockerImage:   dockerImage,
+		DefaultModel:  defaultModel,
+		AgentTimeout:  agentTimeout,
+		RetryCooldown: retryCooldown,
 	}
 }

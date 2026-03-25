@@ -407,7 +407,7 @@ func TestStatusWithPopulatedQueue(t *testing.T) {
 
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "status-agent.pid"), fmt.Sprintf("%d", os.Getpid()))
 
-	if err := status.Show(repoRoot, ""); err != nil {
+	if err := status.Show(repoRoot); err != nil {
 		t.Fatalf("status.Show: %v", err)
 	}
 }
@@ -423,7 +423,7 @@ func TestStatusWithParseFailedTasksPreservesRuntimeMetadata(t *testing.T) {
 			"---\npriority: nope\n---\n# Broken failed\n")
 
 	var buf bytes.Buffer
-	if err := status.ShowTo(&buf, repoRoot, ""); err != nil {
+	if err := status.ShowTo(&buf, repoRoot); err != nil {
 		t.Fatalf("status.ShowTo: %v", err)
 	}
 	output := buf.String()

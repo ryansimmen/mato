@@ -9,26 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 
 	"golang.org/x/term"
 )
-
-// parseAgentTimeout parses a duration string for the agent timeout.
-// Returns defaultAgentTimeout if envVal is empty.
-func parseAgentTimeout(envVal string) (time.Duration, error) {
-	if envVal == "" {
-		return defaultAgentTimeout, nil
-	}
-	parsed, err := time.ParseDuration(envVal)
-	if err != nil {
-		return 0, fmt.Errorf("parse MATO_AGENT_TIMEOUT %q: %w", envVal, err)
-	}
-	if parsed <= 0 {
-		return 0, fmt.Errorf("MATO_AGENT_TIMEOUT must be positive, got %v", parsed)
-	}
-	return parsed, nil
-}
 
 // checkDocker verifies that Docker is installed and the daemon is running
 // by executing "docker info". This runs before any queue setup so that a
@@ -98,7 +83,7 @@ type envConfig struct {
 	hasSystemCerts                          bool
 	copilotArgs                             []string
 	repoRoot, tasksDir                      string
-	targetBranch                            string
+	targetBranch, defaultModel              string
 	isTTY                                   bool
 }
 
@@ -132,7 +117,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"run", "--rm", "--init", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:%s", run.cloneDir, env.workdir),
-		"-v", fmt.Sprintf("%s:%s/.tasks", env.tasksDir, env.workdir),
+		"-v", fmt.Sprintf("%s:%s/%s", env.tasksDir, env.workdir, dirs.Root),
 		"-v", fmt.Sprintf("%s:%s", env.repoRoot, env.repoRoot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", env.gitPath),
@@ -146,7 +131,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	args = append(args,
 		"-e", "MATO_AGENT_ID="+run.agentID,
 		"-e", "MATO_MESSAGING_ENABLED=1",
-		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/.tasks/messages", env.workdir),
+		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/%s/messages", env.workdir, dirs.Root),
 	)
 	for _, e := range extraEnvs {
 		args = append(args, "-e", e)
@@ -189,38 +174,17 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"copilot", "-p", run.prompt, "--autopilot", "--allow-all",
 	)
 	if !hasModelArg(env.copilotArgs) {
-		args = append(args, "--model", defaultModel())
+		args = append(args, "--model", resolveDefaultModel(env.defaultModel))
 	}
 	args = append(args, env.copilotArgs...)
 	return args
 }
 
-// validateTasksDir resolves tasksDir to an absolute path and verifies
-// that its parent directory exists. Returns the resolved absolute path.
-func validateTasksDir(tasksDir string) (string, error) {
-	abs, err := filepath.Abs(tasksDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve tasks directory to absolute path: %w", err)
+func resolveDefaultModel(model string) string {
+	if model != "" {
+		return model
 	}
-	parent := filepath.Dir(abs)
-	info, err := os.Stat(parent)
-	if err != nil {
-		return "", fmt.Errorf("tasks directory parent %s does not exist: %w", parent, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("tasks directory parent %s is not a directory", parent)
-	}
-	return abs, nil
-}
-
-// defaultModel returns the Copilot model to use when --model is not
-// explicitly passed. It checks MATO_DEFAULT_MODEL first, then falls
-// back to the hardcoded default.
-func defaultModel() string {
-	if m := os.Getenv("MATO_DEFAULT_MODEL"); m != "" {
-		return m
-	}
-	return "claude-opus-4.6"
+	return defaultCopilotModel
 }
 
 func hasModelArg(args []string) bool {

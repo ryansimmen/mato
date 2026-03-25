@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/queue"
 )
@@ -91,15 +92,13 @@ type MessageJSON struct {
 }
 
 // ShowJSON writes the status dashboard as JSON to os.Stdout.
-func ShowJSON(w io.Writer, repoRoot, tasksDir string) error {
+func ShowJSON(w io.Writer, repoRoot string) error {
 	resolvedRepoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
 	}
 	repoRoot = strings.TrimSpace(resolvedRepoRoot)
-	if tasksDir == "" {
-		tasksDir = filepath.Join(repoRoot, ".tasks")
-	}
+	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {

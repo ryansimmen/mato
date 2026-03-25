@@ -17,7 +17,7 @@ failures, and retries. Users must manually inspect `completed/` and
 
 1. Add a `log` subcommand to `cmd/mato/main.go`:
    ```
-   mato log [--repo <path>] [--tasks-dir <path>] [--limit N] [--format text|json]
+   mato log [--repo <path>] [--limit N] [--format text|json]
    ```
 
 2. Gather events from multiple sources:

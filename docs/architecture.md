@@ -1,7 +1,7 @@
 # Mato Architecture
 This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
 ## 1. System Overview
-`mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.tasks/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
+`mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
 +-------------------------+      +-----------------------------+
 | CLI: mato               |      | CLI: mato status            |
@@ -11,12 +11,12 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
              v
 +-------------------------------+
 | Host loop in runner.go        |
-| manages .tasks/, Docker, Git  |
+| manages .mato/, Docker, Git  |
 +---------------+---------------+
                 |
                 v
        +-------------------+
-       | .tasks/ queue     |
+       | .mato/ queue     |
        | waiting/backlog/  |
        | in-progress/...   |
        +----+---------+----+
@@ -30,33 +30,33 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 +------------------+     ready-to-merge -> completed
 ```
 High-level flow:
-1. `main.go` parses flags and either starts `runner.Run(...)`, bootstraps a repository via `setup.InitRepo(...)`, or routes to subcommands such as `status.Show(...)`.
-2. `runner.Run(...)` creates/maintains the queue, writes `.queue`, and starts agent runs.
+1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)`, bootstraps a repository via `setup.InitRepo(...)`, or routes to subcommands such as `status.Show(...)`.
+2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs.
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim and pushes `task/<sanitized-filename>`.
 4. The host merge queue squashes that task branch into the target branch and moves the task file to `completed/`.
 ## 2. Host Loop
 ### Startup
-`runner.Run(repoRoot, branch, tasksDirOverride, copilotArgs)` performs host initialization in this order:
+`runner.Run(repoRoot, branch, copilotArgs, opts)` performs host initialization in this order:
 1. Resolve `repoRoot` with `git rev-parse --show-toplevel`.
 2. Ensure the target branch exists with `git.EnsureBranch(...)`; if the local branch exists, check it out; otherwise fetch the branch from `origin` (non-fatal on failure), then if `origin/<branch>` exists create the local branch from the remote-tracking ref; otherwise create it from `HEAD`.
-3. Resolve `tasksDir`; default is `<repoRoot>/.tasks`.
+3. Resolve `tasksDir` as `<repoRoot>/.mato`.
 4. Create queue directories: `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`.
-5. Create messaging directories with `messaging.Init(...)`: `.tasks/messages/events/`, `.tasks/messages/completions/`, and `.tasks/messages/presence/`.
+5. Create messaging directories with `messaging.Init(...)`: `.mato/messages/events/`, `.mato/messages/completions/`, and `.mato/messages/presence/`.
 6. Generate an agent ID with `identity.GenerateAgentID()`.
-7. Register the process as active by writing `.tasks/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
-8. Ensure `/.tasks/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
-9. Resolve host tools and config: Docker image, `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity.
-10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.tasks`, the configured target branch, and `/workspace/.tasks/messages`.
+7. Register the process as active by writing `.mato/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
+8. Ensure `/.mato/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
+9. Resolve host tools and runtime dependencies: `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity. Docker image, default model, agent timeout, and retry cooldown are already resolved in `cmd/mato/main.go`.
+10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.mato`, the configured target branch, and `/workspace/.mato/messages`.
 11. Install `SIGINT`/`SIGTERM` handlers.
 
 ### Explicit initialization path
-`mato init` uses `setup.InitRepo(repoRoot, branch, tasksDir)` for lightweight repository bootstrap without Docker. This path intentionally stays separate from `runner.Run(...)` so the runtime Docker gate and existing runner ordering do not change. `setup.InitRepo(...)` composes shared helpers such as `git.EnsureBranch(...)`, `git.EnsureIdentity(...)`, `git.EnsureGitignoreContains(...)`, and `messaging.Init(...)` to:
+`mato init` uses `setup.InitRepo(repoRoot, branch)` for lightweight repository bootstrap without Docker. This path intentionally stays separate from `runner.Run(...)` so the runtime Docker gate and existing runner ordering do not change. `setup.InitRepo(...)` composes shared helpers such as `git.EnsureBranch(...)`, `git.EnsureIdentity(...)`, `git.EnsureGitignoreContains(...)`, and `messaging.Init(...)` to:
 
-1. Resolve and validate the tasks directory.
+1. Resolve the canonical queue directory as `<repoRoot>/.mato`.
 2. Create or switch to the target branch.
-3. Create queue directories, `.tasks/.locks/`, and messaging subdirectories.
+3. Create queue directories, `.mato/.locks/`, and messaging subdirectories.
 4. Ensure local git identity exists.
-5. Update `.gitignore` when the tasks directory is inside the repository.
+5. Update `.gitignore` with `/.mato/`.
 6. Create a bootstrap commit on empty repositories so the target branch becomes a born branch.
 
 Integration coverage verifies that running `mato init` followed by `runner.DryRun(...)` produces a fully valid queue layout.
@@ -76,7 +76,7 @@ idx = queue.BuildIndex(tasksDir)           // rebuild after reconcile
 deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
 // merge failedDirExcluded into deferred
 queue.WriteQueueManifest(tasksDir, deferred, idx)
-claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, idx)
+claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, cooldown, idx)
 if FailedDirUnavailableError → add task to failedDirExcluded
 if claimed != nil:
     messaging.WriteMessage(...) intent
@@ -93,14 +93,14 @@ Important details from the implementation:
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
 - `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifest()`. Conflict-deferred tasks are excluded from the manifest so agents will not select them.
-- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts `<!-- failure: ... -->` records, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
+- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
 - When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, excluded tasks are merged into the `deferred` map before calling `SelectAndClaimTask`, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
 ### Orphan recovery and lock cleanup
 The `queue` package provides the host-side recovery primitives:
-- `queue.RegisterAgent(...)` (in `queue.go`) writes `.tasks/.locks/<agentID>.pid` and returns a cleanup function.
+- `queue.RegisterAgent(...)` (in `queue.go`) writes `.mato/.locks/<agentID>.pid` and returns a cleanup function.
 - `identity.IsAgentActive(...)` reads a PID file and tests liveness with signal `0`.
 - `queue.CleanStaleLocks(...)` removes dead agent lock files.
 - `queue.RecoverOrphanedTasks(...)` (in `queue.go`) scans `in-progress/*.md`; if the claiming agent is no longer active, it appends `<!-- failure: mato-recovery ... -->` and renames the task back to `backlog/`.
@@ -114,14 +114,14 @@ Before Docker starts, `runOnce(...)`:
 1. Creates a temporary local clone with `git.CreateClone(repoRoot)`.
 2. Defers `git.RemoveClone(cloneDir)`.
 3. Sets `receive.denyCurrentBranch=updateInstead` in the origin repo so the temp clone can push into the checked-out target branch safely.
-The design relies on `.tasks/` being Git-ignored so queue updates do not dirty the branch being updated via `updateInstead`.
+The design relies on `.mato/` being Git-ignored so queue updates do not dirty the branch being updated via `updateInstead`.
 ### Docker runtime
 The container runs as `docker run --rm -it --user <uid>:<gid>` with working directory `/workspace`.
 Primary mounts:
 | Host | Container | Why |
 | --- | --- | --- |
 | temp clone | `/workspace` | isolated working tree for the agent |
-| `tasksDir` | `/workspace/.tasks` | shared queue and message state |
+| `<repoRoot>/.mato` | `/workspace/.mato` | shared queue and message state |
 | `repoRoot` | same absolute host path | keeps the clone's local-path `origin` reachable |
 | `copilot` | `/usr/local/bin/copilot` (ro) | Copilot CLI inside container |
 | `git` | `/usr/local/bin/git` (ro) | Git inside container |
@@ -139,13 +139,13 @@ Environment variables injected by the host:
 - `PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
 - `MATO_AGENT_ID=<generated id>`
 - `MATO_MESSAGING_ENABLED=1`
-- `MATO_MESSAGES_DIR=/workspace/.tasks/messages`
+- `MATO_MESSAGES_DIR=/workspace/.mato/messages`
 - `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, `GIT_CONFIG_VALUE_0=*`
 - `GIT_AUTHOR_NAME` / `GIT_COMMITTER_NAME` if host Git config supplies a name
 - `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_EMAIL` if host Git config supplies an email
 - `HOME=<host home path>`
 - `GOPATH=<home>/go`, `GOMODCACHE=<home>/go/pkg/mod`, `GOCACHE=<home>/.cache/go-build`
-- `MATO_DEPENDENCY_CONTEXT=<file path>` (conditionally, only when the task has `depends_on` entries with available completion data; points to `.tasks/messages/dependency-context-<filename>.json`)
+- `MATO_DEPENDENCY_CONTEXT=<file path>` (conditionally, only when the task has `depends_on` entries with available completion data; points to `/workspace/.mato/messages/dependency-context-<filename>.json`)
 The final command is:
 ```text
 copilot -p <embedded task prompt> --autopilot --allow-all [copilotArgs...]
@@ -153,7 +153,7 @@ copilot -p <embedded task prompt> --autopilot --allow-all [copilotArgs...]
 If forwarded arguments do not already contain `--model`, `runOnce(...)` appends `--model` with the value from `MATO_DEFAULT_MODEL` (or `claude-opus-4.6` if unset).
 ### Host-side task claiming
 Before launching a Docker container, the host calls `queue.SelectAndClaimTask(tasksDir, agentID, deferred)` which:
-1. Reads `.tasks/.queue` if present, otherwise lists `backlog/*.md` alphabetically.
+1. Reads `.mato/.queue` if present, otherwise lists `backlog/*.md` alphabetically.
 2. Parses each candidate's frontmatter and counts `<!-- failure: ... -->` records.
 3. Atomically renames the candidate from `backlog/` to `in-progress/`.
 4. If the number of `<!-- failure: ... -->` records >= `max_retries` (default 3), moves the task from `in-progress/` to `failed/` and continues to the next candidate. If `failed/` is unavailable, the task is rolled back to `backlog/` and a `FailedDirUnavailableError` (carrying the task filename) is returned; the host loop adds this task to a persistent exclusion set to prevent livelocking on the same retry-exhausted task.
@@ -179,7 +179,7 @@ After the agent exits, the host (`postAgentPush` in `task.go`) checks for commit
 
 The prompt enforces several invariants: one task per run; agents never push any branches (the host handles all pushes); they send at most 4 messages per task (3 `progress` + 1 for `ON_FAILURE`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States
-The queue is encoded directly in directories under `.tasks/`.
+The queue is encoded directly in directories under `.mato/`.
 ```text
 waiting/ --deps met--> backlog/ --host claim--> in-progress/ --host push--> ready-for-review/ --approved--> ready-to-merge/ --merge--> completed/
    ^                      |                          |                              |
@@ -233,7 +233,7 @@ Relevant frontmatter defaults from `frontmatter.go`:
 ## 6. Merge Queue
 `merge.ProcessQueue(repoRoot, tasksDir, branch)` in `merge.go` is the host-side integrator.
 ### Locking
-Before processing the queue, `Run()` calls `merge.AcquireLock(tasksDir)`. The lock file is `.tasks/.locks/merge.lock`.
+Before processing the queue, `Run()` calls `merge.AcquireLock(tasksDir)`. The lock file is `.mato/.locks/merge.lock`.
 Behavior:
 - create with `O_CREATE|O_EXCL`
 - write a `"PID:starttime"` identity (via `process.LockIdentity`) into the file to detect PID reuse; on non-Linux systems the start time is unavailable so the value is just `"PID"`
@@ -255,7 +255,7 @@ For each task:
 9. `git merge --squash origin/<task-branch>`
 10. `git commit -m <formatted message with trailers>`
 11. `git push origin <target-branch>`
-12. After a successful push, write a completion detail file to `.tasks/messages/completions/` (using a collision-resistant encoding of the task ID; see `docs/messaging.md` for the filename encoding and full schema) with the commit SHA, changed files, branch, title, and merge timestamp. This file is used by `runner.writeDependencyContextFile(...)` to create the dependency context file referenced by `MATO_DEPENDENCY_CONTEXT` when a dependent task runs.
+12. After a successful push, write a completion detail file to `.mato/messages/completions/` (using a collision-resistant encoding of the task ID; see `docs/messaging.md` for the filename encoding and full schema) with the commit SHA, changed files, branch, title, and merge timestamp. This file is used by `runner.writeDependencyContextFile(...)` to create the dependency context file referenced by `MATO_DEPENDENCY_CONTEXT` when a dependent task runs.
 13. Append `<!-- merged: merge-queue at ... -->` and rename the task file `ready-to-merge/ -> completed/`
 ### Squash commit message format
 `formatSquashCommitMessage(task, agentLog)` builds the squash-merge commit message from the agent's commit and the task metadata. The format is:
@@ -290,7 +290,7 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 1. `selectTaskForReview(tasksDir)` scans `ready-for-review/*.md` for the next task to review.
 2. The host verifies the task branch exists (`git rev-parse --verify`). If the branch is missing, the host writes a `<!-- review-failure: ... -->` record and skips the review.
 3. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts).
-4. The review agent diffs the task branch against the target branch, analyzes the changes, and writes a JSON verdict file to `.tasks/messages/verdict-<filename>.json` with `{"verdict":"approve"}`, `{"verdict":"reject","reason":"..."}`, or `{"verdict":"error","reason":"..."}`.
+4. The review agent diffs the task branch against the target branch, analyzes the changes, and writes a JSON verdict file to `.mato/messages/verdict-<filename>.json` with `{"verdict":"approve"}`, `{"verdict":"reject","reason":"..."}`, or `{"verdict":"error","reason":"..."}`.
 5. After the review agent exits, the host reads the verdict file via `postReviewAction(...)`:
    - **Approved**: host writes `<!-- reviewed: ... -->` to the task file, moves it to `ready-to-merge/`, and sends a completion message.
    - **Rejected**: host writes `<!-- review-rejection: ... -->` to the task file, moves it back to `backlog/`, and sends a completion message.
@@ -331,7 +331,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `cmd/mato/main.go`
 - CLI entrypoint.
 - `main()` routes `status` to `status.Show(...)` and otherwise starts `runner.Run(...)`.
-- `extractKnownFlags(...)` handles `--repo`, `--branch`, `--tasks-dir`, `--help`, `--`, and forwards all other args to Copilot CLI.
+- `extractKnownFlags(...)` handles `--repo`, `--branch`, `--dry-run`, `--help`, `--`, and forwards all other args to Copilot CLI.
 
 ### `internal/runner/`
 - Embeds `task-instructions.md` (the task agent prompt/state machine) and `review-instructions.md` (the review agent prompt).
@@ -443,7 +443,7 @@ Responsibility is split cleanly:
 - Git branches carry code changes;
 - task files carry scheduling metadata and retry history;
 - `.locks/` and `.queue` provide coarse coordination;
-- `.tasks/messages/` provides advisory coordination.
+- `.mato/messages/` provides advisory coordination.
 
 The merge queue enriches each squash commit with git trailers (`Task-ID`, `Affects`) and writes completion detail files that flow back to dependent agents via `MATO_DEPENDENCY_CONTEXT`. This creates an agent → review → merge → dependent-agent knowledge chain: a task agent pushes its branch, the review agent evaluates the changes, the merge queue records what changed, and the next agent that depends on that work receives the context automatically.
 

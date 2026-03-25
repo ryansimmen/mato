@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/config"
+	"mato/internal/dirs"
 	"mato/internal/doctor"
 	"mato/internal/git"
 	"mato/internal/graph"
@@ -27,7 +29,6 @@ import (
 type runConfig struct {
 	repo        string
 	branch      string
-	tasksDir    string
 	dryRun      bool
 	copilotArgs []string
 }
@@ -41,8 +42,6 @@ func assignFlag(name, val string, cfg *runConfig) bool {
 		cfg.repo = val
 	case "--branch":
 		cfg.branch = val
-	case "--tasks-dir":
-		cfg.tasksDir = val
 	default:
 		return false
 	}
@@ -55,7 +54,7 @@ func assignFlag(name, val string, cfg *runConfig) bool {
 // by cobra and can be passed through.
 func extractKnownFlags(args []string) (runConfig, error) {
 	cfg := runConfig{copilotArgs: make([]string, 0, len(args))}
-	known := map[string]bool{"--repo": true, "--branch": true, "--tasks-dir": true}
+	known := map[string]bool{"--repo": true, "--branch": true}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -124,11 +123,89 @@ func resolveRepo(repo string) (string, error) {
 	return wd, nil
 }
 
-func resolveBranch(b string) string {
-	if b != "" {
-		return b
+func resolveEnvBranch() (string, bool, error) {
+	raw, ok := os.LookupEnv("MATO_BRANCH")
+	if !ok || raw == "" {
+		return "", false, nil
 	}
-	return "mato"
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false, fmt.Errorf("MATO_BRANCH must not be whitespace-only")
+	}
+	return trimmed, true, nil
+}
+
+func resolveConfigBranch(cfg config.Config, flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if envBranch, ok, err := resolveEnvBranch(); err != nil {
+		return "", err
+	} else if ok {
+		return envBranch, nil
+	}
+	if cfg.Branch != nil {
+		return *cfg.Branch, nil
+	}
+	return "mato", nil
+}
+
+func resolveRunOptions(cfg config.Config) (runner.RunOptions, error) {
+	var opts runner.RunOptions
+
+	if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
+		opts.DockerImage = v
+	} else if cfg.DockerImage != nil {
+		opts.DockerImage = *cfg.DockerImage
+	}
+
+	if v := os.Getenv("MATO_DEFAULT_MODEL"); v != "" {
+		opts.DefaultModel = v
+	} else if cfg.DefaultModel != nil {
+		opts.DefaultModel = *cfg.DefaultModel
+	}
+
+	if v := os.Getenv("MATO_AGENT_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return opts, fmt.Errorf("parse MATO_AGENT_TIMEOUT %q: %w", v, err)
+		}
+		if d <= 0 {
+			return opts, fmt.Errorf("MATO_AGENT_TIMEOUT must be positive, got %v", d)
+		}
+		opts.AgentTimeout = d
+	} else if cfg.AgentTimeout != nil {
+		d, err := time.ParseDuration(*cfg.AgentTimeout)
+		if err != nil {
+			return opts, fmt.Errorf("invalid agent_timeout %q in .mato.yaml: %w", *cfg.AgentTimeout, err)
+		}
+		if d <= 0 {
+			return opts, fmt.Errorf("agent_timeout in .mato.yaml must be positive, got %v", d)
+		}
+		opts.AgentTimeout = d
+	}
+
+	if v := os.Getenv("MATO_RETRY_COOLDOWN"); v != "" {
+		// Keep env parsing lenient for retry cooldown to preserve the pre-config
+		// behavior from queue.retryCooldown(): invalid or non-positive env values
+		// are ignored and fall back to config/default instead of aborting the run.
+		// In contrast, config-file values are treated as deliberate repository
+		// settings and therefore validated strictly when effective.
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			opts.RetryCooldown = d
+		}
+	} else if cfg.RetryCooldown != nil {
+		d, err := time.ParseDuration(*cfg.RetryCooldown)
+		if err != nil {
+			return opts, fmt.Errorf("invalid retry_cooldown %q in .mato.yaml: %w", *cfg.RetryCooldown, err)
+		}
+		if d <= 0 {
+			return opts, fmt.Errorf("retry_cooldown in .mato.yaml must be positive, got %v", d)
+		}
+		opts.RetryCooldown = d
+	}
+
+	return opts, nil
 }
 
 var gitShowTopLevel = func(dir string) (string, error) {
@@ -185,6 +262,14 @@ func validateRepoPath(dir string) error {
 	return gitRevParseGitDir(dir)
 }
 
+// runFn is the function used to start the orchestrator loop. Defaults to
+// runner.Run and can be replaced in tests to observe resolved values.
+var runFn = runner.Run
+
+// dryRunFn is the function used for dry-run validation. Defaults to
+// runner.DryRun and can be replaced in tests.
+var dryRunFn = runner.DryRun
+
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "mato [copilot-args...]",
@@ -216,14 +301,36 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 			if err := validateRepoPath(resolved); err != nil {
 				return err
 			}
-			br := resolveBranch(cfg.branch)
-			if err := validateBranch(br); err != nil {
+			repoRoot, err := resolveRepoRoot(resolved)
+			if err != nil {
+				return err
+			}
+			fileCfg, err := config.Load(repoRoot)
+			if err != nil {
 				return err
 			}
 			if cfg.dryRun {
-				return runner.DryRun(resolved, br, cfg.tasksDir)
+				br, err := resolveConfigBranch(fileCfg, cfg.branch)
+				if err != nil {
+					return err
+				}
+				if err := validateBranch(br); err != nil {
+					return err
+				}
+				return dryRunFn(repoRoot, br)
 			}
-			return runner.Run(resolved, br, cfg.tasksDir, cfg.copilotArgs)
+			opts, err := resolveRunOptions(fileCfg)
+			if err != nil {
+				return err
+			}
+			br, err := resolveConfigBranch(fileCfg, cfg.branch)
+			if err != nil {
+				return err
+			}
+			if err := validateBranch(br); err != nil {
+				return err
+			}
+			return runFn(repoRoot, br, cfg.copilotArgs, opts)
 		},
 	}
 
@@ -231,7 +338,6 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 	// because DisableFlagParsing is true (required for copilot arg forwarding).
 	root.Flags().String("repo", "", "Path to the git repository (default: current directory)")
 	root.Flags().String("branch", "", "Target branch for merging (default: mato)")
-	root.Flags().String("tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	root.Flags().Bool("dry-run", false, "Validate queue setup without launching Docker containers")
 
 	root.AddCommand(newStatusCmd())
@@ -245,7 +351,6 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 func newInitCmd() *cobra.Command {
 	var initRepo string
 	var initBranch string
-	var initTasksDir string
 
 	cmd := &cobra.Command{
 		Use:           "init",
@@ -265,19 +370,19 @@ func newInitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			branch := resolveBranch(initBranch)
+			fileCfg, err := config.Load(repoRoot)
+			if err != nil {
+				return err
+			}
+			branch, err := resolveConfigBranch(fileCfg, initBranch)
+			if err != nil {
+				return err
+			}
 			if err := validateBranch(branch); err != nil {
 				return err
 			}
 
-			tasksDir := initTasksDir
-			if tasksDir == "" {
-				tasksDir = filepath.Join(repoRoot, ".tasks")
-			} else if !filepath.IsAbs(tasksDir) {
-				tasksDir = filepath.Join(repoRoot, tasksDir)
-			}
-
-			result, err := setup.InitRepo(repoRoot, branch, filepath.Clean(tasksDir))
+			result, err := setup.InitRepo(repoRoot, branch)
 			if err != nil {
 				return err
 			}
@@ -288,7 +393,6 @@ func newInitCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&initRepo, "repo", "", "Path to the git repository (default: current directory)")
 	cmd.Flags().StringVar(&initBranch, "branch", "", "Target branch name (default: mato)")
-	cmd.Flags().StringVar(&initTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 
 	return cmd
 }
@@ -299,17 +403,13 @@ func printInitResult(result *setup.InitResult) {
 			fmt.Printf("Created %s/\n", rel)
 		}
 	} else {
-		fmt.Println(".tasks/ directory structure already exists")
+		fmt.Printf("%s/ directory structure already exists\n", dirs.Root)
 	}
 
-	if result.GitignoreSkipped {
-		fmt.Println("Skipped .gitignore (tasks directory is outside the repository)")
+	if result.GitignoreUpdated {
+		fmt.Printf("Added %s to .gitignore\n", result.IgnorePattern)
 	} else {
-		if result.GitignoreUpdated {
-			fmt.Printf("Added %s to .gitignore\n", result.IgnorePattern)
-		} else {
-			fmt.Printf(".gitignore already contains %s\n", result.IgnorePattern)
-		}
+		fmt.Printf(".gitignore already contains %s\n", result.IgnorePattern)
 	}
 
 	switch {
@@ -321,7 +421,7 @@ func printInitResult(result *setup.InitResult) {
 		fmt.Printf("Created branch: %s\n", result.BranchName)
 	}
 
-	if len(result.DirsCreated) == 0 && !result.GitignoreUpdated && !result.GitignoreSkipped && result.AlreadyOnBranch {
+	if len(result.DirsCreated) == 0 && !result.GitignoreUpdated && result.AlreadyOnBranch {
 		fmt.Println("Nothing to do - already initialized.")
 		return
 	}
@@ -330,7 +430,6 @@ func printInitResult(result *setup.InitResult) {
 
 func newStatusCmd() *cobra.Command {
 	var statusRepo string
-	var statusTasksDir string
 	var watch bool
 	var interval time.Duration
 	var format string
@@ -353,7 +452,7 @@ func newStatusCmd() *cobra.Command {
 				if watch {
 					return fmt.Errorf("--format json and --watch cannot be used together")
 				}
-				return status.ShowJSON(os.Stdout, repo, statusTasksDir)
+				return status.ShowJSON(os.Stdout, repo)
 			}
 			if watch {
 				if interval <= 0 {
@@ -361,14 +460,13 @@ func newStatusCmd() *cobra.Command {
 				}
 				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 				defer stop()
-				return status.Watch(ctx, repo, statusTasksDir, interval)
+				return status.Watch(ctx, repo, interval)
 			}
-			return status.Show(repo, statusTasksDir)
+			return status.Show(repo)
 		},
 	}
 
 	cmd.Flags().StringVar(&statusRepo, "repo", "", "Path to the git repository (default: current directory)")
-	cmd.Flags().StringVar(&statusTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Continuously refresh the status display")
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "Refresh interval for watch mode")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
@@ -391,7 +489,6 @@ var doctorRunFn = doctor.Run
 
 func newDoctorCmd() *cobra.Command {
 	var doctorRepo string
-	var doctorTasksDir string
 	var fix bool
 	var format string
 	var only []string
@@ -419,7 +516,7 @@ func newDoctorCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
 
-			report, err := doctorRunFn(ctx, repoInput, doctorTasksDir, doctor.Options{
+			report, err := doctorRunFn(ctx, repoInput, doctor.Options{
 				Fix:    fix,
 				Format: format,
 				Only:   only,
@@ -444,7 +541,6 @@ func newDoctorCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&doctorRepo, "repo", "", "Path to git repository (default: current directory)")
-	cmd.Flags().StringVar(&doctorTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, hygiene, deps)")
@@ -454,7 +550,6 @@ func newDoctorCmd() *cobra.Command {
 
 func newGraphCmd() *cobra.Command {
 	var graphRepo string
-	var graphTasksDir string
 	var format string
 	var showAll bool
 
@@ -472,12 +567,11 @@ func newGraphCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return graph.Show(repo, graphTasksDir, format, showAll)
+			return graph.Show(repo, format, showAll)
 		},
 	}
 
 	cmd.Flags().StringVar(&graphRepo, "repo", "", "Path to the git repository (default: current directory)")
-	cmd.Flags().StringVar(&graphTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, dot, or json")
 	cmd.Flags().BoolVar(&showAll, "all", false, "Include completed and failed tasks")
 
@@ -486,7 +580,6 @@ func newGraphCmd() *cobra.Command {
 
 func newRetryCmd() *cobra.Command {
 	var retryRepo string
-	var retryTasksDir string
 
 	cmd := &cobra.Command{
 		Use:           "retry <task-name> [task-name...]",
@@ -495,18 +588,15 @@ func newRetryCmd() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tasksDir := retryTasksDir
-			if tasksDir == "" {
-				repo, err := resolveRepo(retryRepo)
-				if err != nil {
-					return err
-				}
-				repoRoot, err := resolveRepoRoot(repo)
-				if err != nil {
-					return err
-				}
-				tasksDir = filepath.Join(repoRoot, ".tasks")
+			repo, err := resolveRepo(retryRepo)
+			if err != nil {
+				return err
 			}
+			repoRoot, err := resolveRepoRoot(repo)
+			if err != nil {
+				return err
+			}
+			tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 			var firstErr error
 			for _, name := range args {
@@ -525,7 +615,6 @@ func newRetryCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&retryRepo, "repo", "", "Path to the git repository (default: current directory)")
-	cmd.Flags().StringVar(&retryTasksDir, "tasks-dir", "", "Path to the tasks directory (default: <repo>/.tasks)")
 
 	return cmd
 }
