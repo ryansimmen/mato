@@ -437,6 +437,7 @@ func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 
 func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"init", "--repo", repoRoot})
 
@@ -484,6 +485,7 @@ func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
 
 func TestInitCmd_Idempotent(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"init", "--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
@@ -1400,6 +1402,7 @@ func TestResolveRunOptions(t *testing.T) {
 
 func TestConfigFile_BranchFromConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
 	writeRepoConfig(t, repoRoot, "branch: main\n")
 
 	origRunFn := runFn
@@ -1494,6 +1497,7 @@ func TestConfigFile_BranchEnvOverridesConfig(t *testing.T) {
 
 func TestConfigFile_MissingConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
 
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
@@ -1618,6 +1622,7 @@ func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
 
 func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
 	writeRepoConfig(t, repoRoot, "branch: main\n")
 
 	origDryRunFn := dryRunFn
@@ -1654,7 +1659,27 @@ func TestConfigFile_WhitespaceEnvBranchRejected(t *testing.T) {
 
 func TestConfigFile_InitUsesConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
 	writeRepoConfig(t, repoRoot, "branch: main\n")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	branchOut, err := runCmd("git", "-C", repoRoot, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v\n%s", err, branchOut)
+	}
+	if strings.TrimSpace(branchOut) != "main" {
+		t.Fatalf("current branch = %q, want %q", strings.TrimSpace(branchOut), "main")
+	}
+}
+
+func TestConfigFile_InitUsesEnvBranch(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "main")
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"init", "--repo", repoRoot})
