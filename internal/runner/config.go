@@ -15,22 +15,6 @@ import (
 	"golang.org/x/term"
 )
 
-// parseAgentTimeout parses a duration string for the agent timeout.
-// Returns defaultAgentTimeout if envVal is empty.
-func parseAgentTimeout(envVal string) (time.Duration, error) {
-	if envVal == "" {
-		return defaultAgentTimeout, nil
-	}
-	parsed, err := time.ParseDuration(envVal)
-	if err != nil {
-		return 0, fmt.Errorf("parse MATO_AGENT_TIMEOUT %q: %w", envVal, err)
-	}
-	if parsed <= 0 {
-		return 0, fmt.Errorf("MATO_AGENT_TIMEOUT must be positive, got %v", parsed)
-	}
-	return parsed, nil
-}
-
 // checkDocker verifies that Docker is installed and the daemon is running
 // by executing "docker info". This runs before any queue setup so that a
 // missing or stopped Docker installation fails fast with a clear message
@@ -99,7 +83,7 @@ type envConfig struct {
 	hasSystemCerts                          bool
 	copilotArgs                             []string
 	repoRoot, tasksDir                      string
-	targetBranch                            string
+	targetBranch, defaultModel              string
 	isTTY                                   bool
 }
 
@@ -190,20 +174,17 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"copilot", "-p", run.prompt, "--autopilot", "--allow-all",
 	)
 	if !hasModelArg(env.copilotArgs) {
-		args = append(args, "--model", defaultModel())
+		args = append(args, "--model", resolveDefaultModel(env.defaultModel))
 	}
 	args = append(args, env.copilotArgs...)
 	return args
 }
 
-// defaultModel returns the Copilot model to use when --model is not
-// explicitly passed. It checks MATO_DEFAULT_MODEL first, then falls
-// back to the hardcoded default.
-func defaultModel() string {
-	if m := os.Getenv("MATO_DEFAULT_MODEL"); m != "" {
-		return m
+func resolveDefaultModel(model string) string {
+	if model != "" {
+		return model
 	}
-	return "claude-opus-4.6"
+	return defaultCopilotModel
 }
 
 func hasModelArg(args []string) bool {

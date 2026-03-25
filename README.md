@@ -55,6 +55,8 @@ Useful flags:
 
 Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe.
 
+You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `default_model`, `agent_timeout`, and `retry_cooldown`. CLI flags still win over config, and host env vars still win over both.
+
 Arguments after a `--` separator are always forwarded to the Copilot CLI without
 interpretation — even `--help` and `-h` (e.g., `mato -- --help` forwards
 `--help` to Copilot instead of showing mato's own usage).
@@ -201,7 +203,7 @@ attempt still receives prior reviewer guidance. If the task already exists in
 
 ## Docker
 
-`mato` launches an `ubuntu:24.04` container by default (override with `MATO_DOCKER_IMAGE`). The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
+`mato` launches an `ubuntu:24.04` container by default. Override it with `MATO_DOCKER_IMAGE` or set `docker_image` in `.mato.yaml`. The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
 
 ```bash
 mato --model gpt-5.3-codex

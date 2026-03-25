@@ -180,7 +180,7 @@ func rollbackClaimToBacklog(name, dst, src string, claimErr error) error {
 //
 // When idx is non-nil, the index is used for active branch lookup and
 // pre-parsed metadata. When idx is nil, the filesystem is scanned directly.
-func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, idx *PollIndex) (*ClaimedTask, error) {
+func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, cooldown time.Duration, idx *PollIndex) (*ClaimedTask, error) {
 	candidates, err := selectCandidates(tasksDir, deferred)
 	if err != nil {
 		return nil, err
@@ -237,7 +237,7 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 			rawData, readErr := os.ReadFile(src)
 			if readErr == nil {
 				if lastFail, ok := lastFailureTime(rawData); ok {
-					if timeNowFn().Sub(lastFail) < retryCooldown() {
+					if timeNowFn().Sub(lastFail) < retryCooldown(cooldown) {
 						continue
 					}
 				}
@@ -400,14 +400,11 @@ func CountReviewFailureLines(taskPath string) (int, error) {
 	return taskfile.CountReviewFailureMarkers(data), nil
 }
 
-// retryCooldown returns the configured retry cooldown duration from the
-// MATO_RETRY_COOLDOWN environment variable, defaulting to defaultRetryCooldown
-// (2 minutes). Invalid or non-positive values are silently ignored.
-func retryCooldown() time.Duration {
-	if v := os.Getenv("MATO_RETRY_COOLDOWN"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
+// retryCooldown resolves the effective retry cooldown duration, defaulting to
+// defaultRetryCooldown when cooldown is zero or negative.
+func retryCooldown(cooldown time.Duration) time.Duration {
+	if cooldown > 0 {
+		return cooldown
 	}
 	return defaultRetryCooldown
 }

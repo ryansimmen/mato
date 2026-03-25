@@ -30,13 +30,13 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 +------------------+     ready-to-merge -> completed
 ```
 High-level flow:
-1. `main.go` parses flags and either starts `runner.Run(...)`, bootstraps a repository via `setup.InitRepo(...)`, or routes to subcommands such as `status.Show(...)`.
-2. `runner.Run(...)` creates/maintains the queue, writes `.queue`, and starts agent runs.
+1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)`, bootstraps a repository via `setup.InitRepo(...)`, or routes to subcommands such as `status.Show(...)`.
+2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs.
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim and pushes `task/<sanitized-filename>`.
 4. The host merge queue squashes that task branch into the target branch and moves the task file to `completed/`.
 ## 2. Host Loop
 ### Startup
-`runner.Run(repoRoot, branch, copilotArgs)` performs host initialization in this order:
+`runner.Run(repoRoot, branch, copilotArgs, opts)` performs host initialization in this order:
 1. Resolve `repoRoot` with `git rev-parse --show-toplevel`.
 2. Ensure the target branch exists with `git.EnsureBranch(...)`; if the local branch exists, check it out; otherwise fetch the branch from `origin` (non-fatal on failure), then if `origin/<branch>` exists create the local branch from the remote-tracking ref; otherwise create it from `HEAD`.
 3. Resolve `tasksDir` as `<repoRoot>/.mato`.
@@ -45,7 +45,7 @@ High-level flow:
 6. Generate an agent ID with `identity.GenerateAgentID()`.
 7. Register the process as active by writing `.mato/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
 8. Ensure `/.mato/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
-9. Resolve host tools and config: Docker image, `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity.
+9. Resolve host tools and runtime dependencies: `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity. Docker image, default model, agent timeout, and retry cooldown are already resolved in `cmd/mato/main.go`.
 10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.mato`, the configured target branch, and `/workspace/.mato/messages`.
 11. Install `SIGINT`/`SIGTERM` handlers.
 
@@ -76,7 +76,7 @@ idx = queue.BuildIndex(tasksDir)           // rebuild after reconcile
 deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
 // merge failedDirExcluded into deferred
 queue.WriteQueueManifest(tasksDir, deferred, idx)
-claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, idx)
+claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, cooldown, idx)
 if FailedDirUnavailableError → add task to failedDirExcluded
 if claimed != nil:
     messaging.WriteMessage(...) intent
@@ -93,7 +93,7 @@ Important details from the implementation:
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
 - `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifest()`. Conflict-deferred tasks are excluded from the manifest so agents will not select them.
-- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts `<!-- failure: ... -->` records, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
+- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
 - When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, excluded tasks are merged into the `deferred` map before calling `SelectAndClaimTask`, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.

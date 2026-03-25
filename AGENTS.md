@@ -40,6 +40,7 @@ go build ./... && go vet ./... && go test -count=1 ./...
 cmd/mato/          CLI entrypoint (cobra root command)
 internal/          All library packages:
   atomicwrite/     Atomic file write utilities
+  config/          Repository-local .mato.yaml loading
   dag/             Dependency graph analysis (Kahn + Tarjan)
   doctor/          Health checks for repo and task queue
   frontmatter/     YAML frontmatter parser

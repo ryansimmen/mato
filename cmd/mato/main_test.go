@@ -10,8 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"mato/internal/config"
 	"mato/internal/doctor"
+	"mato/internal/runner"
 	"mato/internal/testutil"
 
 	"github.com/spf13/cobra"
@@ -380,6 +383,13 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatalf("close read pipe: %v", err)
 	}
 	return string(data)
+}
+
+func writeRepoConfig(t *testing.T, repoRoot, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repoRoot, ".mato.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write .mato.yaml: %v", err)
+	}
 }
 
 func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
@@ -1267,5 +1277,307 @@ func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- review-rejection:") {
 		t.Fatal("review rejection feedback should be preserved")
+	}
+}
+
+func TestResolveConfigBranch(t *testing.T) {
+	branch := "main"
+	tests := []struct {
+		name string
+		cfg  *string
+		flag string
+		want string
+	}{
+		{name: "flag wins", cfg: &branch, flag: "feature", want: "feature"},
+		{name: "config used", cfg: &branch, want: "main"},
+		{name: "default fallback", want: "mato"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveConfigBranch(configFixture(tt.cfg), tt.flag)
+			if got != tt.want {
+				t.Fatalf("resolveConfigBranch(...) = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveRunOptions(t *testing.T) {
+	stringPtr := func(v string) *string { return &v }
+
+	t.Run("uses config values when env unset", func(t *testing.T) {
+		opts, err := resolveRunOptions(configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("45m"), stringPtr("5m")))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.DockerImage != "custom:latest" || opts.DefaultModel != "claude-sonnet-4" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+			t.Fatalf("opts = %+v", opts)
+		}
+	})
+
+	t.Run("env overrides invalid config", func(t *testing.T) {
+		t.Setenv("MATO_AGENT_TIMEOUT", "1h")
+		t.Setenv("MATO_RETRY_COOLDOWN", "90s")
+		opts, err := resolveRunOptions(configFixtureWithValues(nil, nil, stringPtr("bad"), stringPtr("also-bad")))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.AgentTimeout != time.Hour || opts.RetryCooldown != 90*time.Second {
+			t.Fatalf("opts = %+v", opts)
+		}
+	})
+
+	t.Run("invalid effective config errors", func(t *testing.T) {
+		_, err := resolveRunOptions(configFixtureWithValues(nil, nil, stringPtr("bad"), nil))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("invalid effective env timeout errors", func(t *testing.T) {
+		t.Setenv("MATO_AGENT_TIMEOUT", "bad")
+		_, err := resolveRunOptions(configFixture(nil))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("invalid env cooldown ignored", func(t *testing.T) {
+		t.Setenv("MATO_RETRY_COOLDOWN", "bad")
+		opts, err := resolveRunOptions(configFixture(nil))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.RetryCooldown != 0 {
+			t.Fatalf("RetryCooldown = %v, want 0", opts.RetryCooldown)
+		}
+	})
+}
+
+func TestConfigFile_BranchFromConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	called := false
+	runFn = func(repoRootArg, branch string, copilotArgs []string, opts runner.RunOptions) error {
+		called = true
+		if repoRootArg != repoRoot {
+			t.Fatalf("repoRoot = %q, want %q", repoRootArg, repoRoot)
+		}
+		if branch != "main" {
+			t.Fatalf("branch = %q, want %q", branch, "main")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !called {
+		t.Fatal("expected runFn to be called")
+	}
+}
+
+func TestConfigFile_BranchFlagOverridesConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+		if branch != "feature" {
+			t.Fatalf("branch = %q, want %q", branch, "feature")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot, "--branch", "feature"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_MissingConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, branch string, _ []string, opts runner.RunOptions) error {
+		if branch != "mato" {
+			t.Fatalf("branch = %q, want %q", branch, "mato")
+		}
+		if opts != (runner.RunOptions{}) {
+			t.Fatalf("opts = %+v, want zero value", opts)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_InvalidYAML(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: [\n")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse config file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConfigFile_InvalidAgentTimeout_RunMode(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "agent_timeout: not-a-duration\n")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid agent_timeout") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConfigFile_InvalidTimeout_EnvOverride(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "agent_timeout: not-a-duration\n")
+	t.Setenv("MATO_AGENT_TIMEOUT", "1h")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
+		if opts.AgentTimeout != time.Hour {
+			t.Fatalf("AgentTimeout = %v, want %v", opts.AgentTimeout, time.Hour)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_InvalidCooldown_EnvOverride(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "retry_cooldown: not-a-duration\n")
+	t.Setenv("MATO_RETRY_COOLDOWN", "90s")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
+		if opts.RetryCooldown != 90*time.Second {
+			t.Fatalf("RetryCooldown = %v, want %v", opts.RetryCooldown, 90*time.Second)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, strings.Join([]string{
+		"docker_image: custom:latest",
+		"default_model: claude-sonnet-4",
+		"agent_timeout: 45m",
+		"retry_cooldown: 5m",
+		"",
+	}, "\n"))
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
+		if opts.DockerImage != "custom:latest" || opts.DefaultModel != "claude-sonnet-4" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+			t.Fatalf("opts = %+v", opts)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+
+	origDryRunFn := dryRunFn
+	defer func() { dryRunFn = origDryRunFn }()
+
+	dryRunFn = func(_ string, branch string) error {
+		if branch != "main" {
+			t.Fatalf("branch = %q, want %q", branch, "main")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--repo", repoRoot, "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestConfigFile_InitUsesConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	branchOut, err := runCmd("git", "-C", repoRoot, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v\n%s", err, branchOut)
+	}
+	if strings.TrimSpace(branchOut) != "main" {
+		t.Fatalf("current branch = %q, want %q", strings.TrimSpace(branchOut), "main")
+	}
+}
+
+func configFixture(branch *string) config.Config {
+	return config.Config{Branch: branch}
+}
+
+func configFixtureWithValues(dockerImage, defaultModel, agentTimeout, retryCooldown *string) config.Config {
+	return config.Config{
+		DockerImage:   dockerImage,
+		DefaultModel:  defaultModel,
+		AgentTimeout:  agentTimeout,
+		RetryCooldown: retryCooldown,
 	}
 }

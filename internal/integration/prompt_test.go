@@ -270,7 +270,7 @@ func quotedPath(path string) string {
 func TestPromptVerifyClaim(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, nil)
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, 0, nil)
 	if claimed != nil {
 		t.Fatalf("expected no task (backlog empty), got %+v", claimed)
 	}
@@ -279,7 +279,7 @@ func TestPromptVerifyClaim(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirBacklog, "task-beta.md", "# Task Beta\nDo beta.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\n")
 
-	claimed, err = queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, nil)
+	claimed, err = queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -621,7 +621,7 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "task-alpha.md\ntask-beta.md\ntask-gamma.md\n")
 
 	// Both agents claim via Go; each gets a different task.
-	claimedA, err := queue.SelectAndClaimTask(tasksDir, "agent-a", nil, nil)
+	claimedA, err := queue.SelectAndClaimTask(tasksDir, "agent-a", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("claim agent-a: %v", err)
 	}
@@ -629,7 +629,7 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 		t.Fatal("agent-a got no task")
 	}
 
-	claimedB, err := queue.SelectAndClaimTask(tasksDir, "agent-b", nil, nil)
+	claimedB, err := queue.SelectAndClaimTask(tasksDir, "agent-b", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("claim agent-b: %v", err)
 	}
@@ -830,7 +830,7 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirBacklog, "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".queue"), "add-hello.md\n")
 
-	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-8", nil, nil)
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-8", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}

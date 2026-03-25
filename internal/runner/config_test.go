@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestBuildDockerArgs_GhConfigMount(t *testing.T) {
@@ -258,7 +257,6 @@ func TestBuildDockerArgs_MessagingEnvVars(t *testing.T) {
 }
 
 func TestBuildDockerArgs_CopilotArgsPassthrough(t *testing.T) {
-	t.Setenv("MATO_DEFAULT_MODEL", "")
 	env := envConfig{
 		homeDir:     "/home/test",
 		image:       "ubuntu:24.04",
@@ -306,37 +304,15 @@ func TestBuildDockerArgs_PromptInArgs(t *testing.T) {
 	}
 }
 
-func TestParseAgentTimeout_SubSecondDuration(t *testing.T) {
-	got, err := parseAgentTimeout("500ms")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != 500*time.Millisecond {
-		t.Fatalf("expected 500ms, got %v", got)
-	}
-}
-
-func TestParseAgentTimeout_LargeDuration(t *testing.T) {
-	got, err := parseAgentTimeout("100h")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != 100*time.Hour {
-		t.Fatalf("expected 100h, got %v", got)
-	}
-}
-
-func TestDefaultModel_FallbackToHardcoded(t *testing.T) {
-	t.Setenv("MATO_DEFAULT_MODEL", "")
-	if m := defaultModel(); m != "claude-opus-4.6" {
+func TestResolveDefaultModel_FallbackToHardcoded(t *testing.T) {
+	if m := resolveDefaultModel(""); m != "claude-opus-4.6" {
 		t.Fatalf("expected hardcoded default model, got %q", m)
 	}
 }
 
-func TestDefaultModel_EnvVarOverride(t *testing.T) {
-	t.Setenv("MATO_DEFAULT_MODEL", "custom-model-v2")
-	if m := defaultModel(); m != "custom-model-v2" {
-		t.Fatalf("expected env var model, got %q", m)
+func TestResolveDefaultModel_Configured(t *testing.T) {
+	if m := resolveDefaultModel("custom-model-v2"); m != "custom-model-v2" {
+		t.Fatalf("expected configured model, got %q", m)
 	}
 }
 
