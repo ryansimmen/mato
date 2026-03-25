@@ -116,7 +116,7 @@ Before Docker starts, `runOnce(...)`:
 3. Sets `receive.denyCurrentBranch=updateInstead` in the origin repo so the temp clone can push into the checked-out target branch safely.
 The design relies on `.mato/` being Git-ignored so queue updates do not dirty the branch being updated via `updateInstead`.
 ### Docker runtime
-The container runs as `docker run --rm -it --user <uid>:<gid>` with working directory `/workspace`.
+The container runs as `docker run --rm --init -it --user <uid>:<gid>` with working directory `/workspace`. The `--init` flag ensures an init process reaps zombie child processes inside the container.
 Primary mounts:
 | Host | Container | Why |
 | --- | --- | --- |
@@ -130,9 +130,11 @@ Primary mounts:
 | `gh` | `/usr/local/bin/gh` (ro) | GitHub CLI |
 | host `GOROOT` | `/usr/local/go` (ro) | Go toolchain |
 | host `~/.copilot` | `$HOME/.copilot` | Copilot auth/package state |
+| host `~/.cache/copilot` | `$HOME/.cache/copilot` | Copilot cache data |
 | host `~/go/pkg/mod` | `$HOME/go/pkg/mod` | Go module cache |
 | host `~/.cache/go-build` | `$HOME/.cache/go-build` | Go build cache |
 | host `~/.config/gh` | `$HOME/.config/gh` (ro, optional) | `gh` config |
+| host git-templates dir | same absolute host path (ro, optional) | Git hooks and templates |
 | host `/etc/ssl/certs` | `/etc/ssl/certs` (ro, optional) | CA trust |
 Environment variables injected by the host:
 - `GOROOT=/usr/local/go`

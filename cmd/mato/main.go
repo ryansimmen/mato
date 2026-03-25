@@ -186,14 +186,14 @@ func resolveRunOptions(cfg config.Config) (runner.RunOptions, error) {
 	}
 
 	if v := os.Getenv("MATO_RETRY_COOLDOWN"); v != "" {
-		// Keep env parsing lenient for retry cooldown to preserve the pre-config
-		// behavior from queue.retryCooldown(): invalid or non-positive env values
-		// are ignored and fall back to config/default instead of aborting the run.
-		// In contrast, config-file values are treated as deliberate repository
-		// settings and therefore validated strictly when effective.
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			opts.RetryCooldown = d
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return opts, fmt.Errorf("parse MATO_RETRY_COOLDOWN %q: %w", v, err)
 		}
+		if d <= 0 {
+			return opts, fmt.Errorf("MATO_RETRY_COOLDOWN must be positive, got %v", d)
+		}
+		opts.RetryCooldown = d
 	} else if cfg.RetryCooldown != nil {
 		d, err := time.ParseDuration(*cfg.RetryCooldown)
 		if err != nil {
@@ -513,13 +513,33 @@ func newDoctorCmd() *cobra.Command {
 				repoInput = wd
 			}
 
+			// Resolve docker image the same way as the run command:
+			// env var > .mato.yaml > default. If the repo root cannot
+			// be determined, fall back to env/default and let the git
+			// check report the problem. Config load errors are fatal
+			// so doctor does not silently produce results based on
+			// the wrong image when .mato.yaml is malformed.
+			var dockerImage string
+			if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
+				dockerImage = v
+			} else if root, err := resolveRepoRoot(repoInput); err == nil {
+				fileCfg, err := config.Load(root)
+				if err != nil {
+					return err
+				}
+				if fileCfg.DockerImage != nil {
+					dockerImage = *fileCfg.DockerImage
+				}
+			}
+
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
 
 			report, err := doctorRunFn(ctx, repoInput, doctor.Options{
-				Fix:    fix,
-				Format: format,
-				Only:   only,
+				Fix:         fix,
+				Format:      format,
+				Only:        only,
+				DockerImage: dockerImage,
 			})
 			if err != nil {
 				return err // hard failure -> "mato error: ..." + exit 1
