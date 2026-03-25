@@ -601,3 +601,41 @@ func TestDoctor_DockerImage_Fix_PullFails(t *testing.T) {
 		t.Error("expected docker.image_missing finding")
 	}
 }
+
+func TestDoctor_DockerImage_FromOptions(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Override the inspect stub to record which image was inspected.
+	var inspectedImage string
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		inspectedImage = image
+		return nil
+	})
+
+	report, err := Run(context.Background(), repoRoot, Options{
+		Format:      "text",
+		Only:        []string{"docker"},
+		DockerImage: "my-custom:image",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if inspectedImage != "my-custom:image" {
+		t.Errorf("inspected image = %q, want %q", inspectedImage, "my-custom:image")
+	}
+
+	// Verify the finding message mentions the custom image.
+	foundCustom := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "docker.image_available" && strings.Contains(f.Message, "my-custom:image") {
+				foundCustom = true
+			}
+		}
+	}
+	if !foundCustom {
+		t.Error("expected docker.image_available finding mentioning custom image")
+	}
+}

@@ -12,6 +12,10 @@ import (
 )
 
 func runMatoCommand(t *testing.T, args ...string) (string, error) {
+	return runMatoCommandWithEnv(t, nil, args...)
+}
+
+func runMatoCommandWithEnv(t *testing.T, env []string, args ...string) (string, error) {
 	t.Helper()
 
 	_, file, _, ok := runtime.Caller(0)
@@ -23,9 +27,35 @@ func runMatoCommand(t *testing.T, args ...string) (string, error) {
 	cmdArgs := append([]string{"run", "./cmd/mato"}, args...)
 	cmd := exec.Command("go", cmdArgs...)
 	cmd.Dir = moduleRoot
-	cmd.Env = os.Environ()
+	cmd.Env = append(filteredHostEnv(
+		"MATO_BRANCH",
+		"MATO_DOCKER_IMAGE",
+		"MATO_DEFAULT_MODEL",
+		"MATO_AGENT_TIMEOUT",
+		"MATO_RETRY_COOLDOWN",
+	), env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+func filteredHostEnv(excludedKeys ...string) []string {
+	excluded := make(map[string]struct{}, len(excludedKeys))
+	for _, key := range excludedKeys {
+		excluded[key] = struct{}{}
+	}
+
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, excludedKey := excluded[key]; excludedKey {
+				continue
+			}
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func TestConfigFile_EndToEnd(t *testing.T) {
@@ -41,11 +71,11 @@ func TestConfigFile_EndToEnd(t *testing.T) {
 	}
 }
 
-func TestConfigFile_DryRunWithConfig(t *testing.T) {
+func TestConfigFile_DryRunInvalidBranchFromConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yaml"), "branch: foo..bar\n")
 
-	out, err := runMatoCommand(t, "--repo", repoRoot, "--dry-run")
+	out, err := runMatoCommandWithEnv(t, []string{"MATO_BRANCH="}, "--repo", repoRoot, "--dry-run")
 	if err == nil {
 		t.Fatal("expected command error, got nil")
 	}

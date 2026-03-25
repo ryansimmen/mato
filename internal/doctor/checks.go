@@ -315,7 +315,10 @@ func checkDocker(cc *checkContext) CheckReport {
 	})
 
 	// Check if the configured Docker image is available locally.
-	image := resolveDockerImage()
+	image := cc.opts.DockerImage
+	if image == "" {
+		image = resolveDockerImage()
+	}
 	if err := dockerImageInspectFn(cc.ctx, image); err != nil {
 		f := Finding{
 			Code:     "docker.image_missing",
