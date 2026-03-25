@@ -179,43 +179,41 @@ func DryRun(repoRoot, branch string) error {
 		return fmt.Errorf("%d required queue directories missing — run `mato init` to create them", missingDirs)
 	}
 
-	// Parse all task files and report errors
+	// Build a single shared index for all sections.
+	idx := queue.BuildIndex(tasksDir)
+	surfaceBuildWarnings(idx)
+
+	// --- Task File Validation ---
 	fmt.Println("=== Task File Validation ===")
-	parseErrors := 0
-	totalTasks := 0
+	parseFailures := idx.ParseFailures()
+	totalTasks := len(parseFailures)
 	for _, sub := range subdirs {
-		dir := filepath.Join(tasksDir, sub)
-		names, readErr := queue.ListTaskFiles(dir)
-		if readErr != nil {
-			continue
-		}
-		for _, name := range names {
-			totalTasks++
-			path := filepath.Join(dir, name)
-			if _, _, parseErr := frontmatter.ParseTaskFile(path); parseErr != nil {
-				fmt.Printf("  ERROR %s/%s: %v\n", sub, name, parseErr)
-				parseErrors++
-			}
-		}
+		totalTasks += len(idx.TasksByState(sub))
 	}
-	if parseErrors > 0 {
-		fmt.Printf("  %d of %d task file(s) have parse errors\n", parseErrors, totalTasks)
+	if len(parseFailures) > 0 {
+		for _, pf := range parseFailures {
+			fmt.Printf("  ERROR %s/%s: %v\n", pf.State, pf.Filename, pf.Err)
+		}
+		fmt.Printf("  %d of %d task file(s) have parse errors\n", len(parseFailures), totalTasks)
 	} else {
 		fmt.Printf("  All %d task file(s) parsed successfully\n", totalTasks)
 	}
 
-	// Run dependency reconciliation (read-only: report what would be promoted)
+	// --- Dependency Resolution ---
 	fmt.Println("\n=== Dependency Resolution ===")
-	promotable := queue.CountPromotableWaitingTasks(tasksDir, nil)
+	promotable := queue.CountPromotableWaitingTasks(tasksDir, idx)
 	if promotable > 0 {
 		fmt.Printf("  %d task(s) in waiting/ would be promoted to backlog/\n", promotable)
 	} else {
 		fmt.Println("  No waiting tasks ready for promotion")
 	}
 
-	// Detect affects conflicts
+	// --- Dependency Summary ---
+	dryRunDependencySummary(tasksDir, idx)
+
+	// --- Affects Conflict Detection ---
 	fmt.Println("\n=== Affects Conflict Detection ===")
-	detailed := queue.DeferredOverlappingTasksDetailed(tasksDir, nil)
+	detailed := queue.DeferredOverlappingTasksDetailed(tasksDir, idx)
 	if len(detailed) > 0 {
 		// Sort deferred task names for stable output.
 		names := make([]string, 0, len(detailed))
@@ -232,30 +230,26 @@ func DryRun(repoRoot, branch string) error {
 		fmt.Println("  No affects conflicts detected")
 	}
 
-	// Compute and display queue manifest (read-only: no file written)
-	fmt.Println("\n=== Queue Manifest ===")
-	deferredSimple := make(map[string]struct{}, len(detailed))
+	// --- Execution Order ---
+	deferredSet := make(map[string]struct{}, len(detailed))
 	for name := range detailed {
-		deferredSimple[name] = struct{}{}
+		deferredSet[name] = struct{}{}
 	}
-	manifest, manifestErr := queue.ComputeQueueManifest(tasksDir, deferredSimple, nil)
-	if manifestErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not compute queue manifest: %v\n", manifestErr)
-	}
-	if len(strings.TrimSpace(manifest)) == 0 {
-		fmt.Println("  (queue is empty)")
-	} else {
-		for i, line := range strings.Split(strings.TrimSpace(manifest), "\n") {
-			fmt.Printf("  %d. %s\n", i+1, line)
-		}
-	}
+	dryRunExecutionOrder(idx, deferredSet)
 
-	// Summary counts
+	// --- Backlog Task Summary ---
+	dryRunBacklogSummary(idx, deferredSet)
+
+	// --- Queue Summary ---
+	// Count includes both successfully parsed tasks and parse failures
+	// so the total matches the actual number of files on disk.
+	parseFailuresByDir := make(map[string]int)
+	for _, pf := range parseFailures {
+		parseFailuresByDir[pf.State]++
+	}
 	fmt.Println("\n=== Queue Summary ===")
 	for _, sub := range subdirs {
-		dir := filepath.Join(tasksDir, sub)
-		names, _ := queue.ListTaskFiles(dir)
-		fmt.Printf("  %-20s %d\n", sub, len(names))
+		fmt.Printf("  %-20s %d\n", sub, len(idx.TasksByState(sub))+parseFailuresByDir[sub])
 	}
 	if len(detailed) > 0 {
 		fmt.Printf("  %-20s %d\n", "deferred", len(detailed))
@@ -263,6 +257,143 @@ func DryRun(repoRoot, branch string) error {
 
 	fmt.Println("\nDry run complete (read-only). No files were modified and no Docker containers were launched.")
 	return nil
+}
+
+// dryRunExecutionOrder prints the === Execution Order === section showing
+// runnable backlog tasks in priority order with their priority values.
+func dryRunExecutionOrder(idx *queue.PollIndex, deferred map[string]struct{}) {
+	fmt.Println("\n=== Execution Order ===")
+	runnable := idx.BacklogByPriority(deferred)
+	if len(runnable) == 0 {
+		fmt.Println("  (no runnable tasks)")
+		return
+	}
+	for i, snap := range runnable {
+		fmt.Printf("  %d. %s (priority %d)\n", i+1, snap.Filename, snap.Meta.Priority)
+	}
+}
+
+// dryRunBacklogSummary prints the === Backlog Task Summary === section with
+// compact frontmatter for every parsed backlog task.
+func dryRunBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}) {
+	backlog := idx.TasksByState(queue.DirBacklog)
+	if len(backlog) == 0 {
+		return
+	}
+	fmt.Println("\n=== Backlog Task Summary ===")
+	for _, snap := range backlog {
+		status := "runnable"
+		if _, ok := deferred[snap.Filename]; ok {
+			status = "deferred"
+		}
+
+		affects := "none"
+		if len(snap.Meta.Affects) > 0 {
+			affects = strings.Join(snap.Meta.Affects, ", ")
+		}
+		dependsOn := "none"
+		if len(snap.Meta.DependsOn) > 0 {
+			dependsOn = strings.Join(snap.Meta.DependsOn, ", ")
+		}
+
+		fmt.Printf("  %s [%s]\n", snap.Filename, status)
+		fmt.Printf("    id: %s  priority: %d\n", snap.Meta.ID, snap.Meta.Priority)
+		fmt.Printf("    affects: %s\n", affects)
+		fmt.Printf("    depends_on: %s\n", dependsOn)
+	}
+}
+
+// dryRunDependencySummary prints the === Dependency Summary === section for
+// waiting/ tasks, showing each dependency and its resolved queue state.
+func dryRunDependencySummary(tasksDir string, idx *queue.PollIndex) {
+	waitingTasks := idx.TasksByState(queue.DirWaiting)
+	if len(waitingTasks) == 0 {
+		return
+	}
+
+	diag := queue.DiagnoseDependencies(tasksDir, idx)
+
+	fmt.Println("\n=== Dependency Summary ===")
+	for _, snap := range waitingTasks {
+		if len(snap.Meta.DependsOn) == 0 {
+			fmt.Printf("  %s: no dependencies\n", snap.Filename)
+			continue
+		}
+		fmt.Printf("  %s:\n", snap.Filename)
+		for _, dep := range snap.Meta.DependsOn {
+			state := resolveDepState(dep, idx)
+			fmt.Printf("    - %s (%s)\n", dep, state)
+		}
+	}
+
+	// Print diagnostics subsection if there are issues.
+	if len(diag.Issues) > 0 {
+		fmt.Println("  diagnostics:")
+		for _, issue := range diag.Issues {
+			switch issue.Kind {
+			case queue.DependencyDuplicateID:
+				fmt.Printf("    WARNING duplicate waiting id %q (files: %s, %s)\n",
+					issue.TaskID, issue.DependsOn, issue.Filename)
+			case queue.DependencySelfCycle:
+				fmt.Printf("    WARNING %s depends on itself\n", issue.TaskID)
+			case queue.DependencyCycle:
+				fmt.Printf("    WARNING %s is part of a dependency cycle\n", issue.TaskID)
+			case queue.DependencyAmbiguousID:
+				fmt.Printf("    WARNING id %q is ambiguous (exists in both completed and non-completed directories)\n", issue.TaskID)
+			case queue.DependencyUnknownID:
+				fmt.Printf("    WARNING %s depends on unknown id %q\n", issue.TaskID, issue.DependsOn)
+			}
+		}
+	}
+}
+
+// resolveDepState determines the queue state label for a dependency ID.
+// It checks each queue directory for a task with a matching ID (frontmatter
+// ID or filename stem), including parse-failed files that still have a known
+// filename stem. Returns "unknown" if not found, or "ambiguous" if multiple
+// task files match and the dependency cannot be resolved safely.
+func resolveDepState(depID string, idx *queue.PollIndex) string {
+	seen := make(map[string]struct{})
+	matchedState := ""
+
+	for _, dir := range queue.AllDirs {
+		for _, snap := range idx.TasksByState(dir) {
+			if snap.Meta.ID != depID && frontmatter.TaskFileStem(snap.Filename) != depID {
+				continue
+			}
+			key := dir + "/" + snap.Filename
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			if matchedState == "" {
+				matchedState = dir
+				continue
+			}
+			return "ambiguous"
+		}
+	}
+
+	for _, pf := range idx.ParseFailures() {
+		if frontmatter.TaskFileStem(pf.Filename) != depID {
+			continue
+		}
+		key := pf.State + "/" + pf.Filename
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		if matchedState == "" {
+			matchedState = pf.State
+			seen[key] = struct{}{}
+			continue
+		}
+		return "ambiguous"
+	}
+
+	if matchedState == "" {
+		return "unknown"
+	}
+	return matchedState
 }
 
 func Run(repoRoot, branch string, copilotArgs []string, opts RunOptions) error {
