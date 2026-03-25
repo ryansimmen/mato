@@ -272,9 +272,11 @@ func Run(repoRoot, branch string, copilotArgs []string, opts RunOptions) error {
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
 
-	if err := git.EnsureBranch(repoRoot, branch); err != nil {
+	branchResult, err := git.EnsureBranch(repoRoot, branch)
+	if err != nil {
 		return err
 	}
+	reportBranchResolution(branchResult)
 
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
@@ -330,6 +332,19 @@ func Run(repoRoot, branch string, copilotArgs []string, opts RunOptions) error {
 	defer signal.Stop(signalChan(ctx))
 
 	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown)
+}
+
+func reportBranchResolution(result git.EnsureBranchResult) {
+	if result.Source == git.BranchSourceLocal {
+		return
+	}
+
+	switch result.Source {
+	case git.BranchSourceRemoteCached, git.BranchSourceHeadRemoteUnavailable:
+		fmt.Fprintf(os.Stderr, "warning: using branch %s (%s)\n", result.Branch, result.SourceDescription())
+	default:
+		fmt.Printf("Using branch %s (%s)\n", result.Branch, result.SourceDescription())
+	}
 }
 
 // resolveGitIdentity reads git user.name and user.email from the local

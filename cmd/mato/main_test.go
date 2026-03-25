@@ -14,7 +14,9 @@ import (
 
 	"mato/internal/config"
 	"mato/internal/doctor"
+	"mato/internal/git"
 	"mato/internal/runner"
+	"mato/internal/setup"
 	"mato/internal/testutil"
 
 	"github.com/spf13/cobra"
@@ -481,6 +483,9 @@ func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
 	if !strings.Contains(output, "Ready to add tasks") {
 		t.Fatalf("expected ready message in output, got %q", output)
 	}
+	if !strings.Contains(output, "Created branch: mato from current HEAD (origin unavailable)") {
+		t.Fatalf("expected branch source message in output, got %q", output)
+	}
 }
 
 func TestInitCmd_Idempotent(t *testing.T) {
@@ -501,6 +506,41 @@ func TestInitCmd_Idempotent(t *testing.T) {
 	})
 	if !strings.Contains(output, "Nothing to do - already initialized.") {
 		t.Fatalf("expected idempotent message, got %q", output)
+	}
+	if !strings.Contains(output, "Already on branch: mato (existing local branch)") {
+		t.Fatalf("expected existing branch message, got %q", output)
+	}
+}
+
+func TestPrintInitResult_RemoteCachedBranchMessage(t *testing.T) {
+	output := captureStdout(t, func() {
+		printInitResult(&setup.InitResult{
+			BranchName:       "mato",
+			BranchSource:     git.BranchSourceRemoteCached,
+			IgnorePattern:    "/.mato/",
+			TasksDir:         filepath.Join("repo", ".mato"),
+			GitignoreUpdated: false,
+		})
+	})
+
+	if !strings.Contains(output, "Switched to branch: mato (cached origin/mato (origin unavailable))") {
+		t.Fatalf("expected cached origin branch message, got %q", output)
+	}
+}
+
+func TestPrintInitResult_RemoteBranchMessage(t *testing.T) {
+	output := captureStdout(t, func() {
+		printInitResult(&setup.InitResult{
+			BranchName:       "mato",
+			BranchSource:     git.BranchSourceRemote,
+			IgnorePattern:    "/.mato/",
+			TasksDir:         filepath.Join("repo", ".mato"),
+			GitignoreUpdated: false,
+		})
+	})
+
+	if !strings.Contains(output, "Switched to branch: mato (live origin/mato)") {
+		t.Fatalf("expected live origin branch message, got %q", output)
 	}
 }
 
