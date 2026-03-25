@@ -1,10 +1,9 @@
 #!/bin/sh
-# Install mato skill to ~/.copilot/skills/mato/
-# Usage: ./install.sh
+# Install mato skill to ~/.copilot/skills/mato/ and, when OpenCode is
+# available, ~/.config/opencode/skills/mato/.
 
 set -e
 
-SKILL_DIR="$HOME/.copilot/skills/mato"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_DIR="$SCRIPT_DIR/../.github/skills/mato"
 
@@ -13,7 +12,15 @@ if [ ! -f "$SOURCE_DIR/SKILL.md" ]; then
   exit 1
 fi
 
-mkdir -p "$SKILL_DIR"
-cp "$SOURCE_DIR"/SKILL.md "$SKILL_DIR/"
+install_skill() {
+  target_dir="$1"
+  mkdir -p "$target_dir"
+  cp "$SOURCE_DIR"/SKILL.md "$target_dir/"
+  echo "Installed mato skill to $target_dir"
+}
 
-echo "Installed mato skill to $SKILL_DIR"
+install_skill "$HOME/.copilot/skills/mato"
+
+if command -v opencode >/dev/null 2>&1; then
+  install_skill "$HOME/.config/opencode/skills/mato"
+fi

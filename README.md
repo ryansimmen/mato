@@ -12,7 +12,7 @@ Runs autonomous Copilot agents against a filesystem-backed task queue in Docker.
 ## Quick Start
 
 ```bash
-# Install mato binary and the mato Copilot skill (~/.copilot/skills/)
+# Install mato binary and the mato skill (Copilot, plus OpenCode when installed)
 make install
 
 # Authenticate with Copilot
