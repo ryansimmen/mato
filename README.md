@@ -53,6 +53,8 @@ Useful flags:
 - `--branch <name>`: merge target branch (defaults to `mato`); empty and whitespace-only values are rejected
 - `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
 
+You can also set `MATO_BRANCH` for a host-side branch default that overrides `.mato.yaml` but is still overridden by `--branch`.
+
 Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe.
 
 You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `default_model`, `agent_timeout`, and `retry_cooldown`. CLI flags still win over config, and host env vars still win over both.
