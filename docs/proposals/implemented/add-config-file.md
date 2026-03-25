@@ -1,5 +1,9 @@
 # `mato` Config File - Implementation Plan
 
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for
+> the current implementation.
+
 ## 1. Goal
 
 Add support for an optional YAML configuration file (`.mato.yaml`) that provides
