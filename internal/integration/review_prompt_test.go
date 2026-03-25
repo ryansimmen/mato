@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/queue"
 	"mato/internal/testutil"
 )
@@ -114,7 +115,7 @@ func TestReviewVerifyReview(t *testing.T) {
 			"# Review Task\nDo the review.\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-review-task.md.json")
 
@@ -191,7 +192,7 @@ func TestReviewEmptyDiffRejects(t *testing.T) {
 			"# Empty Diff Task\nShould be rejected.\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-empty-diff.md.json")
 
@@ -258,7 +259,7 @@ func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
 			"# Fetch Fail Task\nBranch does not exist.\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-fetch-fail.md.json")
 
@@ -353,7 +354,7 @@ func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
 					"# Special Chars Task\nTest special characters.\n")
 
 			cloneDir := createPromptClone(t, repoRoot, tasksDir)
-			cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+			cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 			verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-special-chars.md.json")
 
@@ -464,7 +465,7 @@ func TestReviewVerdictApproveFormat(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-approve-test.md.json")
 
@@ -506,7 +507,7 @@ func TestReviewVerifyReviewMissingTask(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-missing.md.json")
 	missingPath := filepath.Join(cloneTasksDir, queue.DirReadyReview, "missing-task.md")
@@ -550,7 +551,7 @@ func TestReviewProgressMessageFilenameIsDistinct(t *testing.T) {
 			"# Review Progress Test\nTest review progress message.\n")
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	cloneTasksDir := filepath.Join(cloneDir, ".tasks")
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-review-progress.md.json")
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
@@ -50,14 +51,14 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 			"MATO_TASK_FILE="+claimed.Filename,
 			"MATO_TASK_BRANCH="+claimed.Branch,
 			"MATO_TASK_TITLE="+claimed.Title,
-			fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/%s/%s", env.workdir, queue.DirInProgress, claimed.Filename),
-			fmt.Sprintf("MATO_FILE_CLAIMS=%s/.tasks/messages/file-claims.json", env.workdir),
+			fmt.Sprintf("MATO_TASK_PATH=%s/%s/%s/%s", env.workdir, dirs.Root, queue.DirInProgress, claimed.Filename),
+			fmt.Sprintf("MATO_FILE_CLAIMS=%s/%s/messages/file-claims.json", env.workdir, dirs.Root),
 		)
 		if depCtxPath := writeDependencyContextFile(env.tasksDir, claimed); depCtxPath != "" {
 			defer removeDependencyContextFile(env.tasksDir, claimed.Filename)
 			extraEnvs = append(extraEnvs, fmt.Sprintf(
-				"MATO_DEPENDENCY_CONTEXT=%s/.tasks/messages/dependency-context-%s.json",
-				env.workdir, claimed.Filename,
+				"MATO_DEPENDENCY_CONTEXT=%s/%s/messages/dependency-context-%s.json",
+				env.workdir, dirs.Root, claimed.Filename,
 			))
 		}
 		if failures := extractFailureLines(claimed.TaskPath); failures != "" {

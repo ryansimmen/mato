@@ -252,7 +252,7 @@ func TestBuildDockerArgs_MessagingEnvVars(t *testing.T) {
 	if !strings.Contains(joined, "MATO_MESSAGING_ENABLED=1") {
 		t.Fatal("MATO_MESSAGING_ENABLED should be set in docker args")
 	}
-	if !strings.Contains(joined, "MATO_MESSAGES_DIR=/workspace/.tasks/messages") {
+	if !strings.Contains(joined, "MATO_MESSAGES_DIR=/workspace/.mato/messages") {
 		t.Fatal("MATO_MESSAGES_DIR should be set in docker args")
 	}
 }
@@ -377,17 +377,6 @@ func TestIsTerminal_RegularFile(t *testing.T) {
 
 	if isTerminal(f) {
 		t.Fatal("regular file should not be detected as a terminal")
-	}
-}
-
-func TestValidateTasksDir_SuccessCreatesAbsPath(t *testing.T) {
-	dir := t.TempDir()
-	got, err := validateTasksDir(dir + "/.tasks")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != dir+"/.tasks" {
-		t.Fatalf("expected %q, got %q", dir+"/.tasks", got)
 	}
 }
 

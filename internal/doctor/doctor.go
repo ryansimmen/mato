@@ -5,7 +5,10 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
+
+	"mato/internal/dirs"
 )
 
 // Severity classifies the severity of a diagnostic finding.
@@ -88,7 +91,7 @@ var validCheckNames = map[string]bool{
 // Returns an error only for hard failures (canceled context, internal
 // setup errors). Health findings -- including errors -- belong in the
 // report, not in the returned error.
-func Run(ctx context.Context, repoInput, tasksDir string, opts Options) (Report, error) {
+func Run(ctx context.Context, repoInput string, opts Options) (Report, error) {
 	// Validate --only names.
 	onlySet := make(map[string]bool, len(opts.Only))
 	for _, name := range opts.Only {
@@ -101,7 +104,6 @@ func Run(ctx context.Context, repoInput, tasksDir string, opts Options) (Report,
 			}
 			report := Report{
 				RepoInput: repoInput,
-				TasksDir:  tasksDir,
 				Checks:    make([]CheckReport, 0, len(checks)),
 			}
 			for _, cd := range checks {
@@ -130,7 +132,6 @@ func Run(ctx context.Context, repoInput, tasksDir string, opts Options) (Report,
 	cc := &checkContext{
 		ctx:       ctx,
 		repoInput: repoInput,
-		tasksDir:  tasksDir,
 		opts:      opts,
 	}
 
@@ -139,17 +140,12 @@ func Run(ctx context.Context, repoInput, tasksDir string, opts Options) (Report,
 		cc.repoInput = "."
 	}
 
-	// Derive tasksDir from repo root if not explicitly set. The git
-	// check populates repoRoot, but we need to resolve repo first
-	// when tasksDir is not provided.
-	explicitTasksDir := tasksDir != ""
-
 	// Always resolve the repo root eagerly so that --only filters
 	// that skip "git" still have access to repoRoot for deriving
 	// tasksDir. This is a no-op if repoRoot is already set.
 	cc.resolveRepo()
-	if !explicitTasksDir && cc.repoRoot != "" {
-		cc.tasksDir = cc.repoRoot + "/.tasks"
+	if cc.repoRoot != "" {
+		cc.tasksDir = filepath.Join(cc.repoRoot, dirs.Root)
 	}
 
 	report := Report{
@@ -177,9 +173,9 @@ func Run(ctx context.Context, repoInput, tasksDir string, opts Options) (Report,
 		// For filesystem checks, ensure tasksDir is available.
 		needsTasksDir := cd.name == "queue" || cd.name == "tasks" || cd.name == "locks" || cd.name == "hygiene" || cd.name == "deps"
 		if needsTasksDir && !cc.hasTasksDir() {
-			msg := "cannot determine tasks directory: no valid git repository and --tasks-dir not set"
+			msg := "cannot determine tasks directory: no valid git repository"
 			if cc.repoErr != nil {
-				msg = fmt.Sprintf("cannot determine tasks directory (%s) and --tasks-dir not set", cc.repoErrDetail())
+				msg = fmt.Sprintf("cannot determine tasks directory (%s)", cc.repoErrDetail())
 			}
 			report.Checks = append(report.Checks, CheckReport{
 				Name:   cd.name,

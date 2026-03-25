@@ -71,7 +71,6 @@ func TestExtractKnownFlags(t *testing.T) {
 		args       []string
 		wantRepo   string
 		wantBranch string
-		wantTasks  string
 		wantDryRun bool
 		wantExtra  []string
 	}{
@@ -98,18 +97,6 @@ func TestExtractKnownFlags(t *testing.T) {
 			args:       []string{"--branch", "develop"},
 			wantBranch: "develop",
 			wantExtra:  []string{},
-		},
-		{
-			name:      "tasks-dir equals syntax",
-			args:      []string{"--tasks-dir=/custom/tasks"},
-			wantTasks: "/custom/tasks",
-			wantExtra: []string{},
-		},
-		{
-			name:      "tasks-dir space syntax",
-			args:      []string{"--tasks-dir", "/custom/tasks"},
-			wantTasks: "/custom/tasks",
-			wantExtra: []string{},
 		},
 		{
 			name:       "dry-run flag",
@@ -152,15 +139,6 @@ func TestExtractKnownFlags(t *testing.T) {
 			args:       []string{"--repo=/tmp/repo", "--dry-run=false"},
 			wantRepo:   "/tmp/repo",
 			wantDryRun: false,
-			wantExtra:  []string{},
-		},
-		{
-			name:       "all flags combined",
-			args:       []string{"--repo=/tmp/repo", "--branch=develop", "--tasks-dir=/tasks", "--dry-run"},
-			wantRepo:   "/tmp/repo",
-			wantBranch: "develop",
-			wantTasks:  "/tasks",
-			wantDryRun: true,
 			wantExtra:  []string{},
 		},
 		{
@@ -218,9 +196,6 @@ func TestExtractKnownFlags(t *testing.T) {
 			if cfg.branch != tt.wantBranch {
 				t.Errorf("branch = %q, want %q", cfg.branch, tt.wantBranch)
 			}
-			if cfg.tasksDir != tt.wantTasks {
-				t.Errorf("tasksDir = %q, want %q", cfg.tasksDir, tt.wantTasks)
-			}
 			if cfg.dryRun != tt.wantDryRun {
 				t.Errorf("dryRun = %v, want %v", cfg.dryRun, tt.wantDryRun)
 			}
@@ -248,16 +223,6 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			wantErr: "flag --repo requires a value, got flag --model",
 		},
 		{
-			name:    "branch followed by another flag",
-			args:    []string{"--branch", "--tasks-dir", ".tasks"},
-			wantErr: "flag --branch requires a value, got flag --tasks-dir",
-		},
-		{
-			name:    "tasks-dir at end of args",
-			args:    []string{"--tasks-dir"},
-			wantErr: "flag --tasks-dir requires a value",
-		},
-		{
 			name:    "repo at end of args",
 			args:    []string{"--repo"},
 			wantErr: "flag --repo requires a value",
@@ -276,11 +241,6 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			name:    "branch equals empty value",
 			args:    []string{"--branch="},
 			wantErr: "flag --branch requires a value",
-		},
-		{
-			name:    "tasks-dir equals empty value",
-			args:    []string{"--tasks-dir="},
-			wantErr: "flag --tasks-dir requires a value",
 		},
 		{
 			name:    "dry-run invalid boolean",
@@ -303,11 +263,6 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			wantErr: "flag --branch requires a value",
 		},
 		{
-			name:    "tasks-dir whitespace-only equals form",
-			args:    []string{"--tasks-dir=  "},
-			wantErr: "flag --tasks-dir requires a value",
-		},
-		{
 			name:    "repo whitespace-only space form",
 			args:    []string{"--repo", "   "},
 			wantErr: "flag --repo requires a value",
@@ -316,11 +271,6 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			name:    "branch whitespace-only space form",
 			args:    []string{"--branch", " \t "},
 			wantErr: "flag --branch requires a value",
-		},
-		{
-			name:    "tasks-dir whitespace-only space form",
-			args:    []string{"--tasks-dir", "  "},
-			wantErr: "flag --tasks-dir requires a value",
 		},
 	}
 
@@ -464,17 +414,17 @@ func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
 	})
 
 	for _, rel := range []string{
-		".tasks/backlog",
-		".tasks/waiting",
-		".tasks/in-progress",
-		".tasks/ready-for-review",
-		".tasks/ready-to-merge",
-		".tasks/completed",
-		".tasks/failed",
-		".tasks/.locks",
-		".tasks/messages/events",
-		".tasks/messages/presence",
-		".tasks/messages/completions",
+		".mato/backlog",
+		".mato/waiting",
+		".mato/in-progress",
+		".mato/ready-for-review",
+		".mato/ready-to-merge",
+		".mato/completed",
+		".mato/failed",
+		".mato/.locks",
+		".mato/messages/events",
+		".mato/messages/presence",
+		".mato/messages/completions",
 	} {
 		if _, err := os.Stat(filepath.Join(repoRoot, rel)); err != nil {
 			t.Fatalf("expected %s to exist: %v", rel, err)
@@ -484,8 +434,8 @@ func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	if !strings.Contains(string(data), "/.tasks/") {
-		t.Fatalf(".gitignore should contain /.tasks/, got %q", string(data))
+	if !strings.Contains(string(data), "/.mato/") {
+		t.Fatalf(".gitignore should contain /.mato/, got %q", string(data))
 	}
 	branchOut, err := runCmd("git", "-C", repoRoot, "branch", "--show-current")
 	if err != nil {
@@ -550,26 +500,6 @@ func TestInitCmd_NoExtraArgs(t *testing.T) {
 	cmd.SetArgs([]string{"init", "extra"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("expected error for extra positional arg")
-	}
-}
-
-func TestInitCmd_RelativeTasksDirResolvedAgainstRepoRoot(t *testing.T) {
-	repoRoot := testutil.SetupRepo(t)
-	nested := filepath.Join(repoRoot, "nested")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatalf("mkdir nested: %v", err)
-	}
-
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"init", "--repo", nested, "--tasks-dir", "custom-tasks"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("init command failed: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "custom-tasks", "backlog")); err != nil {
-		t.Fatalf("expected tasks dir under repo root: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(nested, "custom-tasks")); !os.IsNotExist(err) {
-		t.Fatalf("did not expect tasks dir under nested cwd, got %v", err)
 	}
 }
 
@@ -685,8 +615,6 @@ func TestStatusCmd_FlagParsing(t *testing.T) {
 	}{
 		{"status help", []string{"status", "--help"}},
 		{"status with repo", []string{"status", "--repo=/tmp/repo"}},
-		{"status with tasks-dir", []string{"status", "--tasks-dir=/tmp/tasks"}},
-		{"status with repo and tasks-dir", []string{"status", "--repo=/tmp/repo", "--tasks-dir=/tmp/tasks"}},
 		{"status with text format", []string{"status", "--format=text"}},
 	}
 
@@ -756,7 +684,7 @@ func TestDoctorCmd_OnlyFlagsPassedThrough(t *testing.T) {
 	orig := doctorRunFn
 	defer func() { doctorRunFn = orig }()
 
-	doctorRunFn = func(_ context.Context, _, _ string, opts doctor.Options) (doctor.Report, error) {
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
 		capturedOpts = opts
 		return doctor.Report{}, nil
 	}
@@ -794,7 +722,7 @@ func TestDoctorCmd_ExitCodeBecomesExitError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+			doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
 				return doctor.Report{ExitCode: tt.exitCode}, nil
 			}
 
@@ -820,7 +748,7 @@ func TestDoctorCmd_ExitCodeZeroNoError(t *testing.T) {
 	orig := doctorRunFn
 	defer func() { doctorRunFn = orig }()
 
-	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
 		return doctor.Report{ExitCode: 0}, nil
 	}
 
@@ -836,7 +764,7 @@ func TestDoctorCmd_HardFailurePropagated(t *testing.T) {
 	defer func() { doctorRunFn = orig }()
 
 	hardErr := fmt.Errorf("context canceled")
-	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
 		return doctor.Report{}, hardErr
 	}
 
@@ -861,7 +789,7 @@ func TestDoctorCmd_FlagParsing(t *testing.T) {
 	orig := doctorRunFn
 	defer func() { doctorRunFn = orig }()
 
-	doctorRunFn = func(_ context.Context, _, _ string, _ doctor.Options) (doctor.Report, error) {
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
 		return doctor.Report{}, nil
 	}
 
@@ -871,11 +799,10 @@ func TestDoctorCmd_FlagParsing(t *testing.T) {
 	}{
 		{"doctor help", []string{"doctor", "--help"}},
 		{"doctor with repo", []string{"doctor", "--repo=/tmp/repo"}},
-		{"doctor with tasks-dir", []string{"doctor", "--tasks-dir=/tmp/tasks"}},
 		{"doctor with fix", []string{"doctor", "--fix"}},
 		{"doctor with json format", []string{"doctor", "--format=json"}},
 		{"doctor with text format", []string{"doctor", "--format=text"}},
-		{"doctor with all flags", []string{"doctor", "--repo=/tmp/repo", "--tasks-dir=/tmp/tasks", "--fix", "--format=json", "--only=git"}},
+		{"doctor with all flags", []string{"doctor", "--repo=/tmp/repo", "--fix", "--format=json", "--only=git"}},
 	}
 
 	for _, tt := range tests {
@@ -933,7 +860,6 @@ func TestGraphCmd_FlagParsing(t *testing.T) {
 		args []string
 	}{
 		{"graph with repo", []string{"graph", "--repo=/tmp/repo"}},
-		{"graph with tasks-dir", []string{"graph", "--tasks-dir=/tmp/tasks"}},
 		{"graph with text format", []string{"graph", "--format=text"}},
 		{"graph with dot format", []string{"graph", "--format=dot"}},
 		{"graph with json format", []string{"graph", "--format=json"}},
@@ -974,7 +900,7 @@ func TestGraphCmd_EndToEnd(t *testing.T) {
 	}
 
 	// Create a minimal tasks directory with one task.
-	tasksDir := filepath.Join(dir, ".tasks")
+	tasksDir := filepath.Join(dir, ".mato")
 	backlog := filepath.Join(tasksDir, "backlog")
 	if err := os.MkdirAll(backlog, 0o755); err != nil {
 		t.Fatalf("mkdir backlog: %v", err)
@@ -1201,9 +1127,9 @@ func TestRetryCmd_NoArgs(t *testing.T) {
 }
 
 func TestRetryCmd_SuccessfulRetry(t *testing.T) {
-	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, ".tasks", "failed")
-	backlogDir := filepath.Join(tmp, ".tasks", "backlog")
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1217,7 +1143,7 @@ func TestRetryCmd_SuccessfulRetry(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "fix-bug"})
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "fix-bug"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("retry command failed: %v", err)
 	}
@@ -1228,16 +1154,16 @@ func TestRetryCmd_SuccessfulRetry(t *testing.T) {
 }
 
 func TestRetryCmd_TaskNotFound(t *testing.T) {
-	tmp := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmp, ".tasks", "failed"), 0o755); err != nil {
+	repoRoot := testutil.SetupRepo(t)
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".mato", "failed"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmp, ".tasks", "backlog"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".mato", "backlog"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "nonexistent"})
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "nonexistent"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for missing task")
@@ -1252,8 +1178,6 @@ func TestRetryCmd_FlagParsing(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"tasks-dir equals form", []string{"retry", "--tasks-dir=/tmp/t", "foo"}},
-		{"tasks-dir space form", []string{"retry", "--tasks-dir", "/tmp/t", "foo"}},
 		{"repo equals form", []string{"retry", "--repo=/tmp/r", "foo"}},
 	}
 	for _, tt := range tests {
@@ -1281,8 +1205,8 @@ func TestRetryCmd_DefaultTasksDirUsesRepoRoot(t *testing.T) {
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	failedDir := filepath.Join(repoRoot, ".tasks", "failed")
-	backlogDir := filepath.Join(repoRoot, ".tasks", "backlog")
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1316,9 +1240,9 @@ func TestRetryCmd_DefaultTasksDirUsesRepoRoot(t *testing.T) {
 }
 
 func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
-	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, ".tasks", "failed")
-	backlogDir := filepath.Join(tmp, ".tasks", "backlog")
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1332,7 +1256,7 @@ func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"retry", "--tasks-dir", filepath.Join(tmp, ".tasks"), "fix-bug"})
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "fix-bug"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("retry command failed: %v", err)
 	}

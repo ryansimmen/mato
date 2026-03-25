@@ -466,7 +466,7 @@ type FileClaim struct {
 
 // BuildAndWriteFileClaims builds a file-claims.json index from tasks in
 // in-progress/, ready-for-review/, and ready-to-merge/ that have affects:
-// metadata, then writes it atomically to .tasks/messages/file-claims.json.
+// metadata, then writes it atomically to .mato/messages/file-claims.json.
 // If excludeTask is non-empty, skip the task with that filename so the
 // just-claimed task does not see its own files as conflicting. Entries ending
 // with "/" are preserved as directory-prefix claims.

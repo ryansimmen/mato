@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
+
 	"github.com/fatih/color"
 
 	"mato/internal/frontmatter"
@@ -24,20 +26,18 @@ import (
 )
 
 // Show writes the status dashboard to os.Stdout.
-func Show(repoRoot, tasksDir string) error {
-	return ShowTo(os.Stdout, repoRoot, tasksDir)
+func Show(repoRoot string) error {
+	return ShowTo(os.Stdout, repoRoot)
 }
 
 // ShowTo writes the status dashboard to the given writer.
-func ShowTo(w io.Writer, repoRoot, tasksDir string) error {
+func ShowTo(w io.Writer, repoRoot string) error {
 	resolvedRepoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
 	}
 	repoRoot = strings.TrimSpace(resolvedRepoRoot)
-	if tasksDir == "" {
-		tasksDir = filepath.Join(repoRoot, ".tasks")
-	}
+	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
@@ -292,8 +292,8 @@ func pluralize(n int, singular, plural string) string {
 
 // Watch calls Show in a loop, redrawing the terminal without flicker.
 // It writes to os.Stdout; use WatchTo to write to a different writer.
-func Watch(ctx context.Context, repoRoot, tasksDir string, interval time.Duration) error {
-	return WatchTo(ctx, os.Stdout, repoRoot, tasksDir, interval)
+func Watch(ctx context.Context, repoRoot string, interval time.Duration) error {
+	return WatchTo(ctx, os.Stdout, repoRoot, interval)
 }
 
 // WatchTo calls ShowTo in a loop, redrawing the given writer without flicker.
@@ -302,13 +302,13 @@ func Watch(ctx context.Context, repoRoot, tasksDir string, interval time.Duratio
 // The per-line erase prevents artifacts when a line shrinks between frames.
 // It runs until the context is cancelled or a write error occurs (e.g. stdout
 // closed by a pager or pipe).
-func WatchTo(ctx context.Context, w io.Writer, repoRoot, tasksDir string, interval time.Duration) error {
+func WatchTo(ctx context.Context, w io.Writer, repoRoot string, interval time.Duration) error {
 	dim := color.New(color.Faint).SprintFunc()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		var buf bytes.Buffer
-		if err := ShowTo(&buf, repoRoot, tasksDir); err != nil {
+		if err := ShowTo(&buf, repoRoot); err != nil {
 			return err
 		}
 		fmt.Fprintf(&buf, "\n%s\n", dim(fmt.Sprintf("Refreshing every %s — press Ctrl+C to stop", interval)))

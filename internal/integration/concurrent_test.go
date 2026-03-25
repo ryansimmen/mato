@@ -1027,7 +1027,7 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	}
 }
 
-// readFileClaims reads and parses .tasks/messages/file-claims.json.
+// readFileClaims reads and parses .mato/messages/file-claims.json.
 func readFileClaims(t *testing.T, tasksDir string) map[string]messaging.FileClaim {
 	t.Helper()
 	path := filepath.Join(tasksDir, "messages", "file-claims.json")

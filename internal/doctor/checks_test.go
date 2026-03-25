@@ -23,7 +23,7 @@ func TestDoctor_OrphanedMessages_Clean(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "messages", "events", "recent.json"),
 		`{"id":"recent","type":"progress"}`)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestDoctor_OrphanedMessages_Stale(t *testing.T) {
 	old := time.Now().Add(-25 * time.Hour)
 	os.Chtimes(eventFile, old, old)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestDoctor_OrphanedMessages_Fix(t *testing.T) {
 	old := time.Now().Add(-25 * time.Hour)
 	os.Chtimes(eventFile, old, old)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestDoctor_OrphanedMessages_NonJSONIgnored(t *testing.T) {
 	old := time.Now().Add(-48 * time.Hour)
 	os.Chtimes(nonJSON, old, old)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -130,11 +130,11 @@ func TestDoctor_OrphanedMessages_NonJSONIgnored(t *testing.T) {
 // ---------- Stale Merge Lock ----------
 
 func TestDoctor_StaleMergeLock_NoLock(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
 	// No merge.lock should produce no finding.
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestDoctor_StaleMergeLock_DeadPID(t *testing.T) {
 	// Write a merge.lock with a dead PID.
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "merge.lock"), "999999:0")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestDoctor_StaleMergeLock_Empty(t *testing.T) {
 	// Write an empty merge.lock.
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "merge.lock"), "")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestDoctor_StaleMergeLock_Fix(t *testing.T) {
 	lockFile := filepath.Join(tasksDir, ".locks", "merge.lock")
 	testutil.WriteFile(t, lockFile, "999999:0")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestDoctor_StaleMergeLock_LivePID(t *testing.T) {
 	identity := process.LockIdentity(os.Getpid())
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "merge.lock"), identity)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -261,11 +261,11 @@ func TestDoctor_StaleMergeLock_LivePID(t *testing.T) {
 // ---------- Leftover Temp Files ----------
 
 func TestDoctor_LeftoverTempFiles_Clean(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
 	// No temp files → no finding.
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestDoctor_LeftoverTempFiles_Detected(t *testing.T) {
 	tmpFile := filepath.Join(tasksDir, "backlog", ".fix-bug.md.tmp-123456")
 	testutil.WriteFile(t, tmpFile, "partial write")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestDoctor_LeftoverTempFiles_InMessageDir(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", ".task.md.tmp-111"), "data")
 	testutil.WriteFile(t, filepath.Join(tasksDir, "messages", "events", ".msg.json.tmp-222"), "data")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestDoctor_LeftoverTempFiles_Fix_OldFiles(t *testing.T) {
 	old := time.Now().Add(-2 * time.Hour)
 	os.Chtimes(tmpFile, old, old)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestDoctor_LeftoverTempFiles_Fix_RecentNotRemoved(t *testing.T) {
 	tmpFile := filepath.Join(tasksDir, "backlog", ".task.md.tmp-recent")
 	testutil.WriteFile(t, tmpFile, "in progress write")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Fix: true, Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestDoctor_LeftoverTempFiles_NormalFilesIgnored(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", "real-task.md"), "# Real\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", ".hidden-file"), "hidden")
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{Format: "text"})
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -432,10 +432,10 @@ func TestDoctor_LeftoverTempFiles_NormalFilesIgnored(t *testing.T) {
 // ---------- Hygiene check with --only filter ----------
 
 func TestDoctor_HygieneOnlyFilter(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+	report, err := Run(context.Background(), repoRoot, Options{
 		Format: "text",
 		Only:   []string{"hygiene"},
 	})
@@ -462,10 +462,10 @@ func TestDoctor_HygieneOnlyFilter(t *testing.T) {
 // ---------- Docker Image Availability ----------
 
 func TestDoctor_DockerImage_Available(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+	report, err := Run(context.Background(), repoRoot, Options{
 		Format: "text",
 		Only:   []string{"docker"},
 	})
@@ -490,13 +490,13 @@ func TestDoctor_DockerImage_Available(t *testing.T) {
 }
 
 func TestDoctor_DockerImage_Missing(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
 		return fmt.Errorf("No such image: %s", image)
 	})
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+	report, err := Run(context.Background(), repoRoot, Options{
 		Format: "text",
 		Only:   []string{"docker"},
 	})
@@ -527,7 +527,7 @@ func TestDoctor_DockerImage_Missing(t *testing.T) {
 }
 
 func TestDoctor_DockerImage_Fix_PullSucceeds(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
 		return fmt.Errorf("No such image: %s", image)
@@ -536,7 +536,7 @@ func TestDoctor_DockerImage_Fix_PullSucceeds(t *testing.T) {
 		return nil
 	})
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+	report, err := Run(context.Background(), repoRoot, Options{
 		Fix:    true,
 		Format: "text",
 		Only:   []string{"docker"},
@@ -562,7 +562,7 @@ func TestDoctor_DockerImage_Fix_PullSucceeds(t *testing.T) {
 }
 
 func TestDoctor_DockerImage_Fix_PullFails(t *testing.T) {
-	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
 		return fmt.Errorf("No such image: %s", image)
@@ -571,7 +571,7 @@ func TestDoctor_DockerImage_Fix_PullFails(t *testing.T) {
 		return fmt.Errorf("network timeout")
 	})
 
-	report, err := Run(context.Background(), repoRoot, tasksDir, Options{
+	report, err := Run(context.Background(), repoRoot, Options{
 		Fix:    true,
 		Format: "text",
 		Only:   []string{"docker"},

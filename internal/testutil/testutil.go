@@ -65,7 +65,7 @@ func SetupRepo(t *testing.T) string {
 }
 
 // SetupRepoWithTasks creates a temporary git repository like SetupRepo but
-// additionally checks out a "mato" branch, creates the standard .tasks
+// additionally checks out a "mato" branch, creates the standard .mato
 // subdirectory tree, initialises messaging, and sets
 // receive.denyCurrentBranch=updateInstead. It returns (repoRoot, tasksDir).
 func SetupRepoWithTasks(t *testing.T) (string, string) {
@@ -76,7 +76,7 @@ func SetupRepoWithTasks(t *testing.T) (string, string) {
 		t.Fatalf("git checkout -b mato: %v", err)
 	}
 
-	tasksDir := filepath.Join(dir, ".tasks")
+	tasksDir := filepath.Join(dir, ".mato")
 	for _, sub := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
