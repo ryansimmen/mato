@@ -14,9 +14,9 @@ import (
 
 func TestInitRepo_EndToEnd(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
+	tasksDir := filepath.Join(repoRoot, ".mato")
 
-	result, err := setup.InitRepo(repoRoot, "mato", tasksDir)
+	result, err := setup.InitRepo(repoRoot, "mato")
 	if err != nil {
 		t.Fatalf("InitRepo: %v", err)
 	}
@@ -30,18 +30,17 @@ func TestInitRepo_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	if !strings.Contains(string(data), "/.tasks/") {
-		t.Fatalf(".gitignore should contain /.tasks/, got %q", string(data))
+	if !strings.Contains(string(data), "/.mato/") {
+		t.Fatalf(".gitignore should contain /.mato/, got %q", string(data))
 	}
 }
 
 func TestInitRepo_IdempotentEndToEnd(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
-	if _, err := setup.InitRepo(repoRoot, "mato", tasksDir); err != nil {
+	if _, err := setup.InitRepo(repoRoot, "mato"); err != nil {
 		t.Fatalf("first InitRepo: %v", err)
 	}
-	result, err := setup.InitRepo(repoRoot, "mato", tasksDir)
+	result, err := setup.InitRepo(repoRoot, "mato")
 	if err != nil {
 		t.Fatalf("second InitRepo: %v", err)
 	}
@@ -52,27 +51,11 @@ func TestInitRepo_IdempotentEndToEnd(t *testing.T) {
 
 func TestInitRepo_ThenDryRunWorks(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(repoRoot, ".tasks")
-	if _, err := setup.InitRepo(repoRoot, "mato", tasksDir); err != nil {
+	if _, err := setup.InitRepo(repoRoot, "mato"); err != nil {
 		t.Fatalf("InitRepo: %v", err)
 	}
-	if err := runner.DryRun(repoRoot, "mato", tasksDir); err != nil {
+	if err := runner.DryRun(repoRoot, "mato"); err != nil {
 		t.Fatalf("DryRun after init: %v", err)
-	}
-}
-
-func TestInitRepo_OutsideRepoTasksDir(t *testing.T) {
-	repoRoot := testutil.SetupRepo(t)
-	tasksDir := filepath.Join(t.TempDir(), "external-tasks")
-	result, err := setup.InitRepo(repoRoot, "mato", tasksDir)
-	if err != nil {
-		t.Fatalf("InitRepo: %v", err)
-	}
-	if !result.GitignoreSkipped {
-		t.Fatal("expected GitignoreSkipped=true")
-	}
-	if _, err := os.Stat(filepath.Join(tasksDir, "backlog")); err != nil {
-		t.Fatalf("expected external backlog dir: %v", err)
 	}
 }
 
@@ -81,7 +64,7 @@ func TestInitRepo_EmptyRepoBootstrapCommit(t *testing.T) {
 	if _, err := git.Output(repoRoot, "init"); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
-	if _, err := setup.InitRepo(repoRoot, "mato", filepath.Join(repoRoot, ".tasks")); err != nil {
+	if _, err := setup.InitRepo(repoRoot, "mato"); err != nil {
 		t.Fatalf("InitRepo: %v", err)
 	}
 	log, err := git.Output(repoRoot, "log", "--oneline", "-1")

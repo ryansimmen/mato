@@ -14,11 +14,12 @@ import (
 	"mato/internal/messaging"
 )
 
+const ignorePattern = "/" + dirs.Root + "/"
+
 // InitResult describes what repository initialization changed.
 type InitResult struct {
 	DirsCreated      []string
 	GitignoreUpdated bool
-	GitignoreSkipped bool
 	IgnorePattern    string
 	BranchName       string
 	BranchExisted    bool
@@ -27,16 +28,14 @@ type InitResult struct {
 }
 
 // InitRepo performs the full non-Docker initialization of a mato repository.
-// All steps are idempotent. tasksDir must be an absolute path when provided.
-func InitRepo(repoRoot, branch, tasksDir string) (*InitResult, error) {
-	resolvedTasksDir, err := resolveTasksDir(repoRoot, tasksDir)
-	if err != nil {
-		return nil, err
-	}
+// All steps are idempotent.
+func InitRepo(repoRoot, branch string) (*InitResult, error) {
+	resolvedTasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	result := &InitResult{
-		BranchName: branch,
-		TasksDir:   resolvedTasksDir,
+		BranchName:    branch,
+		TasksDir:      resolvedTasksDir,
+		IgnorePattern: ignorePattern,
 	}
 
 	currentBranch, err := currentBranch(repoRoot)
@@ -50,24 +49,13 @@ func InitRepo(repoRoot, branch, tasksDir string) (*InitResult, error) {
 	}
 	result.BranchExisted = branchExisted
 
-	hasCommit, err := repoHasCommit(repoRoot)
-	if err != nil {
-		return nil, err
-	}
-
-	ignorePattern, ignoreInsideRepo := computeIgnorePattern(repoRoot, resolvedTasksDir)
-	result.IgnorePattern = ignorePattern
-	if !hasCommit && !ignoreInsideRepo {
-		return nil, fmt.Errorf("cannot initialize: repository has no commits and tasks directory is outside the repository; create an initial commit first or use the default tasks directory")
-	}
-
 	if !result.AlreadyOnBranch {
 		if err := git.EnsureBranch(repoRoot, branch); err != nil {
 			return nil, err
 		}
 	}
 
-	hasCommit, err = repoHasCommit(repoRoot)
+	hasCommit, err := repoHasCommit(repoRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -87,33 +75,29 @@ func InitRepo(repoRoot, branch, tasksDir string) (*InitResult, error) {
 
 	git.EnsureIdentity(repoRoot)
 
-	if ignoreInsideRepo {
-		contains, err := gitignoreContains(repoRoot, ignorePattern)
+	contains, err := gitignoreContains(repoRoot, ignorePattern)
+	if err != nil {
+		return nil, err
+	}
+	changed := false
+	if !contains {
+		dirty, err := pathHasLocalChanges(repoRoot, ".gitignore")
 		if err != nil {
 			return nil, err
 		}
-		changed := false
-		if !contains {
-			dirty, err := pathHasLocalChanges(repoRoot, ".gitignore")
-			if err != nil {
-				return nil, err
-			}
-			if dirty {
-				return nil, fmt.Errorf("cannot update .gitignore: file has local changes; commit, stash, or discard them first")
-			}
-			changed, err = git.EnsureGitignoreContains(repoRoot, ignorePattern)
-			if err != nil {
-				return nil, err
-			}
+		if dirty {
+			return nil, fmt.Errorf("cannot update .gitignore: file has local changes; commit, stash, or discard them first")
 		}
-		result.GitignoreUpdated = changed
-		if changed && hasCommit {
-			if err := git.CommitGitignore(repoRoot, "chore: add "+ignorePattern+" to .gitignore"); err != nil {
-				return nil, err
-			}
+		changed, err = git.EnsureGitignoreContains(repoRoot, ignorePattern)
+		if err != nil {
+			return nil, err
 		}
-	} else {
-		result.GitignoreSkipped = true
+	}
+	result.GitignoreUpdated = changed
+	if changed && hasCommit {
+		if err := git.CommitGitignore(repoRoot, "chore: add "+ignorePattern+" to .gitignore"); err != nil {
+			return nil, err
+		}
 	}
 
 	born, err := branchExists(repoRoot, branch)
@@ -130,29 +114,6 @@ func InitRepo(repoRoot, branch, tasksDir string) (*InitResult, error) {
 	}
 
 	return result, nil
-}
-
-func resolveTasksDir(repoRoot, tasksDir string) (string, error) {
-	if tasksDir == "" {
-		tasksDir = filepath.Join(repoRoot, ".tasks")
-	}
-	if !filepath.IsAbs(tasksDir) {
-		return "", fmt.Errorf("tasks directory must be absolute: %s", tasksDir)
-	}
-	cleanRepoRoot := filepath.Clean(repoRoot)
-	cleanTasksDir := filepath.Clean(tasksDir)
-	if cleanRepoRoot == cleanTasksDir {
-		return "", fmt.Errorf("tasks directory must not be the repository root %s", repoRoot)
-	}
-	parent := filepath.Dir(cleanTasksDir)
-	info, err := os.Stat(parent)
-	if err != nil {
-		return "", fmt.Errorf("tasks directory parent %s does not exist: %w", parent, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("tasks directory parent %s is not a directory", parent)
-	}
-	return cleanTasksDir, nil
 }
 
 func initDirs(tasksDir string) ([]string, error) {
@@ -195,20 +156,6 @@ func initMessagingDirs(tasksDir string) ([]string, error) {
 		return nil, fmt.Errorf("init messaging: %w", err)
 	}
 	return created, nil
-}
-
-func computeIgnorePattern(repoRoot, tasksDir string) (string, bool) {
-	rel, err := filepath.Rel(repoRoot, tasksDir)
-	if err != nil {
-		return "", false
-	}
-	if rel == "." {
-		return "/", true
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return "/" + filepath.ToSlash(rel) + "/", true
 }
 
 func currentBranch(repoRoot string) (string, error) {

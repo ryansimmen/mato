@@ -464,7 +464,7 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 	mustGitOutput(t, clone1, "push", "origin", "task/fix-bug")
 
 	// Agent 2 claims fix_bug.md; SelectAndClaimTask should disambiguate the branch.
-	claimed, err := queue.SelectAndClaimTask(tasksDir, "agent-2", nil, nil)
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "agent-2", nil, 0, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -810,7 +810,7 @@ func TestConcurrentSelectAndClaimTask(t *testing.T) {
 			}()
 
 			<-start
-			ct, err := queue.SelectAndClaimTask(tasksDir, fmt.Sprintf("agent-%d", id), nil, nil)
+			ct, err := queue.SelectAndClaimTask(tasksDir, fmt.Sprintf("agent-%d", id), nil, 0, nil)
 			results[id] = ct
 			errs[id] = err
 		}(g)
@@ -1027,7 +1027,7 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	}
 }
 
-// readFileClaims reads and parses .tasks/messages/file-claims.json.
+// readFileClaims reads and parses .mato/messages/file-claims.json.
 func readFileClaims(t *testing.T, tasksDir string) map[string]messaging.FileClaim {
 	t.Helper()
 	path := filepath.Join(tasksDir, "messages", "file-claims.json")

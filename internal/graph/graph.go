@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"mato/internal/dag"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/queue"
@@ -347,13 +348,13 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 }
 
 // Show writes the dependency graph to os.Stdout.
-func Show(repoRoot, tasksDir, format string, showAll bool) error {
-	return ShowTo(os.Stdout, repoRoot, tasksDir, format, showAll)
+func Show(repoRoot, format string, showAll bool) error {
+	return ShowTo(os.Stdout, repoRoot, format, showAll)
 }
 
 // ShowTo resolves the tasks directory, builds the dependency graph, and
 // writes it to w in the requested format.
-func ShowTo(w io.Writer, repoRoot, tasksDir, format string, showAll bool) error {
+func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 	if format != "text" && format != "dot" && format != "json" {
 		return fmt.Errorf("unsupported format %q", format)
 	}
@@ -363,9 +364,7 @@ func ShowTo(w io.Writer, repoRoot, tasksDir, format string, showAll bool) error 
 		return err
 	}
 	repoRoot = strings.TrimSpace(resolvedRoot)
-	if tasksDir == "" {
-		tasksDir = filepath.Join(repoRoot, ".tasks")
-	}
+	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	idx := queue.BuildIndex(tasksDir)
 

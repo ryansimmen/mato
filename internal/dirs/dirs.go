@@ -3,6 +3,9 @@
 // duplicating these constants and risking silent drift.
 package dirs
 
+// Root is the canonical repository-local queue directory.
+const Root = ".mato"
+
 // Queue directory names.
 const (
 	Waiting     = "waiting"

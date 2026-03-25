@@ -20,8 +20,8 @@ Learn the project's conventions from these sources (read all that exist):
 2. **Path-specific instructions**: Read all `.github/instructions/**/*.instructions.md` files — conventions scoped to specific file paths or patterns.
 3. **Agent instructions**: Read `AGENTS.md` at the repo root (and any `AGENTS.md` in subdirectories).
 4. **Detect language & tooling**: Read build files (`Makefile`, `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, etc.) to identify the language and project structure.
-5. **Check for a task directory**: Look for `.tasks/` with subdirectories like `backlog/`, `waiting/`, `completed/`, etc. If it exists, read completed tasks for tone and style reference.
-6. **Check for existing tasks**: Read `.tasks/backlog/`, `.tasks/waiting/`, `.tasks/in-progress/`, `.tasks/ready-for-review/`, and `.tasks/ready-to-merge/` to avoid creating duplicates.
+5. **Check for a task directory**: Look for `.mato/` with subdirectories like `backlog/`, `waiting/`, `completed/`, etc. If it exists, read completed tasks for tone and style reference.
+6. **Check for existing tasks**: Read `.mato/backlog/`, `.mato/waiting/`, `.mato/in-progress/`, `.mato/ready-for-review/`, and `.mato/ready-to-merge/` to avoid creating duplicates.
 7. **Contributing guidelines**: Read `CONTRIBUTING.md` if present.
 
 ### 2. Research
@@ -31,11 +31,11 @@ Read the relevant source files, tests, and docs to understand what needs to chan
 ### 3. Create Tasks
 
 1. Break the work into independent, actionable tasks. Each task should be completable in a single focused session.
-2. Check `.tasks/completed/` for examples of well-written task files to calibrate tone and style.
+2. Check `.mato/completed/` for examples of well-written task files to calibrate tone and style.
 3. Create one task file per unit of work, following the format below.
 4. Use kebab-case filenames: `add-http-retry-logic.md`
-5. **Placement**: Tasks with no `depends_on` go in `.tasks/backlog/`. Tasks with dependencies go in `.tasks/waiting/` — they will be promoted to `backlog/` automatically once their dependencies complete.
-6. If the project does NOT have a `.tasks/` directory, create it with `backlog/` and `waiting/` subdirectories.
+5. **Placement**: Tasks with no `depends_on` go in `.mato/backlog/`. Tasks with dependencies go in `.mato/waiting/` — they will be promoted to `backlog/` automatically once their dependencies complete.
+6. If the project does NOT have a `.mato/` directory, create it with `backlog/` and `waiting/` subdirectories.
 7. End with a summary: how many tasks created, their dependencies, and suggested execution order.
 
 ## Task File Format

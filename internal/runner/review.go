@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
@@ -230,9 +231,9 @@ func selectAndLockReview(tasksDir string, idx *queue.PollIndex) (*queue.ClaimedT
 }
 
 func runReview(ctx context.Context, env envConfig, run runContext, task *queue.ClaimedTask, branch string) error {
-	run.prompt = strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", env.workdir+"/.tasks")
+	run.prompt = strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", env.workdir+"/"+dirs.Root)
 	run.prompt = strings.ReplaceAll(run.prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
-	run.prompt = strings.ReplaceAll(run.prompt, "MESSAGES_DIR_PLACEHOLDER", env.workdir+"/.tasks/messages")
+	run.prompt = strings.ReplaceAll(run.prompt, "MESSAGES_DIR_PLACEHOLDER", env.workdir+"/"+dirs.Root+"/messages")
 
 	cloneDir, err := git.CreateClone(env.repoRoot)
 	if err != nil {
@@ -253,8 +254,8 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 		"MATO_TASK_FILE=" + task.Filename,
 		"MATO_TASK_BRANCH=" + task.Branch,
 		"MATO_TASK_TITLE=" + task.Title,
-		fmt.Sprintf("MATO_TASK_PATH=%s/.tasks/%s/%s", env.workdir, queue.DirReadyReview, task.Filename),
-		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/.tasks/messages/verdict-%s.json", env.workdir, task.Filename),
+		fmt.Sprintf("MATO_TASK_PATH=%s/%s/%s/%s", env.workdir, dirs.Root, queue.DirReadyReview, task.Filename),
+		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/%s/messages/verdict-%s.json", env.workdir, dirs.Root, task.Filename),
 	}
 
 	args := buildDockerArgs(env, run, extraEnvs, nil)

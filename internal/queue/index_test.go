@@ -12,11 +12,11 @@ import (
 	"mato/internal/frontmatter"
 )
 
-// setupIndexDirs creates the standard .tasks directory tree in a temp dir
+// setupIndexDirs creates the standard .mato directory tree in a temp dir
 // and returns the tasksDir path.
 func setupIndexDirs(t *testing.T) string {
 	t.Helper()
-	tasksDir := filepath.Join(t.TempDir(), ".tasks")
+	tasksDir := filepath.Join(t.TempDir(), ".mato")
 	for _, dir := range AllDirs {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", dir, err)
@@ -484,7 +484,7 @@ func TestBuildIndex_NilIndexMethods(t *testing.T) {
 
 func TestBuildIndex_MissingDirectories(t *testing.T) {
 	// BuildIndex should not panic when directories don't exist.
-	tasksDir := filepath.Join(t.TempDir(), ".tasks")
+	tasksDir := filepath.Join(t.TempDir(), ".mato")
 	// Don't create any directories.
 
 	idx := BuildIndex(tasksDir)
