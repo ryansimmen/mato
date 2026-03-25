@@ -119,6 +119,22 @@ func TestBuildDockerArgs_ExtraVolumes(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_CopilotCacheMount(t *testing.T) {
+	env := envConfig{
+		homeDir:         "/home/test",
+		image:           "ubuntu:24.04",
+		workdir:         "/workspace",
+		copilotCacheDir: "/home/test/.cache/copilot",
+	}
+	run := runContext{prompt: "test"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "/home/test/.cache/copilot:/home/test/.cache/copilot") {
+		t.Fatal("copilot cache directory should be bind-mounted")
+	}
+}
+
 func TestBuildDockerArgs_ExtraEnvs(t *testing.T) {
 	env := envConfig{
 		homeDir: "/home/test",

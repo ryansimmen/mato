@@ -29,6 +29,10 @@ func TestDiscoverHostTools_ValidCopilotDir(t *testing.T) {
 	if tools.copilotConfigDir != copilotDir {
 		t.Fatalf("copilotConfigDir = %q, want %q", tools.copilotConfigDir, copilotDir)
 	}
+	wantCache := filepath.Join(home, ".cache", "copilot")
+	if tools.copilotCacheDir != wantCache {
+		t.Fatalf("copilotCacheDir = %q, want %q", tools.copilotCacheDir, wantCache)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -52,13 +56,15 @@ func (f fakeFileInfo) Sys() any           { return nil }
 // and restores originals via t.Cleanup.
 func setTestSeams(t *testing.T, lp func(string) (string, error), st func(string) (os.FileInfo, error), home func() (string, error), gep func() (string, error)) {
 	t.Helper()
-	origLP, origSt, origHome, origGEP := lookPathFn, statFn, userHomeDirFn, gitExecPathFn
+	origLP, origSt, origHome, origGEP, origMkdir := lookPathFn, statFn, userHomeDirFn, gitExecPathFn, mkdirAllFn
 	t.Cleanup(func() {
 		lookPathFn = origLP
 		statFn = origSt
 		userHomeDirFn = origHome
 		gitExecPathFn = origGEP
+		mkdirAllFn = origMkdir
 	})
+	mkdirAllFn = func(string, os.FileMode) error { return nil }
 	if lp != nil {
 		lookPathFn = lp
 	}
@@ -431,11 +437,12 @@ func TestInspectHostTools_RequiredVsOptionalClassification(t *testing.T) {
 	setTestSeams(t,
 		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                        {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):      {name: ".copilot", isDir: true},
-			"/usr/share/git-core/templates":      {name: "templates", isDir: true},
-			"/etc/ssl/certs":                     {name: "certs", isDir: true},
-			filepath.Join(home, ".config", "gh"): {name: "gh", isDir: true},
+			"/usr/bin/gh":                              {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):            {name: ".copilot", isDir: true},
+			filepath.Join(home, ".cache", "copilot"):   {name: "copilot", isDir: true},
+			"/usr/share/git-core/templates":            {name: "templates", isDir: true},
+			"/etc/ssl/certs":                           {name: "certs", isDir: true},
+			filepath.Join(home, ".config", "gh"):       {name: "gh", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
@@ -448,7 +455,7 @@ func TestInspectHostTools_RequiredVsOptionalClassification(t *testing.T) {
 		"git-receive-pack": true, "gh": true, ".copilot": true,
 	}
 	optionalNames := map[string]bool{
-		"git templates dir": true, "system certs dir": true, "gh config dir": true,
+		"copilot cache dir": true, "git templates dir": true, "system certs dir": true, "gh config dir": true,
 	}
 
 	for _, f := range report.Findings {
@@ -539,7 +546,7 @@ func TestInspectHostTools_OptionalDirsMissing(t *testing.T) {
 
 	report := InspectHostTools()
 	optionalNames := map[string]bool{
-		"git templates dir": true, "system certs dir": true, "gh config dir": true,
+		"copilot cache dir": true, "git templates dir": true, "system certs dir": true, "gh config dir": true,
 	}
 	for _, f := range report.Findings {
 		if optionalNames[f.Name] {
