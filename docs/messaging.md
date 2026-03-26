@@ -184,6 +184,7 @@ The host runner calls `messaging.WritePresence(tasksDir, agentID, taskFile, bran
 `messaging.CleanOldMessages(tasksDir, 24*time.Hour)` garbage-collects event files.
 The runner calls it once per main loop iteration, deleting `.mato/messages/events/*.json` files older than 24 hours.
 Age is based on file modification time, not the JSON `sent_at` value. Unreadable entries are skipped silently.
+A zero or negative `maxAge` removes all files whose mtime is in the past (the cutoff moves to the current time or beyond).
 
 Completion detail files in `completions/` are not garbage-collected; they persist for the lifetime of the task queue so that dependent tasks can read them regardless of when they run.
 
@@ -219,5 +220,7 @@ Go-helper construction details:
 - invalid characters become `-`
 - leading/trailing `-`, `_`, and `.` are trimmed
 - empty parts fall back to `unknown` or `message`
+
+**Note:** The sanitization is lossy — distinct raw values can map to the same filename part, causing one message to silently overwrite another. The same applies to presence filenames (derived from agent ID). The collision-resistant encoding used for completion detail filenames (see above) avoids this problem; event and presence filenames still use the lossy scheme.
 
 Readers only require a `.json` file; the Go helper naming scheme is available for tooling, but it is not the canonical runtime convention for agent-written messages.

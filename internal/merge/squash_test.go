@@ -1,7 +1,9 @@
 package merge
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,6 +244,48 @@ func TestTaskBranchName(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCleanupTaskBranch_IgnoresMissingRemoteBranch(t *testing.T) {
+	originalGitOutput := gitOutput
+	defer func() {
+		gitOutput = originalGitOutput
+	}()
+
+	var stderr bytes.Buffer
+	originalStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() {
+		os.Stderr = originalStderr
+	}()
+
+	gitOutput = func(dir string, args ...string) (string, error) {
+		switch {
+		case len(args) >= 3 && args[0] == "branch" && args[1] == "-D":
+			return "", nil
+		case len(args) >= 4 && args[0] == "push" && args[1] == "origin" && args[2] == "--delete":
+			return "", fmt.Errorf("git push origin --delete %s: exit status 1 (error: unable to delete '%s': remote ref does not exist)", args[3], args[3])
+		default:
+			return "", fmt.Errorf("unexpected git args: %v", args)
+		}
+	}
+
+	cleanupTaskBranch("/tmp/repo", "task/missing-remote")
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stderr writer: %v", err)
+	}
+	if _, err := stderr.ReadFrom(r); err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+
+	if strings.Contains(stderr.String(), "warning: could not delete remote task branch") {
+		t.Fatalf("unexpected remote-delete warning: %q", stderr.String())
 	}
 }
 
