@@ -145,6 +145,24 @@ func TestComputeQueueManifest_WithIndex(t *testing.T) {
 	}
 }
 
+func TestComputeQueueManifest_ExcludesDependencyBlockedBacklog(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "blocked.md",
+		"---\nid: blocked\ndepends_on: [missing-dep]\npriority: 10\n---\n# Blocked\n")
+	writeTask(t, tasksDir, DirBacklog, "runnable.md",
+		"---\nid: runnable\npriority: 20\n---\n# Runnable\n")
+
+	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
+	if err != nil {
+		t.Fatalf("ComputeQueueManifest: %v", err)
+	}
+
+	if manifest != "runnable.md\n" {
+		t.Fatalf("manifest = %q, want %q", manifest, "runnable.md\n")
+	}
+}
+
 func TestComputeQueueManifest_TrailingNewline(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
@@ -187,6 +205,31 @@ func TestWriteQueueManifest(t *testing.T) {
 		if got != want[i] {
 			t.Errorf("line %d = %q, want %q", i, got, want[i])
 		}
+	}
+}
+
+func TestWriteQueueManifestFromView(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "blocked.md",
+		"---\nid: blocked\ndepends_on: [missing]\npriority: 5\n---\n# Blocked\n")
+	writeTask(t, tasksDir, DirBacklog, "alpha.md",
+		"---\nid: alpha\npriority: 10\n---\n# Alpha\n")
+	writeTask(t, tasksDir, DirBacklog, "beta.md",
+		"---\nid: beta\npriority: 20\n---\n# Beta\n")
+
+	idx := BuildIndex(tasksDir)
+	view := ComputeRunnableBacklogView(tasksDir, idx)
+	if err := WriteQueueManifestFromView(tasksDir, nil, idx, view); err != nil {
+		t.Fatalf("WriteQueueManifestFromView: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, ".queue"))
+	if err != nil {
+		t.Fatalf("read .queue: %v", err)
+	}
+	if string(data) != "alpha.md\nbeta.md\n" {
+		t.Fatalf(".queue = %q, want %q", string(data), "alpha.md\nbeta.md\n")
 	}
 }
 

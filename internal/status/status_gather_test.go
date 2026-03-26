@@ -644,6 +644,34 @@ func TestGatherStatus_RunnableExcludesDeferred(t *testing.T) {
 	}
 }
 
+func TestGatherStatus_DependencyBlockedBacklogExcludedFromRunnable(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeTask(t, tasksDir, queue.DirBacklog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "runnable.md", "---\nid: runnable\npriority: 20\n---\n# Runnable\n")
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	if data.runnable != 1 {
+		t.Fatalf("runnable = %d, want 1", data.runnable)
+	}
+	if len(data.runnableBacklog) != 1 || data.runnableBacklog[0].name != "runnable.md" {
+		t.Fatalf("runnableBacklog = %#v, want only runnable.md", data.runnableBacklog)
+	}
+	if len(data.waitingTasks) != 1 {
+		t.Fatalf("waitingTasks = %d, want 1", len(data.waitingTasks))
+	}
+	if data.waitingTasks[0].Name != "blocked.md" || data.waitingTasks[0].State != queue.DirBacklog {
+		t.Fatalf("waitingTasks[0] = %#v, want blocked backlog task", data.waitingTasks[0])
+	}
+}
+
 func TestIsMergeLockActive_NoLock(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	if isMergeLockActive(tasksDir) {
@@ -662,7 +690,7 @@ func TestIsMergeLockActive_DeadProcess(t *testing.T) {
 func TestWaitingTasksFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	idx := queue.BuildIndex(tasksDir)
-	tasks := waitingTasksFromIndex(idx)
+	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 waiting tasks, got %d", len(tasks))
 	}
@@ -675,7 +703,7 @@ func TestWaitingTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "b-wait.md", "---\nid: b-wait\npriority: 10\ndepends_on: [dep-z]\n---\n# B waiting\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := waitingTasksFromIndex(idx)
+	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 3 {
 		t.Fatalf("expected 3 waiting tasks, got %d", len(tasks))
 	}
@@ -696,7 +724,7 @@ func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-done]\n---\n# Waiter\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := waitingTasksFromIndex(idx)
+	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
@@ -714,7 +742,7 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [nonexistent]\n---\n# Waiter\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := waitingTasksFromIndex(idx)
+	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
@@ -724,6 +752,27 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 	}
 	if dep.Status != "missing" {
 		t.Errorf("dep Status = %q, want %q", dep.Status, "missing")
+	}
+}
+
+func TestWaitingTasksFromIndex_IncludesBlockedBacklogFromSharedMap(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirBacklog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
+
+	idx := queue.BuildIndex(tasksDir)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	tasks := waitingTasksFromIndex(idx, view.DependencyBlocked)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 dependency-blocked task, got %d", len(tasks))
+	}
+	if tasks[0].Name != "blocked.md" {
+		t.Fatalf("tasks[0].Name = %q, want %q", tasks[0].Name, "blocked.md")
+	}
+	if tasks[0].State != queue.DirBacklog {
+		t.Fatalf("tasks[0].State = %q, want %q", tasks[0].State, queue.DirBacklog)
+	}
+	if len(tasks[0].Dependencies) != 1 || tasks[0].Dependencies[0].Status != "unknown" {
+		t.Fatalf("Dependencies = %#v, want unknown blocked dependency", tasks[0].Dependencies)
 	}
 }
 

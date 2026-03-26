@@ -78,7 +78,7 @@ func TestRenderQueueOverview_ZeroCounts(t *testing.T) {
 	renderQueueOverview(&buf, c, data)
 	output := buf.String()
 
-	for _, want := range []string{"Queue Overview", "runnable:", "deferred:", "waiting:", "in-progress:", "ready-review:", "ready-to-merge:", "completed:", "failed:", "merge queue:"} {
+	for _, want := range []string{"Queue Overview", "runnable:", "deferred:", "blocked:", "in-progress:", "ready-review:", "ready-to-merge:", "completed:", "failed:", "merge queue:"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q, got:\n%s", want, output)
 		}
@@ -305,6 +305,7 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 				Name:     "wait-task.md",
 				Title:    "A waiting task",
 				Priority: 10,
+				State:    queue.DirBacklog,
 				Dependencies: []waitingDep{
 					{ID: "dep-a", Status: "in-progress"},
 					{ID: "dep-b", Status: "completed"},
@@ -321,6 +322,9 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 	}
 	if !strings.Contains(output, "A waiting task") {
 		t.Errorf("output missing title, got:\n%s", output)
+	}
+	if !strings.Contains(output, "(backlog/)") {
+		t.Errorf("output missing state suffix, got:\n%s", output)
 	}
 	if !strings.Contains(output, "depends on:") {
 		t.Errorf("output missing 'depends on:', got:\n%s", output)

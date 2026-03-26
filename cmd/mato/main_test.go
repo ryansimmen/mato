@@ -996,6 +996,63 @@ func TestDoctorCmd_EnvImageBypassesMalformedConfig(t *testing.T) {
 	}
 }
 
+func TestDoctorNeedsDockerConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		only []string
+		want bool
+	}{
+		{name: "all checks", only: nil, want: true},
+		{name: "explicit docker", only: []string{"queue", "docker"}, want: true},
+		{name: "queue only", only: []string{"queue", "tasks", "deps"}, want: false},
+		{name: "git only", only: []string{"git"}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := doctorNeedsDockerConfig(tt.only); got != tt.want {
+				t.Errorf("doctorNeedsDockerConfig(%v) = %v, want %v", tt.only, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDoctorCmd_QueueOnlyBypassesMalformedConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, ":\n  bad yaml: [unbalanced\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "")
+
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "queue,tasks,deps"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected queue-only doctor to bypass malformed config, got: %v", err)
+	}
+
+	if capturedOpts.DockerImage != "" {
+		t.Errorf("DockerImage = %q, want empty for queue-only doctor run", capturedOpts.DockerImage)
+	}
+
+	wantOnly := []string{"queue", "tasks", "deps"}
+	if len(capturedOpts.Only) != len(wantOnly) {
+		t.Fatalf("Only = %v, want %v", capturedOpts.Only, wantOnly)
+	}
+	for i := range wantOnly {
+		if capturedOpts.Only[i] != wantOnly[i] {
+			t.Errorf("Only[%d] = %q, want %q", i, capturedOpts.Only[i], wantOnly[i])
+		}
+	}
+}
+
 // --- Graph subcommand tests ---
 
 // runCmd executes an external command and returns its combined output.

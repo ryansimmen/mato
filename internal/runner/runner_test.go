@@ -2795,12 +2795,14 @@ func TestDryRun_BacklogTaskSummary(t *testing.T) {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	// Runnable task with affects and depends_on.
+	// Runnable task with affects and a satisfied dependency.
 	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n  - file-b.go\ndepends_on:\n  - dep-x\n---\n# Task A\n"
 	// Deferred task (overlaps with task-a).
 	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - file-a.go\n---\n# Task B\n"
 	// Task with no affects or depends_on.
 	taskC := "---\nid: task-c\npriority: 5\n---\n# Task C\n"
+	depX := "---\nid: dep-x\n---\n# Dep X\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "dep-x.md"), []byte(depX), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
@@ -3084,6 +3086,46 @@ func TestDryRun_AffectsConflictDetail(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "shared.go") {
 		t.Errorf("should show conflicting affects entry, got:\n%s", stdout)
+	}
+}
+
+func TestDryRun_DependencyBlockedBacklogTask(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	blocked := "---\nid: blocked\ndepends_on:\n  - missing-dep\npriority: 10\n---\n# Blocked\n"
+	runnable := "---\nid: runnable\npriority: 20\n---\n# Runnable\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"), []byte(blocked), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(runnable), 0o644)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main"); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "=== Dependency-Blocked Backlog Tasks ===") {
+		t.Fatalf("missing dependency-blocked backlog section:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "BLOCKED blocked.md") {
+		t.Fatalf("blocked task should be surfaced, got:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "blocked.md (priority 10)") {
+		t.Fatalf("blocked task should not appear in execution order, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "runnable.md (priority 20)") {
+		t.Fatalf("runnable task should remain in execution order, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "blocked.md [dependency-blocked]") {
+		t.Fatalf("backlog summary should label blocked task, got:\n%s", stdout)
 	}
 }
 

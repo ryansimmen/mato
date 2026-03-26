@@ -491,6 +491,18 @@ func (e ExitError) Error() string {
 // doctor.Run and can be replaced in tests to inject failures or exit codes.
 var doctorRunFn = doctor.Run
 
+func doctorNeedsDockerConfig(only []string) bool {
+	if len(only) == 0 {
+		return true
+	}
+	for _, name := range only {
+		if name == "docker" {
+			return true
+		}
+	}
+	return false
+}
+
 func newDoctorCmd() *cobra.Command {
 	var doctorRepo string
 	var fix bool
@@ -517,22 +529,24 @@ func newDoctorCmd() *cobra.Command {
 				repoInput = wd
 			}
 
-			// Resolve docker image the same way as the run command:
-			// env var > .mato.yaml > default. If the repo root cannot
-			// be determined, fall back to env/default and let the git
-			// check report the problem. Config load errors are fatal
-			// so doctor does not silently produce results based on
-			// the wrong image when .mato.yaml is malformed.
 			var dockerImage string
-			if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
-				dockerImage = v
-			} else if root, err := resolveRepoRoot(repoInput); err == nil {
-				fileCfg, err := config.Load(root)
-				if err != nil {
-					return err
-				}
-				if fileCfg.DockerImage != nil {
-					dockerImage = *fileCfg.DockerImage
+			if doctorNeedsDockerConfig(only) {
+				// Resolve docker image the same way as the run command:
+				// env var > .mato.yaml > default. If the repo root cannot
+				// be determined, fall back to env/default and let the git
+				// check report the problem. Config load errors are fatal
+				// so doctor does not silently produce results based on
+				// the wrong image when .mato.yaml is malformed.
+				if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
+					dockerImage = v
+				} else if root, err := resolveRepoRoot(repoInput); err == nil {
+					fileCfg, err := config.Load(root)
+					if err != nil {
+						return err
+					}
+					if fileCfg.DockerImage != nil {
+						dockerImage = *fileCfg.DockerImage
+					}
 				}
 			}
 

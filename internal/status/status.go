@@ -150,6 +150,7 @@ type waitingTaskSummary struct {
 	Name         string
 	Title        string
 	Priority     int
+	State        string
 	Dependencies []waitingDep
 }
 
@@ -191,11 +192,11 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 	return agents, nil
 }
 
-// waitingTasksFromIndex derives waiting task summaries from the PollIndex
-// snapshot. It populates structured dependency data (ID + status) without
-// any presentation formatting so the same model can drive both text and
-// JSON output.
-func waitingTasksFromIndex(idx *queue.PollIndex) []waitingTaskSummary {
+// waitingTasksFromIndex derives dependency-blocked task summaries from the
+// PollIndex snapshot and the already-computed backlog dependency blockers. It
+// populates structured dependency data (ID + status) without any presentation
+// formatting so the same model can drive both text and JSON output.
+func waitingTasksFromIndex(idx *queue.PollIndex, blockedBacklog map[string][]queue.DependencyBlock) []waitingTaskSummary {
 	snaps := idx.TasksByState(queue.DirWaiting)
 
 	// Build ID→state map from the index.
@@ -216,6 +217,25 @@ func waitingTasksFromIndex(idx *queue.PollIndex) []waitingTaskSummary {
 			Name:         snap.Filename,
 			Title:        title,
 			Priority:     snap.Meta.Priority,
+			State:        queue.DirWaiting,
+			Dependencies: deps,
+		})
+	}
+
+	for _, snap := range idx.TasksByState(queue.DirBacklog) {
+		blocks, ok := blockedBacklog[snap.Filename]
+		if !ok {
+			continue
+		}
+		deps := make([]waitingDep, 0, len(blocks))
+		for _, block := range blocks {
+			deps = append(deps, waitingDep{ID: block.DependencyID, Status: block.State})
+		}
+		waiting = append(waiting, waitingTaskSummary{
+			Name:         snap.Filename,
+			Title:        frontmatter.ExtractTitle(snap.Filename, snap.Body),
+			Priority:     snap.Meta.Priority,
+			State:        queue.DirBacklog,
 			Dependencies: deps,
 		})
 	}

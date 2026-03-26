@@ -30,9 +30,10 @@ and merges completed work into the target branch. If the target branch does not 
 yet, `mato` creates it.
 Dry-run mode (`--dry-run`) validates the task queue setup without launching Docker
 containers. It parses all task files, reports ready dependencies that would be promoted
-from `waiting/` to `backlog/`, detects `affects` conflicts, computes the `.queue`
-manifest, and prints a summary of the queue state. Useful for verifying setup in CI or
-before a real run. No files are modified.
+from `waiting/` to `backlog/`, diagnoses misplaced dependency-blocked backlog tasks,
+detects `affects` conflicts, computes the effective `.queue` manifest, and prints a
+summary of the queue state. Useful for verifying setup in CI or before a real run. No
+files are modified.
 Status mode prints queue counts, active agents, waiting-task dependency summaries, and
 recent messages. `mato status` rejects both extra positional arguments and
 unrecognized flags such as `--branch`.
@@ -96,17 +97,17 @@ Long flags support both `--flag value` and `--flag=value` forms.
 | --- | --- | --- | --- |
 | `--repo <path>` | run, init, status, doctor, graph, retry | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
 | `--branch <name>` | run, init, dry-run | `mato` | Target branch used for merge processing. Not accepted by `mato status`. |
-| `--dry-run` | run | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, detects `affects` conflicts, computes the `.queue` manifest, and prints a summary. Exits after one pass. |
+| `--dry-run` | run | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
 | `--help`, `-h` | all commands | none | Show help and exit. |
 | `--` | run | none | Forward all following arguments directly to Copilot CLI without further `mato` parsing. |
 
 ## Subcommands
 ### `mato status`
 `mato status` reads the queue directory and reports:
-- counts for `waiting`, `backlog`, `in-progress`, `ready-for-review`, `ready-to-merge`, `completed`, and `failed`
-- runnable backlog in execution order (priority-sorted, conflict-deferred tasks excluded), matching the ordering the host uses to claim work
+- counts for `waiting`, `backlog`, semantic `blocked`, `in-progress`, `ready-for-review`, `ready-to-merge`, `completed`, and `failed`
+- runnable backlog in execution order (priority-sorted, dependency-blocked and conflict-deferred tasks excluded), matching the ordering the host uses to claim work
 - active agents discovered from `.mato/.locks/*.pid`
-- waiting tasks plus dependency-status summaries
+- dependency-blocked tasks plus dependency-status summaries
 - conflict-deferred tasks with blocking details
 - the five most recent messages from `.mato/messages`
 
@@ -159,8 +160,9 @@ mato graph --all
 `mato doctor` runs structured health checks on the repository and task queue.
 It loads `.mato.yaml` and resolves the Docker image using the same precedence as
 the run command (env var > config file > default), so the docker check verifies the
-image users will actually run with. A malformed `.mato.yaml` is a hard error — doctor
-will not silently fall back to defaults and produce misleading results.
+image users will actually run with. A malformed `.mato.yaml` is a hard error when
+the requested checks need config-backed Docker resolution; queue-only runs such as
+`mato doctor --only queue,tasks,deps` skip that Docker/config path.
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -169,6 +171,15 @@ will not silently fall back to defaults and produce misleading results.
 | `--format` | `text` | Output format: `text` or `json`. |
 | `--only <check>` | all checks | Run only specified checks (repeatable). Valid names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`. |
 
+Recommended queue-only preflight command:
+
+```bash
+mato doctor --only queue,tasks,deps
+```
+
+This focuses on queue layout, task parsing, and dependency integrity without
+running Docker checks.
+
 ### `mato retry`
 `mato retry` requeues one or more failed tasks back to `backlog/`. It reads the
 task file from `failed/`, strips task-failure markers (`<!-- failure: -->`,
@@ -176,7 +187,9 @@ task file from `failed/`, strips task-failure markers (`<!-- failure: -->`,
 and writes the cleaned content to `backlog/`. Review feedback markers
 (`<!-- review-rejection: -->`) are preserved so the next attempt can still see
 prior reviewer guidance. The original file in `failed/` is only removed after a
-successful write, ensuring no data loss on collision or write error.
+successful write, ensuring no data loss on collision or write error. If the retried
+task still has unmet `depends_on`, the next reconcile pass moves it back to
+`waiting/`.
 
 | Flag | Default | Description |
 | --- | --- | --- |
