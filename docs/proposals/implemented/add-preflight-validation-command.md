@@ -12,7 +12,11 @@ affects:
 tags: [feature, cli, validation]
 estimated_complexity: simple
 ---
-# Add queue-only preflight validation to `mato doctor`
+# Add Queue-Only Preflight Validation to `mato doctor`
+
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the implemented design; see the source code for the
+> current behavior.
 
 ## Problem
 

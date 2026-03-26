@@ -23,7 +23,11 @@ affects:
 tags: [feature, scheduling, correctness]
 estimated_complexity: medium
 ---
-# Make depends_on authoritative across scheduling
+# Make `depends_on` Authoritative Across Scheduling
+
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the implemented design; see the source code for the
+> current behavior.
 
 `depends_on` currently has two different meanings depending on where a task
 file sits. Tasks in `waiting/` are dependency-gated, but a task placed in
