@@ -159,8 +159,9 @@ mato graph --all
 `mato doctor` runs structured health checks on the repository and task queue.
 It loads `.mato.yaml` and resolves the Docker image using the same precedence as
 the run command (env var > config file > default), so the docker check verifies the
-image users will actually run with. A malformed `.mato.yaml` is a hard error — doctor
-will not silently fall back to defaults and produce misleading results.
+image users will actually run with. A malformed `.mato.yaml` is a hard error when
+the requested checks need config-backed Docker resolution; queue-only runs such as
+`mato doctor --only queue,tasks,deps` skip that Docker/config path.
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -168,6 +169,15 @@ will not silently fall back to defaults and produce misleading results.
 | `--fix` | `false` | Auto-repair safe issues (stale locks, orphaned tasks, missing dirs). |
 | `--format` | `text` | Output format: `text` or `json`. |
 | `--only <check>` | all checks | Run only specified checks (repeatable). Valid names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`. |
+
+Recommended queue-only preflight command:
+
+```bash
+mato doctor --only queue,tasks,deps
+```
+
+This focuses on queue layout, task parsing, and dependency integrity without
+running Docker checks.
 
 ### `mato retry`
 `mato retry` requeues one or more failed tasks back to `backlog/`. It reads the
