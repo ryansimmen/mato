@@ -915,6 +915,12 @@ func TestHasAvailableTasks(t *testing.T) {
 	}
 
 	os.Remove(filepath.Join(tasksDir, DirBacklog, "task1.md"))
+	os.WriteFile(filepath.Join(tasksDir, DirBacklog, "blocked.md"), []byte("---\nid: blocked\ndepends_on: [missing]\n---\n# Blocked\n"), 0o644)
+	if HasAvailableTasks(tasksDir, nil) {
+		t.Fatal("dependency-blocked backlog task should not count as available")
+	}
+
+	os.Remove(filepath.Join(tasksDir, DirBacklog, "blocked.md"))
 	os.WriteFile(filepath.Join(tasksDir, DirInProgress, "task2.md"), []byte("# Task 2\n"), 0o644)
 	if HasAvailableTasks(tasksDir, nil) {
 		t.Fatal("in-progress tasks should not count as available")

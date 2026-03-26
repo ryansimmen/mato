@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -1032,6 +1033,22 @@ func checkDependencies(cc *checkContext) CheckReport {
 				})
 			}
 		}
+	}
+
+	blockedBacklog := queue.DependencyBlockedBacklogTasksDetailed(cc.tasksDir, idx)
+	blockedNames := make([]string, 0, len(blockedBacklog))
+	for name := range blockedBacklog {
+		blockedNames = append(blockedNames, name)
+	}
+	sort.Strings(blockedNames)
+	for _, name := range blockedNames {
+		details := blockedBacklog[name]
+		cr.Findings = append(cr.Findings, Finding{
+			Code:     "deps.backlog_blocked",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("backlog task %q is dependency-blocked and should be in waiting/ (blocked by %s)", name, queue.FormatDependencyBlocks(details)),
+			Path:     filepath.Join(cc.tasksDir, queue.DirBacklog, name),
+		})
 	}
 
 	// Deps-satisfied count.

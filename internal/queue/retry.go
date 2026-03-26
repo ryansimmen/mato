@@ -74,5 +74,10 @@ func RetryTask(tasksDir, name string) error {
 		fmt.Fprintf(os.Stderr, "warning: could not remove %s after requeue: %v\n", failedPath, err)
 	}
 
+	idx := BuildIndex(tasksDir)
+	if blocks, ok := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[name]; ok {
+		fmt.Fprintf(os.Stderr, "warning: retried task %s was placed in backlog/ but remains dependency-blocked; next reconcile will move it to waiting/ (blocked by %s)\n", name, FormatDependencyBlocks(blocks))
+	}
+
 	return nil
 }

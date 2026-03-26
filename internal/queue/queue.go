@@ -29,16 +29,16 @@ func ParseClaimedBy(path string) string {
 	return agent
 }
 
-// HasAvailableTasks reports whether there is at least one claimable .md task
-// file in backlog/ that is not in the deferred exclusion set.
+// HasAvailableTasks reports whether there is at least one effective runnable
+// backlog task that is not in the deferred exclusion set. This now builds a
+// queue index and computes the runnable backlog view so dependency-blocked and
+// affects-deferred tasks are excluded consistently with claim selection.
 func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
-	names, err := ListTaskFiles(filepath.Join(tasksDir, DirBacklog))
-	if err != nil {
-		return false
-	}
-	for _, name := range names {
+	idx := BuildIndex(tasksDir)
+	view := ComputeRunnableBacklogView(tasksDir, idx)
+	for _, snap := range view.Runnable {
 		if deferred != nil {
-			if _, excluded := deferred[name]; excluded {
+			if _, excluded := deferred[snap.Filename]; excluded {
 				continue
 			}
 		}

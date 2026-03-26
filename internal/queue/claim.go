@@ -181,6 +181,7 @@ func rollbackClaimToBacklog(name, dst, src string, claimErr error) error {
 // When idx is non-nil, the index is used for active branch lookup and
 // pre-parsed metadata. When idx is nil, the filesystem is scanned directly.
 func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, cooldown time.Duration, idx *PollIndex) (*ClaimedTask, error) {
+	idx = ensureIndex(tasksDir, idx)
 	candidates, err := selectCandidates(tasksDir, deferred)
 	if err != nil {
 		return nil, err
@@ -191,42 +192,41 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 	backlogDir := filepath.Join(tasksDir, DirBacklog)
 
 	activeBranches := CollectActiveBranches(tasksDir, idx)
+	depLookup := newDependencyLookup(idx)
 
 	for _, name := range candidates {
 		src := filepath.Join(backlogDir, name)
 		dst := filepath.Join(inProgressDir, name)
 
-		// Try to use pre-parsed metadata from the index first.
+		// Always re-read the candidate file before claiming so manual edits made
+		// after index construction cannot bypass dependency enforcement.
 		var meta frontmatter.TaskMeta
 		var body string
 		var maxRetries int
 		var failures int
 
-		snap := (*TaskSnapshot)(nil)
-		if idx != nil {
-			snap = idx.Snapshot(DirBacklog, name)
+		var parseErr error
+		meta, body, parseErr = frontmatter.ParseTaskFile(src)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, parseErr)
+			continue
+		}
+		maxRetries = meta.MaxRetries
+		var failErr error
+		failures, failErr = CountFailureLines(src)
+		if failErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not count failures for %s, skipping: %v\n", name, failErr)
+			continue
 		}
 
-		if snap != nil {
-			meta = snap.Meta
-			body = snap.Body
-			maxRetries = meta.MaxRetries
-			failures = snap.FailureCount
-		} else {
-			// Fallback: parse from disk.
-			var parseErr error
-			meta, body, parseErr = frontmatter.ParseTaskFile(src)
-			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, parseErr)
+		if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
+			waitingPath := filepath.Join(tasksDir, DirWaiting, name)
+			if err := AtomicMove(src, waitingPath); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
 				continue
 			}
-			maxRetries = meta.MaxRetries
-			var failErr error
-			failures, failErr = CountFailureLines(src)
-			if failErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not count failures for %s, skipping: %v\n", name, failErr)
-				continue
-			}
+			fmt.Fprintf(os.Stderr, "warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, FormatDependencyBlocks(blocks))
+			continue
 		}
 
 		// Skip tasks that failed recently (within cooldown window) to
@@ -287,7 +287,7 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 	return nil, nil
 }
 
-// selectCandidates returns the ordered list of claimable task filenames.
+// selectCandidates returns the ordered list of backlog candidate filenames.
 // It reads .queue if present for ordering, then appends any backlog/ files
 // not listed in the manifest. This ensures stale or incomplete manifests
 // cannot strand ready work. Without .queue, backlog/ is listed alphabetically.

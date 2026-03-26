@@ -174,6 +174,54 @@ func TestSelectAndClaimTask_DeferredExclusion(t *testing.T) {
 	}
 }
 
+func TestSelectAndClaimTask_DemotesDependencyBlockedBacklogTask(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "blocked.md"), "---\nid: blocked\ndepends_on: [missing]\n---\n# Blocked\n")
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "runnable.md"), "# Runnable\n")
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "blocked.md\nrunnable.md\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-dep", nil, 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected runnable.md to be claimed, got nil")
+	}
+	if task.Filename != "runnable.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "runnable.md")
+	}
+	if _, err := os.Stat(filepath.Join(dir, DirWaiting, "blocked.md")); err != nil {
+		t.Fatalf("blocked.md should be moved to waiting/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, DirBacklog, "blocked.md")); !os.IsNotExist(err) {
+		t.Fatal("blocked.md should not remain in backlog/")
+	}
+}
+
+func TestSelectAndClaimTask_FreshlyEditedDependencyBlockedTaskIsDemoted(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "edited.md"), "# Edited\n")
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "fallback.md"), "# Fallback\n")
+	testutil.WriteFile(t, filepath.Join(dir, ".queue"), "edited.md\nfallback.md\n")
+
+	idx := BuildIndex(dir)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "edited.md"), "---\nid: edited\ndepends_on: [missing]\n---\n# Edited\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-fresh", nil, 0, idx)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected fallback.md to be claimed, got nil")
+	}
+	if task.Filename != "fallback.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "fallback.md")
+	}
+	if _, err := os.Stat(filepath.Join(dir, DirWaiting, "edited.md")); err != nil {
+		t.Fatalf("edited.md should be moved to waiting/: %v", err)
+	}
+}
+
 func TestSelectAndClaimTask_QueueFileOrdering(t *testing.T) {
 	dir := setupClaimTestDir(t)
 	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "z-last.md"), "# Z Last\n")

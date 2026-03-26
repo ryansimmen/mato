@@ -118,6 +118,9 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	if !contains(output, "backlog:") {
 		t.Errorf("output should contain 'backlog:' line in queue overview, got:\n%s", output)
 	}
+	if !contains(output, "blocked:") {
+		t.Errorf("output should contain 'blocked:' line in queue overview, got:\n%s", output)
+	}
 
 	// Verify runnable backlog section appears with the backlog task.
 	if !contains(output, "Runnable Backlog (execution order)") {
@@ -1388,6 +1391,9 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 	if result.Counts["waiting"] != 1 {
 		t.Errorf("expected 1 waiting, got %d", result.Counts["waiting"])
 	}
+	if result.Counts["blocked"] != 1 {
+		t.Errorf("expected 1 blocked, got %d", result.Counts["blocked"])
+	}
 	if result.MergeQueue != "idle" {
 		t.Errorf("expected merge_queue idle, got %s", result.MergeQueue)
 	}
@@ -1422,6 +1428,9 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 	// Verify waiting tasks with dependency info.
 	if len(result.Waiting) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(result.Waiting))
+	}
+	if result.Waiting[0].State != queue.DirWaiting {
+		t.Errorf("expected waiting task state %q, got %q", queue.DirWaiting, result.Waiting[0].State)
 	}
 	if result.Waiting[0].Title != "Refactor the API layer" {
 		t.Errorf("expected title 'Refactor the API layer', got %q", result.Waiting[0].Title)
@@ -1462,6 +1471,52 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 	}
 	if result.RunnableBacklog[0].Priority != 10 {
 		t.Errorf("expected priority 10, got %d", result.RunnableBacklog[0].Priority)
+	}
+}
+
+func TestShowJSON_BacklogDependencyBlockedAppearsInWaiting(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"), []byte("---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(blocked): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte("---\nid: runnable\npriority: 20\n---\n# Runnable\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(runnable): %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v", err)
+	}
+
+	if len(result.RunnableBacklog) != 1 || result.RunnableBacklog[0].Name != "runnable.md" {
+		t.Fatalf("RunnableBacklog = %#v, want only runnable.md", result.RunnableBacklog)
+	}
+	if len(result.Waiting) != 1 || result.Waiting[0].Name != "blocked.md" {
+		t.Fatalf("Waiting = %#v, want blocked.md", result.Waiting)
+	}
+	if result.Counts["waiting"] != 0 {
+		t.Fatalf("Counts[waiting] = %d, want 0 physical waiting/ tasks", result.Counts["waiting"])
+	}
+	if result.Counts["blocked"] != 1 {
+		t.Fatalf("Counts[blocked] = %d, want 1 dependency-blocked task", result.Counts["blocked"])
+	}
+	if result.Waiting[0].State != queue.DirBacklog {
+		t.Fatalf("Waiting[0].State = %q, want %q", result.Waiting[0].State, queue.DirBacklog)
 	}
 }
 

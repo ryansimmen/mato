@@ -770,9 +770,9 @@ func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
 		t.Fatal("HasAvailableTasks should return false when only deferred tasks in backlog")
 	}
 
-	// Without deferred set, it would return true (proving alignment matters)
-	if !queue.HasAvailableTasks(tasksDir, nil) {
-		t.Fatal("HasAvailableTasks(nil) should return true (task exists in backlog)")
+	// Without deferred set, it still returns false because deferred tasks are not runnable work.
+	if queue.HasAvailableTasks(tasksDir, nil) {
+		t.Fatal("HasAvailableTasks(nil) should return false when only deferred tasks exist")
 	}
 }
 
