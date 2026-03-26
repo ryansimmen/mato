@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,6 +190,49 @@ func TestRetryTask_RejectsPathTraversal(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "path separators are not allowed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRetryTask_DependencyBlockedWarnsAndReconcileMovesToWaiting(t *testing.T) {
+	tmp := t.TempDir()
+	for _, dir := range AllDirs {
+		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	content := "---\nid: blocked\ndepends_on: [missing-dep]\n---\n# Blocked\n"
+	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "blocked.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = oldStderr }()
+
+	if err := RetryTask(tmp, "blocked"); err != nil {
+		t.Fatalf("RetryTask() error: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stderr pipe: %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	if !strings.Contains(buf.String(), "next reconcile will move it to waiting/") {
+		t.Fatalf("stderr = %q, want warning about waiting/ demotion", buf.String())
+	}
+
+	if got := ReconcileReadyQueue(tmp, nil); !got {
+		t.Fatal("ReconcileReadyQueue() = false, want true")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, DirWaiting, "blocked.md")); err != nil {
+		t.Fatalf("blocked.md not found in waiting/: %v", err)
 	}
 }
 

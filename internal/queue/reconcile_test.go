@@ -164,6 +164,46 @@ func TestReconcileReadyQueue_InvalidGlobInBacklogQuarantined(t *testing.T) {
 	}
 }
 
+func TestReconcileReadyQueue_DemotesDependencyBlockedBacklogTask(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "blocked.md",
+		"---\nid: blocked\ndepends_on: [missing-dep]\n---\n# Blocked\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "blocked.md")); err != nil {
+		t.Fatalf("blocked.md not found in waiting/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "blocked.md")); !os.IsNotExist(err) {
+		t.Fatal("blocked.md should not remain in backlog/")
+	}
+}
+
+func TestReconcileReadyQueue_DependencyBlockedWinsOverAffectsDeferral(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirInProgress, "active.md",
+		"---\nid: active\naffects:\n  - src/main.go\n---\n# Active\n")
+	writeTask(t, tasksDir, DirBacklog, "blocked.md",
+		"---\nid: blocked\ndepends_on: [missing-dep]\naffects:\n  - src/main.go\n---\n# Blocked\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "blocked.md")); err != nil {
+		t.Fatalf("blocked.md not found in waiting/: %v", err)
+	}
+	if deferred := DeferredOverlappingTasks(tasksDir, nil); len(deferred) != 0 {
+		t.Fatalf("deferred = %#v, want empty after demotion", deferred)
+	}
+}
+
 func TestReconcileReadyQueue_Idempotency(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 

@@ -255,6 +255,37 @@ func TestOrphanRecoveryAndRequeue(t *testing.T) {
 	}
 }
 
+func TestDependencyBlockedBacklogDemotedAndRetriedTaskWaits(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirBacklog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
+	writeTask(t, tasksDir, queue.DirFailed, "retry-blocked.md", "---\nid: retry-blocked\ndepends_on: [missing]\npriority: 20\n---\n# Retry blocked\n")
+
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("queue.ReconcileReadyQueue() = false, want true")
+	}
+	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "blocked.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"))
+
+	if err := queue.RetryTask(tasksDir, "retry-blocked"); err != nil {
+		t.Fatalf("queue.RetryTask: %v", err)
+	}
+	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "retry-blocked.md"))
+
+	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
+		t.Fatal("second queue.ReconcileReadyQueue() = false, want true")
+	}
+	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "retry-blocked.md"))
+	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "retry-blocked.md"))
+
+	if err := queue.WriteQueueManifest(tasksDir, nil, nil); err != nil {
+		t.Fatalf("queue.WriteQueueManifest: %v", err)
+	}
+	if got := readFile(t, filepath.Join(tasksDir, ".queue")); strings.TrimSpace(got) != "" {
+		t.Fatalf("queue manifest = %q, want empty", got)
+	}
+}
+
 func TestMergeConflictHandling(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 

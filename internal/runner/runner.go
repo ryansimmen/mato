@@ -213,7 +213,20 @@ func DryRun(repoRoot, branch string) error {
 
 	// --- Affects Conflict Detection ---
 	fmt.Println("\n=== Affects Conflict Detection ===")
-	detailed := queue.DeferredOverlappingTasksDetailed(tasksDir, idx)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	blockedBacklog := view.DependencyBlocked
+	if len(blockedBacklog) > 0 {
+		fmt.Println("\n=== Dependency-Blocked Backlog Tasks ===")
+		names := make([]string, 0, len(blockedBacklog))
+		for name := range blockedBacklog {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Printf("  BLOCKED %s (depends on %s)\n", name, queue.FormatDependencyBlocks(blockedBacklog[name]))
+		}
+	}
+	detailed := view.Deferred
 	if len(detailed) > 0 {
 		// Sort deferred task names for stable output.
 		names := make([]string, 0, len(detailed))
@@ -235,10 +248,10 @@ func DryRun(repoRoot, branch string) error {
 	for name := range detailed {
 		deferredSet[name] = struct{}{}
 	}
-	dryRunExecutionOrder(idx, deferredSet)
+	dryRunExecutionOrder(view.Runnable)
 
 	// --- Backlog Task Summary ---
-	dryRunBacklogSummary(idx, deferredSet)
+	dryRunBacklogSummary(idx, deferredSet, blockedBacklog)
 
 	// --- Queue Summary ---
 	// Count includes both successfully parsed tasks and parse failures
@@ -261,9 +274,8 @@ func DryRun(repoRoot, branch string) error {
 
 // dryRunExecutionOrder prints the === Execution Order === section showing
 // runnable backlog tasks in priority order with their priority values.
-func dryRunExecutionOrder(idx *queue.PollIndex, deferred map[string]struct{}) {
+func dryRunExecutionOrder(runnable []*queue.TaskSnapshot) {
 	fmt.Println("\n=== Execution Order ===")
-	runnable := idx.BacklogByPriority(deferred)
 	if len(runnable) == 0 {
 		fmt.Println("  (no runnable tasks)")
 		return
@@ -275,7 +287,7 @@ func dryRunExecutionOrder(idx *queue.PollIndex, deferred map[string]struct{}) {
 
 // dryRunBacklogSummary prints the === Backlog Task Summary === section with
 // compact frontmatter for every parsed backlog task.
-func dryRunBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}) {
+func dryRunBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}, blocked map[string][]queue.DependencyBlock) {
 	backlog := idx.TasksByState(queue.DirBacklog)
 	if len(backlog) == 0 {
 		return
@@ -283,7 +295,9 @@ func dryRunBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}) {
 	fmt.Println("\n=== Backlog Task Summary ===")
 	for _, snap := range backlog {
 		status := "runnable"
-		if _, ok := deferred[snap.Filename]; ok {
+		if _, ok := blocked[snap.Filename]; ok {
+			status = "dependency-blocked"
+		} else if _, ok := deferred[snap.Filename]; ok {
 			status = "deferred"
 		}
 
@@ -300,6 +314,9 @@ func dryRunBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}) {
 		fmt.Printf("    id: %s  priority: %d\n", snap.Meta.ID, snap.Meta.Priority)
 		fmt.Printf("    affects: %s\n", affects)
 		fmt.Printf("    depends_on: %s\n", dependsOn)
+		if blocks, ok := blocked[snap.Filename]; ok {
+			fmt.Printf("    blocked by: %s\n", queue.FormatDependencyBlocks(blocks))
+		}
 	}
 }
 
@@ -614,11 +631,15 @@ func pollReconcile(tasksDir string) (*queue.PollIndex, bool) {
 // encountered. It returns whether a task was claimed and whether any
 // non-fatal error occurred.
 func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex) (claimed bool, hadError bool) {
-	deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	deferred := make(map[string]struct{}, len(view.Deferred))
+	for name := range view.Deferred {
+		deferred[name] = struct{}{}
+	}
 	for name := range failedDirExcluded {
 		deferred[name] = struct{}{}
 	}
-	if err := queue.WriteQueueManifest(tasksDir, deferred, idx); err != nil {
+	if err := queue.WriteQueueManifestFromView(tasksDir, deferred, idx, view); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 		hadError = true
 	}

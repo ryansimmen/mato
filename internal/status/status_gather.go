@@ -81,25 +81,24 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	}
 	data.presenceMap = presenceMap
 
-	// Waiting tasks (dependency-blocked) — derived from index.
-	data.waitingTasks = waitingTasksFromIndex(idx)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
 
-	// Deferred (conflict-blocked) tasks — reuse the same index.
-	data.deferredDetail = queue.DeferredOverlappingTasksDetailed(tasksDir, idx)
+	// Waiting tasks (dependency-blocked) — derived from index and the shared runnable backlog view.
+	data.waitingTasks = waitingTasksFromIndex(idx, view.DependencyBlocked)
+
+	// Deferred (conflict-blocked) tasks — derived from the effective runnable backlog view.
+	data.deferredDetail = view.Deferred
 	deferred := make(map[string]struct{}, len(data.deferredDetail))
 	for name := range data.deferredDetail {
 		deferred[name] = struct{}{}
 	}
 
 	// Runnable count.
-	data.runnable = data.queueCounts[queue.DirBacklog] - len(deferred)
-	if data.runnable < 0 {
-		data.runnable = 0
-	}
+	data.runnable = len(view.Runnable)
 
 	// Runnable backlog in priority order — same ordering the host uses to
 	// claim the next task, minus conflict-deferred entries.
-	runnableSnaps := idx.BacklogByPriority(deferred)
+	runnableSnaps := view.Runnable
 	data.runnableBacklog = make([]taskEntry, 0, len(runnableSnaps))
 	for _, snap := range runnableSnaps {
 		data.runnableBacklog = append(data.runnableBacklog, taskEntry{

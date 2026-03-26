@@ -79,11 +79,13 @@ func DeferredOverlappingTasks(tasksDir string, idx *PollIndex) map[string]struct
 // When idx is nil, a temporary index is built internally.
 func DeferredOverlappingTasksDetailed(tasksDir string, idx *PollIndex) map[string]DeferralInfo {
 	idx = ensureIndex(tasksDir, idx)
+	view := ComputeRunnableBacklogView(tasksDir, idx)
+	return view.Deferred
+}
 
+func deferredOverlappingTasksDetailedForSnapshots(idx *PollIndex, backlogSnaps []*TaskSnapshot) map[string]DeferralInfo {
 	deferred := make(map[string]DeferralInfo)
 
-	// Build sorted backlog tasks from the index.
-	backlogSnaps := idx.TasksByState(DirBacklog)
 	tasks := make([]backlogTask, 0, len(backlogSnaps))
 	for _, snap := range backlogSnaps {
 		tasks = append(tasks, backlogTask{
@@ -101,7 +103,6 @@ func DeferredOverlappingTasksDetailed(tasksDir string, idx *PollIndex) map[strin
 		return tasks[i].name < tasks[j].name
 	})
 
-	// Use index-derived active affects instead of rescanning filesystem.
 	active := idx.ActiveAffects()
 	kept := make([]backlogTask, 0, len(tasks)+len(active))
 	for _, at := range active {
