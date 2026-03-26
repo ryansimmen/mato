@@ -208,6 +208,31 @@ func TestWriteQueueManifest(t *testing.T) {
 	}
 }
 
+func TestWriteQueueManifestFromView(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "blocked.md",
+		"---\nid: blocked\ndepends_on: [missing]\npriority: 5\n---\n# Blocked\n")
+	writeTask(t, tasksDir, DirBacklog, "alpha.md",
+		"---\nid: alpha\npriority: 10\n---\n# Alpha\n")
+	writeTask(t, tasksDir, DirBacklog, "beta.md",
+		"---\nid: beta\npriority: 20\n---\n# Beta\n")
+
+	idx := BuildIndex(tasksDir)
+	view := ComputeRunnableBacklogView(tasksDir, idx)
+	if err := WriteQueueManifestFromView(tasksDir, nil, idx, view); err != nil {
+		t.Fatalf("WriteQueueManifestFromView: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, ".queue"))
+	if err != nil {
+		t.Fatalf("read .queue: %v", err)
+	}
+	if string(data) != "alpha.md\nbeta.md\n" {
+		t.Fatalf(".queue = %q, want %q", string(data), "alpha.md\nbeta.md\n")
+	}
+}
+
 func TestWriteQueueManifest_EmptyBacklogFile(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 

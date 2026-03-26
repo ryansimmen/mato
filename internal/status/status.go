@@ -192,11 +192,11 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 	return agents, nil
 }
 
-// waitingTasksFromIndex derives waiting task summaries from the PollIndex
-// snapshot. It populates structured dependency data (ID + status) without
-// any presentation formatting so the same model can drive both text and
-// JSON output.
-func waitingTasksFromIndex(idx *queue.PollIndex) []waitingTaskSummary {
+// waitingTasksFromIndex derives dependency-blocked task summaries from the
+// PollIndex snapshot and the already-computed backlog dependency blockers. It
+// populates structured dependency data (ID + status) without any presentation
+// formatting so the same model can drive both text and JSON output.
+func waitingTasksFromIndex(idx *queue.PollIndex, blockedBacklog map[string][]queue.DependencyBlock) []waitingTaskSummary {
 	snaps := idx.TasksByState(queue.DirWaiting)
 
 	// Build ID→state map from the index.
@@ -222,7 +222,6 @@ func waitingTasksFromIndex(idx *queue.PollIndex) []waitingTaskSummary {
 		})
 	}
 
-	blockedBacklog := queue.DependencyBlockedBacklogTasksDetailed("", idx)
 	for _, snap := range idx.TasksByState(queue.DirBacklog) {
 		blocks, ok := blockedBacklog[snap.Filename]
 		if !ok {

@@ -631,11 +631,15 @@ func pollReconcile(tasksDir string) (*queue.PollIndex, bool) {
 // encountered. It returns whether a task was claimed and whether any
 // non-fatal error occurred.
 func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex) (claimed bool, hadError bool) {
-	deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	deferred := make(map[string]struct{}, len(view.Deferred))
+	for name := range view.Deferred {
+		deferred[name] = struct{}{}
+	}
 	for name := range failedDirExcluded {
 		deferred[name] = struct{}{}
 	}
-	if err := queue.WriteQueueManifest(tasksDir, deferred, idx); err != nil {
+	if err := queue.WriteQueueManifestFromView(tasksDir, deferred, idx, view); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 		hadError = true
 	}

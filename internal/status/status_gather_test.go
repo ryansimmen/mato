@@ -690,7 +690,7 @@ func TestIsMergeLockActive_DeadProcess(t *testing.T) {
 func TestWaitingTasksFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	idx := queue.BuildIndex(tasksDir)
-	tasks := waitingTasksFromIndex(idx)
+	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 waiting tasks, got %d", len(tasks))
 	}
@@ -703,7 +703,7 @@ func TestWaitingTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "b-wait.md", "---\nid: b-wait\npriority: 10\ndepends_on: [dep-z]\n---\n# B waiting\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := waitingTasksFromIndex(idx)
+	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 3 {
 		t.Fatalf("expected 3 waiting tasks, got %d", len(tasks))
 	}
@@ -724,7 +724,7 @@ func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-done]\n---\n# Waiter\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := waitingTasksFromIndex(idx)
+	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
@@ -742,7 +742,7 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [nonexistent]\n---\n# Waiter\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := waitingTasksFromIndex(idx)
+	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
 	}
@@ -752,6 +752,27 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 	}
 	if dep.Status != "missing" {
 		t.Errorf("dep Status = %q, want %q", dep.Status, "missing")
+	}
+}
+
+func TestWaitingTasksFromIndex_IncludesBlockedBacklogFromSharedMap(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirBacklog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
+
+	idx := queue.BuildIndex(tasksDir)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	tasks := waitingTasksFromIndex(idx, view.DependencyBlocked)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 dependency-blocked task, got %d", len(tasks))
+	}
+	if tasks[0].Name != "blocked.md" {
+		t.Fatalf("tasks[0].Name = %q, want %q", tasks[0].Name, "blocked.md")
+	}
+	if tasks[0].State != queue.DirBacklog {
+		t.Fatalf("tasks[0].State = %q, want %q", tasks[0].State, queue.DirBacklog)
+	}
+	if len(tasks[0].Dependencies) != 1 || tasks[0].Dependencies[0].Status != "unknown" {
+		t.Fatalf("Dependencies = %#v, want unknown blocked dependency", tasks[0].Dependencies)
 	}
 }
 

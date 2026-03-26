@@ -81,10 +81,10 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	}
 	data.presenceMap = presenceMap
 
-	// Waiting tasks (dependency-blocked) — derived from index.
-	data.waitingTasks = waitingTasksFromIndex(idx)
-
 	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+
+	// Waiting tasks (dependency-blocked) — derived from index and the shared runnable backlog view.
+	data.waitingTasks = waitingTasksFromIndex(idx, view.DependencyBlocked)
 
 	// Deferred (conflict-blocked) tasks — derived from the effective runnable backlog view.
 	data.deferredDetail = view.Deferred
