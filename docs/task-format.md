@@ -56,6 +56,9 @@ Most tasks need only markdown instructions plus a few common scheduler fields
 | `depends_on` | string array | empty | IDs that must be completed before a waiting task can be promoted into `backlog/`. No dependencies means the task is immediately ready. Circular dependencies (including self-dependencies) are detected and the affected tasks are moved to `failed/` with a `<!-- cycle-failure: -->` marker. |
 | `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). Exact strings are compared literally; an entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Combining glob metacharacters with a trailing `/` is invalid and treated as a fatal task error: the queue moves such tasks to `failed/`, and `mato doctor` reports them at error severity (exit code 2). Unsafe path entries — absolute paths (e.g. `/etc/passwd`) and path-traversal entries that escape the repository root (e.g. `../../secret`) — are stripped during parsing and reported by `mato doctor` at error severity (code `tasks.unsafe_affects`). The stripped entries are recorded in structured metadata so diagnostics can report exactly which entries were removed and why. |
 
+For queue-focused preflight checks on task metadata and dependency integrity, use
+`mato doctor --only queue,tasks,deps`.
+
 ### Advanced scheduler fields
 
 | Field | Type | Default | Reference |

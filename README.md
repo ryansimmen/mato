@@ -171,7 +171,7 @@ read-only and makes no filesystem changes.
 - git repository detection and configuration
 - host tool availability (git, docker, gh, copilot)
 - Docker daemon connectivity
-- queue directory layout (missing or unexpected directories)
+- queue directory layout and read errors
 - task file parsing (frontmatter errors, invalid globs)
 - lock and orphan detection (stale PID locks, orphaned in-progress tasks)
 - dependency integrity (cycles, unknown IDs, ambiguous prefixes, duplicates)
@@ -182,6 +182,15 @@ The `--only` flag accepts a comma-separated list of check categories to run
 (`git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`);
 non-selected checks appear as skipped. Exit code 0 means healthy, 1 means
 warnings only, and 2 means errors were found.
+
+For queue-focused preflight validation, prefer:
+
+```bash
+mato doctor --only queue,tasks,deps
+```
+
+That mode stays read-only and skips unrelated Docker checks and Docker-image
+config loading.
 
 ## Retry Command
 
