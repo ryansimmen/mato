@@ -150,6 +150,7 @@ type waitingTaskSummary struct {
 	Name         string
 	Title        string
 	Priority     int
+	State        string
 	Dependencies []waitingDep
 }
 
@@ -216,6 +217,26 @@ func waitingTasksFromIndex(idx *queue.PollIndex) []waitingTaskSummary {
 			Name:         snap.Filename,
 			Title:        title,
 			Priority:     snap.Meta.Priority,
+			State:        queue.DirWaiting,
+			Dependencies: deps,
+		})
+	}
+
+	blockedBacklog := queue.DependencyBlockedBacklogTasksDetailed("", idx)
+	for _, snap := range idx.TasksByState(queue.DirBacklog) {
+		blocks, ok := blockedBacklog[snap.Filename]
+		if !ok {
+			continue
+		}
+		deps := make([]waitingDep, 0, len(blocks))
+		for _, block := range blocks {
+			deps = append(deps, waitingDep{ID: block.DependencyID, Status: block.State})
+		}
+		waiting = append(waiting, waitingTaskSummary{
+			Name:         snap.Filename,
+			Title:        frontmatter.ExtractTitle(snap.Filename, snap.Body),
+			Priority:     snap.Meta.Priority,
+			State:        queue.DirBacklog,
 			Dependencies: deps,
 		})
 	}

@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"mato/internal/atomicwrite"
-	"mato/internal/frontmatter"
 )
 
 type queueEntry struct {
@@ -33,7 +32,8 @@ func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}, idx *Pol
 				return "", fmt.Errorf("read backlog dir: %w", warn.Err)
 			}
 		}
-		sorted := idx.BacklogByPriority(exclude)
+		view := ComputeRunnableBacklogView(tasksDir, idx)
+		sorted := sortSnapshotsByPriority(view.Runnable, exclude)
 		queueEntries = make([]queueEntry, 0, len(sorted))
 		for _, snap := range sorted {
 			queueEntries = append(queueEntries, queueEntry{name: snap.Filename, priority: snap.Meta.Priority})
@@ -53,33 +53,27 @@ func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}, idx *Pol
 			return queueEntries[i].name < queueEntries[j].name
 		})
 	} else {
-		// Fallback: scan filesystem.
-		names, err := ListTaskFiles(filepath.Join(tasksDir, DirBacklog))
-		if err != nil {
-			return "", err
+		idx = BuildIndex(tasksDir)
+		for _, warn := range idx.BuildWarnings() {
+			fmt.Fprintf(os.Stderr, "warning: could not build queue index cleanly: read %s: %v\n", warn.Path, warn.Err)
+			if warn.State == DirBacklog {
+				return "", fmt.Errorf("read backlog dir: %w", warn.Err)
+			}
 		}
-
-		queueEntries = make([]queueEntry, 0, len(names))
-		for _, name := range names {
+		view := ComputeRunnableBacklogView(tasksDir, idx)
+		sorted := sortSnapshotsByPriority(view.Runnable, exclude)
+		queueEntries = make([]queueEntry, 0, len(sorted))
+		for _, snap := range sorted {
+			queueEntries = append(queueEntries, queueEntry{name: snap.Filename, priority: snap.Meta.Priority})
+		}
+		for _, pf := range idx.BacklogParseFailures() {
 			if exclude != nil {
-				if _, excluded := exclude[name]; excluded {
+				if _, excluded := exclude[pf.Filename]; excluded {
 					continue
 				}
 			}
-			meta, _, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, DirBacklog, name))
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", name, err)
-				continue
-			}
-			queueEntries = append(queueEntries, queueEntry{name: name, priority: meta.Priority})
+			fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", pf.Filename, pf.Err)
 		}
-
-		sort.Slice(queueEntries, func(i, j int) bool {
-			if queueEntries[i].priority != queueEntries[j].priority {
-				return queueEntries[i].priority < queueEntries[j].priority
-			}
-			return queueEntries[i].name < queueEntries[j].name
-		})
 	}
 
 	lines := make([]string, 0, len(queueEntries))

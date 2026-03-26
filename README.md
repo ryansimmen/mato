@@ -83,7 +83,8 @@ After the frontmatter, write normal markdown instructions for the agent.
 
 - Put blocked tasks in `waiting/`.
 - `depends_on` entries refer to task IDs.
-- On each loop, completed dependencies promote a task from `waiting/` to `backlog/`.
+- `depends_on` is authoritative regardless of directory placement. Tasks with unsatisfied dependencies are dependency-blocked even if they were manually or automatically placed in `backlog/`.
+- On each loop, completed dependencies promote a task from `waiting/` to `backlog/`. If a dependency-blocked task is found in `backlog/`, mato moves it back to `waiting/` before writing `.queue` or claiming work.
 - Lower numbers mean higher priority.
 - `affects` is used for simple conflict prevention: if two backlog tasks have overlapping entries, the lower-priority task is excluded from the `.queue` manifest until the conflict clears. Entries are compared using three matching modes — exact strings are compared literally, entries ending with `/` are treated as directory prefixes that match any path underneath them (e.g. `pkg/client/` conflicts with `pkg/client/http.go`), and entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Conflict-deferred tasks remain in `backlog/` (they are not moved to `waiting/`). Invalid glob syntax (e.g. combining metacharacters with a trailing `/`) is a fatal task error: the queue quarantines the task into `failed/`, and `mato doctor` reports it at error severity.
 
@@ -91,8 +92,8 @@ After the frontmatter, write normal markdown instructions for the agent.
 
 ```text
 <repo>/.mato/
-├── waiting/         # blocked tasks waiting on dependencies
-├── backlog/         # ready to run
+├── waiting/         # dependency-blocked tasks
+├── backlog/         # runnable tasks and affects-deferred tasks
 ├── in-progress/     # claimed by an active agent
 ├── ready-for-review/# completed by agent, waiting for AI review
 ├── ready-to-merge/  # approved by review agent, waiting for host merge
@@ -110,7 +111,7 @@ Tasks that accumulate `max_retries` failure records (default 3) are moved to `fa
 ## How It Works
 
 1. Add tasks to `waiting/` or `backlog/`.
-2. Mato promotes ready tasks into `backlog/`, orders them by priority, and defers overlapping `affects` conflicts (exact paths, directory prefixes, and glob patterns).
+2. Mato promotes ready tasks into `backlog/`, moves misplaced dependency-blocked backlog tasks back to `waiting/`, orders runnable backlog tasks by priority, and defers overlapping `affects` conflicts (exact paths, directory prefixes, and glob patterns).
 3. An agent claims a backlog task, works in an isolated clone on a host-created `task/<name>` branch, and commits. The host pushes the branch after the agent exits.
 4. Agents communicate through `.mato/messages/` so concurrent runs can share intent and completion events.
 5. A review agent automatically evaluates each completed task branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with feedback for the next attempt.
@@ -127,8 +128,8 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 
 `mato status` prints a terminal-friendly snapshot of the queue:
 
-- counts for `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`
-- runnable backlog in execution order (priority-sorted, conflict-deferred tasks excluded)
+- counts for `backlog/`, dependency-blocked work, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`
+- runnable backlog in execution order (priority-sorted, dependency-blocked and conflict-deferred tasks excluded)
 - active agents from `.locks/`
 - waiting tasks with dependency progress
 - conflict-deferred tasks with blocking details

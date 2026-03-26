@@ -50,6 +50,7 @@ type WaitingTaskJSON struct {
 	Name         string           `json:"name"`
 	Title        string           `json:"title,omitempty"`
 	Priority     int              `json:"priority"`
+	State        string           `json:"state,omitempty"`
 	Dependencies []DependencyJSON `json:"dependencies"`
 }
 
@@ -120,6 +121,7 @@ func statusDataToJSON(data statusData) StatusJSON {
 			"runnable":       data.runnable,
 			"deferred":       len(data.deferredDetail),
 			"waiting":        data.queueCounts[queue.DirWaiting],
+			"blocked":        len(data.waitingTasks),
 			"in_progress":    data.queueCounts[queue.DirInProgress],
 			"ready_review":   data.queueCounts[queue.DirReadyReview],
 			"ready_to_merge": data.queueCounts[queue.DirReadyMerge],
@@ -181,6 +183,7 @@ func statusDataToJSON(data statusData) StatusJSON {
 			Name:         wt.Name,
 			Title:        wt.Title,
 			Priority:     wt.Priority,
+			State:        wt.State,
 			Dependencies: deps,
 		})
 	}

@@ -92,8 +92,8 @@ Important details from the implementation:
 - The poll loop builds a `PollIndex` (`queue.BuildIndex(tasksDir)`) at the start of each cycle. The index reads every task file once and provides O(1) lookups for task IDs, active branches, `affects` metadata, and state. All consumers in the cycle share this snapshot instead of independently scanning directories and parsing YAML frontmatter. The index is rebuilt after `ReconcileReadyQueue` since it may promote tasks from `waiting/` to `backlog/`. Functions that accept a `*PollIndex` parameter treat `nil` as "build a temporary index internally", preserving backward compatibility for callers outside the poll loop (e.g., `DryRun`, `status`, integration tests).
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
-- `.queue` is written once per iteration, after overlap deferral, so the manifest reflects the final backlog state. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifest()`. Conflict-deferred tasks are excluded from the manifest so agents will not select them.
-- `queue.SelectAndClaimTask(...)` reads `.queue` if present, parses each candidate's frontmatter and counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). `HasAvailableTasks` is a separate helper but is not called in the polling loop.
+- `.queue` is written once per iteration, after dependency enforcement and overlap deferral, so the manifest reflects the effective runnable backlog. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifest()`. Dependency-blocked backlog tasks and conflict-deferred tasks are excluded from the manifest so agents will not select them.
+- `queue.SelectAndClaimTask(...)` reads `.queue` if present, reparses each candidate from disk before claim-time validation, re-checks `depends_on`, counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). Dependency-blocked candidates are moved back to `waiting/` as a safety net if they were edited or requeued after the last reconcile pass. `HasAvailableTasks` is a separate helper but is not called in the polling loop.
 - When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, excluded tasks are merged into the `deferred` map before calling `SelectAndClaimTask`, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
@@ -156,11 +156,13 @@ If forwarded arguments do not already contain `--model`, `runOnce(...)` appends 
 ### Host-side task claiming
 Before launching a Docker container, the host calls `queue.SelectAndClaimTask(tasksDir, agentID, deferred)` which:
 1. Reads `.mato/.queue` if present, otherwise lists `backlog/*.md` alphabetically.
-2. Parses each candidate's frontmatter and counts `<!-- failure: ... -->` records.
-3. Atomically renames the candidate from `backlog/` to `in-progress/`.
-4. If the number of `<!-- failure: ... -->` records >= `max_retries` (default 3), moves the task from `in-progress/` to `failed/` and continues to the next candidate. If `failed/` is unavailable, the task is rolled back to `backlog/` and a `FailedDirUnavailableError` (carrying the task filename) is returned; the host loop adds this task to a persistent exclusion set to prevent livelocking on the same retry-exhausted task.
-5. Prepends a `<!-- claimed-by: ... -->` header to the task file.
-6. Returns the filename, derived branch name, extracted title, and host-side path.
+2. Reparses each candidate from disk and re-checks `depends_on` against the current completed/non-completed snapshot.
+3. If a candidate is dependency-blocked, moves it from `backlog/` back to `waiting/` and continues.
+4. Counts `<!-- failure: ... -->` records and applies retry cooldown.
+5. Atomically renames the candidate from `backlog/` to `in-progress/`.
+6. If the number of `<!-- failure: ... -->` records >= `max_retries` (default 3), moves the task from `in-progress/` to `failed/` and continues to the next candidate. If `failed/` is unavailable, the task is rolled back to `backlog/` and a `FailedDirUnavailableError` (carrying the task filename) is returned; the host loop adds this task to a persistent exclusion set to prevent livelocking on the same retry-exhausted task.
+7. Prepends a `<!-- claimed-by: ... -->` header to the task file.
+8. Returns the filename, derived branch name, extracted title, and host-side path.
 
 The host then writes one best-effort `intent` message via `messaging.WriteMessage(...)` and passes the claimed task info to the agent as environment variables: `MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`.
 
@@ -188,13 +190,14 @@ waiting/ --deps met--> backlog/ --host claim--> in-progress/ --host push--> read
    |                      |                          +--ON_FAILURE--> backlog/       +--review rejection--> backlog/
    +--dep not met---------+                          +--host orphan recovery--> backlog/
                           |                          +--host failure record budget exhausted--> failed/
-                          +--conflict-deferred tasks stay in backlog/ but excluded from .queue
+                           +--dependency-blocked tasks are demoted back to waiting/
+                           +--conflict-deferred tasks stay in backlog/ but excluded from .queue
 ```
 State meanings:
 | State | Meaning | Entered by | Left by |
 | --- | --- | --- | --- |
-| `waiting/` | blocked task | authored there initially for dependency tracking | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed and no active overlap exists |
-| `backlog/` | claimable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, `ON_FAILURE` requeue, or review rejection | host `SelectAndClaimTask` moves it to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue` |
+| `waiting/` | dependency-blocked task | authored there initially for dependency tracking, or demoted from `backlog/` when `depends_on` is not satisfied | `queue.ReconcileReadyQueue(...)` moves it to `backlog/` when every dependency is completed and no active overlap exists |
+| `backlog/` | runnable task (or conflict-deferred) | initial ready state, dependency promotion, orphan recovery, merge requeue after squash conflicts, `ON_FAILURE` requeue, or review rejection | host `SelectAndClaimTask` moves runnable tasks to `in-progress/`; conflict-deferred tasks remain here but are excluded from `.queue`; dependency-blocked tasks are moved back to `waiting/` |
 | `in-progress/` | task owned by one agent | host `SelectAndClaimTask` | host `postAgentPush` (to `ready-for-review/`), `ON_FAILURE`, or host orphan recovery |
 | `ready-for-review/` | branch pushed, waiting for AI review | host `postAgentPush` | host `postReviewAction` moves to `ready-to-merge/` on approval, or to `backlog/` on rejection |
 | `ready-to-merge/` | reviewed and approved, waiting for host merge | host `postReviewAction` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict or missing task branch (if retries remain), to `failed/` if the task branch is missing and `max_retries` is exhausted, or leaves it in place if the squash commit cannot be pushed |
@@ -202,7 +205,7 @@ State meanings:
 | `failed/` | failure record budget exhausted, circular dependency, or duplicate waiting task ID | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), merge-queue failure handling (squash conflict or missing branch with retries exhausted), `ReconcileReadyQueue` moves cycle members from `waiting/` to `failed/` with `<!-- cycle-failure: ... -->` markers, or `ReconcileReadyQueue` moves duplicate waiting task ID copies to `failed/` with `<!-- terminal-failure: ... -->` markers | no normal exit |
 Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
 ## 5. Dependency Resolution
-`queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` promotes waiting tasks whose dependencies are satisfied, moves cyclic tasks to `failed/`, and moves duplicate waiting task ID copies to `failed/`.
+`queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` demotes dependency-blocked backlog tasks to `waiting/`, promotes waiting tasks whose dependencies are satisfied, moves cyclic tasks to `failed/`, and moves duplicate waiting task ID copies to `failed/`.
 ### DAG Analysis
 Dependency resolution is built on a shared analysis pass in `internal/dag/`. `dag.Analyze(nodes, completedIDs, ambiguousIDs, knownIDs)` constructs a dependency graph from the waiting tasks and classifies each node:
 - **DepsSatisfied**: all `depends_on` entries are in the completed-ID set (unambiguously).
@@ -216,7 +219,8 @@ The analysis produces deterministic, sorted output for all three categories.
 1. Emits structured warnings from `diag.Issues` (duplicate waiting IDs, unknown dependencies, ambiguous completed IDs, cycles).
 2. Moves duplicate waiting task ID copies to `failed/` with `<!-- terminal-failure: ... -->` markers. When multiple `waiting/` files share the same task ID, the first file (by filename sort) is retained and every subsequent copy is failed. These markers do **not** consume the task's normal `max_retries` budget.
 3. Moves cycle members to `failed/` with `<!-- cycle-failure: mato at <timestamp> — circular dependency -->` markers. These markers do **not** consume the task's normal `max_retries` budget (only `<!-- failure: ... -->` records are counted).
-4. Promotes deps-satisfied tasks from `waiting/` to `backlog/` if they also pass the `HasActiveOverlap` filter (no conflicting active tasks).
+4. Moves dependency-blocked `backlog/` tasks back to `waiting/` before manifest generation or claim selection.
+5. Promotes deps-satisfied tasks from `waiting/` to `backlog/` if they also pass the `HasActiveOverlap` filter (no conflicting active tasks).
 ### One-Hop Promotion Semantics
 Promotion is intentionally one-hop per reconcile cycle. If A is completed, B depends on A, and C depends on B, then one reconcile pass promotes B to `backlog/` but leaves C in `waiting/`. C becomes promotable on the next reconcile cycle after B completes. This preserves the existing behavior and avoids premature promotion of deeply chained tasks.
 ### Cycle-to-Failed Behavior
@@ -226,6 +230,7 @@ The cycle-to-failed sequence is idempotent: it checks for an existing `<!-- cycl
 - A dependency is satisfied only if it matches a task already in `completed/`.
 - Matching can happen by file stem or explicit `id:` frontmatter.
 - Dependencies on tasks that exist elsewhere in `waiting/`, `backlog/`, `in-progress/`, `ready-to-merge/`, or `failed/` but are not completed remain blocked.
+- `depends_on` is authoritative regardless of directory placement; `backlog/` does not override unmet dependencies.
 - Truly unknown dependency IDs (not found in any queue directory) produce structured warnings.
 - Ambiguous completed IDs (where multiple completed tasks share the same ID via stem/explicit-ID aliasing) block promotion with a structured warning rather than silently satisfying the dependency.
 Relevant frontmatter defaults from `frontmatter.go`:

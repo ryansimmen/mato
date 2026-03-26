@@ -40,7 +40,7 @@ func renderQueueOverview(w io.Writer, c colorSet, data statusData) {
 	fmt.Fprintf(w, "  backlog:        %s  %s\n", c.green(data.queueCounts[queue.DirBacklog]), c.dim("(total tasks in backlog/)"))
 	fmt.Fprintf(w, "  runnable:       %s\n", c.green(data.runnable))
 	fmt.Fprintf(w, "  deferred:       %s  %s\n", c.yellow(len(data.deferredDetail)), c.dim("(conflict-blocked, in backlog)"))
-	fmt.Fprintf(w, "  waiting:        %s  %s\n", c.dim(data.queueCounts[queue.DirWaiting]), c.dim("(dependency-blocked)"))
+	fmt.Fprintf(w, "  blocked:        %s  %s\n", c.dim(len(data.waitingTasks)), c.dim("(dependency-blocked, including misplaced backlog tasks)"))
 	fmt.Fprintf(w, "  in-progress:    %s\n", c.yellow(data.queueCounts[queue.DirInProgress]))
 	fmt.Fprintf(w, "  ready-review:   %s\n", c.cyan(data.queueCounts[queue.DirReadyReview]))
 	fmt.Fprintf(w, "  ready-to-merge: %s\n", c.cyan(data.queueCounts[queue.DirReadyMerge]))
@@ -180,8 +180,8 @@ func renderReadyToMerge(w io.Writer, c colorSet, data statusData) {
 
 func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) {
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.bold("Dependency-Blocked (waiting/)"))
-	fmt.Fprintln(w, c.bold("─────────────────────────────"))
+	fmt.Fprintln(w, c.bold("Dependency-Blocked"))
+	fmt.Fprintln(w, c.bold("──────────────────"))
 	if len(data.waitingTasks) == 0 {
 		fmt.Fprintln(w, c.dim("  (none)"))
 		return
@@ -191,7 +191,11 @@ func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) {
 		if task.Title != "" {
 			label = fmt.Sprintf("%s — %s", task.Name, task.Title)
 		}
-		fmt.Fprintf(w, "  %s\n", label)
+		state := task.State
+		if state == "" {
+			state = queue.DirWaiting
+		}
+		fmt.Fprintf(w, "  %s  %s\n", label, c.dim("("+state+"/)"))
 		if len(task.Dependencies) == 0 {
 			fmt.Fprintf(w, "    depends on: none\n")
 			continue

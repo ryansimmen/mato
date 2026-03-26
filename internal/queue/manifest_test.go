@@ -145,6 +145,24 @@ func TestComputeQueueManifest_WithIndex(t *testing.T) {
 	}
 }
 
+func TestComputeQueueManifest_ExcludesDependencyBlockedBacklog(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "blocked.md",
+		"---\nid: blocked\ndepends_on: [missing-dep]\npriority: 10\n---\n# Blocked\n")
+	writeTask(t, tasksDir, DirBacklog, "runnable.md",
+		"---\nid: runnable\npriority: 20\n---\n# Runnable\n")
+
+	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
+	if err != nil {
+		t.Fatalf("ComputeQueueManifest: %v", err)
+	}
+
+	if manifest != "runnable.md\n" {
+		t.Fatalf("manifest = %q, want %q", manifest, "runnable.md\n")
+	}
+}
+
 func TestComputeQueueManifest_TrailingNewline(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 

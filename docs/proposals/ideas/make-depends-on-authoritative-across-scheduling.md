@@ -162,15 +162,17 @@ With demotion-to-waiting as the chosen behavior:
   exclusion model
 - `mato status` continues to show dependency-blocked tasks in the waiting
   section and conflict-blocked tasks in the deferred backlog section
-- `mato doctor` and `--dry-run` should diagnose misplaced dependency-blocked
-  backlog tasks explicitly in read-only mode; they must not present those tasks
-  as runnable just because the current snapshot still shows them in `backlog/`
+- queue-only preflight checks via `mato doctor --only queue,tasks,deps` and
+  `--dry-run` should diagnose misplaced dependency-blocked backlog tasks
+  explicitly in read-only mode; they must not present those tasks as runnable
+  just because the current snapshot still shows them in `backlog/`
 
 Read-only views need one explicit shared model. In the mutating runner path,
 reconcile can physically move blocked tasks back to `waiting/` before
 `WriteQueueManifest(...)` and claim selection run. In read-only flows such as
-`mato status`, `--dry-run`, and `HasAvailableTasks(...)`, the host cannot rely
-on that move having already happened.
+`mato status`, queue-only doctor runs (`mato doctor --only queue,tasks,deps`),
+`--dry-run`, and `HasAvailableTasks(...)`, the host cannot rely on that move
+having already happened.
 
 Implement one shared "effective runnable backlog" helper that derives:
 
@@ -225,6 +227,8 @@ Add coverage for:
   `waiting/`, not left in `backlog/` as deferred
 - read-only views (`mato status`, `--dry-run`, `HasAvailableTasks(...)`) do
   not report dependency-blocked backlog tasks as runnable
+- queue-only doctor runs via `mato doctor --only queue,tasks,deps` surface the
+  same effective dependency-blocked state as status and dry-run
 - status, doctor, and dry-run output continue to present dependency-blocked
   tasks through the waiting model
 
@@ -238,6 +242,8 @@ Update `README.md`, `docs/task-format.md`, `docs/architecture.md`, and
 - `backlog/` is for runnable tasks plus `affects`-deferred tasks, not
   dependency-blocked tasks
 - manual placement in `backlog/` does not override dependency rules
+- queue-focused read-only validation should remain aligned with the documented
+  preflight command `mato doctor --only queue,tasks,deps`
 
 ## Acceptance criteria
 

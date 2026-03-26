@@ -103,6 +103,28 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		}
 	}
 
+	blockedBacklog := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
+	if len(blockedBacklog) > 0 {
+		demoted := 0
+		for _, snap := range idx.TasksByState(DirBacklog) {
+			blocks, blocked := blockedBacklog[snap.Filename]
+			if !blocked {
+				continue
+			}
+			waitingPath := filepath.Join(tasksDir, DirWaiting, snap.Filename)
+			if err := AtomicMove(snap.Path, waitingPath); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", snap.Filename, err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", snap.Filename, FormatDependencyBlocks(blocks))
+			moved = true
+			demoted++
+		}
+		if demoted > 0 {
+			idx = ensureIndex(tasksDir, nil)
+		}
+	}
+
 	// Run DAG-based dependency analysis.
 	diag := DiagnoseDependencies(tasksDir, idx)
 

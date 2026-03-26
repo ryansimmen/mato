@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mato/internal/process"
+	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
@@ -637,5 +638,39 @@ func TestDoctor_DockerImage_FromOptions(t *testing.T) {
 	}
 	if !foundCustom {
 		t.Error("expected docker.image_available finding mentioning custom image")
+	}
+}
+
+func TestDoctor_Dependencies_FlagsDependencyBlockedBacklogTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"),
+		"---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"deps"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "deps.backlog_blocked" {
+				found = true
+				if f.Severity != SeverityWarning {
+					t.Fatalf("Severity = %q, want %q", f.Severity, SeverityWarning)
+				}
+				if !strings.Contains(f.Message, "should be in waiting/") {
+					t.Fatalf("Message = %q, want waiting/ guidance", f.Message)
+				}
+				if f.Path != filepath.Join(tasksDir, queue.DirBacklog, "blocked.md") {
+					t.Fatalf("Path = %q, want blocked backlog path", f.Path)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected deps.backlog_blocked finding")
 	}
 }
