@@ -36,28 +36,41 @@ func ParseBranchComment(data []byte) (string, bool) {
 }
 
 // ParseClaimedBy extracts the agent ID from a <!-- claimed-by: ... -->
-// comment in the given data. Returns the agent ID and true if found.
+// comment that appears as a standalone line. Marker-like text embedded in
+// prose or code blocks is ignored.
 func ParseClaimedBy(data []byte) (string, bool) {
-	m := claimedByRe.FindSubmatch(data)
-	if len(m) < 2 {
-		return "", false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "<!-- claimed-by:") {
+			continue
+		}
+		m := claimedByRe.FindStringSubmatch(trimmed)
+		if len(m) >= 2 {
+			return m[1], true
+		}
 	}
-	return string(m[1]), true
+	return "", false
 }
 
 // ParseClaimedAt extracts the claimed-at timestamp from a
-// <!-- claimed-by: ... claimed-at: ... --> comment. Returns the parsed time
-// and true if a valid RFC3339 timestamp is found.
+// <!-- claimed-by: ... claimed-at: ... --> comment that appears as a
+// standalone line. Marker-like text embedded in prose is ignored.
 func ParseClaimedAt(data []byte) (time.Time, bool) {
-	m := claimedAtRe.FindSubmatch(data)
-	if len(m) < 2 {
-		return time.Time{}, false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "<!-- claimed-by:") {
+			continue
+		}
+		m := claimedAtRe.FindStringSubmatch(trimmed)
+		if len(m) >= 2 {
+			t, err := time.Parse(time.RFC3339, m[1])
+			if err != nil {
+				continue
+			}
+			return t, true
+		}
 	}
-	t, err := time.Parse(time.RFC3339, string(m[1]))
-	if err != nil {
-		return time.Time{}, false
-	}
-	return t, true
+	return time.Time{}, false
 }
 
 // CountFailureMarkers counts <!-- failure: ... --> lines in data, excluding
@@ -97,21 +110,30 @@ func ExtractFailureLines(data []byte) string {
 }
 
 // ExtractReviewRejections returns all <!-- review-rejection: ... --> lines
-// joined by newlines. Returns "" if none are found.
+// joined by newlines. Only standalone marker lines are matched; marker-like
+// text embedded in prose or code blocks is ignored.
 func ExtractReviewRejections(data []byte) string {
 	var rejections []string
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, reviewRejectionStr) {
-			rejections = append(rejections, strings.TrimSpace(line))
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, reviewRejectionStr) {
+			rejections = append(rejections, trimmed)
 		}
 	}
 	return strings.Join(rejections, "\n")
 }
 
 // ContainsFailureFrom reports whether data contains a failure record written
-// by the given agent (matching the pattern "<!-- failure: <agentID> ").
+// by the given agent as a standalone line starting with
+// "<!-- failure: <agentID> ". Marker-like text in prose is ignored.
 func ContainsFailureFrom(data []byte, agentID string) bool {
-	return strings.Contains(string(data), "<!-- failure: "+agentID+" ")
+	target := "<!-- failure: " + agentID + " "
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), target) {
+			return true
+		}
+	}
+	return false
 }
 
 // LastFailureReason extracts the reason from the last <!-- failure: ... -->
@@ -272,9 +294,14 @@ func AppendCycleFailureRecord(path string) error {
 }
 
 // ContainsCycleFailure reports whether data contains a <!-- cycle-failure: ... -->
-// marker. Used for idempotency checks before appending a new record.
+// marker as a standalone line. Marker-like text in prose or code is ignored.
 func ContainsCycleFailure(data []byte) bool {
-	return strings.Contains(string(data), cycleFailurePrefix)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), cycleFailurePrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // CountCycleFailureMarkers counts <!-- cycle-failure: ... --> lines in data.
@@ -331,9 +358,15 @@ func AppendTerminalFailureRecord(path, reason string) error {
 }
 
 // ContainsTerminalFailure reports whether data contains a
-// <!-- terminal-failure: ... --> marker.
+// <!-- terminal-failure: ... --> marker as a standalone line. Marker-like
+// text in prose or code is ignored.
 func ContainsTerminalFailure(data []byte) bool {
-	return strings.Contains(string(data), terminalFailurePrefix)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), terminalFailurePrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // CountTerminalFailureMarkers counts <!-- terminal-failure: ... --> lines in data.
