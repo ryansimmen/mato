@@ -66,6 +66,7 @@ type taskEntry struct {
 	name                      string
 	title                     string
 	id                        string
+	cancelled                 bool
 	priority                  int
 	maxRetries                int
 	branch                    string
@@ -89,6 +90,7 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 			name:                      snap.Filename,
 			title:                     frontmatter.ExtractTitle(snap.Filename, snap.Body),
 			id:                        snap.Meta.ID,
+			cancelled:                 snap.Cancelled,
 			priority:                  snap.Meta.Priority,
 			maxRetries:                snap.Meta.MaxRetries,
 			branch:                    snap.Branch,
@@ -108,6 +110,7 @@ func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
 		}
 		tasks = append(tasks, taskEntry{
 			name:                      pf.Filename,
+			cancelled:                 pf.Cancelled,
 			priority:                  50,
 			maxRetries:                3,
 			branch:                    pf.Branch,
@@ -260,6 +263,9 @@ func taskStatesByIDFromIndex(idx *queue.PollIndex) map[string]string {
 				states[snap.Meta.ID] = dir
 			}
 		}
+	}
+	for _, pf := range idx.ParseFailures() {
+		states[frontmatter.TaskFileStem(pf.Filename)] = pf.State
 	}
 	return states
 }

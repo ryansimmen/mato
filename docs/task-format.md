@@ -37,7 +37,7 @@ Notes:
 - Runtime metadata is stored as full-line HTML comments and is auto-managed.
 - The markdown body starts after the frontmatter block.
 - Agents are instructed to ignore frontmatter and these HTML comments when reading the task.
-- The parser strips only **scheduler-managed** HTML comment lines from the body it returns. The managed prefixes are: `claimed-by`, `branch`, `failure`, `review-failure`, `review-rejection`, `reviewed`, `cycle-failure`, `terminal-failure`, and `merged`. All other HTML comments (e.g. `<!-- TODO: ... -->` or `<!-- example -->`) are preserved in the body so task authors can use them freely in instructions.
+- The parser strips only **scheduler-managed** HTML comment lines from the body it returns. The managed prefixes are: `claimed-by`, `branch`, `failure`, `review-failure`, `review-rejection`, `reviewed`, `cancelled`, `cycle-failure`, `terminal-failure`, and `merged`. All other HTML comments (e.g. `<!-- TODO: ... -->` or `<!-- example -->`) are preserved in the body so task authors can use them freely in instructions.
 
 ## Frontmatter Fields
 Supported keys come from `TaskMeta`. Unknown keys are currently ignored.
@@ -119,6 +119,7 @@ Expected comment patterns:
 <!-- review-failure: review-agent-3 at 2026-01-01T00:05:00Z step=DIFF error=could_not_fetch_branch -->
 <!-- review-rejection: review-agent-3 at 2026-01-01T00:06:00Z — tests do not cover the retry backoff logic; add unit tests for exponential delays -->
 <!-- reviewed: review-agent-3 at 2026-01-01T00:07:00Z — approved -->
+<!-- cancelled: operator at 2026-01-01T00:07:30Z -->
 <!-- cycle-failure: mato at 2026-01-01T00:08:00Z — circular dependency -->
 <!-- terminal-failure: mato at 2026-01-01T00:09:00Z — unparseable frontmatter: yaml: line 2: did not find expected ',' or ']' -->
 <!-- merged: merge-queue at 2026-01-01T00:10:00Z -->
@@ -131,6 +132,7 @@ What they mean:
 - `review-failure:` records a review infrastructure failure (e.g. network blip during `git fetch`, diff timeout). These are tracked separately from task failure records and do **not** count against the task's `max_retries` budget. Only review-failure records are counted for the review retry budget.
 - `review-rejection:` records feedback from the review agent when rejecting a task. Format: `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->`. Review rejections do **not** count against `max_retries`. The feedback is passed to the implementing agent via the `MATO_REVIEW_FEEDBACK` environment variable on the next attempt.
 - `reviewed:` records that the review agent approved the task. Format: `<!-- reviewed: <agent-id> at <timestamp> — approved -->`. The host writes this after reading the review agent's verdict, then moves the task to `ready-to-merge/`.
+- `cancelled:` records that an operator deliberately withdrew the task from the queue with `mato cancel`. Format: `<!-- cancelled: operator at <timestamp> -->`. Cancelled markers do **not** count against the task's `max_retries` budget. `mato retry` removes them and requeues the task to `backlog/`.
 - `cycle-failure:` records that the task was detected as part of a circular dependency during dependency resolution. Format: `<!-- cycle-failure: mato at <timestamp> — circular dependency -->`. The task is moved to `failed/` when this marker is appended. Cycle-failure markers do **not** count against the task's `max_retries` budget. To recover, fix the `depends_on` entries to break the cycle and move the task back to `waiting/`.
 - `terminal-failure:` records that the host automatically moved a task to `failed/` due to a non-recoverable structural problem. Format: `<!-- terminal-failure: mato at <timestamp> — <reason> -->`. Written before the task is moved to `failed/` by reconciliation or review candidate selection. Reasons include unparseable YAML frontmatter, invalid glob syntax in `affects`, and review retry budget exhaustion. Terminal-failure markers do **not** count against the task's `max_retries` budget. To recover, fix the underlying issue (e.g. correct the YAML or glob syntax) and move the task back to `waiting/` or `backlog/`.
 - `merged:` records that the merge queue successfully squashed the task branch into the target branch.

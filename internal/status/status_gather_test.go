@@ -217,6 +217,23 @@ func TestListTasksFromIndex_ParseFailureBranch(t *testing.T) {
 	}
 }
 
+func TestListTasksFromIndex_CancelledPropagation(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirFailed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
+	writeTask(t, tasksDir, queue.DirFailed, "broken.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n")
+
+	idx := queue.BuildIndex(tasksDir)
+	tasks := listTasksFromIndex(idx, queue.DirFailed)
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2", len(tasks))
+	}
+	for _, task := range tasks {
+		if !task.cancelled {
+			t.Fatalf("task %+v should be marked cancelled", task)
+		}
+	}
+}
+
 func TestStatusAgentDisplayName(t *testing.T) {
 	tests := []struct {
 		id   string
@@ -514,6 +531,17 @@ func TestTaskStatesByIDFromIndex_FileStemKey(t *testing.T) {
 	stem := frontmatter.TaskFileStem("no-id-task.md")
 	if got := states[stem]; got != queue.DirBacklog {
 		t.Errorf("states[%q] = %q, want %q", stem, got, queue.DirBacklog)
+	}
+}
+
+func TestTaskStatesByIDFromIndex_ParseFailureStemKey(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, queue.DirFailed, "broken.md", "---\npriority: nope\n---\n# Broken\n")
+
+	idx := queue.BuildIndex(tasksDir)
+	states := taskStatesByIDFromIndex(idx)
+	if got := states["broken"]; got != queue.DirFailed {
+		t.Errorf("states[%q] = %q, want %q", "broken", got, queue.DirFailed)
 	}
 }
 

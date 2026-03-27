@@ -380,6 +380,38 @@ func TestAppendCycleFailureRecord_NonexistentFile(t *testing.T) {
 	}
 }
 
+func TestAppendCancelledRecord_Format(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.md")
+	os.WriteFile(path, []byte("# Task\n"), 0o644)
+
+	if err := AppendCancelledRecord(path); err != nil {
+		t.Fatalf("AppendCancelledRecord: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "<!-- cancelled: operator at") {
+		t.Fatalf("cancelled record not found in file: %s", data)
+	}
+}
+
+func TestContainsCancelledMarker(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"present", "# Task\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n", true},
+		{"absent", "# Task\n<!-- failure: agent at 2026-01-01T00:00:00Z step=WORK error=fail -->\n", false},
+		{"inline body text ignored", "# Task\nUse `<!-- cancelled: ... -->` to document operator actions.\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsCancelledMarker([]byte(tt.data)); got != tt.want {
+				t.Fatalf("ContainsCancelledMarker() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestContainsCycleFailure(t *testing.T) {
 	tests := []struct {
 		name string
@@ -566,6 +598,7 @@ Body text.
 
 <!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->
 <!-- review-failure: def at 2026-01-02T00:00:00Z step=REVIEW error=timeout -->
+<!-- cancelled: operator at 2026-01-02T06:00:00Z -->
 <!-- cycle-failure: mato at 2026-01-03T00:00:00Z — circular dependency -->
 <!-- review-rejection: reviewer at 2026-01-04T00:00:00Z — bad code -->
 <!-- terminal-failure: mato at 2026-01-05T00:00:00Z — unparseable -->
@@ -574,6 +607,7 @@ Body text.
 			notWant: []string{
 				"<!-- failure:",
 				"<!-- review-failure:",
+				"<!-- cancelled:",
 				"<!-- cycle-failure:",
 				"<!-- terminal-failure:",
 			},
@@ -665,5 +699,12 @@ func TestStripFailureMarkers_TrailingNewline(t *testing.T) {
 	// Should not end with multiple newlines.
 	if strings.HasSuffix(got, "\n\n") {
 		t.Errorf("result should not end with double newline, got: %q", got)
+	}
+}
+
+func TestCountFailureMarkers_IgnoresCancelled(t *testing.T) {
+	data := []byte("<!-- failure: agent at T step=WORK error=e -->\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n")
+	if got := CountFailureMarkers(data); got != 1 {
+		t.Fatalf("CountFailureMarkers() = %d, want 1 (should ignore cancelled)", got)
 	}
 }

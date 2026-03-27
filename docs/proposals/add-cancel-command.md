@@ -52,11 +52,11 @@ distinguishable from organic failures.
 - New `<!-- cancelled: -->` HTML comment marker type
 - Integration with `StripFailureMarkers` so `mato retry` reverses cancellation
 - Downstream dependency warnings when a cancelled task has dependents in
-  `waiting/`
+  `waiting/` or is still sitting dependency-blocked in `backlog/`
 - `cancelled` status classification in both `mato status` and `mato inspect`,
   distinct from `terminal`, `cycle`, and `retry`
 - Extraction of task-resolution logic from `internal/inspect/` into a reusable
-  `queue.ResolveTask` helper (inspect already landed; cancel reuses it)
+  `queue.ResolveTask` helper shared by inspect and cancel
 - Full test coverage (unit, integration lifecycle) and documentation updates
 
 ### Out of scope
@@ -110,9 +110,10 @@ func ContainsCancelledMarker(data []byte) bool {
 ```
 
 This is consistent with `CountFailureMarkers`, `CountCycleFailureMarkers`, and
-other line-aware functions in `internal/taskfile/metadata.go`. It avoids inline
-false-positives while accepting that a standalone example line would match — the
-same trade-off already accepted by `ContainsCycleFailure`/`ContainsTerminalFailure`.
+other line-aware functions in `internal/taskfile/metadata.go`. It is slightly
+stricter than today's `ContainsCycleFailure`/`ContainsTerminalFailure` helpers,
+which use substring detection, but it avoids inline false-positives while
+accepting that a standalone example line would still match.
 
 **Marker registration in two places:**
 
@@ -218,6 +219,12 @@ Resolution rules:
 6. Multiple matches: list all as `state/filename (id: …)` and return ambiguity
    error.
 
+To preserve today's inspect ambiguity wording, `internal/queue/resolve.go` should
+also carry a small unexported helper equivalent to inspect's current
+`candidateID`: it should prefer the explicit frontmatter `id` when present and
+otherwise fall back to the filename stem. `ResolveTask` uses that helper when
+formatting ambiguous-match errors.
+
 `internal/inspect/inspect.go` retains its internal `candidate` struct (which has
 inspect-specific fields). Its `resolveCandidate` is refactored to call
 `queue.ResolveTask` and convert the result. Private helpers that move to
@@ -258,7 +265,7 @@ var appendCancelledRecordFn = taskfile.AppendCancelledRecord
 type CancelResult struct {
     Filename   string
     PriorState string   // directory name the task was in before cancellation
-    Warnings   []string // dependent task filenames (one per file, deduplicated)
+    Warnings   []string // dependent task paths like waiting/foo.md, deduplicated
 }
 
 // CancelTask cancels the named task reference.
@@ -276,10 +283,11 @@ Algorithm:
    (§3.2). On both success and rollback paths, the error semantics are as
    described in §3.2.
 7. If `match.State == DirFailed`: `appendCancelledRecordFn(match.Path)` only.
-8. Scan `idx` waiting-state `TaskSnapshot`s (parseable only; `ParseFailure`
-   entries are excluded because `Meta.DependsOn` is unavailable) for references
-   to the cancelled task's stem or `meta.ID`. Collect unique dependent filenames
-   into `CancelResult.Warnings` (one entry per file, deduplicated).
+8. Scan parseable `waiting/` tasks plus parseable `backlog/` tasks that are
+   currently dependency-blocked according to
+   `DependencyBlockedBacklogTasksDetailed(tasksDir, idx)`. Match references to
+   the cancelled task's stem or `meta.ID`. Collect unique dependent task paths
+   (`waiting/foo.md`, `backlog/bar.md`) into `CancelResult.Warnings`.
 9. Return result.
 
 ### 3.6 Retry Interaction
@@ -291,19 +299,19 @@ task.
 
 ### 3.7 Downstream Dependency Warnings
 
-`CancelTask` scans parseable waiting-state `TaskSnapshot`s for `Meta.DependsOn`
-containing the cancelled task's stem or `meta.ID`. A task is counted once even
-if its `depends_on` references the same task by both identifiers. Parse-failed
-waiting tasks cannot participate in the scan because their `Meta.DependsOn` is
-unavailable.
+`CancelTask` scans parseable `waiting/` tasks and parseable backlog tasks that
+are currently dependency-blocked for `Meta.DependsOn` entries containing the
+cancelled task's stem or `meta.ID`. A task is counted once even if its
+`depends_on` references the same task by both identifiers. Parse-failed tasks
+cannot participate in the scan because `Meta.DependsOn` is unavailable.
 
 Warnings are returned in `CancelResult.Warnings`; the CLI formats and prints them:
 
 ```
 cancelled: add-auth-models.md (was in backlog/)
-  warning: 2 tasks depend on add-auth-models:
+  warning: 2 task(s) depend on add-auth-models:
     waiting/add-login-endpoints.md
-    waiting/add-auth-tests.md
+    backlog/add-auth-tests.md
   these tasks will remain blocked until add-auth-models is retried
 ```
 
@@ -386,11 +394,9 @@ var cancelTaskFn = queue.CancelTask
 func newCancelCmd() *cobra.Command {
     var cancelRepo string
     cmd := &cobra.Command{
-        Use:           "cancel <task-ref> [task-ref...]",
-        Short:         "Withdraw tasks from the queue by moving them to failed/",
-        SilenceUsage:  true,
-        SilenceErrors: true,
-        Args:          cobra.MinimumNArgs(1),
+        Use:   "cancel <task-ref> [task-ref...]",
+        Short: "Withdraw tasks from the queue by moving them to failed/",
+        Args:  usageMinimumNArgs(1),
         RunE: func(cmd *cobra.Command, args []string) error {
             repo, err := resolveRepo(cancelRepo)
             if err != nil { return err }
@@ -402,7 +408,7 @@ func newCancelCmd() *cobra.Command {
             for _, ref := range args {
                 result, err := cancelTaskFn(tasksDir, ref)
                 if err != nil {
-                    fmt.Fprintf(os.Stderr, "error: %v\n", err)
+                    fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
                     if firstErr == nil { firstErr = err }
                     continue
                 }
@@ -425,9 +431,13 @@ func newCancelCmd() *cobra.Command {
                     fmt.Printf("  these tasks will remain blocked until %s is retried\n", stem)
                 }
             }
-            return firstErr
+            if firstErr != nil {
+                return &SilentError{Err: firstErr, Code: 1}
+            }
+            return nil
         },
     }
+    configureCommand(cmd)
     cmd.Flags().StringVar(&cancelRepo, "repo", "",
         "Path to the git repository (default: current directory)")
     return cmd
@@ -474,6 +484,8 @@ Steps are ordered so each depends only on already-completed work.
 - In `BuildIndex`, compute `cancelled = taskfile.ContainsCancelledMarker(data)`
   immediately after `os.ReadFile` (when `readErr == nil`) and propagate to both
   the parse-failure path and the successful snapshot path.
+- Add tests in `internal/queue/index_test.go` covering both snapshot-backed and
+  parse-failure-backed `Cancelled` propagation.
 
 *Depends on: Step 1.*
 
@@ -482,7 +494,8 @@ Steps are ordered so each depends only on already-completed work.
 - Create `internal/queue/resolve.go` with `TaskMatch` struct and
   `ResolveTask(idx *PollIndex, taskRef string) (TaskMatch, error)`.
 - Implement matching logic identical to inspect's current `resolveCandidate`:
-  unexported `matchesRef`, `matchesParseFailure`, and `stateOrder` helpers.
+  unexported `matchesRef`, `matchesParseFailure`, `taskMatchID`, and
+  `stateOrder` helpers.
 - Create `internal/queue/resolve_test.go` (table-driven `TestResolveTask_*`):
   `StemMatch`, `MDSuffixMatch`, `ExplicitIDMatch`, `ExplicitIDWithSlash`,
   `IDDifferentFromStem`, `NotFound`, `AmbiguousMatch`, `EmptyRef`.
@@ -492,7 +505,7 @@ Steps are ordered so each depends only on already-completed work.
   `matchesRef` / `matchesParseFailure` helpers. **Existing inspect tests serve
   as regression coverage.**
 
-*Depends on: Step 3.*
+*Depends on: nothing.*
 
 **Step 5 — Implement cancel logic in `internal/queue/cancel.go`**
 
@@ -512,10 +525,13 @@ Steps are ordered so each depends only on already-completed work.
   - `AppendFailsAfterMove_RollbackFails`: `appendCancelledRecordFn` returns
     error and `linkFn` fails on the rollback call; verify combined error and
     task left in `failed/` without marker.
-  - `DownstreamWarnings`: cancelled task has dependents in `waiting/`.
+  - `DownstreamWarnings`: cancelled task has dependents in `waiting/` and/or
+    dependency-blocked `backlog/`.
   - `DownstreamDeduplication`: `depends_on` lists both stem and ID of same
     cancelled task; counted once.
-  - `NoDownstreamWarnings`: no waiting dependents.
+  - `NoDownstreamWarnings`: no blocked dependents.
+  - `ReCancelFailedTask`: cancelling an already-failed task twice appends
+    another cancelled marker.
   - `TaskNotFound`: not-found error.
   - `EmptyName`: empty task ref rejected.
   - `ExplicitIDResolution`: cancel by frontmatter `id` different from filename
@@ -536,7 +552,7 @@ Steps are ordered so each depends only on already-completed work.
   - `TestCancelCmd_Registered`
   - `TestCancelCmd_SingleTask`
   - `TestCancelCmd_MultiTask`
-  - `TestCancelCmd_PartialFailure`
+  - `TestCancelCmd_PartialFailure` (returns `*SilentError`, matching `retry`)
   - `TestCancelCmd_CompletedRefusal`
   - `TestCancelCmd_MissingMatoDir` (no `.mato/` directory → "task not found"
     error; `BuildIndex` handles missing dirs gracefully; `ResolveTask` returns
@@ -544,6 +560,7 @@ Steps are ordered so each depends only on already-completed work.
   - `TestCancelCmd_InProgressWarning`
   - `TestCancelCmd_ReadyToMergeWarning`
   - `TestCancelCmd_DownstreamWarnings`
+  - `TestCancelCmd_UsesRepoRootFromSubdir`
 
 *Depends on: Step 5.*
 
@@ -633,6 +650,7 @@ go test -race -count=1 ./...
 | `internal/frontmatter/frontmatter.go` | Add `"<!-- cancelled:"` to `managedCommentPrefixes` |
 | `internal/frontmatter/frontmatter_test.go` | Test that cancelled marker is stripped from parsed body |
 | `internal/queue/index.go` | Add `Cancelled bool` to `TaskSnapshot` and `ParseFailure`; populate in `BuildIndex` |
+| `internal/queue/index_test.go` | Add cancelled-marker propagation tests for snapshots and parse failures |
 | `internal/inspect/inspect.go` | Delegate `resolveCandidate` to `queue.ResolveTask`; remove dead helpers; update `buildFailedResult` and parse-failure classification |
 | `internal/inspect/inspect_test.go` | Cancelled task and cancelled parse-failure inspect tests |
 | `internal/status/status.go` | Add `cancelled bool` to `taskEntry`; update `listTasksFromIndex` |
@@ -665,8 +683,9 @@ go test -race -count=1 ./...
 - **Missing `.mato/` directory**: `BuildIndex` handles missing directories
   gracefully (skips them); `ResolveTask` returns "task not found". No separate
   initialization error.
-- **Multi-cancel partial failure**: per-task errors printed to stderr; first
-  error returned as command exit error.
+- **Multi-cancel partial failure**: per-task errors printed to stderr with the
+  `mato error:` prefix; first error returned as `*SilentError`, matching
+  existing multi-item CLI commands.
 
 ---
 
@@ -689,6 +708,11 @@ go test -race -count=1 ./...
   `_ExplicitIDWithSlash`, `_IDDifferentFromStem`, `_NotFound`, `_AmbiguousMatch`,
   `_EmptyRef`
 
+### Unit tests — `internal/queue/index_test.go`
+
+- `TestBuildIndex_CancelledSnapshot`
+- `TestBuildIndex_CancelledParseFailure`
+
 ### Unit tests — `internal/queue/cancel_test.go`
 
 - `TestCancelTask_WaitingTask`, `_BacklogTask`, `_InProgressTask`,
@@ -699,7 +723,9 @@ go test -race -count=1 ./...
 - `TestCancelTask_AppendFailsAfterMove_RollbackFails`
 - `TestCancelTask_DownstreamWarnings`, `_DownstreamDeduplication`,
   `_NoDownstreamWarnings`
-- `TestCancelTask_TaskNotFound`, `_EmptyName`, `_ExplicitIDResolution`
+- `TestCancelTask_ReCancelFailedTask`
+- `TestCancelTask_TaskNotFound`, `_EmptyName`, `_ExplicitIDResolution`,
+  `_ExplicitIDWithSlash`
 - `TestRetryTask_StrippedCancelledMarker` (cancel/retry lifecycle)
 
 ### Command tests — `cmd/mato/main_test.go`
@@ -707,7 +733,7 @@ go test -race -count=1 ./...
 - `TestCancelCmd_Registered`, `_SingleTask`, `_MultiTask`, `_PartialFailure`
 - `TestCancelCmd_CompletedRefusal`, `_MissingMatoDir`
 - `TestCancelCmd_InProgressWarning`, `_ReadyToMergeWarning`
-- `TestCancelCmd_DownstreamWarnings`
+- `TestCancelCmd_DownstreamWarnings`, `_UsesRepoRootFromSubdir`
 
 ### Status tests — `internal/status/status_test.go`
 
@@ -743,7 +769,7 @@ go test -race -count=1 ./...
 | Race: merge queue merges `ready-to-merge/` task after cancel | Low | Merge is branch-based; `loadMergeCandidates` does not re-check file existence before `mergeReadyTask`. Git merge can complete; subsequent `moveTaskWithRetry` to `completed/` fails. Warning printed. Future enhancement: check `lockfile.IsHeld(mergeLockPath)` and refuse when merge lock is active. |
 | Append and rollback both fail (partial cancel state) | Extremely low | Task left in `failed/` without cancelled marker. Combined error returned. Operator can re-run `mato cancel`. |
 | Destination collision in `failed/` | Very low | `ErrDestinationExists` caught; clear error returned; no marker written. |
-| Standalone-line false positive in `ContainsCancelledMarker` | Very low (accepted) | Same trade-off as `ContainsCycleFailure`/`ContainsTerminalFailure`. Inline prose unaffected. |
+| Standalone-line false positive in `ContainsCancelledMarker` | Very low (accepted) | Same trade-off as other line-aware marker counters. Inline prose unaffected. |
 | Downstream tasks silently stuck | Medium (by design) | Explicit per-cancel warnings listing affected tasks. `--cascade` documented as a future enhancement. |
 | Breaking `inspect` during `resolveCandidate` extraction | Low | Existing inspect tests provide full regression coverage. Refactoring is purely structural. |
 
