@@ -708,3 +708,206 @@ func TestCountFailureMarkers_IgnoresCancelled(t *testing.T) {
 		t.Fatalf("CountFailureMarkers() = %d, want 1 (should ignore cancelled)", got)
 	}
 }
+
+// Regression tests: marker-like text in prose and fenced code must not be
+// treated as real scheduler metadata. Only standalone trimmed lines count.
+
+func TestParseClaimedBy_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		want   string
+		wantOK bool
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nThe `<!-- claimed-by: agent -->` marker is used for claims.\n",
+			"", false,
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- claimed-by: agent42 -->\n```\n",
+			"agent42", true, // fenced code lines still start with the marker
+		},
+		{
+			"embedded in sentence",
+			"# Task\nUse the <!-- claimed-by: agentX --> comment to claim.\n",
+			"", false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- claimed-by: real-agent  claimed-at: 2026-01-01T00:00:00Z -->\nSome prose about <!-- claimed-by: fake -->.\n",
+			"real-agent", true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseClaimedBy([]byte(tt.data))
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseClaimedAt_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		wantOK bool
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nThe `<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->` marker.\n",
+			false,
+		},
+		{
+			"embedded in sentence",
+			"# Task\nUse <!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z --> to mark.\n",
+			false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->\nProse about <!-- claimed-by: x  claimed-at: 2025-01-01T00:00:00Z -->.\n",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := ParseClaimedAt([]byte(tt.data))
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestContainsFailureFrom_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		agentID string
+		want    bool
+	}{
+		{
+			"inline prose",
+			"# Task\nLook for `<!-- failure: abc12345 at ... -->` records.\n",
+			"abc12345", false,
+		},
+		{
+			"prose sentence",
+			"# Task\nThe <!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail --> marker.\n",
+			"abc12345", false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail -->\nProse about <!-- failure: abc12345 -->.\n",
+			"abc12345", true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ContainsFailureFrom([]byte(tt.data), tt.agentID)
+			if got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsCycleFailure_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nThe `<!-- cycle-failure: mato at ... -->` marker is for cycle detection.\n",
+			false,
+		},
+		{
+			"prose sentence",
+			"# Task\nSee <!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency --> for details.\n",
+			false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\nProse about <!-- cycle-failure: -->.\n",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsCycleFailure([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsTerminalFailure_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nUse `<!-- terminal-failure: ... -->` for permanent errors.\n",
+			false,
+		},
+		{
+			"prose sentence",
+			"# Task\nThe <!-- terminal-failure: mato at T — reason --> marker is terminal.\n",
+			false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\nProse about <!-- terminal-failure: -->.\n",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsTerminalFailure([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractReviewRejections_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nThe `<!-- review-rejection: reviewer -->` comment is for rejection feedback.\n",
+			"",
+		},
+		{
+			"prose sentence",
+			"# Task\nSee the <!-- review-rejection: reviewer at T — reason --> for details.\n",
+			"",
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- review-rejection: reviewer-1 at T — bad code -->\nProse about <!-- review-rejection: fake -->.\n",
+			"<!-- review-rejection: reviewer-1 at T — bad code -->",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractReviewRejections([]byte(tt.data))
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
