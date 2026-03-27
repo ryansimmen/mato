@@ -777,6 +777,25 @@ func TestRenderFailedTasks_TerminalFailureOnly(t *testing.T) {
 	}
 }
 
+func TestRenderFailedTasks_Cancelled(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		failedTasks: []taskEntry{{
+			name:      "cancelled.md",
+			title:     "Cancelled task",
+			cancelled: true,
+		}},
+	}
+
+	renderFailedTasks(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "cancelled.md") || !strings.Contains(output, "(cancelled)") {
+		t.Fatalf("output should render cancelled task, got:\n%s", output)
+	}
+}
+
 func TestRenderFailedTasks_TerminalWithRegularFailures(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()

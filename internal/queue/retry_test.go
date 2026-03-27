@@ -175,6 +175,52 @@ func TestRetryTask_AppendsMdExtension(t *testing.T) {
 	}
 }
 
+func TestRetryTask_ExplicitIDResolution(t *testing.T) {
+	tmp := t.TempDir()
+	failedDir := filepath.Join(tmp, DirFailed)
+	backlogDir := filepath.Join(tmp, DirBacklog)
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(failedDir, "filename.md"), []byte("---\nid: explicit-id\n---\n# Task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RetryTask(tmp, "explicit-id"); err != nil {
+		t.Fatalf("RetryTask() error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(backlogDir, "filename.md")); err != nil {
+		t.Fatalf("task not found in backlog after explicit id retry: %v", err)
+	}
+}
+
+func TestRetryTask_ExplicitIDWithSlash(t *testing.T) {
+	tmp := t.TempDir()
+	failedDir := filepath.Join(tmp, DirFailed)
+	backlogDir := filepath.Join(tmp, DirBacklog)
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(failedDir, "filename.md"), []byte("---\nid: group/explicit-id\n---\n# Task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RetryTask(tmp, "group/explicit-id"); err != nil {
+		t.Fatalf("RetryTask() error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(backlogDir, "filename.md")); err != nil {
+		t.Fatalf("task not found in backlog after slash id retry: %v", err)
+	}
+}
+
 func TestRetryTask_RejectsPathTraversal(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmp, DirFailed), 0o755); err != nil {
@@ -188,7 +234,7 @@ func TestRetryTask_RejectsPathTraversal(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for path traversal name")
 	}
-	if !strings.Contains(err.Error(), "path separators are not allowed") {
+	if !strings.Contains(err.Error(), "path traversal is not allowed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

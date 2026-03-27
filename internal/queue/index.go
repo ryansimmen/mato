@@ -21,6 +21,7 @@ type TaskSnapshot struct {
 	Path               string // full filesystem path
 	Meta               frontmatter.TaskMeta
 	Body               string
+	Cancelled          bool
 	Branch             string // from <!-- branch: ... --> comment, "" if absent
 	FailureCount       int    // <!-- failure: ... --> markers (excluding review-failure)
 	ReviewFailureCount int    // <!-- review-failure: ... --> markers
@@ -44,11 +45,12 @@ type TaskSnapshot struct {
 
 // ParseFailure records a task file that could not be parsed during index build.
 type ParseFailure struct {
-	Filename string
-	State    string // directory the file was found in
-	Path     string
-	Err      error
-	Branch   string // from <!-- branch: ... --> comment, extracted before parse failure
+	Filename  string
+	State     string // directory the file was found in
+	Path      string
+	Err       error
+	Cancelled bool
+	Branch    string // from <!-- branch: ... --> comment, extracted before parse failure
 	// ClaimedBy is the agent ID from <!-- claimed-by: ... -->, "" if absent.
 	ClaimedBy string
 	// ClaimedAt is the timestamp from <!-- claimed-by: ... claimed-at: ... -->.
@@ -198,6 +200,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 			branch, _ := taskfile.ParseBranchComment(data)
 			claimedBy, _ := taskfile.ParseClaimedBy(data)
 			claimedAt, _ := taskfile.ParseClaimedAt(data)
+			cancelled := taskfile.ContainsCancelledMarker(data)
 			failureCount := taskfile.CountFailureMarkers(data)
 			lastFailureReason := taskfile.LastFailureReason(data)
 			lastCycleFailureReason := taskfile.LastCycleFailureReason(data)
@@ -211,6 +214,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 					State:                     dir,
 					Path:                      path,
 					Err:                       err,
+					Cancelled:                 cancelled,
 					Branch:                    branch,
 					ClaimedBy:                 claimedBy,
 					ClaimedAt:                 claimedAt,
@@ -232,6 +236,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 				Path:                      path,
 				Meta:                      meta,
 				Body:                      body,
+				Cancelled:                 cancelled,
 				Branch:                    branch,
 				FailureCount:              failureCount,
 				ReviewFailureCount:        taskfile.CountReviewFailureMarkers(data),

@@ -10,6 +10,12 @@ description: >
 
 You are a task planning agent. Given a request, you research the codebase, break the work into actionable tasks, and write task files. You do not implement the tasks yourself.
 
+Runtime HTML comments such as `<!-- claimed-by: -->`, `<!-- branch: -->`,
+`<!-- failure: -->`, `<!-- review-failure: -->`, `<!-- review-rejection: -->`,
+`<!-- reviewed: -->`, `<!-- cancelled: -->`, `<!-- cycle-failure: -->`,
+`<!-- terminal-failure: -->`, and `<!-- merged: -->` are queue-managed metadata,
+not task instructions.
+
 ## Workflow
 
 ### 1. Discover the Project
