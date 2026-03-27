@@ -131,86 +131,23 @@ func inspectTask(tasksDir, taskRef string) (inspectResult, error) {
 }
 
 func resolveCandidate(idx *queue.PollIndex, taskRef string) (candidate, error) {
-	ref := strings.TrimSpace(taskRef)
-	if ref == "" {
-		return candidate{}, fmt.Errorf("task reference must not be empty")
+	match, err := queue.ResolveTask(idx, taskRef)
+	if err != nil {
+		return candidate{}, err
 	}
-	filenameRef := ref
-	if !strings.HasSuffix(filenameRef, ".md") {
-		filenameRef += ".md"
+	cand := candidate{
+		filename: match.Filename,
+		state:    match.State,
+		stem:     frontmatter.TaskFileStem(match.Filename),
+		snapshot: match.Snapshot,
 	}
-	stemRef := strings.TrimSuffix(filenameRef, ".md")
-
-	var matches []candidate
-	for _, dir := range queue.AllDirs {
-		for _, snap := range idx.TasksByState(dir) {
-			cand := candidate{
-				filename:   snap.Filename,
-				state:      snap.State,
-				stem:       frontmatter.TaskFileStem(snap.Filename),
-				explicitID: snap.Meta.ID,
-				snapshot:   snap,
-			}
-			if matchesRef(cand, ref, filenameRef, stemRef) {
-				matches = append(matches, cand)
-			}
-		}
+	if match.Snapshot != nil {
+		cand.explicitID = match.Snapshot.Meta.ID
 	}
-	for _, pf := range idx.ParseFailures() {
-		pf := pf
-		cand := candidate{
-			filename:     pf.Filename,
-			state:        pf.State,
-			stem:         frontmatter.TaskFileStem(pf.Filename),
-			parseFailure: &pf,
-		}
-		if matchesParseFailure(cand, ref, filenameRef, stemRef) {
-			matches = append(matches, cand)
-		}
+	if match.ParseFailure != nil {
+		cand.parseFailure = match.ParseFailure
 	}
-
-	if len(matches) == 0 {
-		return candidate{}, fmt.Errorf("task not found: %s", ref)
-	}
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].state != matches[j].state {
-			return stateOrder(matches[i].state) < stateOrder(matches[j].state)
-		}
-		return matches[i].filename < matches[j].filename
-	})
-	if len(matches) > 1 {
-		var b strings.Builder
-		fmt.Fprintf(&b, "task reference %q is ambiguous:", ref)
-		for _, m := range matches {
-			fmt.Fprintf(&b, "\n- %s/%s (id: %s)", m.state, m.filename, candidateID(m))
-		}
-		return candidate{}, fmt.Errorf("%s", b.String())
-	}
-	return matches[0], nil
-}
-
-func matchesRef(c candidate, rawRef, filenameRef, stemRef string) bool {
-	if c.filename == filenameRef || c.filename == rawRef {
-		return true
-	}
-	if c.stem == rawRef || c.stem == stemRef {
-		return true
-	}
-	return c.explicitID != "" && c.explicitID == rawRef
-}
-
-func matchesParseFailure(c candidate, rawRef, filenameRef, stemRef string) bool {
-	if c.filename == filenameRef || c.filename == rawRef {
-		return true
-	}
-	return c.stem == rawRef || c.stem == stemRef
-}
-
-func candidateID(c candidate) string {
-	if c.explicitID != "" {
-		return c.explicitID
-	}
-	return c.stem
+	return cand, nil
 }
 
 func buildInspectContext(tasksDir string, idx *queue.PollIndex) inspectContext {
@@ -315,12 +252,28 @@ func buildParseFailureResult(pf queue.ParseFailure) inspectResult {
 	if pf.State == queue.DirReadyReview {
 		result.NextStep = "fix the task frontmatter before the next review pass quarantines it to failed/"
 	}
-	if pf.LastTerminalFailureReason != "" {
+	if pf.Cancelled {
+		result.FailureKind = "cancelled"
+	} else if pf.LastTerminalFailureReason != "" {
 		result.FailureKind = "terminal"
 	} else if pf.LastCycleFailureReason != "" {
 		result.FailureKind = "cycle"
 	} else if pf.FailureCount > 0 {
 		result.FailureKind = "retry"
+	}
+	if pf.State == queue.DirFailed {
+		result.Status = "failed"
+		result.Reason = "task frontmatter cannot be parsed and the task is quarantined in failed/"
+		switch result.FailureKind {
+		case "cancelled":
+			result.NextStep = "fix the task frontmatter, then requeue with mato retry if you want to run it again"
+		case "terminal":
+			result.NextStep = "fix the task frontmatter and the structural failure, then retry the task"
+		case "cycle":
+			result.NextStep = "fix the task frontmatter and dependency cycle, then retry the task"
+		default:
+			result.NextStep = "fix the task frontmatter and last failure cause, then requeue the task with mato retry"
+		}
 	}
 	return result
 }
@@ -464,6 +417,10 @@ func buildBacklogResult(result *inspectResult, snap *queue.TaskSnapshot, ctx ins
 func buildFailedResult(result *inspectResult, snap *queue.TaskSnapshot) {
 	result.Status = "failed"
 	switch {
+	case snap.Cancelled:
+		result.FailureKind = "cancelled"
+		result.Reason = "task was deliberately cancelled by an operator"
+		result.NextStep = "use mato retry to requeue if you want to run it again"
 	case snap.LastTerminalFailureReason != "":
 		result.FailureKind = "terminal"
 		result.Reason = fmt.Sprintf("task failed with a structural error: %s", snap.LastTerminalFailureReason)
@@ -581,15 +538,6 @@ func sortedKeys(m map[string]struct{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func stateOrder(state string) int {
-	for i, dir := range queue.AllDirs {
-		if dir == state {
-			return i
-		}
-	}
-	return len(queue.AllDirs)
 }
 
 func snapshotTaskID(snap *queue.TaskSnapshot) string {

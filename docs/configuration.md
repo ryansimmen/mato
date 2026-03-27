@@ -15,12 +15,15 @@ the host and bind-mounts those executables into agent containers.
 
 ## CLI Usage
 ```text
-mato [--repo <path>] [--branch <name>] [--dry-run] [copilot-args...]
+mato [--repo <path>] [--branch <name>] [--dry-run] [--version] [copilot-args...]
 mato init [--repo <path>] [--branch <name>]
 mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
-mato retry [--repo <path>] <task-name> [task-name...]
+mato inspect [--repo <path>] [--format text|json] <task-ref>
+mato retry [--repo <path>] <task-ref> [task-ref...]
+mato cancel [--repo <path>] <task-ref> [task-ref...]
+mato version
 ```
 Valid `--only` check names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
 The task queue location is fixed at `<repo>/.mato`.
@@ -39,6 +42,8 @@ recent messages. `mato status` rejects both extra positional arguments and
 unrecognized flags such as `--branch`.
 Use `--` to stop `mato` flag parsing and forward the remaining arguments verbatim to
 Copilot CLI. In run mode, unrecognized arguments are also passed through to Copilot.
+Prefer `mato -- <copilot-args>` when you want to forward flags that could also be
+interpreted as mato flags.
 
 ## Config File
 `mato` optionally loads `.mato.yaml` from the repository root (next to `.git/`).
@@ -95,9 +100,10 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 Long flags support both `--flag value` and `--flag=value` forms.
 | Flag | Applies to | Default | Description |
 | --- | --- | --- | --- |
-| `--repo <path>` | run, init, status, doctor, graph, retry | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
+| `--repo <path>` | run, init, status, doctor, graph, inspect, retry, cancel | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
 | `--branch <name>` | run, init, dry-run | `mato` | Target branch used for merge processing. Not accepted by `mato status`. |
 | `--dry-run` | run | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
+| `--version` | run | `false` | Print the mato build version and exit without starting the orchestrator. |
 | `--help`, `-h` | all commands | none | Show help and exit. |
 | `--` | run | none | Forward all following arguments directly to Copilot CLI without further `mato` parsing. |
 
@@ -183,13 +189,14 @@ running Docker checks.
 ### `mato retry`
 `mato retry` requeues one or more failed tasks back to `backlog/`. It reads the
 task file from `failed/`, strips task-failure markers (`<!-- failure: -->`,
-`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`),
+`<!-- review-failure: -->`, `<!-- cancelled: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`),
 and writes the cleaned content to `backlog/`. Review feedback markers
 (`<!-- review-rejection: -->`) are preserved so the next attempt can still see
 prior reviewer guidance. The original file in `failed/` is only removed after a
 successful write, ensuring no data loss on collision or write error. If the retried
 task still has unmet `depends_on`, the next reconcile pass moves it back to
-`waiting/`.
+`waiting/`. Task refs can be a filename, filename stem, or explicit task `id`
+for tasks already in `failed/`.
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -202,6 +209,54 @@ mato retry fix-login-bug
 
 # Retry multiple tasks at once
 mato retry fix-login-bug add-dark-mode
+```
+
+### `mato inspect`
+`mato inspect` explains the current state of one task using the same queue
+snapshot and scheduling logic as the host.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--format` | `text` | Output format: `text` or `json`. |
+
+### `mato cancel`
+`mato cancel` withdraws one or more queued tasks by moving them to `failed/`
+and appending a `<!-- cancelled: operator at ... -->` marker. It resolves task
+refs queue-wide by filename, filename stem, or explicit task `id`, warns when
+the cancelled task is still being worked or merged, and reports blocked
+dependents that will remain stuck until the task is retried.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+
+Example usage:
+```bash
+# Cancel a single task
+mato cancel fix-login-bug
+
+# Cancel multiple tasks at once
+mato cancel fix-login-bug add-dark-mode
+```
+
+### `mato version`
+`mato version` prints the build version in a script-friendly format.
+
+Example usage:
+```bash
+mato version
+mato --version
+```
+
+### `mato completion`
+`mato completion <shell>` prints the shell completion script for one of Cobra's
+supported shells: `bash`, `zsh`, `fish`, or `powershell`.
+
+Example usage:
+```bash
+mato completion bash > ~/.local/share/bash-completion/completions/mato
+mato completion zsh > ~/.zfunc/_mato
 ```
 
 ## Host Configuration Environment Variables
@@ -295,17 +350,18 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 `help` target.
 | Target | Description |
 | --- | --- |
-| `build` | Build `bin/mato` with `go build -o bin/mato ./cmd/mato`. |
-| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when `opencode` is on `PATH`, `~/.config/opencode/skills/mato/`. The skill is a task planner that breaks down work into actionable task files. |
+| `build` | Build `bin/mato` with `go build -ldflags "$(GO_LDFLAGS)" -o bin/mato ./cmd/mato`. By default `GO_LDFLAGS` stamps `main.version` from `git describe --tags --always --dirty`, falling back to `dev`. |
+| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when `opencode` is on `PATH`, `~/.config/opencode/skills/mato/`. The skill is a task planner that breaks down work into actionable task files. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |
-| `run` | Run `go run ./cmd/mato --repo "$(REPO)" $(COPILOT_ARGS)`. `REPO` is required; set it in `.env` or on the command line. |
+| `run` | Run `go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato --repo "$(REPO)" $(COPILOT_ARGS)`. `REPO` is required; set it in `.env` or on the command line. |
 | `test` | Run `go test -race ./...`. |
 | `vet` | Run `go vet ./...`. |
 | `lint` | Run `golangci-lint run ./...`. |
 | `help` | Print the target list and descriptions. |
 Additional behavior:
 - `all` runs `fmt`, `vet`, `build`, and `test`.
+- `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --always --dirty` and falls back to `dev`.
 - `REPO` is required for `make run` and may be supplied from `.env`.
 - `COPILOT_ARGS` is passed through to `mato`, which then forwards those arguments to Copilot CLI.

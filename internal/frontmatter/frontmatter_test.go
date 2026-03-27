@@ -131,7 +131,7 @@ func TestParseTaskFile_EmptyFrontmatter(t *testing.T) {
 
 func TestParseTaskFile_StripsOnlyManagedCommentLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commented-task.md")
-	content := "<!-- claimed-by: abc -->\n# Title\n<!-- failure: x -->\n<!-- This is a user note -->\nBody text\n"
+	content := "<!-- claimed-by: abc -->\n# Title\n<!-- failure: x -->\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n<!-- This is a user note -->\nBody text\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
@@ -144,6 +144,23 @@ func TestParseTaskFile_StripsOnlyManagedCommentLines(t *testing.T) {
 	want := "# Title\n<!-- This is a user note -->\nBody text\n"
 	if body != want {
 		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestParseTaskFile_StripsCancelledMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cancelled-task.md")
+	content := "# Title\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\nBody text\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	_, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	if body != "# Title\nBody text\n" {
+		t.Fatalf("body = %q, want %q", body, "# Title\nBody text\n")
 	}
 }
 

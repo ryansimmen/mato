@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,12 +27,105 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var version = "dev"
+
 // runConfig holds the parsed flags for the root command.
 type runConfig struct {
 	repo        string
 	branch      string
 	dryRun      bool
+	version     bool
 	copilotArgs []string
+}
+
+// UsageError marks command-line misuse that should print the command usage.
+type UsageError struct {
+	Err   error
+	Usage string
+}
+
+func (e *UsageError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *UsageError) Unwrap() error {
+	return e.Err
+}
+
+// SilentError carries a non-zero exit code for failures that have already been
+// reported to the user and should not be printed again by main.
+type SilentError struct {
+	Err  error
+	Code int
+}
+
+func (e *SilentError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("exit %d", e.Code)
+	}
+	return e.Err.Error()
+}
+
+func (e *SilentError) Unwrap() error {
+	return e.Err
+}
+
+func newUsageError(cmd *cobra.Command, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &UsageError{Err: err, Usage: cmd.UsageString()}
+}
+
+func usageNoArgs(cmd *cobra.Command, args []string) error {
+	return newUsageError(cmd, cobra.NoArgs(cmd, args))
+}
+
+func usageExactArgs(n int) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		return newUsageError(cmd, cobra.ExactArgs(n)(cmd, args))
+	}
+}
+
+func usageMinimumNArgs(n int) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		return newUsageError(cmd, cobra.MinimumNArgs(n)(cmd, args))
+	}
+}
+
+func configureCommand(cmd *cobra.Command) {
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return newUsageError(c, err)
+	})
+}
+
+func printVersion(w io.Writer) error {
+	_, err := fmt.Fprintf(w, "mato %s\n", version)
+	return err
+}
+
+func writeCommandError(w io.Writer, err error) int {
+	var exitErr ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.Code
+	}
+
+	var silentErr *SilentError
+	if errors.As(err, &silentErr) {
+		return silentErr.Code
+	}
+
+	var usageErr *UsageError
+	if errors.As(err, &usageErr) {
+		fmt.Fprintf(w, "mato error: %v\n\n", usageErr.Err)
+		_, _ = io.WriteString(w, usageErr.Usage)
+		return 1
+	}
+
+	fmt.Fprintf(w, "mato error: %v\n", err)
+	return 1
 }
 
 // assignFlag sets the target field on cfg for a known flag name. It returns
@@ -66,6 +160,10 @@ func extractKnownFlags(args []string) (runConfig, error) {
 			cfg.dryRun = true
 			continue
 		}
+		if arg == "--version" {
+			cfg.version = true
+			continue
+		}
 		if strings.HasPrefix(arg, "--dry-run=") {
 			val := strings.TrimPrefix(arg, "--dry-run=")
 			b, parseErr := strconv.ParseBool(val)
@@ -73,6 +171,15 @@ func extractKnownFlags(args []string) (runConfig, error) {
 				return runConfig{}, fmt.Errorf("invalid value %q for flag --dry-run: must be a boolean", val)
 			}
 			cfg.dryRun = b
+			continue
+		}
+		if strings.HasPrefix(arg, "--version=") {
+			val := strings.TrimPrefix(arg, "--version=")
+			b, parseErr := strconv.ParseBool(val)
+			if parseErr != nil {
+				return runConfig{}, fmt.Errorf("invalid value %q for flag --version: must be a boolean", val)
+			}
+			cfg.version = b
 			continue
 		}
 		// --flag=value form
@@ -277,10 +384,11 @@ func newRootCmd() *cobra.Command {
 		Short: "Runs autonomous Copilot agents against a task queue in Docker",
 		Long: `Runs autonomous Copilot agents against a task queue in Docker.
 
-Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
+Any unrecognized flags are forwarded to the copilot CLI inside the container.
+Use "mato -- <copilot-args>" to force forwarding; for example,
+"mato -- --help" forwards --help to Copilot instead of showing mato help.`,
+		Example:            "mato --model gpt-5.3-codex\nmato -- --help\nmato status\nmato version",
 		DisableFlagParsing: true,
-		SilenceUsage:       true,
-		SilenceErrors:      true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, a := range args {
 				if a == "--" {
@@ -293,7 +401,10 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 			}
 			cfg, err := extractKnownFlags(args)
 			if err != nil {
-				return err
+				return newUsageError(cmd, err)
+			}
+			if cfg.version {
+				return printVersion(cmd.OutOrStdout())
 			}
 			resolved, err := resolveRepo(cfg.repo)
 			if err != nil {
@@ -334,19 +445,27 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 			return runFn(repoRoot, br, cfg.copilotArgs, opts)
 		},
 	}
+	// The root command keeps DisableFlagParsing enabled so unknown arguments can be
+	// forwarded to Copilot. configureCommand is still useful here for shared
+	// SilenceUsage/SilenceErrors behavior, even though Cobra will not call the
+	// flag error hook on the root command.
+	configureCommand(root)
 
 	// Flags are defined for help/documentation only; actual parsing is manual
 	// because DisableFlagParsing is true (required for copilot arg forwarding).
 	root.Flags().String("repo", "", "Path to the git repository (default: current directory)")
 	root.Flags().String("branch", "", "Target branch for merging (default: mato)")
 	root.Flags().Bool("dry-run", false, "Validate queue setup without launching Docker containers")
+	root.Flags().Bool("version", false, "Print mato version and exit")
 
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newGraphCmd())
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newInspectCmd())
+	root.AddCommand(newCancelCmd())
 	root.AddCommand(newRetryCmd())
+	root.AddCommand(newVersionCmd())
 	return root
 }
 
@@ -355,11 +474,9 @@ func newInitCmd() *cobra.Command {
 	var initBranch string
 
 	cmd := &cobra.Command{
-		Use:           "init",
-		Short:         "Initialize a repository for mato use",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args:          cobra.NoArgs,
+		Use:   "init",
+		Short: "Initialize a repository for mato use",
+		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo, err := resolveRepo(initRepo)
 			if err != nil {
@@ -392,6 +509,7 @@ func newInitCmd() *cobra.Command {
 			return nil
 		},
 	}
+	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&initRepo, "repo", "", "Path to the git repository (default: current directory)")
 	cmd.Flags().StringVar(&initBranch, "branch", "", "Target branch name (default: mato)")
@@ -441,14 +559,12 @@ func newStatusCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:           "status",
-		Short:         "Show the current state of the task queue",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args:          cobra.NoArgs,
+		Use:   "status",
+		Short: "Show the current state of the task queue",
+		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if format != "text" && format != "json" {
-				return fmt.Errorf("--format must be text or json, got %s", format)
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
 			}
 			repo, err := resolveRepo(statusRepo)
 			if err != nil {
@@ -456,13 +572,13 @@ func newStatusCmd() *cobra.Command {
 			}
 			if format == "json" {
 				if watch {
-					return fmt.Errorf("--format json and --watch cannot be used together")
+					return newUsageError(cmd, fmt.Errorf("--format json and --watch cannot be used together"))
 				}
 				return status.ShowJSON(os.Stdout, repo)
 			}
 			if watch {
 				if interval <= 0 {
-					return fmt.Errorf("--interval must be a positive duration, got %s", interval)
+					return newUsageError(cmd, fmt.Errorf("--interval must be a positive duration, got %s", interval))
 				}
 				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 				defer stop()
@@ -471,6 +587,7 @@ func newStatusCmd() *cobra.Command {
 			return status.Show(repo)
 		},
 	}
+	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&statusRepo, "repo", "", "Path to the git repository (default: current directory)")
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Continuously refresh the status display")
@@ -516,14 +633,12 @@ func newDoctorCmd() *cobra.Command {
 	var only []string
 
 	cmd := &cobra.Command{
-		Use:           "doctor",
-		Short:         "Run health checks on the repository and task queue",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args:          cobra.NoArgs,
+		Use:   "doctor",
+		Short: "Run health checks on the repository and task queue",
+		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if format != "text" && format != "json" {
-				return fmt.Errorf("--format must be text or json, got %s", format)
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
 			}
 
 			repoInput := doctorRepo
@@ -583,6 +698,7 @@ func newDoctorCmd() *cobra.Command {
 			return nil // healthy -> exit 0
 		},
 	}
+	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&doctorRepo, "repo", "", "Path to git repository (default: current directory)")
 	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs)")
@@ -598,14 +714,12 @@ func newGraphCmd() *cobra.Command {
 	var showAll bool
 
 	cmd := &cobra.Command{
-		Use:           "graph",
-		Short:         "Visualize task dependency topology",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args:          cobra.NoArgs,
+		Use:   "graph",
+		Short: "Visualize task dependency topology",
+		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if format != "text" && format != "dot" && format != "json" {
-				return fmt.Errorf("--format must be text, dot, or json, got %s", format)
+				return newUsageError(cmd, fmt.Errorf("--format must be text, dot, or json, got %s", format))
 			}
 			repo, err := resolveRepo(graphRepo)
 			if err != nil {
@@ -614,6 +728,7 @@ func newGraphCmd() *cobra.Command {
 			return graph.Show(repo, format, showAll)
 		},
 	}
+	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&graphRepo, "repo", "", "Path to the git repository (default: current directory)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, dot, or json")
@@ -627,14 +742,12 @@ func newInspectCmd() *cobra.Command {
 	var format string
 
 	cmd := &cobra.Command{
-		Use:           "inspect <task-ref>",
-		Short:         "Explain the current state of a single task",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args:          cobra.ExactArgs(1),
+		Use:   "inspect <task-ref>",
+		Short: "Explain the current state of a single task",
+		Args:  usageExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if format != "text" && format != "json" {
-				return fmt.Errorf("--format must be text or json, got %s", format)
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
 			}
 			repo, err := resolveRepo(inspectRepo)
 			if err != nil {
@@ -643,6 +756,7 @@ func newInspectCmd() *cobra.Command {
 			return inspectShowFn(repo, args[0], format)
 		},
 	}
+	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&inspectRepo, "repo", "", "Path to the git repository (default: current directory)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
@@ -654,11 +768,9 @@ func newRetryCmd() *cobra.Command {
 	var retryRepo string
 
 	cmd := &cobra.Command{
-		Use:           "retry <task-name> [task-name...]",
-		Short:         "Requeue failed tasks back to backlog",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args:          cobra.MinimumNArgs(1),
+		Use:   "retry <task-ref> [task-ref...]",
+		Short: "Requeue failed tasks back to backlog",
+		Args:  usageMinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo, err := resolveRepo(retryRepo)
 			if err != nil {
@@ -673,7 +785,7 @@ func newRetryCmd() *cobra.Command {
 			var firstErr error
 			for _, name := range args {
 				if err := queue.RetryTask(tasksDir, name); err != nil {
-					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
 					if firstErr == nil {
 						firstErr = err
 					}
@@ -682,22 +794,93 @@ func newRetryCmd() *cobra.Command {
 				stem := strings.TrimSuffix(name, ".md")
 				fmt.Printf("Requeued %s to backlog\n", stem)
 			}
-			return firstErr
+			if firstErr != nil {
+				return &SilentError{Err: firstErr, Code: 1}
+			}
+			return nil
 		},
 	}
+	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&retryRepo, "repo", "", "Path to the git repository (default: current directory)")
 
 	return cmd
 }
 
+var cancelTaskFn = queue.CancelTask
+
+func newCancelCmd() *cobra.Command {
+	var cancelRepo string
+
+	cmd := &cobra.Command{
+		Use:   "cancel <task-ref> [task-ref...]",
+		Short: "Withdraw tasks from the queue by moving them to failed/",
+		Args:  usageMinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, err := resolveRepo(cancelRepo)
+			if err != nil {
+				return err
+			}
+			repoRoot, err := resolveRepoRoot(repo)
+			if err != nil {
+				return err
+			}
+			tasksDir := filepath.Join(repoRoot, dirs.Root)
+
+			var firstErr error
+			for _, ref := range args {
+				result, err := cancelTaskFn(tasksDir, ref)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+				}
+				stem := strings.TrimSuffix(result.Filename, ".md")
+				fmt.Printf("cancelled: %s (was in %s/)\n", result.Filename, result.PriorState)
+				if result.PriorState == queue.DirInProgress {
+					fmt.Fprintf(os.Stderr, "warning: agent container for %s may still be running\n", stem)
+				}
+				if result.PriorState == queue.DirReadyMerge {
+					fmt.Fprintf(os.Stderr, "warning: merge queue may still merge %s's branch\n", stem)
+				}
+				if len(result.Warnings) > 0 {
+					fmt.Printf("  warning: %d task(s) depend on %s:\n", len(result.Warnings), stem)
+					for _, warning := range result.Warnings {
+						fmt.Printf("    %s\n", warning)
+					}
+					fmt.Printf("  these tasks will remain blocked until %s is retried\n", stem)
+				}
+			}
+			if firstErr != nil {
+				return &SilentError{Err: firstErr, Code: 1}
+			}
+			return nil
+		},
+	}
+	configureCommand(cmd)
+
+	cmd.Flags().StringVar(&cancelRepo, "repo", "", "Path to the git repository (default: current directory)")
+
+	return cmd
+}
+
+func newVersionCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print mato version",
+		Args:  usageNoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return printVersion(cmd.OutOrStdout())
+		},
+	}
+	configureCommand(cmd)
+	return cmd
+}
+
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
-		var exitErr ExitError
-		if errors.As(err, &exitErr) {
-			os.Exit(exitErr.Code)
-		}
-		fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
-		os.Exit(1)
+		os.Exit(writeCommandError(os.Stderr, err))
 	}
 }

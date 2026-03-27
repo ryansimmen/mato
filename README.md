@@ -52,6 +52,7 @@ Useful flags:
 - `--repo <path>`: target repository (defaults to the current directory); empty and whitespace-only values are rejected
 - `--branch <name>`: merge target branch (defaults to `mato`); empty and whitespace-only values are rejected
 - `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
+- `--version[=<bool>]`: print the mato version and exit (`--version` is equivalent to `--version=true`)
 
 You can also set `MATO_BRANCH` for a host-side branch default that overrides `.mato.yaml` but is still overridden by `--branch`.
 
@@ -61,7 +62,16 @@ You can also add an optional `.mato.yaml` at the repository root to persist defa
 
 Arguments after a `--` separator are always forwarded to the Copilot CLI without
 interpretation — even `--help` and `-h` (e.g., `mato -- --help` forwards
-`--help` to Copilot instead of showing mato's own usage).
+`--help` to Copilot instead of showing mato's own usage). When you want to pass
+flags that might look like mato flags, prefer the explicit separator form.
+
+```bash
+# Print mato's own help
+mato --help
+
+# Forward help to Copilot instead
+mato -- --help
+```
 
 ## Task Files
 
@@ -98,7 +108,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 ├── ready-for-review/# completed by agent, waiting for AI review
 ├── ready-to-merge/  # approved by review agent, waiting for host merge
 ├── completed/       # merged successfully
-├── failed/          # exceeded retry limit
+├── failed/          # exceeded retry limit or cancelled by operator
 ├── messages/
 │   ├── events/      # coordination events and status updates
 │   ├── completions/ # host-written completion details for merged tasks
@@ -107,6 +117,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 ```
 
 Tasks that accumulate `max_retries` failure records (default 3) are moved to `failed/`.
+Operators can also move queued tasks to `failed/` deliberately with `mato cancel`.
 
 ## How It Works
 
@@ -225,12 +236,42 @@ mato retry fix-login-bug add-dark-mode
 ```
 
 The command strips task-failure markers (`<!-- failure: -->`,
-`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`)
+`<!-- review-failure: -->`, `<!-- cancelled: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`)
 from the task file and writes the cleaned content to `backlog/`. Review
 feedback markers (`<!-- review-rejection: -->`) are preserved so the next
 attempt still receives prior reviewer guidance. If the task already exists in
 `backlog/`, the command prints an error and leaves the `failed/` copy unchanged
 (no data loss).
+
+## Cancel Command
+
+`mato cancel` withdraws queued tasks by moving them to `failed/` and appending a
+`<!-- cancelled: operator at ... -->` marker:
+
+```bash
+# Cancel a single task
+mato cancel fix-login-bug
+
+# Cancel multiple tasks
+mato cancel fix-login-bug add-dark-mode
+```
+
+If cancelled tasks are later retried with `mato retry`, the cancelled markers are
+stripped and the tasks return to `backlog/` like any other failed task.
+
+## Version Command
+
+`mato version` prints the build version in a script-friendly format:
+
+```bash
+mato version
+```
+
+You can also use the root-level convenience flag:
+
+```bash
+mato --version
+```
 
 ## Docker
 
@@ -238,6 +279,19 @@ attempt still receives prior reviewer guidance. If the task already exists in
 
 ```bash
 mato --model gpt-5.3-codex
+mato -- --help
+```
+
+## Shell Completion
+
+`mato` exposes Cobra's built-in shell completion command:
+
+```bash
+# Bash
+mato completion bash > ~/.local/share/bash-completion/completions/mato
+
+# Zsh
+mato completion zsh > ~/.zfunc/_mato
 ```
 
 ## Notes

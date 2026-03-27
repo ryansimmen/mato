@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"mato/internal/config"
 	"mato/internal/doctor"
 	"mato/internal/git"
+	"mato/internal/queue"
 	"mato/internal/runner"
 	"mato/internal/setup"
 	"mato/internal/testutil"
@@ -281,6 +283,16 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			wantErr: `invalid value "" for flag --dry-run: must be a boolean`,
 		},
 		{
+			name:    "version invalid boolean",
+			args:    []string{"--version=maybe"},
+			wantErr: `invalid value "maybe" for flag --version: must be a boolean`,
+		},
+		{
+			name:    "version empty equals value",
+			args:    []string{"--version="},
+			wantErr: `invalid value "" for flag --version: must be a boolean`,
+		},
+		{
 			name:    "repo whitespace-only equals form",
 			args:    []string{"--repo=   "},
 			wantErr: "flag --repo requires a value",
@@ -310,6 +322,40 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			}
 			if err.Error() != tt.wantErr {
 				t.Errorf("error = %q, want %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestExtractKnownFlags_Version(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantVersion bool
+		wantExtra   []string
+	}{
+		{name: "bare version flag", args: []string{"--version"}, wantVersion: true},
+		{name: "version true", args: []string{"--version=true"}, wantVersion: true},
+		{name: "version false", args: []string{"--version=false", "--model", "gpt-5"}, wantExtra: []string{"--model", "gpt-5"}},
+		{name: "version forwarded after separator", args: []string{"--", "--version"}, wantExtra: []string{"--version"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := extractKnownFlags(tt.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.version != tt.wantVersion {
+				t.Fatalf("version = %v, want %v", cfg.version, tt.wantVersion)
+			}
+			if len(cfg.copilotArgs) != len(tt.wantExtra) {
+				t.Fatalf("extra = %v, want %v", cfg.copilotArgs, tt.wantExtra)
+			}
+			for i := range cfg.copilotArgs {
+				if cfg.copilotArgs[i] != tt.wantExtra[i] {
+					t.Errorf("extra[%d] = %q, want %q", i, cfg.copilotArgs[i], tt.wantExtra[i])
+				}
 			}
 		})
 	}
@@ -410,6 +456,39 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(data)
 }
 
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() {
+		os.Stderr = origStderr
+	}()
+
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close write pipe: %v", err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close read pipe: %v", err)
+	}
+	return string(data)
+}
+
+func renderCommandError(t *testing.T, err error) (string, int) {
+	t.Helper()
+	var buf bytes.Buffer
+	code := writeCommandError(&buf, err)
+	return buf.String(), code
+}
+
 func writeRepoConfig(t *testing.T, repoRoot, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repoRoot, ".mato.yaml"), []byte(content), 0o644); err != nil {
@@ -434,6 +513,128 @@ func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 	}
 	if capturedArgs[0] != "--model" || capturedArgs[1] != "gpt-5.2" {
 		t.Errorf("forwarded args = %v, want [--model gpt-5.2]", capturedArgs)
+	}
+}
+
+func TestRootCmd_HelpListsCompletionCommand(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out.String(), "completion") {
+		t.Fatalf("expected help to mention completion command, got:\n%s", out.String())
+	}
+}
+
+func TestVersionCmd_Output(t *testing.T) {
+	origVersion := version
+	defer func() { version = origVersion }()
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "subcommand", args: []string{"version"}, want: "mato 1.2.3\n"},
+		{name: "root flag", args: []string{"--version"}, want: "mato 1.2.3\n"},
+	}
+
+	version = "1.2.3"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs(tt.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if out.String() != tt.want {
+				t.Fatalf("output = %q, want %q", out.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestVersionCmd_DefaultFallback(t *testing.T) {
+	origVersion := version
+	defer func() { version = origVersion }()
+	version = "dev"
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.String() != "mato dev\n" {
+		t.Fatalf("output = %q, want %q", out.String(), "mato dev\n")
+	}
+}
+
+func TestWriteCommandError_UsageErrorIncludesUsage(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "extra"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	out, code := renderCommandError(t, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "mato error:") {
+		t.Fatalf("expected mato error prefix, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Usage:\n  mato status") {
+		t.Fatalf("expected status usage in output, got:\n%s", out)
+	}
+}
+
+func TestWriteCommandError_RuntimeErrorOmitsUsage(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", t.TempDir()})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	out, code := renderCommandError(t, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if strings.Contains(out, "Usage:") {
+		t.Fatalf("runtime error should not include usage, got:\n%s", out)
+	}
+	if !strings.Contains(out, "not a git repository") {
+		t.Fatalf("expected git repo error, got:\n%s", out)
+	}
+}
+
+func TestWriteCommandError_SilentErrorSuppressesOutput(t *testing.T) {
+	out, code := renderCommandError(t, &SilentError{Err: fmt.Errorf("already printed"), Code: 1})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if out != "" {
+		t.Fatalf("expected no output, got %q", out)
+	}
+}
+
+func TestWriteCommandError_ExitErrorSuppressesOutput(t *testing.T) {
+	out, code := renderCommandError(t, ExitError{Code: 2})
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if out != "" {
+		t.Fatalf("expected no output, got %q", out)
 	}
 }
 
@@ -1480,12 +1681,22 @@ func TestRetryCmd_TaskNotFound(t *testing.T) {
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "nonexistent"})
-	err := cmd.Execute()
-	if err == nil {
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+	if !strings.Contains(stderr, "mato error: task nonexistent not found in failed/") {
+		t.Fatalf("expected prefixed retry error, got %q", stderr)
+	}
+	if execErr == nil {
 		t.Fatal("expected error for missing task")
 	}
-	if !strings.Contains(err.Error(), "not found in failed/") {
-		t.Errorf("unexpected error: %v", err)
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
+	}
+	if !strings.Contains(execErr.Error(), "not found in failed/") {
+		t.Errorf("unexpected error: %v", execErr)
 	}
 }
 
@@ -1583,6 +1794,253 @@ func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- review-rejection:") {
 		t.Fatal("review rejection feedback should be preserved")
+	}
+}
+
+func TestRetryCmd_ExplicitID(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "---\nid: explicit-id\n---\n# Fix bug\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "fix-bug.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "explicit-id"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry command failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(backlogDir, "fix-bug.md")); err != nil {
+		t.Fatal("task should be in backlog after retry by explicit id")
+	}
+}
+
+func TestRetryCmd_ExplicitIDWithSlash(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "---\nid: group/explicit-id\n---\n# Fix bug\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "fix-bug.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "group/explicit-id"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry command failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(backlogDir, "fix-bug.md")); err != nil {
+		t.Fatal("task should be in backlog after retry by slash id")
+	}
+}
+
+func TestCancelCmd_Registered(t *testing.T) {
+	cmd := newRootCmd()
+	if got, _, err := cmd.Find([]string{"cancel"}); err != nil || got == nil || got.Name() != "cancel" {
+		t.Fatalf("cancel command not registered: cmd=%v err=%v", got, err)
+	}
+}
+
+func TestCancelCmd_NoArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error with no arguments")
+	}
+}
+
+func TestCancelCmd_SingleTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel command failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+		t.Fatalf("task should be in failed after cancel: %v", err)
+	}
+}
+
+func TestCancelCmd_MultiTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, name), []byte("---\nid: "+strings.TrimSuffix(name, ".md")+"\n---\n# Task\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "one", "two"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel command failed: %v", err)
+	}
+	for _, name := range []string{"one.md", "two.md"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, name)); err != nil {
+			t.Fatalf("task %s should be in failed after cancel: %v", name, err)
+		}
+	}
+}
+
+func TestCancelCmd_PartialFailure(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "good", "missing"})
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+	if !strings.Contains(stderr, "mato error: task not found: missing") {
+		t.Fatalf("expected prefixed cancel error, got %q", stderr)
+	}
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "good.md")); err != nil {
+		t.Fatalf("successful cancel should still move task: %v", err)
+	}
+}
+
+func TestCancelCmd_CompletedRefusal(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "done.md"), []byte("---\nid: done\n---\n# Done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "done"})
+	var execErr error
+	stderr := captureStderr(t, func() { execErr = cmd.Execute() })
+	if !strings.Contains(stderr, "mato error: cannot cancel done: task has already been merged") {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if execErr == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestCancelCmd_MissingMatoDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "missing"})
+	var execErr error
+	stderr := captureStderr(t, func() { execErr = cmd.Execute() })
+	if !strings.Contains(stderr, "mato error: task not found: missing") {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if execErr == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestCancelCmd_InProgressWarning(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "running.md"), []byte("---\nid: running\n---\n# Running\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "running"})
+	stderr := captureStderr(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel command failed: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "warning: agent container for running may still be running") {
+		t.Fatalf("missing in-progress warning: %q", stderr)
+	}
+}
+
+func TestCancelCmd_ReadyToMergeWarning(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "merge-me.md"), []byte("---\nid: merge-me\n---\n# Merge\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "merge-me"})
+	stderr := captureStderr(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel command failed: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "warning: merge queue may still merge merge-me's branch") {
+		t.Fatalf("missing ready-to-merge warning: %q", stderr)
+	}
+}
+
+func TestCancelCmd_DownstreamWarnings(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte("---\nid: waiter\ndepends_on: [dep]\n---\n# Waiter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "dep"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel command failed: %v", err)
+		}
+	})
+	if !strings.Contains(output, "warning: 1 task(s) depend on dep:") || !strings.Contains(output, "waiting/waiter.md") {
+		t.Fatalf("missing downstream warning output:\n%s", output)
+	}
+}
+
+func TestCancelCmd_UsesRepoRootFromSubdir(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	subdir := filepath.Join(repoRoot, "nested")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel command failed from subdir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+		t.Fatalf("task should be cancelled into repo-root failed/: %v", err)
 	}
 }
 

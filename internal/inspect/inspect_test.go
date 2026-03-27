@@ -210,12 +210,28 @@ func TestShowTo_TextStatuses(t *testing.T) {
 			want:    []string{"Status: failed", "Failure: terminal", "Terminal failure: invalid glob syntax"},
 		},
 		{
+			name: "failed cancelled",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
+			},
+			taskRef: "cancelled",
+			want:    []string{"Status: failed", "Failure: cancelled", "task was deliberately cancelled by an operator", "use mato retry to requeue if you want to run it again"},
+		},
+		{
 			name: "parse failed task in review",
 			setup: func(t *testing.T, tasksDir string) {
 				writeTask(t, tasksDir, queue.DirReadyReview, "broken.md", "<!-- branch: task/broken -->\n---\npriority: nope\n---\n# Broken\n")
 			},
 			taskRef: "broken",
 			want:    []string{"Status: invalid", "Parse error:", "quarantines it to failed/", "File: ready-for-review/broken.md"},
+		},
+		{
+			name: "cancelled parse failed task",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n# Broken\n")
+			},
+			taskRef: "broken-cancelled",
+			want:    []string{"Status: failed", "Failure: cancelled", "Parse error:"},
 		},
 	}
 
@@ -343,6 +359,19 @@ func TestShowTo_JSONFields(t *testing.T) {
 			},
 		},
 		{
+			name: "failed cancelled fields",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
+			},
+			taskRef: "cancelled",
+			assert: func(t *testing.T, got map[string]any) {
+				t.Helper()
+				if got["status"] != "failed" || got["failure_kind"] != "cancelled" {
+					t.Fatalf("status/failure_kind = %v/%v, want failed/cancelled", got["status"], got["failure_kind"])
+				}
+			},
+		},
+		{
 			name: "invalid glob fields",
 			setup: func(t *testing.T, tasksDir string) {
 				writeTask(t, tasksDir, queue.DirBacklog, "bad-glob.md", "---\nid: bad-glob\naffects: ['foo[']\n---\n# Bad Glob\n")
@@ -371,6 +400,22 @@ func TestShowTo_JSONFields(t *testing.T) {
 				}
 				if _, ok := got["parse_error"].(string); !ok {
 					t.Fatalf("parse_error = %v, want string", got["parse_error"])
+				}
+			},
+		},
+		{
+			name: "invalid cancelled parse failure fields",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n# Broken\n")
+			},
+			taskRef: "broken-cancelled",
+			assert: func(t *testing.T, got map[string]any) {
+				t.Helper()
+				if got["status"] != "failed" {
+					t.Fatalf("status = %v, want failed", got["status"])
+				}
+				if got["failure_kind"] != "cancelled" {
+					t.Fatalf("failure_kind = %v, want cancelled", got["failure_kind"])
 				}
 			},
 		},
