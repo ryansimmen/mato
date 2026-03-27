@@ -14,6 +14,11 @@ affects:
 tags: [feature, cli, ux]
 estimated_complexity: medium
 ---
+
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for the
+> current implementation.
+
 # Add `mato inspect` for single-task root-cause explanation
 
 ## Goal

@@ -17,6 +17,7 @@ import (
 	"mato/internal/doctor"
 	"mato/internal/git"
 	"mato/internal/graph"
+	"mato/internal/inspect"
 	"mato/internal/queue"
 	"mato/internal/runner"
 	"mato/internal/setup"
@@ -344,6 +345,7 @@ Any unrecognized flags are forwarded to the copilot CLI inside the container.`,
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newGraphCmd())
 	root.AddCommand(newInitCmd())
+	root.AddCommand(newInspectCmd())
 	root.AddCommand(newRetryCmd())
 	return root
 }
@@ -491,6 +493,10 @@ func (e ExitError) Error() string {
 // doctor.Run and can be replaced in tests to inject failures or exit codes.
 var doctorRunFn = doctor.Run
 
+// inspectShowFn is the function used to render task inspection results.
+// Tests replace it to verify CLI flag parsing and delegation.
+var inspectShowFn = inspect.Show
+
 func doctorNeedsDockerConfig(only []string) bool {
 	if len(only) == 0 {
 		return true
@@ -612,6 +618,34 @@ func newGraphCmd() *cobra.Command {
 	cmd.Flags().StringVar(&graphRepo, "repo", "", "Path to the git repository (default: current directory)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text, dot, or json")
 	cmd.Flags().BoolVar(&showAll, "all", false, "Include completed and failed tasks")
+
+	return cmd
+}
+
+func newInspectCmd() *cobra.Command {
+	var inspectRepo string
+	var format string
+
+	cmd := &cobra.Command{
+		Use:           "inspect <task-ref>",
+		Short:         "Explain the current state of a single task",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if format != "text" && format != "json" {
+				return fmt.Errorf("--format must be text or json, got %s", format)
+			}
+			repo, err := resolveRepo(inspectRepo)
+			if err != nil {
+				return err
+			}
+			return inspectShowFn(repo, args[0], format)
+		},
+	}
+
+	cmd.Flags().StringVar(&inspectRepo, "repo", "", "Path to the git repository (default: current directory)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd
 }

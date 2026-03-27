@@ -1,5 +1,5 @@
 # Mato Architecture
-This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
+This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `inspect/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
@@ -30,7 +30,7 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 +------------------+     ready-to-merge -> completed
 ```
 High-level flow:
-1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)`, bootstraps a repository via `setup.InitRepo(...)`, or routes to subcommands such as `status.Show(...)`.
+1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)`, bootstraps a repository via `setup.InitRepo(...)`, or routes to read-only subcommands such as `status.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
 2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs.
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim and pushes `task/<sanitized-filename>`.
 4. The host merge queue squashes that task branch into the target branch and moves the task file to `completed/`.
@@ -416,6 +416,11 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `mato status` dashboard — `Show`, `ShowTo`, `Watch` (`status.go`).
 - Data gathering layer — `gatherStatus` collects queue counts, active agents, presence, task lists, completions, messages, merge-lock state (`status_gather.go`).
 - Rendering layer — individual `render*` functions for each dashboard section, terminal colors (`status_render.go`).
+
+### `internal/inspect/`
+- `mato inspect` single-task troubleshooting command — `Show`, `ShowTo` (`inspect.go`).
+- Reuses `queue.BuildIndex(...)`, `queue.DiagnoseDependencies(...)`, and `queue.ComputeRunnableBacklogView(...)` so explanations match current scheduler behavior.
+- Resolves one task reference across indexed snapshots and parse failures, then renders either compact text or JSON without mutating the queue.
 
 ### `internal/doctor/`
 - Health check command — `Run`, `RenderText`, `RenderJSON` (`doctor.go`, `checks.go`, `render.go`).

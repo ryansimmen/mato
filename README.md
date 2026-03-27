@@ -165,6 +165,25 @@ The graph reuses `PollIndex` and `DiagnoseDependencies` to show dependency
 edges, blocked tasks, cycles, and hidden (off-graph) dependencies. Output is
 read-only and makes no filesystem changes.
 
+## Inspect Command
+
+`mato inspect` explains the current state of one task using the same queue
+snapshot and scheduling logic as the host:
+
+```bash
+# Human-readable explanation
+mato inspect add-retry-logic
+
+# Machine-readable JSON
+mato inspect add-retry-logic --format json
+```
+
+It resolves a task by filename, filename stem, or explicit frontmatter `id`,
+then reports the current queue state, the actionable status (`blocked`,
+`deferred`, `runnable`, `running`, `ready_for_review`, `ready_to_merge`,
+`completed`, `failed`, or `invalid`), and the most relevant next step. The
+command is read-only: it never moves tasks or writes markers.
+
 ## Doctor Command
 
 `mato doctor` runs a structured health check across the repository and task queue:

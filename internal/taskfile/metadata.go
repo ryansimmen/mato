@@ -130,6 +130,23 @@ func LastFailureReason(data []byte) string {
 	return last
 }
 
+// LastReviewRejectionReason extracts the reason from the last
+// <!-- review-rejection: ... --> comment in data. Returns "" if none found.
+func LastReviewRejectionReason(data []byte) string {
+	last := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, reviewRejectionStr) {
+			continue
+		}
+		reason := failureReasonFromLine(trimmed)
+		if reason != "" {
+			last = reason
+		}
+	}
+	return last
+}
+
 func failureReasonFromLine(line string) string {
 	if idx := strings.Index(line, "—"); idx >= 0 {
 		return trimCommentSuffix(line[idx+len("—"):])
