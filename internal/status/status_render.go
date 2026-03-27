@@ -10,6 +10,7 @@ import (
 	"github.com/fatih/color"
 
 	"mato/internal/frontmatter"
+	"mato/internal/pause"
 	"mato/internal/queue"
 )
 
@@ -51,6 +52,17 @@ func renderQueueOverview(w io.Writer, c colorSet, data statusData) {
 	} else {
 		fmt.Fprintf(w, "  merge queue:    %s\n", c.dim("idle"))
 	}
+	fmt.Fprintf(w, "  pause state:    %s\n", renderPauseState(c, data.pauseState))
+}
+
+func renderPauseState(c colorSet, state pause.State) string {
+	if !state.Active {
+		return c.dim("not paused")
+	}
+	if state.ProblemKind != pause.ProblemNone {
+		return c.yellow(fmt.Sprintf("paused (problem: %s)", state.Problem))
+	}
+	return c.yellow("paused since " + state.Since.Format(time.RFC3339))
 }
 
 func renderRunnableBacklog(w io.Writer, c colorSet, data statusData) {

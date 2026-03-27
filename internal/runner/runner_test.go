@@ -17,6 +17,7 @@ import (
 
 	"mato/internal/git"
 	"mato/internal/messaging"
+	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
@@ -569,6 +570,26 @@ func TestIdleHeartbeat_RecordActivityResetsState(t *testing.T) {
 	want := "[mato] idle — waiting for tasks (next poll in 10s)"
 	if msg != want {
 		t.Errorf("idle message after reset = %q, want %q", msg, want)
+	}
+}
+
+func TestIdleHeartbeat_PausedMessage(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	hb := newIdleHeartbeat(now)
+
+	msg := hb.pausedMessage(now.Add(10*time.Second), false)
+	if msg == "" {
+		t.Fatal("expected immediate paused message")
+	}
+
+	msg = hb.pausedMessage(now.Add(20*time.Second), true)
+	if msg != "" {
+		t.Fatalf("expected throttled empty message, got %q", msg)
+	}
+
+	msg = hb.pausedMessage(now.Add(10*time.Second+heartbeatInterval), true)
+	if msg == "" {
+		t.Fatal("expected paused heartbeat after interval")
 	}
 }
 
@@ -3654,10 +3675,11 @@ func TestPollClaimAndRun_NoTasksAvailable(t *testing.T) {
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := make(map[string]struct{})
 	idx := queue.BuildIndex(tasksDir)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
 
 	var claimed, hadError bool
 	captureStdoutStderr(t, func() {
-		claimed, hadError = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
+		claimed, hadError = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx, view)
 	})
 
 	if claimed {
@@ -3678,9 +3700,10 @@ func TestPollClaimAndRun_FailedDirUnavailableExclusion(t *testing.T) {
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := map[string]struct{}{"already-excluded.md": {}}
 	idx := queue.BuildIndex(tasksDir)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
 
 	captureStdoutStderr(t, func() {
-		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
+		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx, view)
 	})
 
 	if _, ok := failedDirExcluded["already-excluded.md"]; !ok {
@@ -3708,10 +3731,11 @@ func TestPollClaimAndRun_DeferredOverlapSkipped(t *testing.T) {
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := make(map[string]struct{})
 	idx := queue.BuildIndex(tasksDir)
+	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
 
 	var claimed bool
 	captureStdoutStderr(t, func() {
-		claimed, _ = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx)
+		claimed, _ = pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx, view)
 	})
 
 	if claimed {
@@ -3754,6 +3778,254 @@ func TestPollMerge_LockAcquiredAndReleased(t *testing.T) {
 	})
 	if count != 0 {
 		t.Fatalf("expected 0 on second call, got %d", count)
+	}
+}
+
+func TestPollIterate_PausedSkipsClaimAndReviewButMerges(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	origNowFn := nowFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+		nowFn = origNowFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	var manifestCalled, claimCalled, reviewCalled bool
+	pauseReadFn = func(string) (pause.State, error) {
+		return pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}, nil
+	}
+	pollWriteManifestFn = func(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		manifestCalled = true
+		if _, ok := failedDirExcluded["excluded.md"]; !ok {
+			t.Fatalf("failedDirExcluded not preserved")
+		}
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		claimCalled = true
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		reviewCalled = true
+		return false
+	}
+	pollMergeFn = func(string, string, string) int { return 1 }
+	nowFn = func() time.Time { return time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC) }
+
+	hb := newIdleHeartbeat(nowFn())
+	stdout, _ := captureStdoutStderr(t, func() {
+		result := pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &hb, map[string]struct{}{"excluded.md": {}}, false)
+		if !result.pauseActive {
+			t.Fatal("pauseActive = false, want true")
+		}
+		if result.mergeCount != 1 {
+			t.Fatalf("mergeCount = %d, want 1", result.mergeCount)
+		}
+	})
+
+	if !manifestCalled {
+		t.Fatal("expected manifest refresh")
+	}
+	if claimCalled {
+		t.Fatal("claim phase should be skipped while paused")
+	}
+	if reviewCalled {
+		t.Fatal("review phase should be skipped while paused")
+	}
+	if !strings.Contains(stdout, "[mato] paused - run 'mato resume' to continue") {
+		t.Fatalf("expected paused message, got %q", stdout)
+	}
+}
+
+func TestPollIterate_PauseWarningThrottled(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	origNowFn := nowFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+		nowFn = origNowFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) {
+		return pause.State{Active: true, ProblemKind: pause.ProblemMalformed, Problem: `invalid timestamp: "bad"`}, nil
+	}
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(string, string, string) int { return 0 }
+
+	hb := newIdleHeartbeat(time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC))
+	nowFn = func() time.Time { return time.Date(2026, 3, 23, 10, 0, 10, 0, time.UTC) }
+	_, stderr1 := captureStdoutStderr(t, func() {
+		pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &hb, map[string]struct{}{}, false)
+	})
+	if !strings.Contains(stderr1, "warning: pause sentinel: invalid timestamp") {
+		t.Fatalf("expected warning, got %q", stderr1)
+	}
+
+	nowFn = func() time.Time { return time.Date(2026, 3, 23, 10, 0, 20, 0, time.UTC) }
+	_, stderr2 := captureStdoutStderr(t, func() {
+		pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &hb, map[string]struct{}{}, true)
+	})
+	if strings.Contains(stderr2, "warning: pause sentinel:") {
+		t.Fatalf("expected warning to be throttled, got %q", stderr2)
+	}
+}
+
+func TestPollIterate_PausedMergeDoesNotResetHeartbeatThrottle(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	origNowFn := nowFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+		nowFn = origNowFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) {
+		return pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}, nil
+	}
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(string, string, string) int { return 1 }
+
+	hb := newIdleHeartbeat(time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC))
+	nowFn = func() time.Time { return time.Date(2026, 3, 23, 10, 0, 10, 0, time.UTC) }
+	stdout1, _ := captureStdoutStderr(t, func() {
+		pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &hb, map[string]struct{}{}, false)
+	})
+	if !strings.Contains(stdout1, "[mato] paused - run 'mato resume' to continue") {
+		t.Fatalf("expected initial paused heartbeat, got %q", stdout1)
+	}
+
+	nowFn = func() time.Time { return time.Date(2026, 3, 23, 10, 0, 20, 0, time.UTC) }
+	stdout2, _ := captureStdoutStderr(t, func() {
+		pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &hb, map[string]struct{}{}, true)
+	})
+	if strings.Contains(stdout2, "[mato] paused - run 'mato resume' to continue") {
+		t.Fatalf("paused merge work should not reset heartbeat throttle, got %q", stdout2)
+	}
+}
+
+func TestPollIterate_ClaimedCancelledSkipsReviewAndMerge(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return true, false
+	}
+	reviewCalled := false
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		reviewCalled = true
+		return false
+	}
+	mergeCalled := false
+	pollMergeFn = func(string, string, string) int {
+		mergeCalled = true
+		return 0
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := pollIterate(ctx, envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	if !result.claimedTask {
+		t.Fatal("claimedTask = false, want true")
+	}
+	if reviewCalled {
+		t.Fatal("review phase should be skipped")
+	}
+	if mergeCalled {
+		t.Fatal("merge phase should be skipped")
+	}
+}
+
+func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(string, string, string) int {
+		path := filepath.Join(tasksDir, queue.DirReadyReview, "new-review.md")
+		if err := os.WriteFile(path, []byte("---\nid: new-review\nbranch: task/new-review\n---\n# Review\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		return 0
+	}
+
+	result := pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	if !result.hasReviewTasks {
+		t.Fatal("hasReviewTasks = false, want true after merge-side review creation")
 	}
 }
 

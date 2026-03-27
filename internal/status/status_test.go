@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"mato/internal/messaging"
+	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
@@ -112,6 +113,9 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	// Verify merge queue shows idle.
 	if !contains(output, "merge queue:    idle") {
 		t.Errorf("output should contain 'merge queue:    idle', got:\n%s", output)
+	}
+	if !contains(output, "pause state:    not paused") {
+		t.Errorf("output should contain pause state line, got:\n%s", output)
 	}
 
 	// Verify backlog count appears in queue overview (1 task in backlog/).
@@ -1758,6 +1762,29 @@ func TestShowJSON_WarningsIncluded(t *testing.T) {
 	}
 	if result.Warnings[0] != "could not read agent presence: boom" {
 		t.Errorf("warning = %q, want %q", result.Warnings[0], "could not read agent presence: boom")
+	}
+}
+
+func TestShowJSON_PauseState(t *testing.T) {
+	result := statusDataToJSON(statusData{pauseState: pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}})
+	if !result.Paused.Active {
+		t.Fatal("Paused.Active = false, want true")
+	}
+	if result.Paused.Since != "2026-03-23T10:00:00Z" {
+		t.Fatalf("Paused.Since = %q", result.Paused.Since)
+	}
+
+	problem := statusDataToJSON(statusData{pauseState: pause.State{Active: true, ProblemKind: pause.ProblemMalformed, Problem: `invalid timestamp: "bad"`}})
+	if !problem.Paused.Active {
+		t.Fatal("problem pause should stay active")
+	}
+	if problem.Paused.Since != "" {
+		t.Fatalf("Paused.Since = %q, want empty for problem state", problem.Paused.Since)
+	}
+
+	unpaused := statusDataToJSON(statusData{})
+	if unpaused.Paused.Active {
+		t.Fatal("Paused.Active = true, want false")
 	}
 }
 

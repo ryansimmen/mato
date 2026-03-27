@@ -19,6 +19,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/graph"
 	"mato/internal/inspect"
+	"mato/internal/pause"
 	"mato/internal/queue"
 	"mato/internal/runner"
 	"mato/internal/setup"
@@ -370,6 +371,20 @@ func validateRepoPath(dir string) error {
 	return gitRevParseGitDir(dir)
 }
 
+func requireTasksDir(tasksDir string) error {
+	info, err := os.Stat(tasksDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
+		}
+		return fmt.Errorf("stat %s: %w", tasksDir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists but is not a directory", tasksDir)
+	}
+	return nil
+}
+
 // runFn is the function used to start the orchestrator loop. Defaults to
 // runner.Run and can be replaced in tests to observe resolved values.
 var runFn = runner.Run
@@ -385,9 +400,9 @@ func newRootCmd() *cobra.Command {
 		Long: `Runs autonomous Copilot agents against a task queue in Docker.
 
 Any unrecognized flags are forwarded to the copilot CLI inside the container.
-Use "mato -- <copilot-args>" to force forwarding; for example,
-"mato -- --help" forwards --help to Copilot instead of showing mato help.`,
-		Example:            "mato --model gpt-5.3-codex\nmato -- --help\nmato status\nmato version",
+Pass a custom model directly; for example, "mato --model gpt-5.4".
+Use "mato -- <copilot-args>" to force forwarding.`,
+		Example:            "mato --model gpt-5.4\nmato status\nmato version",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, a := range args {
@@ -465,6 +480,8 @@ Use "mato -- <copilot-args>" to force forwarding; for example,
 	root.AddCommand(newInspectCmd())
 	root.AddCommand(newCancelCmd())
 	root.AddCommand(newRetryCmd())
+	root.AddCommand(newPauseCmd())
+	root.AddCommand(newResumeCmd())
 	root.AddCommand(newVersionCmd())
 	return root
 }
@@ -804,6 +821,84 @@ func newRetryCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&retryRepo, "repo", "", "Path to the git repository (default: current directory)")
 
+	return cmd
+}
+
+func newPauseCmd() *cobra.Command {
+	var pauseRepo string
+
+	cmd := &cobra.Command{
+		Use:   "pause",
+		Short: "Pause new task claims and review launches",
+		Args:  usageNoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, err := resolveRepo(pauseRepo)
+			if err != nil {
+				return err
+			}
+			repoRoot, err := resolveRepoRoot(repo)
+			if err != nil {
+				return err
+			}
+			tasksDir := filepath.Join(repoRoot, dirs.Root)
+			if err := requireTasksDir(tasksDir); err != nil {
+				return err
+			}
+			result, err := pause.Pause(tasksDir, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			since := result.Since.Format(time.RFC3339)
+			switch {
+			case result.AlreadyPaused:
+				fmt.Printf("Already paused since %s\n", since)
+			case result.Repaired:
+				fmt.Printf("Repaired pause sentinel. Paused since %s\n", since)
+			default:
+				fmt.Printf("Paused since %s\n", since)
+			}
+			return nil
+		},
+	}
+	configureCommand(cmd)
+	cmd.Flags().StringVar(&pauseRepo, "repo", "", "Path to the git repository (default: current directory)")
+	return cmd
+}
+
+func newResumeCmd() *cobra.Command {
+	var resumeRepo string
+
+	cmd := &cobra.Command{
+		Use:   "resume",
+		Short: "Resume task claims and review launches",
+		Args:  usageNoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, err := resolveRepo(resumeRepo)
+			if err != nil {
+				return err
+			}
+			repoRoot, err := resolveRepoRoot(repo)
+			if err != nil {
+				return err
+			}
+			tasksDir := filepath.Join(repoRoot, dirs.Root)
+			if err := requireTasksDir(tasksDir); err != nil {
+				return err
+			}
+			result, err := pause.Resume(tasksDir)
+			if err != nil {
+				return err
+			}
+			if result.WasActive {
+				fmt.Println("Resumed")
+			} else {
+				fmt.Println("Not paused")
+			}
+			return nil
+		},
+	}
+	configureCommand(cmd)
+	cmd.Flags().StringVar(&resumeRepo, "repo", "", "Path to the git repository (default: current directory)")
 	return cmd
 }
 
