@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -142,12 +143,41 @@ func TestLoad_UnknownKeys(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	cfg, err := Load(dir)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for unknown key, got nil")
 	}
-	if cfg.Branch == nil || *cfg.Branch != "mato" {
-		t.Fatalf("Branch = %v, want %q", cfg.Branch, "mato")
+	if !strings.Contains(err.Error(), "future_setting") {
+		t.Fatalf("error should mention unknown key name, got: %v", err)
+	}
+}
+
+func TestLoad_MultipleUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, configFileName)
+	if err := os.WriteFile(path, []byte("typo_branch: main\ntypo_model: gpt\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for unknown keys, got nil")
+	}
+}
+
+func TestLoad_UnknownKeyMixedWithValid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, configFileName)
+	if err := os.WriteFile(path, []byte("branch: main\ndockr_image: ubuntu:24.04\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for unknown key 'dockr_image', got nil")
+	}
+	if !strings.Contains(err.Error(), "dockr_image") {
+		t.Fatalf("error should mention unknown key name, got: %v", err)
 	}
 }
 
