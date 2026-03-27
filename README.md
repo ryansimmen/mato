@@ -52,6 +52,7 @@ Useful flags:
 - `--repo <path>`: target repository (defaults to the current directory); empty and whitespace-only values are rejected
 - `--branch <name>`: merge target branch (defaults to `mato`); empty and whitespace-only values are rejected
 - `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
+- `--version[=<bool>]`: print the mato version and exit (`--version` is equivalent to `--version=true`)
 
 You can also set `MATO_BRANCH` for a host-side branch default that overrides `.mato.yaml` but is still overridden by `--branch`.
 
@@ -61,7 +62,16 @@ You can also add an optional `.mato.yaml` at the repository root to persist defa
 
 Arguments after a `--` separator are always forwarded to the Copilot CLI without
 interpretation — even `--help` and `-h` (e.g., `mato -- --help` forwards
-`--help` to Copilot instead of showing mato's own usage).
+`--help` to Copilot instead of showing mato's own usage). When you want to pass
+flags that might look like mato flags, prefer the explicit separator form.
+
+```bash
+# Print mato's own help
+mato --help
+
+# Forward help to Copilot instead
+mato -- --help
+```
 
 ## Task Files
 
@@ -232,12 +242,39 @@ attempt still receives prior reviewer guidance. If the task already exists in
 `backlog/`, the command prints an error and leaves the `failed/` copy unchanged
 (no data loss).
 
+## Version Command
+
+`mato version` prints the build version in a script-friendly format:
+
+```bash
+mato version
+```
+
+You can also use the root-level convenience flag:
+
+```bash
+mato --version
+```
+
 ## Docker
 
 `mato` launches an `ubuntu:24.04` container by default. Override it with `MATO_DOCKER_IMAGE` or set `docker_image` in `.mato.yaml`. The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
 
 ```bash
 mato --model gpt-5.3-codex
+mato -- --help
+```
+
+## Shell Completion
+
+`mato` exposes Cobra's built-in shell completion command:
+
+```bash
+# Bash
+mato completion bash > ~/.local/share/bash-completion/completions/mato
+
+# Zsh
+mato completion zsh > ~/.zfunc/_mato
 ```
 
 ## Notes

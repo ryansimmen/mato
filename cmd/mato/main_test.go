@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -281,6 +282,16 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			wantErr: `invalid value "" for flag --dry-run: must be a boolean`,
 		},
 		{
+			name:    "version invalid boolean",
+			args:    []string{"--version=maybe"},
+			wantErr: `invalid value "maybe" for flag --version: must be a boolean`,
+		},
+		{
+			name:    "version empty equals value",
+			args:    []string{"--version="},
+			wantErr: `invalid value "" for flag --version: must be a boolean`,
+		},
+		{
 			name:    "repo whitespace-only equals form",
 			args:    []string{"--repo=   "},
 			wantErr: "flag --repo requires a value",
@@ -310,6 +321,40 @@ func TestExtractKnownFlags_MissingValue(t *testing.T) {
 			}
 			if err.Error() != tt.wantErr {
 				t.Errorf("error = %q, want %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestExtractKnownFlags_Version(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantVersion bool
+		wantExtra   []string
+	}{
+		{name: "bare version flag", args: []string{"--version"}, wantVersion: true},
+		{name: "version true", args: []string{"--version=true"}, wantVersion: true},
+		{name: "version false", args: []string{"--version=false", "--model", "gpt-5"}, wantExtra: []string{"--model", "gpt-5"}},
+		{name: "version forwarded after separator", args: []string{"--", "--version"}, wantExtra: []string{"--version"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := extractKnownFlags(tt.args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.version != tt.wantVersion {
+				t.Fatalf("version = %v, want %v", cfg.version, tt.wantVersion)
+			}
+			if len(cfg.copilotArgs) != len(tt.wantExtra) {
+				t.Fatalf("extra = %v, want %v", cfg.copilotArgs, tt.wantExtra)
+			}
+			for i := range cfg.copilotArgs {
+				if cfg.copilotArgs[i] != tt.wantExtra[i] {
+					t.Errorf("extra[%d] = %q, want %q", i, cfg.copilotArgs[i], tt.wantExtra[i])
+				}
 			}
 		})
 	}
@@ -410,6 +455,39 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(data)
 }
 
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() {
+		os.Stderr = origStderr
+	}()
+
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close write pipe: %v", err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close read pipe: %v", err)
+	}
+	return string(data)
+}
+
+func renderCommandError(t *testing.T, err error) (string, int) {
+	t.Helper()
+	var buf bytes.Buffer
+	code := writeCommandError(&buf, err)
+	return buf.String(), code
+}
+
 func writeRepoConfig(t *testing.T, repoRoot, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repoRoot, ".mato.yaml"), []byte(content), 0o644); err != nil {
@@ -434,6 +512,128 @@ func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
 	}
 	if capturedArgs[0] != "--model" || capturedArgs[1] != "gpt-5.2" {
 		t.Errorf("forwarded args = %v, want [--model gpt-5.2]", capturedArgs)
+	}
+}
+
+func TestRootCmd_HelpListsCompletionCommand(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out.String(), "completion") {
+		t.Fatalf("expected help to mention completion command, got:\n%s", out.String())
+	}
+}
+
+func TestVersionCmd_Output(t *testing.T) {
+	origVersion := version
+	defer func() { version = origVersion }()
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "subcommand", args: []string{"version"}, want: "mato 1.2.3\n"},
+		{name: "root flag", args: []string{"--version"}, want: "mato 1.2.3\n"},
+	}
+
+	version = "1.2.3"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs(tt.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if out.String() != tt.want {
+				t.Fatalf("output = %q, want %q", out.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestVersionCmd_DefaultFallback(t *testing.T) {
+	origVersion := version
+	defer func() { version = origVersion }()
+	version = "dev"
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.String() != "mato dev\n" {
+		t.Fatalf("output = %q, want %q", out.String(), "mato dev\n")
+	}
+}
+
+func TestWriteCommandError_UsageErrorIncludesUsage(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "extra"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	out, code := renderCommandError(t, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "mato error:") {
+		t.Fatalf("expected mato error prefix, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Usage:\n  mato status") {
+		t.Fatalf("expected status usage in output, got:\n%s", out)
+	}
+}
+
+func TestWriteCommandError_RuntimeErrorOmitsUsage(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", t.TempDir()})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	out, code := renderCommandError(t, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if strings.Contains(out, "Usage:") {
+		t.Fatalf("runtime error should not include usage, got:\n%s", out)
+	}
+	if !strings.Contains(out, "not a git repository") {
+		t.Fatalf("expected git repo error, got:\n%s", out)
+	}
+}
+
+func TestWriteCommandError_SilentErrorSuppressesOutput(t *testing.T) {
+	out, code := renderCommandError(t, &SilentError{Err: fmt.Errorf("already printed"), Code: 1})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if out != "" {
+		t.Fatalf("expected no output, got %q", out)
+	}
+}
+
+func TestWriteCommandError_ExitErrorSuppressesOutput(t *testing.T) {
+	out, code := renderCommandError(t, ExitError{Code: 2})
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if out != "" {
+		t.Fatalf("expected no output, got %q", out)
 	}
 }
 
@@ -1480,12 +1680,22 @@ func TestRetryCmd_TaskNotFound(t *testing.T) {
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "nonexistent"})
-	err := cmd.Execute()
-	if err == nil {
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+	if !strings.Contains(stderr, "mato error: task nonexistent not found in failed/") {
+		t.Fatalf("expected prefixed retry error, got %q", stderr)
+	}
+	if execErr == nil {
 		t.Fatal("expected error for missing task")
 	}
-	if !strings.Contains(err.Error(), "not found in failed/") {
-		t.Errorf("unexpected error: %v", err)
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
+	}
+	if !strings.Contains(execErr.Error(), "not found in failed/") {
+		t.Errorf("unexpected error: %v", execErr)
 	}
 }
 
