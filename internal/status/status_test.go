@@ -1799,3 +1799,81 @@ func TestShowJSON_CycleFailureKind(t *testing.T) {
 		t.Errorf("expected cycle_reason 'circular dependency', got %q", ft.CycleReason)
 	}
 }
+
+func TestShowJSON_CancelledFailureKind(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	content := "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled-task\nmax_retries: 3\n---\n# Cancelled task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "cancelled-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(result.Failed))
+	}
+	if result.Failed[0].FailureKind != "cancelled" {
+		t.Fatalf("expected failure_kind 'cancelled', got %q", result.Failed[0].FailureKind)
+	}
+}
+
+func TestShowJSON_CancelledPrecedence(t *testing.T) {
+	result := statusDataToJSON(statusData{
+		failedTasks: []taskEntry{{
+			name:                      "cancelled.md",
+			cancelled:                 true,
+			failureCount:              2,
+			maxRetries:                3,
+			lastFailureReason:         "tests failed",
+			lastCycleFailureReason:    "circular dependency",
+			lastTerminalFailureReason: "invalid glob",
+		}},
+	})
+	if len(result.Failed) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(result.Failed))
+	}
+	if result.Failed[0].FailureKind != "cancelled" {
+		t.Fatalf("expected failure_kind 'cancelled', got %q", result.Failed[0].FailureKind)
+	}
+}
+
+func TestShow_CancelledParseFailure(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	content := "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n# Broken cancelled task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "broken-cancelled.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	output := captureShow(t, repoRoot)
+	if !contains(output, "broken-cancelled.md") || !contains(output, "(cancelled)") {
+		t.Fatalf("expected cancelled parse failure in output, got:\n%s", output)
+	}
+}

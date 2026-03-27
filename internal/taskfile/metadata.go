@@ -22,6 +22,7 @@ var (
 	reviewRejectionStr = "<!-- review-rejection:"
 	failurePrefix      = "<!-- failure:"
 	reviewFailureStr   = "<!-- review-failure:"
+	cancelledMarkerStr = "<!-- cancelled:"
 )
 
 // ParseBranchComment extracts the branch name from a <!-- branch: ... -->
@@ -194,6 +195,7 @@ func WriteClaimedByComment(w io.Writer, agentID, claimedAt string) error {
 var failureMarkerPrefixes = []string{
 	failurePrefix,
 	reviewFailureStr,
+	cancelledMarkerStr,
 	cycleFailurePrefix,
 	terminalFailurePrefix,
 }
@@ -235,6 +237,26 @@ func AppendFailureRecord(path, agentID, step, errMsg string) error {
 	content := fmt.Sprintf("\n<!-- failure: %s at %s step=%s error=%s -->\n",
 		agentID, time.Now().UTC().Format(time.RFC3339), step, errMsg)
 	return atomicwrite.AppendToFile(path, content)
+}
+
+// AppendCancelledRecord appends a <!-- cancelled: ... --> record to the task
+// file at path using O_APPEND. Cancel records are operator-written terminal
+// markers that can later be removed by RetryTask via StripFailureMarkers.
+func AppendCancelledRecord(path string) error {
+	content := fmt.Sprintf("\n<!-- cancelled: operator at %s -->\n",
+		time.Now().UTC().Format(time.RFC3339))
+	return atomicwrite.AppendToFile(path, content)
+}
+
+// ContainsCancelledMarker reports whether data contains a <!-- cancelled: ... -->
+// marker as a standalone line.
+func ContainsCancelledMarker(data []byte) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), cancelledMarkerStr) {
+			return true
+		}
+	}
+	return false
 }
 
 // cycleFailurePrefix is the marker prefix for cycle-failure records.

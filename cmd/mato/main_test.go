@@ -16,6 +16,7 @@ import (
 	"mato/internal/config"
 	"mato/internal/doctor"
 	"mato/internal/git"
+	"mato/internal/queue"
 	"mato/internal/runner"
 	"mato/internal/setup"
 	"mato/internal/testutil"
@@ -1793,6 +1794,253 @@ func TestRetryCmd_PreservesReviewRejectionFeedback(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- review-rejection:") {
 		t.Fatal("review rejection feedback should be preserved")
+	}
+}
+
+func TestRetryCmd_ExplicitID(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "---\nid: explicit-id\n---\n# Fix bug\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "fix-bug.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "explicit-id"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry command failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(backlogDir, "fix-bug.md")); err != nil {
+		t.Fatal("task should be in backlog after retry by explicit id")
+	}
+}
+
+func TestRetryCmd_ExplicitIDWithSlash(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "---\nid: group/explicit-id\n---\n# Fix bug\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "fix-bug.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "group/explicit-id"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry command failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(backlogDir, "fix-bug.md")); err != nil {
+		t.Fatal("task should be in backlog after retry by slash id")
+	}
+}
+
+func TestCancelCmd_Registered(t *testing.T) {
+	cmd := newRootCmd()
+	if got, _, err := cmd.Find([]string{"cancel"}); err != nil || got == nil || got.Name() != "cancel" {
+		t.Fatalf("cancel command not registered: cmd=%v err=%v", got, err)
+	}
+}
+
+func TestCancelCmd_NoArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error with no arguments")
+	}
+}
+
+func TestCancelCmd_SingleTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel command failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+		t.Fatalf("task should be in failed after cancel: %v", err)
+	}
+}
+
+func TestCancelCmd_MultiTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, name), []byte("---\nid: "+strings.TrimSuffix(name, ".md")+"\n---\n# Task\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "one", "two"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel command failed: %v", err)
+	}
+	for _, name := range []string{"one.md", "two.md"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, name)); err != nil {
+			t.Fatalf("task %s should be in failed after cancel: %v", name, err)
+		}
+	}
+}
+
+func TestCancelCmd_PartialFailure(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "good", "missing"})
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+	if !strings.Contains(stderr, "mato error: task not found: missing") {
+		t.Fatalf("expected prefixed cancel error, got %q", stderr)
+	}
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "good.md")); err != nil {
+		t.Fatalf("successful cancel should still move task: %v", err)
+	}
+}
+
+func TestCancelCmd_CompletedRefusal(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "done.md"), []byte("---\nid: done\n---\n# Done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "done"})
+	var execErr error
+	stderr := captureStderr(t, func() { execErr = cmd.Execute() })
+	if !strings.Contains(stderr, "mato error: cannot cancel done: task has already been merged") {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if execErr == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestCancelCmd_MissingMatoDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "missing"})
+	var execErr error
+	stderr := captureStderr(t, func() { execErr = cmd.Execute() })
+	if !strings.Contains(stderr, "mato error: task not found: missing") {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if execErr == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestCancelCmd_InProgressWarning(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "running.md"), []byte("---\nid: running\n---\n# Running\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "running"})
+	stderr := captureStderr(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel command failed: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "warning: agent container for running may still be running") {
+		t.Fatalf("missing in-progress warning: %q", stderr)
+	}
+}
+
+func TestCancelCmd_ReadyToMergeWarning(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "merge-me.md"), []byte("---\nid: merge-me\n---\n# Merge\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "merge-me"})
+	stderr := captureStderr(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel command failed: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "warning: merge queue may still merge merge-me's branch") {
+		t.Fatalf("missing ready-to-merge warning: %q", stderr)
+	}
+}
+
+func TestCancelCmd_DownstreamWarnings(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte("---\nid: waiter\ndepends_on: [dep]\n---\n# Waiter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "dep"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel command failed: %v", err)
+		}
+	})
+	if !strings.Contains(output, "warning: 1 task(s) depend on dep:") || !strings.Contains(output, "waiting/waiter.md") {
+		t.Fatalf("missing downstream warning output:\n%s", output)
+	}
+}
+
+func TestCancelCmd_UsesRepoRootFromSubdir(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	subdir := filepath.Join(repoRoot, "nested")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel command failed from subdir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+		t.Fatalf("task should be cancelled into repo-root failed/: %v", err)
 	}
 }
 

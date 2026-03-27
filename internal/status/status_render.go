@@ -250,7 +250,9 @@ func renderFailedTasks(w io.Writer, c colorSet, data statusData) {
 		terminalReason := task.lastTerminalFailureReason
 		failCount := task.failureCount
 
-		if terminalReason != "" && cycleReason != "" {
+		if task.cancelled {
+			fmt.Fprintf(w, "  %s  (cancelled)\n", label)
+		} else if terminalReason != "" && cycleReason != "" {
 			info := fmt.Sprintf("structural failure: %s; also: %s", terminalReason, cycleReason)
 			fmt.Fprintf(w, "  %s  (%s)\n", label, info)
 		} else if terminalReason != "" && failCount > 0 {
