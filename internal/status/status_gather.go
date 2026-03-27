@@ -10,6 +10,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
+	"mato/internal/pause"
 	"mato/internal/queue"
 )
 
@@ -24,6 +25,7 @@ type statusData struct {
 	queueCounts     map[string]int
 	runnable        int
 	runnableBacklog []taskEntry
+	pauseState      pause.State
 	agents          []statusAgent
 	presenceMap     map[string]messaging.PresenceInfo
 	activeProgress  []progressEntry
@@ -39,6 +41,8 @@ type statusData struct {
 	mergeLockActive bool
 	warnings        []string
 }
+
+var pauseReadFn = pause.Read
 
 // progressEntry holds a formatted progress message for an active agent.
 type progressEntry struct {
@@ -82,6 +86,19 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	data.presenceMap = presenceMap
 
 	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+
+	pauseState, pauseErr := pauseReadFn(tasksDir)
+	if pauseErr != nil {
+		pauseState = pause.State{
+			Active:      true,
+			ProblemKind: pause.ProblemUnreadable,
+			Problem:     fmt.Sprintf("stat error: %v", pauseErr),
+		}
+	}
+	data.pauseState = pauseState
+	if pauseState.ProblemKind != pause.ProblemNone {
+		data.warnings = append(data.warnings, pauseState.Problem)
+	}
 
 	// Waiting tasks (dependency-blocked) — derived from index and the shared runnable backlog view.
 	data.waitingTasks = waitingTasksFromIndex(idx, view.DependencyBlocked)

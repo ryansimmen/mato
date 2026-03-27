@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
 	"mato/internal/testutil"
@@ -125,6 +126,64 @@ func TestDoctor_OrphanedMessages_NonJSONIgnored(t *testing.T) {
 				t.Error("unexpected stale_events finding for non-JSON file")
 			}
 		}
+	}
+}
+
+func TestScanPauseSentinel(t *testing.T) {
+	tasksDir := t.TempDir()
+	tests := []struct {
+		name     string
+		readFn   func(string) (pause.State, error)
+		wantCode string
+	}{
+		{name: "not paused", readFn: func(string) (pause.State, error) { return pause.State{}, nil }},
+		{name: "recently paused", readFn: func(string) (pause.State, error) {
+			return pause.State{Active: true, Since: time.Now().UTC().Add(-2 * time.Hour)}, nil
+		}},
+		{name: "paused too long", readFn: func(string) (pause.State, error) {
+			return pause.State{Active: true, Since: time.Now().UTC().Add(-48 * time.Hour)}, nil
+		}, wantCode: "hygiene.paused"},
+		{name: "malformed", readFn: func(string) (pause.State, error) {
+			return pause.State{Active: true, ProblemKind: pause.ProblemMalformed, Problem: `invalid timestamp: "bad"`}, nil
+		}, wantCode: "hygiene.invalid_pause_file"},
+		{name: "unreadable", readFn: func(string) (pause.State, error) {
+			return pause.State{Active: true, ProblemKind: pause.ProblemUnreadable, Problem: "unreadable: boom"}, nil
+		}, wantCode: "hygiene.pause_unreadable"},
+		{name: "hard error", readFn: func(string) (pause.State, error) { return pause.State{}, fmt.Errorf("stat boom") }, wantCode: "hygiene.pause_unreadable"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			findings := scanPauseSentinel(tasksDir, tt.readFn)
+			if tt.wantCode == "" {
+				if len(findings) != 0 {
+					t.Fatalf("unexpected findings: %#v", findings)
+				}
+				return
+			}
+			if len(findings) != 1 {
+				t.Fatalf("findings = %#v, want 1", findings)
+			}
+			if findings[0].Code != tt.wantCode {
+				t.Fatalf("code = %q, want %q", findings[0].Code, tt.wantCode)
+			}
+			if findings[0].Fixable {
+				t.Fatal("pause findings should not be fixable")
+			}
+		})
+	}
+}
+
+func TestScanPauseSentinel_StaleThresholdUsesRawAge(t *testing.T) {
+	tasksDir := t.TempDir()
+	findings := scanPauseSentinel(tasksDir, func(string) (pause.State, error) {
+		return pause.State{Active: true, Since: time.Now().UTC().Add(-(24*time.Hour + 20*time.Minute))}, nil
+	})
+	if len(findings) != 1 {
+		t.Fatalf("findings = %#v, want 1 stale finding", findings)
+	}
+	if findings[0].Code != "hygiene.paused" {
+		t.Fatalf("code = %q, want hygiene.paused", findings[0].Code)
 	}
 }
 

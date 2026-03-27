@@ -60,18 +60,7 @@ Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and 
 
 You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `default_model`, `agent_timeout`, and `retry_cooldown`. CLI flags still win over config, and host env vars still win over both.
 
-Arguments after a `--` separator are always forwarded to the Copilot CLI without
-interpretation — even `--help` and `-h` (e.g., `mato -- --help` forwards
-`--help` to Copilot instead of showing mato's own usage). When you want to pass
-flags that might look like mato flags, prefer the explicit separator form.
-
-```bash
-# Print mato's own help
-mato --help
-
-# Forward help to Copilot instead
-mato -- --help
-```
+Arguments after a `--` separator are always forwarded to the Copilot CLI without interpretation. When you want to pass flags that might look like mato flags, prefer the explicit separator form.
 
 ## Task Files
 
@@ -102,6 +91,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 
 ```text
 <repo>/.mato/
+├── .paused          # optional durable operator pause sentinel
 ├── waiting/         # dependency-blocked tasks
 ├── backlog/         # runnable tasks and affects-deferred tasks
 ├── in-progress/     # claimed by an active agent
@@ -130,6 +120,9 @@ Operators can also move queued tasks to `failed/` deliberately with `mato cancel
 7. Tasks move to `completed/` on success. Missing branches move to `failed/`, merge conflicts requeue to `backlog/` for a fresh attempt, and push failures are retried in `ready-to-merge/`.
 
 If the queue is empty, mato keeps polling until new work appears. The loop exits cleanly on `Ctrl+C`.
+If `.mato/.paused` exists, the loop skips new claims and review launches, keeps
+refreshing `.queue`, and continues draining `ready-to-merge/` until the repo is
+resumed.
 
 ## Running Multiple Agents
 
@@ -243,6 +236,24 @@ attempt still receives prior reviewer guidance. If the task already exists in
 `backlog/`, the command prints an error and leaves the `failed/` copy unchanged
 (no data loss).
 
+## Pause and Resume Commands
+
+`mato pause` writes a durable `.mato/.paused` sentinel so the host stops
+claiming new tasks and stops launching review agents:
+
+```bash
+mato pause
+```
+
+`mato resume` removes the sentinel and restores normal polling behavior:
+
+```bash
+mato resume
+```
+
+While paused, already-running task agents are allowed to finish and the merge
+queue continues draining `ready-to-merge/`.
+
 ## Cancel Command
 
 `mato cancel` withdraws queued tasks by moving them to `failed/` and appending a
@@ -263,6 +274,10 @@ stripped and the tasks return to `backlog/` like any other failed task.
 
 `mato version` prints the build version in a script-friendly format:
 
+- release builds prefer the nearest reachable tag matching `v*`
+- non-release tags such as `before-refactor` are ignored for version stamping
+- if no matching release tag is reachable, the build falls back to the commit hash
+
 ```bash
 mato version
 ```
@@ -278,8 +293,7 @@ mato --version
 `mato` launches an `ubuntu:24.04` container by default. Override it with `MATO_DOCKER_IMAGE` or set `docker_image` in `.mato.yaml`. The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
 
 ```bash
-mato --model gpt-5.3-codex
-mato -- --help
+mato --model gpt-5.4
 ```
 
 ## Shell Completion

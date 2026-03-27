@@ -23,6 +23,8 @@ mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato inspect [--repo <path>] [--format text|json] <task-ref>
 mato retry [--repo <path>] <task-ref> [task-ref...]
 mato cancel [--repo <path>] <task-ref> [task-ref...]
+mato pause [--repo <path>]
+mato resume [--repo <path>]
 mato version
 ```
 Valid `--only` check names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
@@ -100,7 +102,7 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 Long flags support both `--flag value` and `--flag=value` forms.
 | Flag | Applies to | Default | Description |
 | --- | --- | --- | --- |
-| `--repo <path>` | run, init, status, doctor, graph, inspect, retry, cancel | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
+| `--repo <path>` | run, init, status, doctor, graph, inspect, retry, cancel, pause, resume | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
 | `--branch <name>` | run, init, dry-run | `mato` | Target branch used for merge processing. Not accepted by `mato status`. |
 | `--dry-run` | run | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
 | `--version` | run | `false` | Print the mato build version and exit without starting the orchestrator. |
@@ -113,6 +115,7 @@ Long flags support both `--flag value` and `--flag=value` forms.
 - counts for `waiting`, `backlog`, semantic `blocked`, `in-progress`, `ready-for-review`, `ready-to-merge`, `completed`, and `failed`
 - runnable backlog in execution order (priority-sorted, dependency-blocked and conflict-deferred tasks excluded), matching the ordering the host uses to claim work
 - active agents discovered from `.mato/.locks/*.pid`
+- pause state from `.mato/.paused`
 - dependency-blocked tasks plus dependency-status summaries
 - conflict-deferred tasks with blocking details
 - the five most recent messages from `.mato/messages`
@@ -240,8 +243,30 @@ mato cancel fix-login-bug
 mato cancel fix-login-bug add-dark-mode
 ```
 
+### `mato pause`
+`mato pause` writes `<repo>/.mato/.paused` with the current UTC timestamp. The
+running orchestrator treats the repo as paused for safety: it skips new task
+claims and review launches, continues refreshing `.queue`, and keeps draining
+`ready-to-merge/`.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+
+### `mato resume`
+`mato resume` removes `<repo>/.mato/.paused` and allows the orchestrator to
+resume normal claim and review polling.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+
 ### `mato version`
 `mato version` prints the build version in a script-friendly format.
+
+Builds prefer the nearest reachable tag matching `v*`. Non-release tags are
+ignored for version stamping. When no matching release tag is reachable, the
+build falls back to the commit hash.
 
 Example usage:
 ```bash
@@ -350,7 +375,7 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 `help` target.
 | Target | Description |
 | --- | --- |
-| `build` | Build `bin/mato` with `go build -ldflags "$(GO_LDFLAGS)" -o bin/mato ./cmd/mato`. By default `GO_LDFLAGS` stamps `main.version` from `git describe --tags --always --dirty`, falling back to `dev`. |
+| `build` | Build `bin/mato` with `go build -ldflags "$(GO_LDFLAGS)" -o bin/mato ./cmd/mato`. By default `GO_LDFLAGS` stamps `main.version` from `git describe --tags --match 'v*' --always --dirty`, which prefers release-style `v*` tags, falls back to the commit hash when no matching tag is reachable, and falls back to `dev` when git metadata is unavailable. |
 | `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when `opencode` is on `PATH`, `~/.config/opencode/skills/mato/`. The skill is a task planner that breaks down work into actionable task files. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
@@ -362,6 +387,6 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | `help` | Print the target list and descriptions. |
 Additional behavior:
 - `all` runs `fmt`, `vet`, `build`, and `test`.
-- `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --always --dirty` and falls back to `dev`.
+- `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --match 'v*' --always --dirty`, which ignores non-release tags, falls back to the commit hash when no matching release tag is reachable, and falls back to `dev` when git metadata is unavailable.
 - `REPO` is required for `make run` and may be supplied from `.env`.
 - `COPILOT_ARGS` is passed through to `mato`, which then forwards those arguments to Copilot CLI.
