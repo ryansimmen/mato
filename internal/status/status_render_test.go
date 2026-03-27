@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"mato/internal/messaging"
+	"mato/internal/pause"
 	"mato/internal/queue"
 )
 
@@ -103,6 +104,28 @@ func TestRenderQueueOverview_MergeLockActive(t *testing.T) {
 
 	if !strings.Contains(output, "active") {
 		t.Errorf("merge queue should show active, got:\n%s", output)
+	}
+}
+
+func TestRenderQueueOverview_PauseState(t *testing.T) {
+	tests := []struct {
+		name  string
+		state pause.State
+		want  string
+	}{
+		{name: "not paused", state: pause.State{}, want: "pause state:    not paused"},
+		{name: "paused valid", state: pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}, want: "pause state:    paused since 2026-03-23T10:00:00Z"},
+		{name: "paused problem", state: pause.State{Active: true, ProblemKind: pause.ProblemMalformed, Problem: `invalid timestamp: "bad"`}, want: `pause state:    paused (problem: invalid timestamp: "bad")`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			renderQueueOverview(&buf, plainColorSet(), statusData{queueCounts: map[string]int{}, deferredDetail: map[string]queue.DeferralInfo{}, pauseState: tt.state})
+			if !strings.Contains(buf.String(), tt.want) {
+				t.Fatalf("output missing %q, got:\n%s", tt.want, buf.String())
+			}
+		})
 	}
 }
 

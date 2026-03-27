@@ -20,14 +20,14 @@ estimated_complexity: medium
 
 ## 1. Goal
 
-Add durable repo-local pause mode to stop new agent and review work without killing
-the orchestrator, while letting already-running agent tasks finish and letting
-ready-to-merge work continue.
+Add a durable repo-local pause mode that stops new agent and review work without
+stopping the orchestrator, while letting already-running agent tasks finish and
+letting ready-to-merge work continue.
 
-Operators need a way to temporarily halt new task claims and review launches — for
-example, when debugging a live queue, coordinating a manual merge, or investigating
-unexpected behavior — without disrupting the running orchestrator process. Pause mode
-provides this toggle:
+Operators need a way to temporarily halt new task claims and review launches - for
+example, when debugging a live queue, coordinating a manual merge, or
+investigating unexpected behavior - without disrupting the running orchestrator
+process. Pause mode works as follows:
 
 - `mato pause` stops the next claim/review cycle by writing a durable `.mato/.paused`
   sentinel.
@@ -159,33 +159,33 @@ read/parse failures fold into `State.ProblemKind` with nil error.
 
 ### 3.2 Initialization precondition
 
-`pause` and `resume` require `<repo>/.mato/` to exist. If missing, commands fail with:
+`pause` and `resume` require `<repo>/.mato/` to exist. If it is missing, return:
 
 ```
-error: .mato/ directory not found — run 'mato init' first
+.mato/ directory not found - run 'mato init' first
 ```
 
-Implement `requireTasksDir(tasksDir string) error` in `cmd/mato/main.go`, checking
-`os.Stat(tasksDir)`. Call before any pause interaction.
+Add `requireTasksDir(tasksDir string) error` to `cmd/mato/main.go`. It should check
+`os.Stat(tasksDir)`, verify the path is a directory, and return a clear error.
+`main()` will render that as `mato error: ...`. Call it before any pause interaction.
 
 ### 3.3 CLI surface
 
 Add `newPauseCmd()` and `newResumeCmd()` to `cmd/mato/main.go`, registered from
-`newRootCmd()`, following the `newRetryCmd()` / `newStatusCmd()` patterns:
+`newRootCmd()`, following the `newCancelCmd()` / `newRetryCmd()` patterns:
 
 ```go
 cobra.Command{
-    Use:           "pause",
-    Short:         "Pause new task claims and review launches",
-    SilenceUsage:  true,
-    SilenceErrors: true,
-    Args:          cobra.NoArgs,
+    Use:   "pause",
+    Short: "Pause new task claims and review launches",
+    Args:  usageNoArgs,
     RunE: ...
 }
 ```
 
-Both commands: `resolveRepo` → `validateRepoPath` → `resolveRepoRoot` →
-`requireTasksDir` → `pause.Pause` / `pause.Resume` → print result.
+Both commands should use `configureCommand(cmd)` and follow this flow:
+`resolveRepo` → `resolveRepoRoot` → `requireTasksDir` → `pause.Pause` /
+`pause.Resume` → print result.
 
 **User-facing output**:
 
@@ -209,6 +209,10 @@ Following the existing `appendToFileFn` function-variable pattern:
 // pauseReadFn reads pause state. Var allows test injection.
 var pauseReadFn = pause.Read
 
+// pollWriteManifestFn refreshes .queue from a precomputed backlog view.
+// Var allows test injection.
+var pollWriteManifestFn = pollWriteManifest
+
 // pollClaimAndRunFn runs the claim-and-run phase. Var allows test injection.
 var pollClaimAndRunFn = pollClaimAndRun
 
@@ -222,12 +226,13 @@ var pollMergeFn = pollMerge
 var nowFn = time.Now
 ```
 
-`pollIterate` calls all phase functions and `pauseReadFn` through these variables,
-making all phase invocations and time advancement fully deterministic under test.
+`pollIterate` calls `pollWriteManifestFn`, the phase functions, `pauseReadFn`, and
+`nowFn` through these variables, making phase invocation and time advancement
+deterministic under test.
 
 **Separation of manifest writing from claiming**
 
-Currently `pollClaimAndRun()` (runner.go lines 633–683) performs both manifest writing
+Today `pollClaimAndRun()` (runner.go lines 633-683) performs both manifest writing
 and task claiming. To keep `.queue` fresh while paused:
 
 - Extract `pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool)` from `pollClaimAndRun`. Computes the view, merges `failedDirExcluded` into the exclusion set (preserving both overlap deferrals and the livelock-prevention set), calls `queue.WriteQueueManifestFromView`, returns the view and error flag. Runs unconditionally every iteration.
@@ -239,7 +244,7 @@ and task claiming. To keep `.queue` fresh while paused:
 ```
 1.  pollCleanup(tasksDir)
 2.  idx, reconcileErr  := pollReconcile(tasksDir)
-3.  view, manifestErr  := pollWriteManifest(tasksDir, failedDirExcluded, idx)
+3.  view, manifestErr  := pollWriteManifestFn(tasksDir, failedDirExcluded, idx)
 4.  ps1, err           := pauseReadFn(tasksDir)
     (non-nil err → log warning, treat as paused)
 5.  if !ps1.Active:
@@ -274,7 +279,6 @@ type iterationResult struct {
     mergeCount      int
     pollHadError    bool
     pauseActive     bool
-    pauseProblem    string
 }
 ```
 
@@ -390,7 +394,9 @@ operator-forgotten runtime artifacts.
 
 Add `scanPauseSentinel(tasksDir string, readFn func(string) (pause.State, error)) []Finding`
 called from `checkHygiene()` with `pause.Read` as the default. Doctor tests inject
-controlled states via this parameter.
+controlled states via this parameter. This intentionally differs from the other
+`checkHygiene` helpers, which take `fix bool`: pause findings are never fixable,
+so the injected `readFn` is the more useful seam here.
 
 | Finding code | Severity | Condition | Fixable |
 |---|---|---|---|
@@ -434,8 +440,8 @@ Create `internal/pause/pause.go` and `internal/pause/pause_test.go`.
 **Step 2 — Wire CLI commands in `cmd/mato/main.go`**
 
 - Add `requireTasksDir(tasksDir string) error` checking `os.Stat(tasksDir)`.
-- Implement `newPauseCmd()` using `resolveRepo` → `validateRepoPath` → `resolveRepoRoot`
-  → `requireTasksDir` → `pause.Pause`.
+- Implement `newPauseCmd()` using `resolveRepo` → `resolveRepoRoot` →
+  `requireTasksDir` → `pause.Pause`.
 - Implement `newResumeCmd()` using the same resolution chain → `pause.Resume`.
 - Register both from `newRootCmd()`.
 - Tests in `cmd/mato/main_test.go` using `testutil.SetupRepoWithTasks`:
@@ -453,8 +459,8 @@ Create `internal/pause/pause.go` and `internal/pause/pause_test.go`.
 This step does not change externally observable behavior; it prepares `runner.go` for
 pause gating and deterministic testing.
 
-- Add `pauseReadFn`, `pollClaimAndRunFn`, `pollReviewFn`, `pollMergeFn`, `nowFn`
-  function variables.
+- Add `pauseReadFn`, `pollWriteManifestFn`, `pollClaimAndRunFn`, `pollReviewFn`,
+  `pollMergeFn`, and `nowFn` function variables.
 - Extract `pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool)`.
 - Modify `pollClaimAndRun` to accept pre-computed `view queue.RunnableBacklogView`.
 - Add `pausedMessage(now time.Time, priorPaused bool) string` method to `idleHeartbeat`.
@@ -478,7 +484,7 @@ pause gating and deterministic testing.
   always call `pollMergeFn`.
 - Throttle problem warnings via `pausedMessage` cadence (shared `lastHeartbeatTime`).
 - Tests via `pollIterate` (all seams injected via function variables):
-  - Paused: `pollWriteManifest` runs, `pollClaimAndRunFn` NOT called, `pollReviewFn`
+  - Paused: `pollWriteManifestFn` runs, `pollClaimAndRunFn` NOT called, `pollReviewFn`
     NOT called, `pollMergeFn` called.
   - Paused: `failedDirExcluded` exclusions preserved in manifest.
   - `claimedTask && ctx.Err() != nil` skips review/merge (cancellation guard).
@@ -495,7 +501,9 @@ pause gating and deterministic testing.
 **Step 5 — Surface pause state in status**
 
 - Add `pauseReadFn` function variable and `pauseState pause.State` field to
-  `status_gather.go`.
+  `status_gather.go`. This is an intentional test seam even though the status
+  package does not currently use function variables elsewhere; it keeps the
+  hard-error path testable without permission-sensitive filesystem setups.
 - In `gatherStatus`, call `pauseReadFn(tasksDir)`; handle nil-error (store + append
   `Problem` to warnings if `ProblemKind != ProblemNone`) and non-nil-error (set
   `State{Active: true, ProblemKind: ProblemUnreadable, Problem: ...}` + append warning).
@@ -540,8 +548,8 @@ pause gating and deterministic testing.
 
 **Step 8 — Add integration-level test coverage**
 
-In `internal/integration/` (package `integration_test`), add a test following the
-existing integration test style:
+In `internal/integration/` (package `integration_test`), add a focused test
+following the existing integration style:
 
 ```go
 func TestPauseResume_StatusReflectsPauseState(t *testing.T) {
@@ -609,7 +617,8 @@ cmd/mato/main_test.go            [MODIFY]
   Tests for command wiring, preconditions, idempotence, repair, output shape.
 
 internal/runner/runner.go        [MODIFY]
-  Add pauseReadFn, pollClaimAndRunFn, pollReviewFn, pollMergeFn, nowFn vars.
+  Add pauseReadFn, pollWriteManifestFn, pollClaimAndRunFn, pollReviewFn,
+  pollMergeFn, nowFn vars.
   Extract pollWriteManifest().
   Modify pollClaimAndRun() to accept pre-computed view.
   Add pausedMessage() to idleHeartbeat.
@@ -657,7 +666,7 @@ internal/doctor/checks_test.go   [MODIFY]
   Tests for all pause hygiene findings via readFn injection.
   Coverage for stale, malformed, unreadable, stat-error, and Fixable: false.
 
-internal/integration/            [MODIFY]
+internal/integration/pause_resume_test.go [NEW]
   Add TestPauseResume_StatusReflectsPauseState using pause and status packages.
 
 README.md                        [MODIFY]
@@ -686,7 +695,8 @@ docs/architecture.md             [MODIFY]
 - Malformed content → `State{Active: true, ProblemKind: ProblemMalformed, ...}`, nil
   error.
 - `Resume` with `ErrNotExist` → `ResumeResult{WasActive: false}`, nil.
-- `requireTasksDir` fails with clear message when `.mato/` missing.
+- `requireTasksDir` fails with a clear message when `.mato/` is missing or is not a
+  directory.
 - Malformed sentinel + repair write failure → wrapped error naming both detection kind
   and write error.
 - Runner: non-nil `pauseReadFn` error → log warning to stderr, treat as paused.

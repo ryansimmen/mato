@@ -1,6 +1,7 @@
 package status
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"mato/internal/frontmatter"
 	"mato/internal/messaging"
+	"mato/internal/pause"
 	"mato/internal/queue"
 )
 
@@ -889,6 +891,47 @@ func TestGatherStatus_NoWarningsOnSuccess(t *testing.T) {
 
 	if len(data.warnings) != 0 {
 		t.Errorf("expected no warnings, got: %v", data.warnings)
+	}
+}
+
+func TestGatherStatus_PauseStateVariants(t *testing.T) {
+	tests := []struct {
+		name       string
+		state      pause.State
+		err        error
+		wantActive bool
+		wantWarn   bool
+	}{
+		{name: "unpaused", state: pause.State{}, wantActive: false},
+		{name: "paused valid", state: pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}, wantActive: true},
+		{name: "paused malformed", state: pause.State{Active: true, ProblemKind: pause.ProblemMalformed, Problem: `invalid timestamp: "bad"`}, wantActive: true, wantWarn: true},
+		{name: "hard error", err: errors.New("stat boom"), wantActive: true, wantWarn: true},
+	}
+
+	orig := pauseReadFn
+	defer func() { pauseReadFn = orig }()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pauseReadFn = func(string) (pause.State, error) {
+				return tt.state, tt.err
+			}
+			tasksDir := setupTasksDir(t)
+			if err := messaging.Init(tasksDir); err != nil {
+				t.Fatalf("messaging.Init: %v", err)
+			}
+			data, err := gatherStatus(tasksDir)
+			if err != nil {
+				t.Fatalf("gatherStatus: %v", err)
+			}
+			if data.pauseState.Active != tt.wantActive {
+				t.Fatalf("pauseState.Active = %v, want %v", data.pauseState.Active, tt.wantActive)
+			}
+			hasWarning := len(data.warnings) > 0
+			if hasWarning != tt.wantWarn {
+				t.Fatalf("warnings present = %v, want %v (%v)", hasWarning, tt.wantWarn, data.warnings)
+			}
+		})
 	}
 }
 
