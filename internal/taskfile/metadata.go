@@ -13,21 +13,26 @@ import (
 	"mato/internal/atomicwrite"
 )
 
-func forEachMarkerLine(data []byte, fn func(trimmed string) bool) {
+func forEachTaskLine(content string, fn func(line, trimmed string, inFence bool) bool) {
 	inFence := false
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if isFenceLine(trimmed) {
-			inFence = !inFence
-			continue
-		}
-		if inFence {
-			continue
-		}
-		if fn(trimmed) {
+		if fn(line, trimmed, inFence) {
 			return
 		}
+		if isFenceLine(trimmed) {
+			inFence = !inFence
+		}
 	}
+}
+
+func forEachMarkerLine(data []byte, fn func(trimmed string) bool) {
+	forEachTaskLine(string(data), func(_ string, trimmed string, inFence bool) bool {
+		if inFence || isFenceLine(trimmed) {
+			return false
+		}
+		return fn(trimmed)
+	})
 }
 
 func isFenceLine(trimmed string) bool {
@@ -115,23 +120,24 @@ func ParseClaimedAt(data []byte) (time.Time, bool) {
 // lines that start with <!-- review-failure: ... -->.
 func CountFailureMarkers(data []byte) int {
 	count := 0
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
+	forEachMarkerLine(data, func(trimmed string) bool {
 		if strings.HasPrefix(trimmed, failurePrefix) && !strings.HasPrefix(trimmed, reviewFailureStr) {
 			count++
 		}
-	}
+		return false
+	})
 	return count
 }
 
 // CountReviewFailureMarkers counts <!-- review-failure: ... --> lines in data.
 func CountReviewFailureMarkers(data []byte) int {
 	count := 0
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), reviewFailureStr) {
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if strings.HasPrefix(trimmed, reviewFailureStr) {
 			count++
 		}
-	}
+		return false
+	})
 	return count
 }
 
@@ -139,11 +145,12 @@ func CountReviewFailureMarkers(data []byte) int {
 // newlines. Returns "" if none are found.
 func ExtractFailureLines(data []byte) string {
 	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), failurePrefix) {
-			lines = append(lines, strings.TrimSpace(line))
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if strings.HasPrefix(trimmed, failurePrefix) {
+			lines = append(lines, trimmed)
 		}
-	}
+		return false
+	})
 	return strings.Join(lines, "\n")
 }
 
@@ -181,16 +188,16 @@ func ContainsFailureFrom(data []byte, agentID string) bool {
 // comment in data. Returns "" if no failure comments are found.
 func LastFailureReason(data []byte) string {
 	last := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
+	forEachMarkerLine(data, func(trimmed string) bool {
 		if !strings.HasPrefix(trimmed, failurePrefix) || strings.HasPrefix(trimmed, reviewFailureStr) {
-			continue
+			return false
 		}
 		reason := failureReasonFromLine(trimmed)
 		if reason != "" {
 			last = reason
 		}
-	}
+		return false
+	})
 	return last
 }
 
@@ -198,16 +205,16 @@ func LastFailureReason(data []byte) string {
 // <!-- review-rejection: ... --> comment in data. Returns "" if none found.
 func LastReviewRejectionReason(data []byte) string {
 	last := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
+	forEachMarkerLine(data, func(trimmed string) bool {
 		if !strings.HasPrefix(trimmed, reviewRejectionStr) {
-			continue
+			return false
 		}
 		reason := failureReasonFromLine(trimmed)
 		if reason != "" {
 			last = reason
 		}
-	}
+		return false
+	})
 	return last
 }
 
@@ -271,18 +278,23 @@ var failureMarkerPrefixes = []string{
 func StripFailureMarkers(content string) string {
 	lines := strings.Split(content, "\n")
 	var kept []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
+	forEachTaskLine(content, func(line, trimmed string, inFence bool) bool {
 		strip := false
-		for _, prefix := range failureMarkerPrefixes {
-			if strings.HasPrefix(trimmed, prefix) {
-				strip = true
-				break
+		if !inFence && !isFenceLine(trimmed) {
+			for _, prefix := range failureMarkerPrefixes {
+				if strings.HasPrefix(trimmed, prefix) {
+					strip = true
+					break
+				}
 			}
 		}
 		if !strip {
 			kept = append(kept, line)
 		}
+		return false
+	})
+	if len(lines) > 0 && lines[len(lines)-1] == "" && (len(kept) == 0 || kept[len(kept)-1] != "") {
+		kept = append(kept, "")
 	}
 	result := strings.Join(kept, "\n")
 	// Collapse runs of 3+ newlines down to 2.
@@ -314,12 +326,15 @@ func AppendCancelledRecord(path string) error {
 // ContainsCancelledMarker reports whether data contains a <!-- cancelled: ... -->
 // marker as a standalone line.
 func ContainsCancelledMarker(data []byte) bool {
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), cancelledMarkerStr) {
+	found := false
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if strings.HasPrefix(trimmed, cancelledMarkerStr) {
+			found = true
 			return true
 		}
-	}
-	return false
+		return false
+	})
+	return found
 }
 
 // cycleFailurePrefix is the marker prefix for cycle-failure records.
@@ -351,11 +366,12 @@ func ContainsCycleFailure(data []byte) bool {
 // CountCycleFailureMarkers counts <!-- cycle-failure: ... --> lines in data.
 func CountCycleFailureMarkers(data []byte) int {
 	count := 0
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), cycleFailurePrefix) {
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if strings.HasPrefix(trimmed, cycleFailurePrefix) {
 			count++
 		}
-	}
+		return false
+	})
 	return count
 }
 
@@ -363,16 +379,16 @@ func CountCycleFailureMarkers(data []byte) int {
 // <!-- cycle-failure: ... --> comment in data. Returns "" if none found.
 func LastCycleFailureReason(data []byte) string {
 	last := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
+	forEachMarkerLine(data, func(trimmed string) bool {
 		if !strings.HasPrefix(trimmed, cycleFailurePrefix) {
-			continue
+			return false
 		}
 		reason := failureReasonFromLine(trimmed)
 		if reason != "" {
 			last = reason
 		}
-	}
+		return false
+	})
 	return last
 }
 
@@ -419,11 +435,12 @@ func ContainsTerminalFailure(data []byte) bool {
 // CountTerminalFailureMarkers counts <!-- terminal-failure: ... --> lines in data.
 func CountTerminalFailureMarkers(data []byte) int {
 	count := 0
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), terminalFailurePrefix) {
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if strings.HasPrefix(trimmed, terminalFailurePrefix) {
 			count++
 		}
-	}
+		return false
+	})
 	return count
 }
 
@@ -431,15 +448,15 @@ func CountTerminalFailureMarkers(data []byte) int {
 // <!-- terminal-failure: ... --> comment in data. Returns "" if none found.
 func LastTerminalFailureReason(data []byte) string {
 	last := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
+	forEachMarkerLine(data, func(trimmed string) bool {
 		if !strings.HasPrefix(trimmed, terminalFailurePrefix) {
-			continue
+			return false
 		}
 		reason := failureReasonFromLine(trimmed)
 		if reason != "" {
 			last = reason
 		}
-	}
+		return false
+	})
 	return last
 }

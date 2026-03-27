@@ -115,6 +115,7 @@ func TestCountFailureMarkers(t *testing.T) {
 		{"two", "<!-- failure: a1 at T1 step=WORK error=e1 -->\n<!-- failure: a2 at T2 step=WORK error=e2 -->", 2},
 		{"ignores review-failure", "<!-- failure: a at T step=WORK error=e -->\n<!-- review-failure: b at T step=REVIEW error=e -->", 1},
 		{"ignores body text", "# Task\n`CountFailureLines()` counts `<!-- failure: ... -->` records.\n<!-- failure: a at T step=WORK error=e -->", 1},
+		{"ignores fenced code", "# Task\n```\n<!-- failure: a at T step=WORK error=e -->\n```\n<!-- failure: b at T step=WORK error=e -->", 1},
 		{"empty", "", 0},
 	}
 	for _, tt := range tests {
@@ -137,6 +138,7 @@ func TestCountReviewFailureMarkers(t *testing.T) {
 		{"one", "<!-- review-failure: a at T step=REVIEW error=e -->", 1},
 		{"two", "<!-- review-failure: a at T1 step=REVIEW error=e1 -->\n<!-- review-failure: b at T2 step=REVIEW error=e2 -->", 2},
 		{"ignores task failure", "<!-- failure: a at T step=WORK error=e -->\n<!-- review-failure: b at T step=REVIEW error=e -->", 1},
+		{"ignores fenced code", "```\n<!-- review-failure: a at T step=REVIEW error=e -->\n```\n<!-- review-failure: b at T step=REVIEW error=e -->", 1},
 		{"empty", "", 0},
 	}
 	for _, tt := range tests {
@@ -161,6 +163,7 @@ func TestExtractFailureLines(t *testing.T) {
 			"<!-- failure: a at T1 step=WORK error=e1 -->\n<!-- failure: b at T2 step=WORK error=e2 -->"},
 		{"body reference ignored", "# Retry budget\n`CountFailureLines()` counts `<!-- failure: ... -->` records.\n<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed -->",
 			"<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed -->"},
+		{"ignores fenced code", "```\n<!-- failure: a at T step=WORK error=e -->\n```\n<!-- failure: b at T step=WORK error=e -->", "<!-- failure: b at T step=WORK error=e -->"},
 		{"empty", "", ""},
 	}
 	for _, tt := range tests {
@@ -228,6 +231,7 @@ func TestLastFailureReason(t *testing.T) {
 		{"multiple returns last", "<!-- failure: a at T1 — first error -->\n<!-- failure: b at T2 — second error -->", "second error"},
 		{"step error format", "<!-- failure: a at T1 step=WORK error=tests_failed -->", "tests_failed"},
 		{"step error with files changed", "<!-- failure: a at T1 step=WORK error=tests_failed files_changed=main.go -->", "tests_failed"},
+		{"ignores fenced code", "```\n<!-- failure: a at T — fenced error -->\n```\n<!-- failure: b at T — real error -->", "real error"},
 		{"empty", "", ""},
 	}
 	for _, tt := range tests {
@@ -250,6 +254,7 @@ func TestLastReviewRejectionReason(t *testing.T) {
 		{"single", "<!-- review-rejection: a at T — missing tests -->", "missing tests"},
 		{"multiple returns last", "<!-- review-rejection: a at T1 — first -->\n<!-- review-rejection: b at T2 — second -->", "second"},
 		{"ignores malformed", "<!-- review-rejection: a at T -->", ""},
+		{"ignores fenced code", "```\n<!-- review-rejection: a at T — fenced -->\n```\n<!-- review-rejection: b at T — real -->", "real"},
 		{"empty", "", ""},
 	}
 	for _, tt := range tests {
@@ -402,6 +407,7 @@ func TestContainsCancelledMarker(t *testing.T) {
 		{"present", "# Task\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n", true},
 		{"absent", "# Task\n<!-- failure: agent at 2026-01-01T00:00:00Z step=WORK error=fail -->\n", false},
 		{"inline body text ignored", "# Task\nUse `<!-- cancelled: ... -->` to document operator actions.\n", false},
+		{"fenced code ignored", "# Task\n```\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n```\n", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -441,6 +447,7 @@ func TestCountCycleFailureMarkers(t *testing.T) {
 		{"one", "# Task\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n", 1},
 		{"two", "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n<!-- cycle-failure: mato at 2026-01-02T00:00:00Z — circular dependency -->\n", 2},
 		{"mixed with failure", "<!-- failure: agent at T step=WORK error=e -->\n<!-- cycle-failure: mato at T — circular dependency -->\n", 1},
+		{"ignores fenced code", "```\n<!-- cycle-failure: mato at T — fenced -->\n```\n<!-- cycle-failure: mato at T — real -->\n", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -460,6 +467,7 @@ func TestLastCycleFailureReason(t *testing.T) {
 		{"present", "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n", "circular dependency"},
 		{"absent", "<!-- failure: agent at T step=WORK error=fail -->\n", ""},
 		{"multiple", "<!-- cycle-failure: mato at T — first -->\n<!-- cycle-failure: mato at T — circular dependency -->\n", "circular dependency"},
+		{"ignores fenced code", "```\n<!-- cycle-failure: mato at T — fenced -->\n```\n<!-- cycle-failure: mato at T — real -->\n", "real"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -546,6 +554,7 @@ func TestCountTerminalFailureMarkers(t *testing.T) {
 		{"two", "<!-- terminal-failure: mato at T1 — reason1 -->\n<!-- terminal-failure: mato at T2 — reason2 -->\n", 2},
 		{"mixed with failure", "<!-- failure: agent at T step=WORK error=e -->\n<!-- terminal-failure: mato at T — reason -->\n", 1},
 		{"mixed with cycle", "<!-- cycle-failure: mato at T — circular dependency -->\n<!-- terminal-failure: mato at T — reason -->\n", 1},
+		{"ignores fenced code", "```\n<!-- terminal-failure: mato at T — fenced -->\n```\n<!-- terminal-failure: mato at T — real -->\n", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -565,6 +574,7 @@ func TestLastTerminalFailureReason(t *testing.T) {
 		{"present", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n", "unparseable frontmatter"},
 		{"absent", "<!-- failure: agent at T step=WORK error=fail -->\n", ""},
 		{"multiple returns last", "<!-- terminal-failure: mato at T — first -->\n<!-- terminal-failure: mato at T — review retry exhausted -->\n", "review retry exhausted"},
+		{"ignores fenced code", "```\n<!-- terminal-failure: mato at T — fenced -->\n```\n<!-- terminal-failure: mato at T — real -->\n", "real"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -674,6 +684,12 @@ Body.
 `,
 			want:    "Body.",
 			notWant: []string{"<!-- failure:", "<!-- review-failure:"},
+		},
+		{
+			name:    "preserves fenced marker examples",
+			input:   "# Title\n\n```\n<!-- failure: fenced at T step=WORK error=e -->\n<!-- cancelled: operator at T -->\n```\n\n<!-- failure: real at T step=WORK error=e -->\n",
+			want:    "<!-- failure: fenced at T step=WORK error=e -->",
+			notWant: []string{"<!-- failure: real at T step=WORK error=e -->"},
 		},
 	}
 	for _, tt := range tests {
