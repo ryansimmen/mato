@@ -768,7 +768,7 @@ func newRetryCmd() *cobra.Command {
 	var retryRepo string
 
 	cmd := &cobra.Command{
-		Use:   "retry <task-name> [task-name...]",
+		Use:   "retry <task-ref> [task-ref...]",
 		Short: "Requeue failed tasks back to backlog",
 		Args:  usageMinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
