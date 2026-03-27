@@ -60,7 +60,8 @@ retry_cooldown: 5m
 ```
 
 - Config is repo-local only; there is no global config file.
-- Unknown YAML keys are ignored for forward compatibility.
+- Unknown YAML keys cause a parse error. This catches typos such as `dockr_image`
+  instead of silently ignoring them.
 - Empty and whitespace-only string values are treated as unset.
 - `.yml` is not supported; the filename must be `.mato.yaml`.
 
