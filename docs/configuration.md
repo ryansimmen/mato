@@ -21,7 +21,8 @@ mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|jso
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato inspect [--repo <path>] [--format text|json] <task-ref>
-mato retry [--repo <path>] <task-name> [task-name...]
+mato retry [--repo <path>] <task-ref> [task-ref...]
+mato cancel [--repo <path>] <task-ref> [task-ref...]
 mato version
 ```
 Valid `--only` check names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
@@ -99,7 +100,7 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 Long flags support both `--flag value` and `--flag=value` forms.
 | Flag | Applies to | Default | Description |
 | --- | --- | --- | --- |
-| `--repo <path>` | run, init, status, doctor, graph, retry | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
+| `--repo <path>` | run, init, status, doctor, graph, inspect, retry, cancel | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
 | `--branch <name>` | run, init, dry-run | `mato` | Target branch used for merge processing. Not accepted by `mato status`. |
 | `--dry-run` | run | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
 | `--version` | run | `false` | Print the mato build version and exit without starting the orchestrator. |
@@ -188,13 +189,14 @@ running Docker checks.
 ### `mato retry`
 `mato retry` requeues one or more failed tasks back to `backlog/`. It reads the
 task file from `failed/`, strips task-failure markers (`<!-- failure: -->`,
-`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`),
+`<!-- review-failure: -->`, `<!-- cancelled: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`),
 and writes the cleaned content to `backlog/`. Review feedback markers
 (`<!-- review-rejection: -->`) are preserved so the next attempt can still see
 prior reviewer guidance. The original file in `failed/` is only removed after a
 successful write, ensuring no data loss on collision or write error. If the retried
 task still has unmet `depends_on`, the next reconcile pass moves it back to
-`waiting/`.
+`waiting/`. Task refs can be a filename, filename stem, or explicit task `id`
+for tasks already in `failed/`.
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -217,6 +219,26 @@ snapshot and scheduling logic as the host.
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
 | `--format` | `text` | Output format: `text` or `json`. |
+
+### `mato cancel`
+`mato cancel` withdraws one or more queued tasks by moving them to `failed/`
+and appending a `<!-- cancelled: operator at ... -->` marker. It resolves task
+refs queue-wide by filename, filename stem, or explicit task `id`, warns when
+the cancelled task is still being worked or merged, and reports blocked
+dependents that will remain stuck until the task is retried.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+
+Example usage:
+```bash
+# Cancel a single task
+mato cancel fix-login-bug
+
+# Cancel multiple tasks at once
+mato cancel fix-login-bug add-dark-mode
+```
 
 ### `mato version`
 `mato version` prints the build version in a script-friendly format.
