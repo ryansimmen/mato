@@ -14,6 +14,11 @@ affects:
 tags: [feature, cli, ux]
 estimated_complexity: medium
 ---
+
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for the
+> current implementation.
+
 # Add `mato inspect` for single-task root-cause explanation
 
 ## Goal
@@ -35,13 +40,17 @@ In scope:
    parse-failed files.
 - Text and JSON outputs backed by a shared inspection model.
 - Root-cause explanations for:
-   - dependency-blocked waiting tasks
-   - waiting or backlog tasks that are structurally invalid before reconcile
-      moves them out (`cycle`, `self-cycle`, duplicate waiting id, invalid glob,
-      parse failure)
-   - conflict-deferred backlog tasks
-   - runnable backlog tasks that are not first in claim order
-   - in-progress, ready-for-review, ready-to-merge, completed, and failed tasks
+    - dependency-blocked waiting tasks
+    - backlog tasks that are still dependency-blocked before reconcile moves
+      them back to `waiting/` (for example after `mato retry` or a manual edit)
+    - waiting or backlog tasks that are structurally invalid before reconcile
+       moves them out (`cycle`, `self-cycle`, duplicate waiting id, invalid glob,
+       parse failure)
+    - conflict-deferred backlog tasks
+    - runnable backlog tasks that are not first in claim order
+    - ready-for-review tasks that are already invalid before the next review
+      pass (`parse failure`, review retry budget exhausted)
+    - in-progress, ready-for-review, ready-to-merge, completed, and failed tasks
    - historical review rejection context for tasks requeued to `backlog/`
    - malformed task files that are visible in the index but not yet reconciled
       out
@@ -54,7 +63,8 @@ Out of scope:
 - Retrying, moving, or otherwise mutating task files.
 - Rendering the full dependency graph or recent messages for a task.
 - Inventing a new queue snapshot format; the command should reuse
-   `queue.PollIndex` and current diagnostics helpers.
+   `queue.BuildIndex(...)`, `queue.ComputeRunnableBacklogView(...)`, and
+   current diagnostics helpers.
 
 ## Design
 
@@ -95,7 +105,7 @@ Internally, the package should:
 1. resolve the canonical repo root with `git.Output(..., "rev-parse",
     "--show-toplevel")`
 2. derive `tasksDir := filepath.Join(repoRoot, dirs.Root)`
-3. build one `queue.PollIndex`
+3. build one `*queue.PollIndex` via `queue.BuildIndex(tasksDir)`
 4. resolve exactly one task candidate
 5. compute a shared `InspectResult`
 6. render the result as text or JSON
@@ -128,11 +138,12 @@ type InspectResult struct {
       BlockingDependencies []BlockingDependency
       ConflictingAffects   []string
 
-      FailureKind           string
-      FailureCount          int
-      MaxRetries            int
-      LastFailureReason     string
-      LastCycleReason       string
+       FailureKind           string
+       FailureCount          int
+       ReviewFailureCount    int
+       MaxRetries            int
+       LastFailureReason     string
+       LastCycleReason       string
       LastTerminalReason    string
       ReviewRejectionReason string
 
@@ -186,18 +197,17 @@ Build the explanation from current primitives rather than inventing a second
 scheduler:
 
 - `queue.BuildIndex(tasksDir)`:
-   source of state, priority, branch, claim metadata, failure counts,
-   terminal/cycle reasons, cached invalid-glob errors, and parse failures
+    source of state, priority, branch, claim metadata, failure counts,
+    review-failure counts, terminal/cycle reasons, cached invalid-glob errors,
+    and parse failures
 - `queue.DiagnoseDependencies(tasksDir, idx)`:
-   source of waiting-task dependency blockage reasons, ambiguous dependency
-   detection, cycle detection, and duplicate waiting ID detection
-- `queue.DeferredOverlappingTasksDetailed(tasksDir, idx)`:
-   source of conflict-deferred backlog explanations
-- `idx.BacklogByPriority(deferred)`:
-   source of runnable backlog order, so inspect can answer "why isn't this
-   next?"
+    source of waiting-task dependency blockage reasons, ambiguous dependency
+    detection, cycle detection, and duplicate waiting ID detection
+- `queue.ComputeRunnableBacklogView(tasksDir, idx)`:
+    source of backlog dependency-blocked explanations, conflict-deferred
+    explanations, and runnable backlog ordering, matching current claim logic
 - `frontmatter.ExtractTitle(...)`:
-   source of the displayed task title, matching other commands
+    source of the displayed task title, matching other commands
 
 ### Minimal additions to existing metadata/index code
 
@@ -212,6 +222,10 @@ existing `LastFailureReason`, `LastCycleFailureReason`, and
 ```go
 func LastReviewRejectionReason(data []byte) string
 ```
+
+`taskfile.ExtractReviewRejections(data)` already exists for callers that need
+the full preserved rejection marker history; the new helper should complement
+that by returning only the latest rejection reason in a renderer-friendly form.
 
 Then extend `queue.TaskSnapshot` and `queue.ParseFailure` with a matching
 field populated during `BuildIndex`. This keeps inspect on the existing
@@ -244,28 +258,36 @@ Primary status rules:
    normal dependency analysis, because reconcile keeps the retained copy and
    fails the duplicate.
 - waiting task blocked by dependencies:
+    `status = "blocked"`
+    Use `diag.Analysis.Blocked[taskID]` for dependency causes, including:
+    - `BlockedByWaiting`
+    - `BlockedByUnknown`
+    - `BlockedByExternal`
+    - `BlockedByAmbiguous`
+- backlog task present in `view.DependencyBlocked`:
    `status = "blocked"`
-   Use `diag.Analysis.Blocked[taskID]` for dependency causes, including:
-   - `BlockedByWaiting`
-   - `BlockedByUnknown`
-   - `BlockedByExternal`
-   - `BlockedByAmbiguous`
-- backlog in `DeferredOverlappingTasksDetailed`:
-   `status = "deferred"`
-   Explain the conflicting task, its directory, and conflicting `affects`
-   entries.
-- backlog not deferred:
-   `status = "runnable"`
-   Use `idx.BacklogByPriority(deferred)` to compute queue position.
-   If position is `1`, reason should say the task is next claim candidate.
-   If position is greater than `1`, reason should say how many runnable tasks
-   are ahead.
+   Explain which dependencies are unsatisfied and that reconcile will move the
+   task back to `waiting/` on the next pass.
+- backlog in `view.Deferred`:
+    `status = "deferred"`
+    Explain the conflicting task, its directory, and conflicting `affects`
+    entries.
+- backlog in `view.Runnable`:
+    `status = "runnable"`
+    Use the `view.Runnable` ordering to compute queue position.
+    If position is `1`, reason should say the task is next claim candidate.
+    If position is greater than `1`, reason should say how many runnable tasks
+    are ahead.
 - in-progress:
-   `status = "running"`
-   Explain who claimed the task and, when present, since when.
+    `status = "running"`
+    Explain who claimed the task and, when present, since when.
+- ready-for-review task whose `ReviewFailureCount >= MaxRetries`:
+   `status = "invalid"`
+   Explain that the review retry budget is exhausted and that the next review
+   selection pass will move the task to `failed/`.
 - ready-for-review:
-   `status = "ready_for_review"`
-   Explain that the task branch exists and is waiting for the review agent.
+    `status = "ready_for_review"`
+    Explain that the task branch exists and is waiting for the review agent.
 - ready-to-merge:
    `status = "ready_to_merge"`
    Explain that review passed and the task is waiting for host-side merge.
@@ -342,6 +364,7 @@ Optional JSON fields:
 - `branch`
 - `claimed_by`
 - `claimed_at`
+- `review_failure_count`
 - `blocking_task`
 - `blocking_dependencies`
 - `conflicting_affects`
@@ -369,7 +392,7 @@ Optional JSON fields:
 2. Implement the new inspection package.
     - Create `internal/inspect/` with the shared result model and the public
        `Show` and `ShowTo` entry points.
-    - Build a single `PollIndex` per command invocation.
+    - Build a single `queue.BuildIndex(...)` snapshot per command invocation.
     - Add candidate collection and exact-one-match resolution over snapshots
        and parse failures.
     - Return deterministic not-found and ambiguity errors.
@@ -377,17 +400,18 @@ Optional JSON fields:
 3. Implement state-to-explanation mapping.
     - Build one dependency diagnostic snapshot via
        `queue.DiagnoseDependencies(tasksDir, idx)`.
-    - Build one deferred map via
-       `queue.DeferredOverlappingTasksDetailed(tasksDir, idx)`.
-    - Build one runnable backlog ordering via `idx.BacklogByPriority(deferred)`.
+    - Build one runnable backlog view via
+        `queue.ComputeRunnableBacklogView(tasksDir, idx)`.
     - Derive the `InspectResult` for each state using the classification rules
        above.
     - Prefer the most actionable current reason:
-       - invalid structural issue over generic state
-       - cycle/duplicate/invalid waiting issue over blocked dependency text
-       - invalid backlog glob over deferred/runnable classification
-       - deferral over generic backlog
-       - runnable queue position for non-deferred backlog tasks
+        - invalid structural issue over generic state
+        - cycle/duplicate/invalid waiting issue over blocked dependency text
+        - invalid backlog glob over deferred/runnable classification
+        - backlog dependency blockage over deferred/runnable classification
+        - deferral over generic backlog
+        - runnable queue position for non-deferred backlog tasks
+        - exhausted review retry budget over generic ready-for-review state
     - Attach review rejection as historical context when present.
     - Derive `NextStep` from the root cause rather than repeating the state.
 
@@ -412,32 +436,37 @@ Optional JSON fields:
        - exact-arg enforcement
        - normal flag parsing and delegation through `inspectShowFn`
     - `internal/inspect/inspect_test.go`:
-       - waiting task blocked by dependency in `waiting/`
-       - waiting task blocked by dependency in `failed/`
-       - waiting task with unknown dependency
-       - waiting task with ambiguous dependency id
+        - waiting task blocked by dependency in `waiting/`
+        - waiting task blocked by dependency in `failed/`
+        - waiting task with unknown dependency
+        - waiting task with ambiguous dependency id
        - waiting task that is part of a self-cycle before reconcile
        - waiting task that is part of a multi-node cycle before reconcile
-       - waiting task with invalid glob syntax before reconcile
-       - backlog task with invalid glob syntax before reconcile
-       - backlog task deferred by active overlap
-       - backlog task runnable and first in queue
-       - backlog task runnable but behind higher-priority runnable tasks
-       - backlog task with preserved review rejection plus current deferral,
-          ensuring deferral remains primary
-       - backlog task with preserved review rejection plus runnable position,
-          ensuring review context remains secondary
-       - in-progress task with claim metadata
-       - ready-for-review and ready-to-merge tasks
-       - failed task with retry, cycle, and terminal failure variants
-       - malformed task surfaced from `ParseFailure`
-       - duplicate waiting ID surfaced as invalid for the duplicate file
-       - retained waiting copy of a duplicate id still follows normal dependency
-          analysis
-       - unknown task ref
-       - ambiguous task ref across multiple matches
-       - JSON output field coverage for blocked, deferred, failed, invalid-glob,
-          and review-history cases
+        - waiting task with invalid glob syntax before reconcile
+        - backlog task with invalid glob syntax before reconcile
+        - backlog task that is still dependency-blocked before reconcile moves
+          it back to `waiting/`
+        - backlog task deferred by active overlap
+        - backlog task runnable and first in queue
+        - backlog task runnable but behind higher-priority runnable tasks
+        - backlog task with preserved review rejection plus current deferral,
+           ensuring deferral remains primary
+        - backlog task with preserved review rejection plus runnable position,
+           ensuring review context remains secondary
+        - in-progress task with claim metadata
+        - ready-for-review task with exhausted review retry budget pending
+          quarantine to `failed/`
+        - ready-for-review and ready-to-merge tasks
+        - failed task with retry, cycle, and terminal failure variants
+        - malformed task surfaced from `ParseFailure`, including a
+          ready-for-review parse failure
+        - duplicate waiting ID surfaced as invalid for the duplicate file
+        - retained waiting copy of a duplicate id still follows normal dependency
+           analysis
+        - unknown task ref
+        - ambiguous task ref across multiple matches
+        - JSON output field coverage for blocked, deferred, failed, invalid-glob,
+          review-history, and exhausted-review-budget cases
        - explicit JSON assertion that absent `claimed_at` is omitted rather than
           serialized as a zero timestamp
     - `internal/integration/inspect_test.go`:
@@ -449,8 +478,8 @@ Optional JSON fields:
     - `README.md`: add `mato inspect` to the command set with one text example
        and one JSON example.
     - `docs/architecture.md`: document `inspect` as a read-only command that
-       reuses `PollIndex`, dependency diagnostics, and overlap deferral data for
-       single-task troubleshooting.
+       reuses `BuildIndex`, `ComputeRunnableBacklogView`, dependency diagnostics,
+       and overlap deferral data for single-task troubleshooting.
 
 ## File Changes
 
@@ -525,9 +554,8 @@ docs/architecture.md
    Mitigation: never guess; return all candidate matches and require a unique
    ref.
 - Inspect reasoning could drift from scheduler behavior.
-   Mitigation: derive explanations only from `PollIndex`,
-   `DiagnoseDependencies`, `DeferredOverlappingTasksDetailed`, and
-   `BacklogByPriority`.
+   Mitigation: derive explanations only from `BuildIndex` / `PollIndex`,
+   `DiagnoseDependencies`, and `ComputeRunnableBacklogView`.
 - Re-reading task files in inspect could create inconsistent output or
    unnecessary I/O.
    Mitigation: extend `BuildIndex` once for review rejection summaries and

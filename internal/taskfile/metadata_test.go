@@ -240,6 +240,28 @@ func TestLastFailureReason(t *testing.T) {
 	}
 }
 
+func TestLastReviewRejectionReason(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{"none", "# Task\nNo rejections.", ""},
+		{"single", "<!-- review-rejection: a at T — missing tests -->", "missing tests"},
+		{"multiple returns last", "<!-- review-rejection: a at T1 — first -->\n<!-- review-rejection: b at T2 — second -->", "second"},
+		{"ignores malformed", "<!-- review-rejection: a at T -->", ""},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LastReviewRejectionReason([]byte(tt.data))
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteBranchComment(t *testing.T) {
 	var buf bytes.Buffer
 	if err := WriteBranchComment(&buf, "task/my-branch"); err != nil {

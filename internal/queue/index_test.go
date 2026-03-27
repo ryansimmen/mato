@@ -313,6 +313,7 @@ func TestBuildIndex_ParseFailurePreservesRuntimeMetadata(t *testing.T) {
 		"<!-- branch: task/bad-task -->\n" +
 		"<!-- failure: agent-xyz at 2026-06-15T12:35:00Z — build failed -->\n" +
 		"<!-- failure: agent-xyz at 2026-06-15T12:40:00Z — lint errors -->\n" +
+		"<!-- review-rejection: reviewer at 2026-06-15T12:45:00Z — missing docs -->\n" +
 		"<!-- cycle-failure: mato at 2026-06-15T13:00:00Z — circular dep -->\n" +
 		"<!-- terminal-failure: mato at 2026-06-15T14:00:00Z — invalid glob -->\n" +
 		"---\npriority: nope\n---\n# Broken task\n"
@@ -345,6 +346,9 @@ func TestBuildIndex_ParseFailurePreservesRuntimeMetadata(t *testing.T) {
 	}
 	if pf.LastTerminalFailureReason != "invalid glob" {
 		t.Errorf("LastTerminalFailureReason = %q, want %q", pf.LastTerminalFailureReason, "invalid glob")
+	}
+	if pf.LastReviewRejectionReason != "missing docs" {
+		t.Errorf("LastReviewRejectionReason = %q, want %q", pf.LastReviewRejectionReason, "missing docs")
 	}
 }
 
@@ -383,6 +387,7 @@ func TestBuildIndex_SnapshotMetadataFields(t *testing.T) {
 		"<!-- branch: task/meta-test -->\n" +
 		"<!-- failure: agent-xyz at 2026-06-15T12:35:00Z — build failed -->\n" +
 		"<!-- failure: agent-xyz at 2026-06-15T12:40:00Z — lint errors -->\n" +
+		"<!-- review-rejection: reviewer at 2026-06-15T12:45:00Z — add tests -->\n" +
 		"<!-- cycle-failure: mato at 2026-06-15T13:00:00Z — circular dep -->\n" +
 		"<!-- terminal-failure: mato at 2026-06-15T14:00:00Z — invalid glob -->\n" +
 		"---\npriority: 10\n---\n# Meta test task\n"
@@ -408,6 +413,9 @@ func TestBuildIndex_SnapshotMetadataFields(t *testing.T) {
 	}
 	if snap.LastTerminalFailureReason != "invalid glob" {
 		t.Errorf("LastTerminalFailureReason = %q, want %q", snap.LastTerminalFailureReason, "invalid glob")
+	}
+	if snap.LastReviewRejectionReason != "add tests" {
+		t.Errorf("LastReviewRejectionReason = %q, want %q", snap.LastReviewRejectionReason, "add tests")
 	}
 }
 
