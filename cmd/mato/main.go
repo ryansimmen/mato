@@ -798,6 +798,9 @@ func newRetryCmd() *cobra.Command {
 				return err
 			}
 			tasksDir := filepath.Join(repoRoot, dirs.Root)
+			if err := requireTasksDir(tasksDir); err != nil {
+				return err
+			}
 
 			var firstErr error
 			for _, name := range args {
@@ -921,6 +924,9 @@ func newCancelCmd() *cobra.Command {
 				return err
 			}
 			tasksDir := filepath.Join(repoRoot, dirs.Root)
+			if err := requireTasksDir(tasksDir); err != nil {
+				return err
+			}
 
 			var firstErr error
 			for _, ref := range args {
