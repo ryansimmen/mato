@@ -199,6 +199,7 @@ var linkFn = os.Link
 // permissions, which are not portable across root/container environments.
 var readFileFn = os.ReadFile
 var openFileFn = os.OpenFile
+var removeFn = os.Remove
 var writeFileFn = func(f *os.File, data []byte) error {
 	_, err := f.Write(data)
 	return err
@@ -220,7 +221,7 @@ func AtomicMove(src, dst string) error {
 		}
 		return fmt.Errorf("atomic move %s → %s: link: %w", src, dst, err)
 	}
-	if err := os.Remove(src); err != nil {
+	if err := removeFn(src); err != nil {
 		// The move is logically complete (dst exists), so warn but don't fail.
 		fmt.Fprintf(os.Stderr, "warning: could not remove source %s after linking to %s: %v\n", src, dst, err)
 	}
@@ -244,14 +245,14 @@ func crossDeviceMove(src, dst string) error {
 	}
 	if err := writeFileFn(f, data); err != nil {
 		f.Close()
-		os.Remove(dst)
+		removeFn(dst)
 		return fmt.Errorf("atomic move %s → %s: write destination: %w", src, dst, err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(dst)
+		removeFn(dst)
 		return fmt.Errorf("atomic move %s → %s: close destination: %w", src, dst, err)
 	}
-	if err := os.Remove(src); err != nil {
+	if err := removeFn(src); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not remove source %s after copying to %s: %v\n", src, dst, err)
 	}
 	return nil

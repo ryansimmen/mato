@@ -463,6 +463,7 @@ Use "mato -- <copilot-args>" to force forwarding; for example,
 	root.AddCommand(newGraphCmd())
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newInspectCmd())
+	root.AddCommand(newCancelCmd())
 	root.AddCommand(newRetryCmd())
 	root.AddCommand(newVersionCmd())
 	return root
@@ -802,6 +803,65 @@ func newRetryCmd() *cobra.Command {
 	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&retryRepo, "repo", "", "Path to the git repository (default: current directory)")
+
+	return cmd
+}
+
+var cancelTaskFn = queue.CancelTask
+
+func newCancelCmd() *cobra.Command {
+	var cancelRepo string
+
+	cmd := &cobra.Command{
+		Use:   "cancel <task-ref> [task-ref...]",
+		Short: "Withdraw tasks from the queue by moving them to failed/",
+		Args:  usageMinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, err := resolveRepo(cancelRepo)
+			if err != nil {
+				return err
+			}
+			repoRoot, err := resolveRepoRoot(repo)
+			if err != nil {
+				return err
+			}
+			tasksDir := filepath.Join(repoRoot, dirs.Root)
+
+			var firstErr error
+			for _, ref := range args {
+				result, err := cancelTaskFn(tasksDir, ref)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+				}
+				stem := strings.TrimSuffix(result.Filename, ".md")
+				fmt.Printf("cancelled: %s (was in %s/)\n", result.Filename, result.PriorState)
+				if result.PriorState == queue.DirInProgress {
+					fmt.Fprintf(os.Stderr, "warning: agent container for %s may still be running\n", stem)
+				}
+				if result.PriorState == queue.DirReadyMerge {
+					fmt.Fprintf(os.Stderr, "warning: merge queue may still merge %s's branch\n", stem)
+				}
+				if len(result.Warnings) > 0 {
+					fmt.Printf("  warning: %d task(s) depend on %s:\n", len(result.Warnings), stem)
+					for _, warning := range result.Warnings {
+						fmt.Printf("    %s\n", warning)
+					}
+					fmt.Printf("  these tasks will remain blocked until %s is retried\n", stem)
+				}
+			}
+			if firstErr != nil {
+				return &SilentError{Err: firstErr, Code: 1}
+			}
+			return nil
+		},
+	}
+	configureCommand(cmd)
+
+	cmd.Flags().StringVar(&cancelRepo, "repo", "", "Path to the git repository (default: current directory)")
 
 	return cmd
 }

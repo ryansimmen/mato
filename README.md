@@ -108,7 +108,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 ├── ready-for-review/# completed by agent, waiting for AI review
 ├── ready-to-merge/  # approved by review agent, waiting for host merge
 ├── completed/       # merged successfully
-├── failed/          # exceeded retry limit
+├── failed/          # exceeded retry limit or cancelled by operator
 ├── messages/
 │   ├── events/      # coordination events and status updates
 │   ├── completions/ # host-written completion details for merged tasks
@@ -117,6 +117,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 ```
 
 Tasks that accumulate `max_retries` failure records (default 3) are moved to `failed/`.
+Operators can also move queued tasks to `failed/` deliberately with `mato cancel`.
 
 ## How It Works
 
@@ -235,12 +236,28 @@ mato retry fix-login-bug add-dark-mode
 ```
 
 The command strips task-failure markers (`<!-- failure: -->`,
-`<!-- review-failure: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`)
+`<!-- review-failure: -->`, `<!-- cancelled: -->`, `<!-- cycle-failure: -->`, `<!-- terminal-failure: -->`)
 from the task file and writes the cleaned content to `backlog/`. Review
 feedback markers (`<!-- review-rejection: -->`) are preserved so the next
 attempt still receives prior reviewer guidance. If the task already exists in
 `backlog/`, the command prints an error and leaves the `failed/` copy unchanged
 (no data loss).
+
+## Cancel Command
+
+`mato cancel` withdraws queued tasks by moving them to `failed/` and appending a
+`<!-- cancelled: operator at ... -->` marker:
+
+```bash
+# Cancel a single task
+mato cancel fix-login-bug
+
+# Cancel multiple tasks
+mato cancel fix-login-bug add-dark-mode
+```
+
+If cancelled tasks are later retried with `mato retry`, the cancelled markers are
+stripped and the tasks return to `backlog/` like any other failed task.
 
 ## Version Command
 

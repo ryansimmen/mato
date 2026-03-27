@@ -350,6 +350,37 @@ func TestBuildIndex_ParseFailurePreservesRuntimeMetadata(t *testing.T) {
 	if pf.LastReviewRejectionReason != "missing docs" {
 		t.Errorf("LastReviewRejectionReason = %q, want %q", pf.LastReviewRejectionReason, "missing docs")
 	}
+	if pf.Cancelled {
+		t.Error("Cancelled = true, want false")
+	}
+}
+
+func TestBuildIndex_CancelledSnapshot(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirFailed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
+
+	idx := BuildIndex(tasksDir)
+	snap := idx.Snapshot(DirFailed, "cancelled.md")
+	if snap == nil {
+		t.Fatal("expected cancelled snapshot")
+	}
+	if !snap.Cancelled {
+		t.Fatal("Cancelled = false, want true")
+	}
+}
+
+func TestBuildIndex_CancelledParseFailure(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirFailed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n")
+
+	idx := BuildIndex(tasksDir)
+	failures := idx.ParseFailures()
+	if len(failures) != 1 {
+		t.Fatalf("expected 1 parse failure, got %d", len(failures))
+	}
+	if !failures[0].Cancelled {
+		t.Fatal("Cancelled = false, want true")
+	}
 }
 
 func TestBuildIndex_FailureAndReviewFailureCounts(t *testing.T) {

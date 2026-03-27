@@ -223,6 +223,8 @@ func statusDataToJSON(data statusData) StatusJSON {
 			CycleReason:    task.lastCycleFailureReason,
 		}
 		switch {
+		case task.cancelled:
+			ft.FailureKind = "cancelled"
 		case task.lastTerminalFailureReason != "":
 			ft.FailureKind = "terminal"
 		case task.lastCycleFailureReason != "":

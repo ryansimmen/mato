@@ -161,6 +161,7 @@ var managedCommentPrefixes = []string{
 	"<!-- review-failure:",
 	"<!-- review-rejection:",
 	"<!-- reviewed:",
+	"<!-- cancelled:",
 	"<!-- cycle-failure:",
 	"<!-- terminal-failure:",
 	"<!-- merged:",
