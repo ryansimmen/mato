@@ -9,10 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mato/internal/frontmatter"
+	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/testutil"
 )
 
 func TestMoveTaskToReviewWithMarker_Success(t *testing.T) {
@@ -211,6 +214,159 @@ func TestPostAgentPush_NoCommits(t *testing.T) {
 	// Task should still be in in-progress/ (not moved).
 	if _, statErr := os.Stat(inProgressPath); statErr != nil {
 		t.Fatal("task should remain in in-progress/ when no commits made")
+	}
+}
+
+func TestPostAgentPush_LogProbeFailureReturnsError(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "probe-fail.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("# Probe Fail\n"), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/probe-fail",
+		Title:    "Probe Fail",
+		TaskPath: inProgressPath,
+	}
+	env := envConfig{
+		tasksDir:     tasksDir,
+		targetBranch: "main",
+	}
+
+	err := postAgentPush(env, "agent1", claimed, t.TempDir())
+	if err == nil {
+		t.Fatal("expected error when git log probe fails")
+	}
+	if !strings.Contains(err.Error(), "determine whether agent committed work") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, statErr := os.Stat(inProgressPath); statErr != nil {
+		t.Fatalf("task should remain in in-progress/ after probe failure: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, taskFile)); !os.IsNotExist(statErr) {
+		t.Fatal("task should not move to ready-for-review/ after probe failure")
+	}
+}
+
+func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneRoot := t.TempDir()
+
+	origCreate := createCloneFn
+	origRemove := removeCloneFn
+	t.Cleanup(func() {
+		createCloneFn = origCreate
+		removeCloneFn = origRemove
+	})
+
+	var createdClone string
+	createCloneFn = func(repo string) (string, error) {
+		if repo != repoRoot {
+			t.Fatalf("createCloneFn repo = %q, want %q", repo, repoRoot)
+		}
+		cloneDir := filepath.Join(cloneRoot, "preserved-clone")
+		if err := os.MkdirAll(filepath.Dir(cloneDir), 0o755); err != nil {
+			return "", err
+		}
+		if _, err := git.Output("", "clone", "--quiet", repoRoot, cloneDir); err != nil {
+			return "", err
+		}
+		createdClone = cloneDir
+		return cloneDir, nil
+	}
+	removeCalled := false
+	removeCloneFn = func(dir string) {
+		removeCalled = true
+		os.RemoveAll(dir)
+	}
+
+	taskFile := "preserve-clone.md"
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	if err := os.WriteFile(taskPath, []byte("---\npriority: 5\n---\n# Preserve Clone\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task: %v", err)
+	}
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/preserve-clone",
+		Title:    "Preserve Clone",
+		TaskPath: taskPath,
+	}
+
+	dockerDir := t.TempDir()
+	dockerLog := filepath.Join(dockerDir, "docker.log")
+	dockerScript := filepath.Join(dockerDir, "docker")
+	script := "#!/bin/sh\n" +
+		"printf 'docker %s\\n' \"$*\" >> \"$DOCKER_LOG\"\n" +
+		"exit 0\n"
+
+	if err := os.WriteFile(dockerScript, []byte(script), 0o755); err != nil {
+		t.Fatalf("os.WriteFile docker stub: %v", err)
+	}
+	origPath, pathOk := os.LookupEnv("PATH")
+	origDockerLog, dockerLogOk := os.LookupEnv("DOCKER_LOG")
+	if err := os.Setenv("PATH", dockerDir+string(os.PathListSeparator)+origPath); err != nil {
+		t.Fatalf("os.Setenv PATH: %v", err)
+	}
+	if err := os.Setenv("DOCKER_LOG", dockerLog); err != nil {
+		t.Fatalf("os.Setenv DOCKER_LOG: %v", err)
+	}
+	t.Cleanup(func() {
+		if pathOk {
+			os.Setenv("PATH", origPath)
+		} else {
+			os.Unsetenv("PATH")
+		}
+		if dockerLogOk {
+			os.Setenv("DOCKER_LOG", origDockerLog)
+		} else {
+			os.Unsetenv("DOCKER_LOG")
+		}
+	})
+
+	env := envConfig{
+		repoRoot:           repoRoot,
+		tasksDir:           tasksDir,
+		workdir:            repoRoot,
+		copilotPath:        "/bin/true",
+		gitPath:            "/usr/bin/git",
+		gitUploadPackPath:  "/usr/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/bin/git-receive-pack",
+		ghPath:             "/bin/true",
+		goRoot:             "/usr",
+		homeDir:            t.TempDir(),
+		targetBranch:       "missing-target",
+		image:              "test-image",
+	}
+	run := runContext{
+		agentID: "agent1",
+		prompt:  "test prompt",
+		timeout: time.Second,
+	}
+
+	err := runOnce(context.Background(), env, run, claimed)
+	if err == nil {
+		t.Fatal("expected runOnce error when postAgentPush probe fails")
+	}
+	if !strings.Contains(err.Error(), "post-agent push failed; preserving clone at") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "determine whether agent committed work") {
+		t.Fatalf("error should include log probe failure, got: %v", err)
+	}
+	if removeCalled {
+		t.Fatal("clone should be preserved when postAgentPush fails")
+	}
+	if createdClone == "" {
+		t.Fatal("expected createCloneFn to record clone path")
+	}
+	if _, statErr := os.Stat(createdClone); statErr != nil {
+		t.Fatalf("preserved clone missing: %v", statErr)
 	}
 }
 
