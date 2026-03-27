@@ -528,6 +528,9 @@ func TestRootCmd_HelpListsCompletionCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "completion") {
 		t.Fatalf("expected help to mention completion command, got:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "mato --model gpt-5.4") {
+		t.Fatalf("expected help to mention custom model forwarding, got:\n%s", out.String())
+	}
 }
 
 func TestVersionCmd_Output(t *testing.T) {

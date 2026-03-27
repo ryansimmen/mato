@@ -385,9 +385,9 @@ func newRootCmd() *cobra.Command {
 		Long: `Runs autonomous Copilot agents against a task queue in Docker.
 
 Any unrecognized flags are forwarded to the copilot CLI inside the container.
-Use "mato -- <copilot-args>" to force forwarding; for example,
-"mato -- --help" forwards --help to Copilot instead of showing mato help.`,
-		Example:            "mato --model gpt-5.3-codex\nmato -- --help\nmato status\nmato version",
+Pass a custom model directly; for example, "mato --model gpt-5.4".
+Use "mato -- <copilot-args>" to force forwarding.`,
+		Example:            "mato --model gpt-5.4\nmato status\nmato version",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, a := range args {
