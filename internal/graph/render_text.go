@@ -22,12 +22,6 @@ func RenderText(w io.Writer, data GraphData) {
 		nodeByKey[data.Nodes[i].Key] = &data.Nodes[i]
 	}
 
-	// Build a set of nodes that are targets of edges (dependents exist).
-	dependentTargets := make(map[string]struct{})
-	for _, e := range data.Edges {
-		dependentTargets[e.To] = struct{}{}
-	}
-
 	// Build edge lookup: to-key → list of from-keys.
 	edgesByTo := make(map[string][]Edge)
 	for _, e := range data.Edges {
@@ -35,12 +29,7 @@ func RenderText(w io.Writer, data GraphData) {
 	}
 
 	// Build cycle membership: key → set of SCC indices.
-	cycleSCCs := make(map[string][]int)
-	for i, scc := range data.Cycles {
-		for _, key := range scc {
-			cycleSCCs[key] = append(cycleSCCs[key], i)
-		}
-	}
+	// (Used only by the DOT renderer; text renderer uses IsCycleMember.)
 
 	// Group nodes by state, preserving the sorted order from Build.
 	type stateGroup struct {
@@ -63,7 +52,7 @@ func RenderText(w io.Writer, data GraphData) {
 	for _, g := range groups {
 		fmt.Fprintf(w, "\n%s/\n", g.state)
 		for _, node := range g.nodes {
-			renderTextNode(w, node, nodeByKey, edgesByTo, cycleSCCs)
+			renderTextNode(w, node, nodeByKey, edgesByTo)
 		}
 	}
 
@@ -83,7 +72,7 @@ func RenderText(w io.Writer, data GraphData) {
 
 // renderTextNode renders a single primary node with its recursive
 // dependency tree.
-func renderTextNode(w io.Writer, node *GraphNode, nodeByKey map[string]*GraphNode, edgesByTo map[string][]Edge, cycleSCCs map[string][]int) {
+func renderTextNode(w io.Writer, node *GraphNode, nodeByKey map[string]*GraphNode, edgesByTo map[string][]Edge) {
 	// Build annotation.
 	annotation := fmt.Sprintf("priority: %d", node.Priority)
 	if len(node.BlockDetails) > 0 {
@@ -97,13 +86,13 @@ func renderTextNode(w io.Writer, node *GraphNode, nodeByKey map[string]*GraphNod
 
 	// Render the recursive dependency tree starting from this node.
 	visited := map[string]struct{}{node.Key: {}}
-	renderDepTree(w, node.Key, "    ", nodeByKey, edgesByTo, cycleSCCs, visited)
+	renderDepTree(w, node.Key, "    ", nodeByKey, edgesByTo, visited)
 }
 
 // renderDepTree recursively renders the dependency tree for a node.
 // prefix is the indentation string for the current nesting level.
 // visited prevents infinite recursion in the presence of cycles.
-func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*GraphNode, edgesByTo map[string][]Edge, cycleSCCs map[string][]int, visited map[string]struct{}) {
+func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*GraphNode, edgesByTo map[string][]Edge, visited map[string]struct{}) {
 	node := nodeByKey[nodeKey]
 	if node == nil {
 		return
@@ -139,7 +128,7 @@ func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*Gr
 			continue
 		}
 		_, alreadyVisited := visited[e.From]
-		ann := depStateAnnotation(fromNode, e.Satisfied, cycleSCCs)
+		ann := depStateAnnotation(fromNode, e.Satisfied)
 		deps = append(deps, depEntry{
 			label:   fmt.Sprintf("%s (%s)", fromNode.ID, ann),
 			fromKey: e.From,
@@ -172,7 +161,7 @@ func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*Gr
 		if d.fromKey != "" {
 			if _, seen := visited[d.fromKey]; !seen {
 				visited[d.fromKey] = struct{}{}
-				renderDepTree(w, d.fromKey, childPrefix, nodeByKey, edgesByTo, cycleSCCs, visited)
+				renderDepTree(w, d.fromKey, childPrefix, nodeByKey, edgesByTo, visited)
 			}
 		}
 	}
@@ -180,7 +169,7 @@ func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*Gr
 
 // depStateAnnotation returns a short annotation for a dependency node
 // used in the dependency tree under a primary node.
-func depStateAnnotation(node *GraphNode, satisfied bool, cycleSCCs map[string][]int) string {
+func depStateAnnotation(node *GraphNode, satisfied bool) string {
 	state := string(node.State)
 	if satisfied {
 		return state + " ✓"
