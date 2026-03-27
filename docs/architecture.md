@@ -394,8 +394,8 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `isProcessActive(pid)` — sends signal 0 to check if a PID is alive (unexported).
 
 ### `internal/atomicwrite/`
-- `WriteFile` — atomically writes `[]byte` to a path via temp-file-then-rename.
-- `WriteFunc` — atomically writes via a caller-supplied callback.
+- `WriteFile` — atomically writes `[]byte` to a path via temp-file-then-rename. Fsyncs the temp file before rename and syncs the parent directory afterward for crash durability.
+- `WriteFunc` — atomically writes via a caller-supplied callback with the same fsync-before-rename and dir-sync-after-rename guarantees.
 
 ### `internal/taskfile/`
 - Branch comment parsing — `ParseBranch`, `ParseBranchComment`, `ParseClaimedBy`, `ParseClaimedAt` (`taskfile.go`, `metadata.go`).

@@ -2,6 +2,10 @@
 //
 // Each function writes to a temporary file in the same directory as the target
 // and renames it into place, ensuring readers never see partial content.
+// Both the primary path and the EXDEV cross-device fallback fsync the temp
+// file before rename and sync the parent directory after rename, so that
+// writes are durable once the function returns.
+//
 // When the temp directory and target path live on different filesystems
 // (e.g. Docker bind mounts), the rename may fail with EXDEV; in that case
 // a fallback copies into a second temp file in the destination directory and
@@ -18,8 +22,9 @@ import (
 )
 
 // WriteFile atomically writes data to path. It creates a temporary file in the
-// same directory, sets permissions to 0o644, writes the data, and renames the
-// temp file to the target path.
+// same directory, sets permissions to 0o644, writes the data, fsyncs, and
+// renames the temp file to the target path. The parent directory is synced
+// after rename to ensure the directory entry is durable.
 func WriteFile(path string, data []byte) error {
 	return WriteFunc(path, func(f *os.File) error {
 		_, err := f.Write(data)
@@ -51,10 +56,22 @@ func AppendToFile(path, content string) error {
 // Tests override it to simulate EXDEV without separate filesystems.
 var renameFn = os.Rename
 
+// syncFileFn is called to fsync a file before rename. Tests override it to
+// verify call ordering without actually hitting disk.
+var syncFileFn = func(f *os.File) error { return f.Sync() }
+
+// syncDirFn is called to fsync the parent directory after rename. Tests
+// override it to verify call ordering.
+var syncDirFn = syncDir
+
 // WriteFunc atomically writes to path using a caller-supplied write callback.
 // The callback receives the open temp file and may write to it in any way
 // (e.g., JSON encoding, fmt.Fprintf). If fn returns an error the temp file is
 // cleaned up and no rename occurs.
+//
+// The temp file is fsynced before rename and the parent directory is synced
+// after rename, providing crash-durable writes on filesystems that honor
+// fsync semantics.
 //
 // When the rename fails with EXDEV (cross-device link), WriteFunc falls back
 // to copying the data into a second temp file in the destination directory and
@@ -79,6 +96,10 @@ func WriteFunc(path string, fn func(f *os.File) error) error {
 		cleanup()
 		return fmt.Errorf("atomic write %s: write temp: %w", path, err)
 	}
+	if err := syncFileFn(tmpFile); err != nil {
+		cleanup()
+		return fmt.Errorf("atomic write %s: fsync temp: %w", path, err)
+	}
 	if err := tmpFile.Close(); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("atomic write %s: close temp: %w", path, err)
@@ -90,6 +111,9 @@ func WriteFunc(path string, fn func(f *os.File) error) error {
 		os.Remove(tmpName)
 		return fmt.Errorf("atomic write %s: rename temp: %w", path, err)
 	}
+	if err := syncDirFn(dir); err != nil {
+		return fmt.Errorf("atomic write %s: sync dir: %w", path, err)
+	}
 	return nil
 }
 
@@ -97,6 +121,7 @@ func WriteFunc(path string, fn func(f *os.File) error) error {
 // path are on different filesystems. It copies the original temp file into a
 // second temp file in the destination directory, fsyncs it, then renames that
 // temp file into place so existing targets are replaced only at the final step.
+// The parent directory is synced after rename for durability.
 func crossDeviceFallback(tmpName, path string) error {
 	src, err := os.Open(tmpName)
 	if err != nil {
@@ -127,7 +152,7 @@ func crossDeviceFallback(tmpName, path string) error {
 		cleanupDst()
 		return fmt.Errorf("atomic write %s: copy to fallback temp: %w", path, err)
 	}
-	if err := tmpDst.Sync(); err != nil {
+	if err := syncFileFn(tmpDst); err != nil {
 		cleanupDst()
 		return fmt.Errorf("atomic write %s: fsync fallback temp: %w", path, err)
 	}
@@ -139,5 +164,23 @@ func crossDeviceFallback(tmpName, path string) error {
 		os.Remove(tmpDstName)
 		return fmt.Errorf("atomic write %s: rename fallback temp: %w", path, err)
 	}
+	if err := syncDirFn(dir); err != nil {
+		return fmt.Errorf("atomic write %s: sync dir: %w", path, err)
+	}
 	return nil
+}
+
+// syncDir opens a directory and fsyncs it, ensuring that directory entry
+// changes (renames) are persisted to stable storage.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = d.Sync()
+	closeErr := d.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
