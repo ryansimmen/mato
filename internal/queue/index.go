@@ -34,6 +34,9 @@ type TaskSnapshot struct {
 	LastCycleFailureReason string
 	// LastTerminalFailureReason is the reason from the last <!-- terminal-failure: ... --> comment.
 	LastTerminalFailureReason string
+	// LastReviewRejectionReason is the reason from the last
+	// <!-- review-rejection: ... --> comment.
+	LastReviewRejectionReason string
 	// GlobError caches the result of ValidateAffectsGlobs, computed once
 	// during index build. nil means all glob patterns are valid.
 	GlobError error
@@ -58,6 +61,9 @@ type ParseFailure struct {
 	LastCycleFailureReason string
 	// LastTerminalFailureReason is the reason from the last <!-- terminal-failure: ... --> comment.
 	LastTerminalFailureReason string
+	// LastReviewRejectionReason is the reason from the last
+	// <!-- review-rejection: ... --> comment.
+	LastReviewRejectionReason string
 }
 
 // BuildWarning records a non-fatal filesystem warning encountered while
@@ -196,6 +202,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 			lastFailureReason := taskfile.LastFailureReason(data)
 			lastCycleFailureReason := taskfile.LastCycleFailureReason(data)
 			lastTerminalFailureReason := taskfile.LastTerminalFailureReason(data)
+			lastReviewRejectionReason := taskfile.LastReviewRejectionReason(data)
 
 			meta, body, err := frontmatter.ParseTaskData(data, path)
 			if err != nil {
@@ -211,6 +218,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 					LastFailureReason:         lastFailureReason,
 					LastCycleFailureReason:    lastCycleFailureReason,
 					LastTerminalFailureReason: lastTerminalFailureReason,
+					LastReviewRejectionReason: lastReviewRejectionReason,
 				})
 				if isActive[dir] && branch != "" {
 					idx.activeBranches[branch] = struct{}{}
@@ -232,6 +240,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 				LastFailureReason:         lastFailureReason,
 				LastCycleFailureReason:    lastCycleFailureReason,
 				LastTerminalFailureReason: lastTerminalFailureReason,
+				LastReviewRejectionReason: lastReviewRejectionReason,
 			}
 
 			// Validate glob syntax in affects once and cache the result.

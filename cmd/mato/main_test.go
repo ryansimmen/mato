@@ -1154,6 +1154,79 @@ func TestGraphCmd_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestInspectCmd_InvalidFormat(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inspect", "sample", "--format", "yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid inspect format, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestInspectCmd_ExactArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "missing ref", args: []string{"inspect"}},
+		{name: "extra ref", args: []string{"inspect", "one", "two"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			if err := cmd.Execute(); err == nil {
+				t.Fatal("expected arg validation error, got nil")
+			}
+		})
+	}
+}
+
+func TestInspectCmd_DelegatesToInspectShow(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	var gotRepo, gotRef, gotFormat string
+
+	orig := inspectShowFn
+	defer func() { inspectShowFn = orig }()
+
+	inspectShowFn = func(repoRootArg, taskRef, format string) error {
+		gotRepo = repoRootArg
+		gotRef = taskRef
+		gotFormat = format
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inspect", "sample-task", "--repo", repoRoot, "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotRepo != repoRoot {
+		t.Errorf("repo = %q, want %q", gotRepo, repoRoot)
+	}
+	if gotRef != "sample-task" {
+		t.Errorf("taskRef = %q, want %q", gotRef, "sample-task")
+	}
+	if gotFormat != "json" {
+		t.Errorf("format = %q, want %q", gotFormat, "json")
+	}
+}
+
+func TestInspectCmd_SubcommandRegistered(t *testing.T) {
+	cmd := newRootCmd()
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "inspect" {
+			return
+		}
+	}
+	t.Fatal("inspect subcommand not registered")
+}
+
 // --- Branch validation tests ---
 
 func TestValidateBranch_Valid(t *testing.T) {
