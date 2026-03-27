@@ -1729,6 +1729,146 @@ func TestRetryCmd_FlagParsing(t *testing.T) {
 	}
 }
 
+func TestPauseCmd_Registered(t *testing.T) {
+	cmd := newRootCmd()
+	if got, _, err := cmd.Find([]string{"pause"}); err != nil || got == nil || got.Name() != "pause" {
+		t.Fatalf("pause command not registered: cmd=%v err=%v", got, err)
+	}
+}
+
+func TestResumeCmd_Registered(t *testing.T) {
+	cmd := newRootCmd()
+	if got, _, err := cmd.Find([]string{"resume"}); err != nil || got == nil || got.Name() != "resume" {
+		t.Fatalf("resume command not registered: cmd=%v err=%v", got, err)
+	}
+}
+
+func TestPauseCmd_CreatesSentinel(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"pause", "--repo", repoRoot})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("pause command failed: %v", err)
+		}
+	})
+	if !strings.HasPrefix(output, "Paused since ") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, ".paused")); err != nil {
+		t.Fatalf("expected pause sentinel: %v", err)
+	}
+}
+
+func TestPauseCmd_AlreadyPaused(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".paused"), []byte("2026-03-23T10:00:00Z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"pause", "--repo", repoRoot})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("pause command failed: %v", err)
+		}
+	})
+	if !strings.HasPrefix(output, "Already paused since ") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
+func TestPauseCmd_RepairsMalformedSentinel(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".paused"), []byte("bad\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"pause", "--repo", repoRoot})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("pause command failed: %v", err)
+		}
+	})
+	if !strings.HasPrefix(output, "Repaired pause sentinel. Paused since ") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
+func TestResumeCmd_RemovesSentinel(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".paused"), []byte("2026-03-23T10:00:00Z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"resume", "--repo", repoRoot})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("resume command failed: %v", err)
+		}
+	})
+	if strings.TrimSpace(output) != "Resumed" {
+		t.Fatalf("unexpected output: %q", output)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, ".paused")); !os.IsNotExist(err) {
+		t.Fatalf("expected sentinel removed, got err %v", err)
+	}
+}
+
+func TestResumeCmd_NotPaused(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"resume", "--repo", repoRoot})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("resume command failed: %v", err)
+		}
+	})
+	if strings.TrimSpace(output) != "Not paused" {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
+func TestPauseResumeCmd_MissingTasksDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	for _, subcmd := range []string{"pause", "resume"} {
+		t.Run(subcmd, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{subcmd, "--repo", repoRoot})
+			out, code := renderCommandError(t, cmd.Execute())
+			if code == 0 {
+				t.Fatal("expected non-zero exit code")
+			}
+			if !strings.Contains(out, ".mato/ directory not found - run 'mato init' first") {
+				t.Fatalf("unexpected output: %q", out)
+			}
+		})
+	}
+}
+
+func TestPauseResumeCmd_RejectExtraArgs(t *testing.T) {
+	for _, subcmd := range []string{"pause", "resume"} {
+		t.Run(subcmd, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{subcmd, "extra"})
+			if err := cmd.Execute(); err == nil {
+				t.Fatal("expected error with extra positional args")
+			}
+		})
+	}
+}
+
+func TestPauseResumeCmd_InvalidRepo(t *testing.T) {
+	for _, subcmd := range []string{"pause", "resume"} {
+		t.Run(subcmd, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{subcmd, "--repo", "/nonexistent/repo"})
+			if err := cmd.Execute(); err == nil {
+				t.Fatal("expected invalid repo error")
+			}
+		})
+	}
+}
+
 func TestRetryCmd_DefaultTasksDirUsesRepoRoot(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	subdir := filepath.Join(repoRoot, "nested")

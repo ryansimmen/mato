@@ -15,6 +15,7 @@ import (
 	"mato/internal/identity"
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
+	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
 	"mato/internal/runner"
@@ -749,8 +750,51 @@ func checkHygiene(cc *checkContext) CheckReport {
 	cr.Findings = append(cr.Findings, scanOrphanedMessages(cc.tasksDir, cc.opts.Fix)...)
 	cr.Findings = append(cr.Findings, scanStaleMergeLock(cc.tasksDir, cc.opts.Fix)...)
 	cr.Findings = append(cr.Findings, scanLeftoverTempFiles(cc.tasksDir, cc.opts.Fix)...)
+	cr.Findings = append(cr.Findings, scanPauseSentinel(cc.tasksDir, pause.Read)...)
 
 	return cr
+}
+
+func scanPauseSentinel(tasksDir string, readFn func(string) (pause.State, error)) []Finding {
+	state, err := readFn(tasksDir)
+	if err != nil {
+		return []Finding{{
+			Code:     "hygiene.pause_unreadable",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("cannot read pause sentinel: %v", err),
+			Path:     filepath.Join(tasksDir, ".paused"),
+		}}
+	}
+	if !state.Active {
+		return nil
+	}
+	if state.ProblemKind == pause.ProblemMalformed {
+		return []Finding{{
+			Code:     "hygiene.invalid_pause_file",
+			Severity: SeverityWarning,
+			Message:  state.Problem,
+			Path:     filepath.Join(tasksDir, ".paused"),
+		}}
+	}
+	if state.ProblemKind == pause.ProblemUnreadable {
+		return []Finding{{
+			Code:     "hygiene.pause_unreadable",
+			Severity: SeverityWarning,
+			Message:  state.Problem,
+			Path:     filepath.Join(tasksDir, ".paused"),
+		}}
+	}
+	rawAge := time.Since(state.Since)
+	if rawAge <= 24*time.Hour {
+		return nil
+	}
+	age := rawAge.Round(time.Hour)
+	return []Finding{{
+		Code:     "hygiene.paused",
+		Severity: SeverityWarning,
+		Message:  fmt.Sprintf("queue has been paused since %s (%s ago)", state.Since.Format(time.RFC3339), age),
+		Path:     filepath.Join(tasksDir, ".paused"),
+	}}
 }
 
 // scanOrphanedMessages checks for event message files older than the

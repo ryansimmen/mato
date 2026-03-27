@@ -1,7 +1,7 @@
 # Mato Architecture
 This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `inspect/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
 ## 1. System Overview
-`mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
+`mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. An optional `.mato/.paused` sentinel can temporarily stop new claims and review launches without stopping the host process. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
 ```text
 +-------------------------+      +-----------------------------+
 | CLI: mato               |      | CLI: mato status            |
@@ -73,31 +73,36 @@ idx := queue.BuildIndex(tasksDir)          // build poll index once
 queue.ReconcileReadyQueue(tasksDir, idx)
 idx = queue.BuildIndex(tasksDir)           // rebuild after reconcile
 
-deferred := queue.DeferredOverlappingTasks(tasksDir, idx)
-// merge failedDirExcluded into deferred
-queue.WriteQueueManifest(tasksDir, deferred, idx)
-claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, cooldown, idx)
+view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+deferred := view.Deferred
+// merge failedDirExcluded into deferred and refresh .queue
+queue.WriteQueueManifestFromView(tasksDir, deferred, idx, view)
+if not paused: claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, cooldown, idx)
 if FailedDirUnavailableError → add task to failedDirExcluded
 if claimed != nil:
     messaging.WriteMessage(...) intent
     runOnce(...)
     recoverStuckTask(...)
-if reviewTask, cleanup := selectAndLockReview(tasksDir, idx); reviewTask != nil:
+if not paused and reviewTask, cleanup := selectAndLockReview(tasksDir, idx); reviewTask != nil:
     runReview(reviewTask, ...)
 merge.AcquireLock(tasksDir) + merge.ProcessQueue(...)
-if no claimed task and no ready-to-merge: print idle message
+if paused: print paused heartbeat
+else if no claimed task and no ready-to-merge: print idle message
 wait for signal or 10 seconds
 ```
 Important details from the implementation:
 - The poll loop builds a `PollIndex` (`queue.BuildIndex(tasksDir)`) at the start of each cycle. The index reads every task file once and provides O(1) lookups for task IDs, active branches, `affects` metadata, and state. All consumers in the cycle share this snapshot instead of independently scanning directories and parsing YAML frontmatter. The index is rebuilt after `ReconcileReadyQueue` since it may promote tasks from `waiting/` to `backlog/`. Functions that accept a `*PollIndex` parameter treat `nil` as "build a temporary index internally", preserving backward compatibility for callers outside the poll loop (e.g., `DryRun`, `status`, integration tests).
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
-- `.queue` is written once per iteration, after dependency enforcement and overlap deferral, so the manifest reflects the effective runnable backlog. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifest()`. Dependency-blocked backlog tasks and conflict-deferred tasks are excluded from the manifest so agents will not select them.
+- `.queue` is written once per iteration, after dependency enforcement and overlap deferral, so the manifest reflects the effective runnable backlog. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifestFromView()`. Dependency-blocked backlog tasks and conflict-deferred tasks are excluded from the manifest so agents will not select them. This refresh still happens while the repo is paused.
 - `queue.SelectAndClaimTask(...)` reads `.queue` if present, reparses each candidate from disk before claim-time validation, re-checks `depends_on`, counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). Dependency-blocked candidates are moved back to `waiting/` as a safety net if they were edited or requeued after the last reconcile pass. `HasAvailableTasks` is a separate helper but is not called in the polling loop.
 - When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, excluded tasks are merged into the `deferred` map before calling `SelectAndClaimTask`, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
+- Pause mode is controlled by `.mato/.paused`, which stores the UTC RFC3339 time
+  when the repo was paused. While present, the host skips new claims and review
+  launches but continues merge processing.
 ### Orphan recovery and lock cleanup
 The `queue` package provides the host-side recovery primitives:
 - `queue.RegisterAgent(...)` (in `queue.go`) writes `.mato/.locks/<agentID>.pid` and returns a cleanup function.

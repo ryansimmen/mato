@@ -23,6 +23,7 @@ import (
 	"mato/internal/identity"
 	"mato/internal/merge"
 	"mato/internal/messaging"
+	"mato/internal/pause"
 	"mato/internal/queue"
 )
 
@@ -132,6 +133,21 @@ func (h *idleHeartbeat) idleMessage(now time.Time, nextPoll time.Duration) strin
 	lastAct := now.Sub(h.lastActivityTime)
 	return fmt.Sprintf("[mato] idle — no tasks available (uptime: %s, last activity: %s ago)",
 		formatDurationShort(uptime), formatDurationShort(lastAct))
+}
+
+// pausedMessage returns the paused heartbeat message or "" when nothing should
+// be printed this cycle. When priorPaused is false, the message is emitted
+// immediately and the paused heartbeat cadence is reset.
+func (h *idleHeartbeat) pausedMessage(now time.Time, priorPaused bool) string {
+	if !priorPaused {
+		h.lastHeartbeatTime = now
+		return "[mato] paused - run 'mato resume' to continue"
+	}
+	if !h.lastHeartbeatTime.IsZero() && now.Sub(h.lastHeartbeatTime) < heartbeatInterval {
+		return ""
+	}
+	h.lastHeartbeatTime = now
+	return "[mato] paused - run 'mato resume' to continue"
 }
 
 // formatDurationShort formats a duration in a compact human-readable form
@@ -624,15 +640,33 @@ func pollReconcile(tasksDir string) (*queue.PollIndex, bool) {
 	return idx, hadError
 }
 
-// pollClaimAndRun computes the deferred task set, selects and claims a task
-// from the backlog, writes coordination messages, runs the agent, and
-// recovers the task if the agent left it stuck in in-progress/. The
-// failedDirExcluded map may be mutated when a FailedDirUnavailableError is
-// encountered. It returns whether a task was claimed and whether any
-// non-fatal error occurred.
-func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex) (claimed bool, hadError bool) {
+// pauseReadFn reads the current pause state. Tests override it to inject
+// deterministic paused, malformed, and hard-error states.
+var pauseReadFn = pause.Read
+
+// pollWriteManifestFn refreshes .queue from a precomputed backlog view. Tests
+// override it to observe or stub manifest updates.
+var pollWriteManifestFn = pollWriteManifest
+
+// pollClaimAndRunFn runs the claim-and-run phase. Tests override it to observe
+// phase ordering.
+var pollClaimAndRunFn = pollClaimAndRun
+
+// pollReviewFn runs the review phase. Tests override it to observe phase
+// ordering.
+var pollReviewFn = pollReview
+
+// pollMergeFn runs the merge phase. Tests override it to observe phase
+// ordering.
+var pollMergeFn = pollMerge
+
+// nowFn returns the current time. Tests override it for deterministic heartbeat
+// assertions.
+var nowFn = time.Now
+
+func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool) {
 	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
-	deferred := make(map[string]struct{}, len(view.Deferred))
+	deferred := make(map[string]struct{}, len(view.Deferred)+len(failedDirExcluded))
 	for name := range view.Deferred {
 		deferred[name] = struct{}{}
 	}
@@ -641,7 +675,24 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 	}
 	if err := queue.WriteQueueManifestFromView(tasksDir, deferred, idx, view); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
-		hadError = true
+		return view, true
+	}
+	return view, false
+}
+
+// pollClaimAndRun uses the caller-provided runnable backlog view to compute the
+// deferred task set, select and claim a task from the backlog, write
+// coordination messages, run the agent, and recover the task if the agent left
+// it stuck in in-progress/. The failedDirExcluded map may be mutated when a
+// FailedDirUnavailableError is encountered. It returns whether a task was
+// claimed and whether any non-fatal error occurred.
+func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex, view queue.RunnableBacklogView) (claimed bool, hadError bool) {
+	deferred := make(map[string]struct{}, len(view.Deferred))
+	for name := range view.Deferred {
+		deferred[name] = struct{}{}
+	}
+	for name := range failedDirExcluded {
+		deferred[name] = struct{}{}
 	}
 
 	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, cooldown, idx)
@@ -725,56 +776,135 @@ func pollMerge(repoRoot, tasksDir, branch string) int {
 // handles reviews, and processes merges. It runs until the context is
 // cancelled (via signal). The loop delegates to focused helpers for each
 // concern and manages idle/backoff state locally.
+type iterationResult struct {
+	claimedTask     bool
+	reviewProcessed bool
+	mergeCount      int
+	pollHadError    bool
+	pauseActive     bool
+	hasReviewTasks  bool
+	hasReadyMerge   bool
+}
+
+func pollIterate(
+	ctx context.Context,
+	env envConfig,
+	run runContext,
+	repoRoot, tasksDir, branch, agentID string,
+	cooldown time.Duration,
+	hb *idleHeartbeat,
+	failedDirExcluded map[string]struct{},
+	priorPausedState bool,
+) iterationResult {
+	var result iterationResult
+
+	pollCleanup(tasksDir)
+
+	idx, reconcileHadError := pollReconcile(tasksDir)
+	if reconcileHadError {
+		result.pollHadError = true
+	}
+
+	view, manifestHadError := pollWriteManifestFn(tasksDir, failedDirExcluded, idx)
+	if manifestHadError {
+		result.pollHadError = true
+	}
+
+	ps1 := readPauseState(tasksDir)
+	if !ps1.Active {
+		claimedTask, claimHadError := pollClaimAndRunFn(ctx, env, run, tasksDir, agentID, failedDirExcluded, cooldown, idx, view)
+		result.claimedTask = claimedTask
+		if claimHadError {
+			result.pollHadError = true
+		}
+	}
+
+	if result.claimedTask && ctx.Err() != nil {
+		result.pauseActive = ps1.Active
+		return result
+	}
+
+	ps2 := readPauseState(tasksDir)
+	if !ps2.Active {
+		result.reviewProcessed = pollReviewFn(ctx, env, run, tasksDir, branch, agentID, idx)
+	}
+
+	result.mergeCount = pollMergeFn(repoRoot, tasksDir, branch)
+	result.pauseActive = ps2.Active
+
+	now := nowFn().UTC()
+	didWork := result.claimedTask || result.reviewProcessed || result.mergeCount > 0
+	if didWork && !ps2.Active {
+		hb.recordActivity(now)
+	}
+
+	pauseProblem := ps2.Problem
+	if pauseProblem == "" {
+		pauseProblem = ps1.Problem
+	}
+	if ps2.Active {
+		if !priorPausedState {
+			hb.recordActivity(now)
+		}
+		if msg := hb.pausedMessage(now, priorPausedState); msg != "" {
+			fmt.Println(msg)
+			if pauseProblem != "" {
+				fmt.Fprintf(os.Stderr, "warning: pause sentinel: %s\n", pauseProblem)
+			}
+		}
+	} else if priorPausedState {
+		hb.recordActivity(now)
+	}
+
+	result.hasReviewTasks = selectTaskForReview(tasksDir, nil) != nil
+	result.hasReadyMerge = merge.HasReadyTasks(tasksDir)
+	return result
+}
+
+func readPauseState(tasksDir string) pause.State {
+	state, err := pauseReadFn(tasksDir)
+	if err != nil {
+		return pause.State{
+			Active:      true,
+			ProblemKind: pause.ProblemUnreadable,
+			Problem:     fmt.Sprintf("stat error: %v", err),
+		}
+	}
+	return state
+}
+
 func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, tasksDir, branch, agentID string, cooldown time.Duration) error {
-	heartbeat := newIdleHeartbeat(time.Now())
+	heartbeat := newIdleHeartbeat(nowFn().UTC())
 	failedDirExcluded := make(map[string]struct{})
 	consecutiveErrors := 0
+	priorPaused := false
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 
-		pollHadError := false
-
-		pollCleanup(tasksDir)
-
-		idx, reconcileHadError := pollReconcile(tasksDir)
-		if reconcileHadError {
-			pollHadError = true
-		}
-
-		claimedTask, claimHadError := pollClaimAndRun(ctx, env, run, tasksDir, agentID, failedDirExcluded, cooldown, idx)
-		if claimHadError {
-			pollHadError = true
-		}
+		result := pollIterate(ctx, env, run, repoRoot, tasksDir, branch, agentID, cooldown, &heartbeat, failedDirExcluded, priorPaused)
+		priorPaused = result.pauseActive
 
 		// If a shutdown signal was received during the task run, exit
 		// now that the task has been properly recovered. This avoids
 		// starting review or merge work with a cancelled context.
-		if claimedTask && ctx.Err() != nil {
+		if result.claimedTask && ctx.Err() != nil {
 			return nil
 		}
 
-		reviewProcessed := pollReview(ctx, env, run, tasksDir, branch, agentID, idx)
-		mergeCount := pollMerge(repoRoot, tasksDir, branch)
-
-		didWork := claimedTask || reviewProcessed || mergeCount > 0
-		if didWork {
-			heartbeat.recordActivity(time.Now())
-		}
-
-		hasReviewTasks := selectTaskForReview(tasksDir, idx) != nil
-		isIdle := !claimedTask && !hasReviewTasks && !merge.HasReadyTasks(tasksDir)
+		didWork := result.claimedTask || result.reviewProcessed || result.mergeCount > 0
+		isIdle := !result.pauseActive && !result.claimedTask && !result.hasReviewTasks && !result.hasReadyMerge
 		if isIdle {
 			nextPoll := pollBackoff(consecutiveErrors)
-			if msg := heartbeat.idleMessage(time.Now(), nextPoll); msg != "" {
+			if msg := heartbeat.idleMessage(nowFn().UTC(), nextPoll); msg != "" {
 				fmt.Println(msg)
 			}
-		} else if !didWork {
-			heartbeat.recordActivity(time.Now())
+		} else if !result.pauseActive && !didWork {
+			heartbeat.recordActivity(nowFn().UTC())
 		}
 
-		if pollHadError {
+		if result.pollHadError {
 			consecutiveErrors++
 			if consecutiveErrors == errBackoffThreshold {
 				fmt.Fprintf(os.Stderr, "warning: entering backoff mode after %d consecutive poll errors\n", consecutiveErrors)

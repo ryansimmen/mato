@@ -91,6 +91,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 
 ```text
 <repo>/.mato/
+├── .paused          # optional durable operator pause sentinel
 ├── waiting/         # dependency-blocked tasks
 ├── backlog/         # runnable tasks and affects-deferred tasks
 ├── in-progress/     # claimed by an active agent
@@ -119,6 +120,9 @@ Operators can also move queued tasks to `failed/` deliberately with `mato cancel
 7. Tasks move to `completed/` on success. Missing branches move to `failed/`, merge conflicts requeue to `backlog/` for a fresh attempt, and push failures are retried in `ready-to-merge/`.
 
 If the queue is empty, mato keeps polling until new work appears. The loop exits cleanly on `Ctrl+C`.
+If `.mato/.paused` exists, the loop skips new claims and review launches, keeps
+refreshing `.queue`, and continues draining `ready-to-merge/` until the repo is
+resumed.
 
 ## Running Multiple Agents
 
@@ -231,6 +235,24 @@ feedback markers (`<!-- review-rejection: -->`) are preserved so the next
 attempt still receives prior reviewer guidance. If the task already exists in
 `backlog/`, the command prints an error and leaves the `failed/` copy unchanged
 (no data loss).
+
+## Pause and Resume Commands
+
+`mato pause` writes a durable `.mato/.paused` sentinel so the host stops
+claiming new tasks and stops launching review agents:
+
+```bash
+mato pause
+```
+
+`mato resume` removes the sentinel and restores normal polling behavior:
+
+```bash
+mato resume
+```
+
+While paused, already-running task agents are allowed to finish and the merge
+queue continues draining `ready-to-merge/`.
 
 ## Cancel Command
 

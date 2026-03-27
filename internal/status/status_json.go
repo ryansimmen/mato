@@ -9,6 +9,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/git"
+	"mato/internal/pause"
 	"mato/internal/queue"
 )
 
@@ -16,6 +17,7 @@ import (
 type StatusJSON struct {
 	Counts          map[string]int    `json:"counts"`
 	MergeQueue      string            `json:"merge_queue"`
+	Paused          PausedJSON        `json:"paused"`
 	RunnableBacklog []TaskSummaryJSON `json:"runnable_backlog"`
 	ActiveAgents    []AgentJSON       `json:"active_agents"`
 	InProgress      []TaskSummaryJSON `json:"in_progress"`
@@ -26,6 +28,12 @@ type StatusJSON struct {
 	Completions     []CompletionJSON  `json:"recent_completions"`
 	Messages        []MessageJSON     `json:"recent_messages"`
 	Warnings        []string          `json:"warnings,omitempty"`
+}
+
+// PausedJSON holds the machine-readable pause state.
+type PausedJSON struct {
+	Active bool   `json:"active"`
+	Since  string `json:"since,omitempty"`
 }
 
 // AgentJSON represents an active agent in JSON output.
@@ -132,6 +140,12 @@ func statusDataToJSON(data statusData) StatusJSON {
 	}
 	if data.mergeLockActive {
 		out.MergeQueue = "active"
+	}
+	if data.pauseState.Active {
+		out.Paused.Active = true
+		if data.pauseState.ProblemKind == pause.ProblemNone {
+			out.Paused.Since = data.pauseState.Since.Format(time.RFC3339)
+		}
 	}
 
 	// Runnable backlog in priority order.
