@@ -3,6 +3,7 @@ package merge
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1346,9 +1347,8 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	// Sabotage: make the completed directory a file so both markTaskMerged
-	// (which will succeed) and moveTaskWithRetry (which will fail) trigger
-	// the "merged but could not move" path.
+	// Sabotage: make the completed directory a file so moveTaskWithRetry fails
+	// after the merge commit lands, leaving recovery to the next poll.
 	completedDir := filepath.Join(tasksDir, queue.DirCompleted)
 	if err := os.RemoveAll(completedDir); err != nil {
 		t.Fatalf("os.RemoveAll completed: %v", err)
@@ -1374,6 +1374,11 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 	// Verify the push actually landed.
 	if _, err := os.Stat(filepath.Join(repoRoot, "durable.txt")); err != nil {
 		t.Fatalf("merged file missing from target branch: %v", err)
+	}
+	if out, err := git.Output(repoRoot, "branch", "--list", "task/durable-merge"); err != nil {
+		t.Fatalf("git branch --list after failed bookkeeping: %v", err)
+	} else if strings.TrimSpace(out) == "" {
+		t.Fatal("task branch should remain locally until bookkeeping succeeds")
 	}
 
 	// Fix the completed directory.
@@ -1426,6 +1431,11 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 	// Squash subject comes from agent commit "durable work".
 	if got := strings.Count(log, "durable work"); got != 1 {
 		t.Fatalf("durable work commit count = %d, want 1; log:\n%s", got, log)
+	}
+	if out, err := git.Output(repoRoot, "branch", "--list", "task/durable-merge"); err != nil {
+		t.Fatalf("git branch --list after recovery: %v", err)
+	} else if strings.TrimSpace(out) != "" {
+		t.Fatal("task branch should be deleted after bookkeeping succeeds")
 	}
 }
 
@@ -1487,6 +1497,70 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, "readonly.txt")); err != nil {
 		t.Fatalf("merged file missing from target branch: %v", err)
+	}
+}
+
+func TestProcessQueue_DuplicateCompletedPathCleanupFailureSkipsBranchCleanup(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskBranch := "task/duplicate-cleanup-fail"
+	if _, err := git.Output(repoRoot, "checkout", "-b", taskBranch, "mato"); err != nil {
+		t.Fatalf("git checkout task branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "dup-cleanup.txt"), []byte("data\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile dup-cleanup.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "dup-cleanup.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "duplicate cleanup work"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	taskName := "duplicate-cleanup-fail.md"
+	readyPath := filepath.Join(tasksDir, queue.DirReadyMerge, taskName)
+	completedPath := filepath.Join(tasksDir, queue.DirCompleted, taskName)
+	taskContent := "---\nid: duplicate-cleanup-fail\npriority: 5\n---\n<!-- branch: " + taskBranch + " -->\n# Duplicate cleanup fail\n"
+	if err := os.WriteFile(readyPath, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile ready task: %v", err)
+	}
+	if err := os.WriteFile(completedPath, []byte("already moved\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile completed task: %v", err)
+	}
+
+	origRemove := removeTaskFileFn
+	t.Cleanup(func() { removeTaskFileFn = origRemove })
+	removeTaskFileFn = func(path string) error {
+		if path == readyPath {
+			return fmt.Errorf("simulated source cleanup failure")
+		}
+		return os.Remove(path)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0 when duplicate cleanup fails", got)
+	}
+
+	if _, err := os.Stat(readyPath); err != nil {
+		t.Fatalf("ready-to-merge task should remain for retry: %v", err)
+	}
+	if out, err := git.Output(repoRoot, "branch", "--list", taskBranch); err != nil {
+		t.Fatalf("git branch --list after failed duplicate cleanup: %v", err)
+	} else if strings.TrimSpace(out) == "" {
+		t.Fatal("task branch should remain when duplicate cleanup fails")
+	}
+	if _, err := os.Stat(readyPath); err != nil {
+		t.Fatalf("ready-to-merge task should remain after duplicate cleanup failure: %v", err)
 	}
 }
 
