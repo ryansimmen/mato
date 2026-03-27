@@ -176,9 +176,9 @@ For backward compatibility, `ReadCompletionDetail` tries the new encoded filenam
 
 ## Presence
 Presence files live in `.mato/messages/presence/` and are host-managed.
-The host runner calls `messaging.WritePresence(tasksDir, agentID, taskFile, branch)` immediately after claiming a task, writing JSON with `agent_id`, `task`, `branch`, and `updated_at` to `<sanitized-agent-id>.json`. Task agents should not edit `presence/` directly.
+The host runner calls `messaging.WritePresence(tasksDir, agentID, taskFile, branch)` immediately after claiming a task, writing JSON with `agent_id`, `task`, `branch`, and `updated_at` to `<encoded-agent-id>.json`, where the agent ID uses collision-resistant encoding (characters in `[a-zA-Z0-9-]` pass through; others become `_XX` hex). Task agents should not edit `presence/` directly.
 
-`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It reads the `agent_id` field from each presence JSON payload to obtain the canonical (unsanitized) agent ID, then checks `.mato/.locks/<agent>.pid` through `identity.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Using the JSON payload avoids mismatches when the agent ID differs from the sanitized filename (e.g., IDs containing spaces or special characters). Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
+`messaging.CleanStalePresence(tasksDir)` removes presence entries for agents that are no longer active. It reads the `agent_id` field from each presence JSON payload to obtain the canonical (unsanitized) agent ID, then checks `.mato/.locks/<agent>.pid` through `identity.IsAgentActive(...)`; if the lock is missing, unreadable, invalid, or points at a dead PID, the presence file is removed on the next cleanup pass. Using the JSON payload avoids mismatches when the agent ID differs from the encoded filename. Since the host now actively writes presence data, this cleanup is essential for keeping the presence directory accurate.
 
 ## Garbage Collection
 `messaging.CleanOldMessages(tasksDir, 24*time.Hour)` garbage-collects event files.
@@ -216,11 +216,9 @@ Example:
 
 Go-helper construction details:
 - `timestamp` uses UTC format `20060102T150405.000000000Z`
-- `from`, `type`, and `id` are sanitized to `[a-zA-Z0-9._-]`
-- invalid characters become `-`
-- leading/trailing `-`, `_`, and `.` are trimmed
-- empty parts fall back to `unknown` or `message`
+- `from`, `type`, and `id` use collision-resistant encoding: characters in `[a-zA-Z0-9-]` pass through unchanged; all other bytes are encoded as `_XX` (lowercase hex)
+- empty or whitespace-only parts fall back to `unknown` or `message`
 
-**Note:** The sanitization is lossy — distinct raw values can map to the same filename part, causing one message to silently overwrite another. The same applies to presence filenames (derived from agent ID). The collision-resistant encoding used for completion detail filenames (see above) avoids this problem; event and presence filenames still use the lossy scheme.
+**Note:** Both event and presence filenames now use the same collision-resistant encoding as completion detail filenames: characters in `[a-zA-Z0-9-]` pass through unchanged, and all other bytes are encoded as `_XX` (lowercase hex). This guarantees distinct raw values produce distinct filenames, preventing silent overwrites that were possible with the previous lossy sanitization. Existing files written with the old scheme are still readable because the read paths scan all `.json` files regardless of filename convention.
 
 Readers only require a `.json` file; the Go helper naming scheme is available for tooling, but it is not the canonical runtime convention for agent-written messages.
