@@ -727,7 +727,7 @@ func TestParseClaimedBy_IgnoresProseMarkers(t *testing.T) {
 		{
 			"fenced code block",
 			"# Task\n```\n<!-- claimed-by: agent42 -->\n```\n",
-			"agent42", true, // fenced code lines still start with the marker
+			"", false,
 		},
 		{
 			"embedded in sentence",
@@ -770,6 +770,11 @@ func TestParseClaimedAt_IgnoresProseMarkers(t *testing.T) {
 			false,
 		},
 		{
+			"fenced code block",
+			"# Task\n```\n<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->\n```\n",
+			false,
+		},
+		{
 			"real marker on own line",
 			"# Task\n<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->\nProse about <!-- claimed-by: x  claimed-at: 2025-01-01T00:00:00Z -->.\n",
 			true,
@@ -800,6 +805,11 @@ func TestContainsFailureFrom_IgnoresProseMarkers(t *testing.T) {
 		{
 			"prose sentence",
 			"# Task\nThe <!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail --> marker.\n",
+			"abc12345", false,
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail -->\n```\n",
 			"abc12345", false,
 		},
 		{
@@ -835,6 +845,11 @@ func TestContainsCycleFailure_IgnoresProseMarkers(t *testing.T) {
 			false,
 		},
 		{
+			"fenced code block",
+			"# Task\n```\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n```\n",
+			false,
+		},
+		{
 			"real marker on own line",
 			"# Task\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\nProse about <!-- cycle-failure: -->.\n",
 			true,
@@ -866,6 +881,11 @@ func TestContainsTerminalFailure_IgnoresProseMarkers(t *testing.T) {
 			false,
 		},
 		{
+			"fenced code block",
+			"# Task\n```\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n```\n",
+			false,
+		},
+		{
 			"real marker on own line",
 			"# Task\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\nProse about <!-- terminal-failure: -->.\n",
 			true,
@@ -894,6 +914,11 @@ func TestExtractReviewRejections_IgnoresProseMarkers(t *testing.T) {
 		{
 			"prose sentence",
 			"# Task\nSee the <!-- review-rejection: reviewer at T — reason --> for details.\n",
+			"",
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- review-rejection: reviewer-1 at T — bad code -->\n```\n",
 			"",
 		},
 		{

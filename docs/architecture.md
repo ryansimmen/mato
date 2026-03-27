@@ -342,7 +342,8 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `cmd/mato/main.go`
 - CLI entrypoint.
-- `main()` routes `status` to `status.Show(...)` and otherwise starts `runner.Run(...)`.
+- `main()` builds the Cobra command tree for `run`, `status`, `doctor`, `graph`, `init`, `inspect`, `cancel`, `retry`, `pause`, `resume`, and `version`.
+- The root command resolves config and starts `runner.Run(...)`; subcommands dispatch to their package-specific handlers.
 - `extractKnownFlags(...)` handles `--repo`, `--branch`, `--dry-run`, `--help`, `--`, and forwards all other args to Copilot CLI.
 
 ### `internal/runner/`

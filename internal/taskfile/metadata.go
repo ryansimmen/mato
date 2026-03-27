@@ -13,6 +13,36 @@ import (
 	"mato/internal/atomicwrite"
 )
 
+func forEachMarkerLine(data []byte, fn func(trimmed string) bool) {
+	inFence := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if isFenceLine(trimmed) {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if fn(trimmed) {
+			return
+		}
+	}
+}
+
+func isFenceLine(trimmed string) bool {
+	if len(trimmed) < 3 {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "~~~") {
+		return true
+	}
+	return false
+}
+
 // Compiled regexes for all HTML comment metadata markers in task files.
 // These are the canonical definitions — no other package should define its own.
 var (
@@ -39,38 +69,46 @@ func ParseBranchComment(data []byte) (string, bool) {
 // comment that appears as a standalone line. Marker-like text embedded in
 // prose or code blocks is ignored.
 func ParseClaimedBy(data []byte) (string, bool) {
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
+	var claimedBy string
+	var ok bool
+	forEachMarkerLine(data, func(trimmed string) bool {
 		if !strings.HasPrefix(trimmed, "<!-- claimed-by:") {
-			continue
+			return false
 		}
 		m := claimedByRe.FindStringSubmatch(trimmed)
 		if len(m) >= 2 {
-			return m[1], true
+			claimedBy = m[1]
+			ok = true
+			return true
 		}
-	}
-	return "", false
+		return false
+	})
+	return claimedBy, ok
 }
 
 // ParseClaimedAt extracts the claimed-at timestamp from a
 // <!-- claimed-by: ... claimed-at: ... --> comment that appears as a
 // standalone line. Marker-like text embedded in prose is ignored.
 func ParseClaimedAt(data []byte) (time.Time, bool) {
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
+	var claimedAt time.Time
+	var ok bool
+	forEachMarkerLine(data, func(trimmed string) bool {
 		if !strings.HasPrefix(trimmed, "<!-- claimed-by:") {
-			continue
+			return false
 		}
 		m := claimedAtRe.FindStringSubmatch(trimmed)
 		if len(m) >= 2 {
 			t, err := time.Parse(time.RFC3339, m[1])
 			if err != nil {
-				continue
+				return false
 			}
-			return t, true
+			claimedAt = t
+			ok = true
+			return true
 		}
-	}
-	return time.Time{}, false
+		return false
+	})
+	return claimedAt, ok
 }
 
 // CountFailureMarkers counts <!-- failure: ... --> lines in data, excluding
@@ -114,12 +152,12 @@ func ExtractFailureLines(data []byte) string {
 // text embedded in prose or code blocks is ignored.
 func ExtractReviewRejections(data []byte) string {
 	var rejections []string
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
+	forEachMarkerLine(data, func(trimmed string) bool {
 		if strings.HasPrefix(trimmed, reviewRejectionStr) {
 			rejections = append(rejections, trimmed)
 		}
-	}
+		return false
+	})
 	return strings.Join(rejections, "\n")
 }
 
@@ -128,12 +166,15 @@ func ExtractReviewRejections(data []byte) string {
 // "<!-- failure: <agentID> ". Marker-like text in prose is ignored.
 func ContainsFailureFrom(data []byte, agentID string) bool {
 	target := "<!-- failure: " + agentID + " "
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), target) {
+	found := false
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if strings.HasPrefix(trimmed, target) {
+			found = true
 			return true
 		}
-	}
-	return false
+		return false
+	})
+	return found
 }
 
 // LastFailureReason extracts the reason from the last <!-- failure: ... -->
@@ -296,12 +337,15 @@ func AppendCycleFailureRecord(path string) error {
 // ContainsCycleFailure reports whether data contains a <!-- cycle-failure: ... -->
 // marker as a standalone line. Marker-like text in prose or code is ignored.
 func ContainsCycleFailure(data []byte) bool {
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), cycleFailurePrefix) {
+	found := false
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if strings.HasPrefix(trimmed, cycleFailurePrefix) {
+			found = true
 			return true
 		}
-	}
-	return false
+		return false
+	})
+	return found
 }
 
 // CountCycleFailureMarkers counts <!-- cycle-failure: ... --> lines in data.
@@ -361,12 +405,15 @@ func AppendTerminalFailureRecord(path, reason string) error {
 // <!-- terminal-failure: ... --> marker as a standalone line. Marker-like
 // text in prose or code is ignored.
 func ContainsTerminalFailure(data []byte) bool {
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), terminalFailurePrefix) {
+	found := false
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if strings.HasPrefix(trimmed, terminalFailurePrefix) {
+			found = true
 			return true
 		}
-	}
-	return false
+		return false
+	})
+	return found
 }
 
 // CountTerminalFailureMarkers counts <!-- terminal-failure: ... --> lines in data.

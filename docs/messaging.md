@@ -219,6 +219,6 @@ Go-helper construction details:
 - `from`, `type`, and `id` use collision-resistant encoding: characters in `[a-zA-Z0-9-]` pass through unchanged; all other bytes are encoded as `_XX` (lowercase hex)
 - empty or whitespace-only parts fall back to `unknown` or `message`
 
-**Note:** Both event and presence filenames now use the same collision-resistant encoding as completion detail filenames: characters in `[a-zA-Z0-9-]` pass through unchanged, and all other bytes are encoded as `_XX` (lowercase hex). This guarantees distinct raw values produce distinct filenames, preventing silent overwrites that were possible with the previous lossy sanitization. Existing files written with the old scheme are still readable because the read paths scan all `.json` files regardless of filename convention.
+**Note:** Both event and presence filenames now use the same collision-resistant encoding as completion detail filenames: characters in `[a-zA-Z0-9-]` pass through unchanged, and all other bytes are encoded as `_XX` (lowercase hex). This preserves distinctions after trimming surrounding whitespace and prevents the silent overwrites caused by the previous lossy sanitization. Existing files written with the old scheme are still readable because the read paths scan all `.json` files regardless of filename convention.
 
 Readers only require a `.json` file; the Go helper naming scheme is available for tooling, but it is not the canonical runtime convention for agent-written messages.
