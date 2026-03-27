@@ -17,6 +17,11 @@ affects:
 tags: [feature, cli, ux]
 estimated_complexity: medium
 ---
+
+> **Status: Implemented** — This idea has been implemented as `mato cancel`.
+> See `docs/proposals/add-cancel-command.md` for the detailed design and the
+> current implementation notes.
+
 # Add `mato cancel` to permanently withdraw tasks from the queue
 
 ## Goal
