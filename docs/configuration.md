@@ -181,7 +181,7 @@ the requested checks need config-backed Docker resolution; queue-only runs such 
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
-| `--fix` | `false` | Auto-repair safe issues (stale locks, orphaned tasks, missing dirs). |
+| `--fix` | `false` | Auto-repair safe issues: stale locks (agent PIDs, review locks, merge locks), orphaned in-progress tasks, missing queue dirs, Docker image pulls, stale event messages, and leftover atomic-write temp files. |
 | `--format` | `text` | Output format: `text` or `json`. |
 | `--only <check>` | all checks | Run only specified checks (repeatable). Valid names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`. |
 
