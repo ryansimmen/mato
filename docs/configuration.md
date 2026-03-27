@@ -60,7 +60,8 @@ retry_cooldown: 5m
 ```
 
 - Config is repo-local only; there is no global config file.
-- Unknown YAML keys are ignored for forward compatibility.
+- Unknown YAML keys cause a parse error. This catches typos such as `dockr_image`
+  instead of silently ignoring them.
 - Empty and whitespace-only string values are treated as unset.
 - `.yml` is not supported; the filename must be `.mato.yaml`.
 
@@ -112,7 +113,7 @@ Long flags support both `--flag value` and `--flag=value` forms.
 ## Subcommands
 ### `mato status`
 `mato status` reads the queue directory and reports:
-- counts for `waiting`, `backlog`, semantic `blocked`, `in-progress`, `ready-for-review`, `ready-to-merge`, `completed`, and `failed`
+- counts for `backlog`, `runnable`, `deferred` (conflict-blocked), `blocked` (dependency-blocked, including misplaced backlog tasks), `in-progress`, `ready-review`, `ready-to-merge`, `completed`, and `failed`
 - runnable backlog in execution order (priority-sorted, dependency-blocked and conflict-deferred tasks excluded), matching the ordering the host uses to claim work
 - active agents discovered from `.mato/.locks/*.pid`
 - pause state from `.mato/.paused`
@@ -122,7 +123,11 @@ Long flags support both `--flag value` and `--flag=value` forms.
 
 Use `--format json` to get machine-readable output. The `runnable_backlog`
 array in the JSON output lists tasks in the same priority order as the text
-view.
+view. The JSON `counts` object includes both `waiting` (number of files in
+`waiting/`) and `blocked` (semantic count of dependency-blocked tasks including
+misplaced backlog tasks); the text output only shows `blocked`. The `waiting`
+array in JSON lists dependency-blocked tasks; each entry's `dependencies` field
+is an array of `{id, status}` objects (empty when there are no dependencies).
 
 Supported flags: `--repo`, `--watch`, `--interval`, `--format`, and `--help`/`-h`.
 
@@ -176,7 +181,7 @@ the requested checks need config-backed Docker resolution; queue-only runs such 
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
-| `--fix` | `false` | Auto-repair safe issues (stale locks, orphaned tasks, missing dirs). |
+| `--fix` | `false` | Auto-repair safe issues: stale locks (agent PIDs, review locks, merge locks), orphaned in-progress tasks, missing queue dirs, Docker image pulls, stale event messages, and leftover atomic-write temp files. |
 | `--format` | `text` | Output format: `text` or `json`. |
 | `--only <check>` | all checks | Run only specified checks (repeatable). Valid names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`. |
 

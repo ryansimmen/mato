@@ -2,7 +2,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +31,7 @@ func Load(dir string) (Config, error) {
 }
 
 // LoadFile parses a specific config file path. Returns a zero Config when the
-// file does not exist.
+// file does not exist. Returns an error if the file contains unknown keys.
 func LoadFile(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -40,7 +42,12 @@ func LoadFile(path string) (Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		if err == io.EOF {
+			return Config{}, nil
+		}
 		return Config{}, fmt.Errorf("parse config file %s: %w", path, err)
 	}
 

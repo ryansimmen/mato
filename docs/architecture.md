@@ -342,7 +342,8 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `cmd/mato/main.go`
 - CLI entrypoint.
-- `main()` routes `status` to `status.Show(...)` and otherwise starts `runner.Run(...)`.
+- `main()` builds the Cobra command tree for `run`, `status`, `doctor`, `graph`, `init`, `inspect`, `cancel`, `retry`, `pause`, `resume`, and `version`.
+- The root command resolves config and starts `runner.Run(...)`; subcommands dispatch to their package-specific handlers.
 - `extractKnownFlags(...)` handles `--repo`, `--branch`, `--dry-run`, `--help`, `--`, and forwards all other args to Copilot CLI.
 
 ### `internal/runner/`
@@ -394,8 +395,8 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `isProcessActive(pid)` — sends signal 0 to check if a PID is alive (unexported).
 
 ### `internal/atomicwrite/`
-- `WriteFile` — atomically writes `[]byte` to a path via temp-file-then-rename.
-- `WriteFunc` — atomically writes via a caller-supplied callback.
+- `WriteFile` — atomically writes `[]byte` to a path via temp-file-then-rename. Fsyncs the temp file before rename and syncs the parent directory afterward for crash durability.
+- `WriteFunc` — atomically writes via a caller-supplied callback with the same fsync-before-rename and dir-sync-after-rename guarantees.
 
 ### `internal/taskfile/`
 - Branch comment parsing — `ParseBranch`, `ParseBranchComment`, `ParseClaimedBy`, `ParseClaimedAt` (`taskfile.go`, `metadata.go`).
@@ -429,7 +430,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `internal/doctor/`
 - Health check command — `Run`, `RenderText`, `RenderJSON` (`doctor.go`, `checks.go`, `render.go`).
-- 7 checks: git, tools, docker, queue layout, task parsing, locks & orphans, dependencies.
+- 8 checks: git, tools, docker, queue layout, task parsing, locks & orphans, hygiene, dependencies.
 - Queue-only preflight usage via `mato doctor --only queue,tasks,deps`; queue-only runs skip unrelated Docker-image config resolution in command setup.
 - Fix mode for repairable issues — `--fix` flag.
 

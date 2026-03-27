@@ -1155,3 +1155,100 @@ func TestHasActiveOverlap_InvalidGlobVsValidGlob(t *testing.T) {
 		})
 	}
 }
+
+// --- Defensive copy tests ---
+
+func TestCompletedIDs_DefensiveCopy(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirCompleted, "done-task.md", "# Done\n")
+
+	idx := BuildIndex(tasksDir)
+
+	ids := idx.CompletedIDs()
+	if _, ok := ids["done-task"]; !ok {
+		t.Fatal("expected done-task in CompletedIDs")
+	}
+
+	// Mutate the returned map.
+	ids["injected"] = struct{}{}
+	delete(ids, "done-task")
+
+	// The index must be unaffected.
+	ids2 := idx.CompletedIDs()
+	if _, ok := ids2["done-task"]; !ok {
+		t.Error("CompletedIDs was corrupted by caller mutation: done-task missing")
+	}
+	if _, ok := ids2["injected"]; ok {
+		t.Error("CompletedIDs was corrupted by caller mutation: injected key present")
+	}
+}
+
+func TestNonCompletedIDs_DefensiveCopy(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirBacklog, "bl-task.md", "# Backlog\n")
+
+	idx := BuildIndex(tasksDir)
+
+	ids := idx.NonCompletedIDs()
+	if _, ok := ids["bl-task"]; !ok {
+		t.Fatal("expected bl-task in NonCompletedIDs")
+	}
+
+	ids["injected"] = struct{}{}
+	delete(ids, "bl-task")
+
+	ids2 := idx.NonCompletedIDs()
+	if _, ok := ids2["bl-task"]; !ok {
+		t.Error("NonCompletedIDs was corrupted by caller mutation: bl-task missing")
+	}
+	if _, ok := ids2["injected"]; ok {
+		t.Error("NonCompletedIDs was corrupted by caller mutation: injected key present")
+	}
+}
+
+func TestAllIDs_DefensiveCopy(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirBacklog, "any-task.md", "# Any\n")
+
+	idx := BuildIndex(tasksDir)
+
+	ids := idx.AllIDs()
+	if _, ok := ids["any-task"]; !ok {
+		t.Fatal("expected any-task in AllIDs")
+	}
+
+	ids["injected"] = struct{}{}
+	delete(ids, "any-task")
+
+	ids2 := idx.AllIDs()
+	if _, ok := ids2["any-task"]; !ok {
+		t.Error("AllIDs was corrupted by caller mutation: any-task missing")
+	}
+	if _, ok := ids2["injected"]; ok {
+		t.Error("AllIDs was corrupted by caller mutation: injected key present")
+	}
+}
+
+func TestActiveBranches_DefensiveCopy(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirInProgress, "ip-task.md",
+		"<!-- branch: task/ip-task -->\n# In Progress\n")
+
+	idx := BuildIndex(tasksDir)
+
+	branches := idx.ActiveBranches()
+	if _, ok := branches["task/ip-task"]; !ok {
+		t.Fatal("expected task/ip-task in ActiveBranches")
+	}
+
+	branches["injected"] = struct{}{}
+	delete(branches, "task/ip-task")
+
+	branches2 := idx.ActiveBranches()
+	if _, ok := branches2["task/ip-task"]; !ok {
+		t.Error("ActiveBranches was corrupted by caller mutation: task/ip-task missing")
+	}
+	if _, ok := branches2["injected"]; ok {
+		t.Error("ActiveBranches was corrupted by caller mutation: injected key present")
+	}
+}

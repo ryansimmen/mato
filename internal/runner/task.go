@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,12 +21,20 @@ import (
 	"mato/internal/taskfile"
 )
 
+var createCloneFn = git.CreateClone
+var removeCloneFn = git.RemoveClone
+
 func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.ClaimedTask) error {
-	cloneDir, err := git.CreateClone(env.repoRoot)
+	cloneDir, err := createCloneFn(env.repoRoot)
 	if err != nil {
 		return fmt.Errorf("create clone: %w", err)
 	}
-	defer git.RemoveClone(cloneDir)
+	cleanupClone := true
+	defer func() {
+		if cleanupClone {
+			removeCloneFn(cloneDir)
+		}
+	}()
 
 	if err := configureReceiveDeny(env.repoRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
@@ -93,12 +102,20 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 
 	// Post-agent: if the task is still in in-progress/ and the agent made
 	// commits, push the branch and move the task to ready-for-review/.
+	var postPushErr error
 	if claimed != nil {
 		if err := postAgentPush(env, run.agentID, claimed, cloneDir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: post-agent push failed: %v\n", err)
+			cleanupClone = false
+			postPushErr = fmt.Errorf("post-agent push failed; preserving clone at %s: %w", cloneDir, err)
 		}
 	}
 
+	if agentErr != nil && postPushErr != nil {
+		return errors.Join(agentErr, postPushErr)
+	}
+	if postPushErr != nil {
+		return postPushErr
+	}
 	return agentErr
 }
 
@@ -114,7 +131,7 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 	// Check whether the agent made any commits above the target branch.
 	logOut, err := git.Output(cloneDir, "log", "--oneline", env.targetBranch+"..HEAD")
 	if err != nil {
-		return nil // can't determine; leave for recoverStuckTask
+		return fmt.Errorf("determine whether agent committed work: %w", err)
 	}
 	if strings.TrimSpace(logOut) == "" {
 		return nil // no commits; recoverStuckTask will handle recovery

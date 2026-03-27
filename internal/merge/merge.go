@@ -31,6 +31,7 @@ type mergeQueueTask struct {
 var errTaskBranchNotPushed = errors.New("task branch not pushed by agent")
 var errSquashMergeConflict = errors.New("squash merge conflict")
 var errPushAfterSquashFailed = errors.New("push failed after squash merge")
+var removeTaskFileFn = os.Remove
 
 type mergeResult struct {
 	commitSHA    string
@@ -138,6 +139,7 @@ func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask
 				}
 				continue
 			}
+			cleanupTaskBranch(repoRoot, taskBranchName(task))
 			merged++
 			continue
 		}
@@ -150,8 +152,6 @@ func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask
 			}
 			continue
 		}
-		// Clean up the now-merged task branch (best-effort).
-		cleanupTaskBranch(repoRoot, taskBranchName(task))
 		if result != nil {
 			detail := messaging.CompletionDetail{
 				TaskID:       task.id,
@@ -167,20 +167,28 @@ func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask
 		}
 		if err := markTaskMerged(task.path); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: merged task %s but could not mark completion: %v\n", task.name, err)
-			// Continue to moveTaskWithRetry: moving to completed/ is
-			// more important than the merged record.  If the move also
-			// fails, the next cycle will detect the already-merged
-			// branch via the idempotent squash check.
+			// Continue to moveTaskWithRetry: moving to completed/ is more
+			// important than the merged record. If the move also fails,
+			// leave the task branch in place so a later cycle can recover
+			// using the already-merged detection path.
 		}
+		bookkeepingComplete := false
 		if err := moveTaskWithRetry(task.path, completedPath); err != nil {
 			if _, statErr := os.Stat(completedPath); statErr == nil {
-				if removeErr := os.Remove(task.path); removeErr != nil {
+				if removeErr := removeTaskFileFn(task.path); removeErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
+					continue
 				}
+				bookkeepingComplete = true
 			} else {
 				fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
 				continue
 			}
+		} else {
+			bookkeepingComplete = true
+		}
+		if bookkeepingComplete {
+			cleanupTaskBranch(repoRoot, taskBranchName(task))
 		}
 		merged++
 	}

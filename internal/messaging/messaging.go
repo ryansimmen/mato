@@ -103,9 +103,9 @@ func WriteMessage(tasksDir string, msg Message) error {
 
 	filename := fmt.Sprintf("%s-%s-%s-%s.json",
 		msg.SentAt.Format("20060102T150405.000000000Z"),
-		messageFilePart(msg.From, "unknown"),
-		messageFilePart(msg.Type, "message"),
-		messageFilePart(msg.ID, "message"),
+		safeFilePart(msg.From, "unknown"),
+		safeFilePart(msg.Type, "message"),
+		safeFilePart(msg.ID, "message"),
 	)
 
 	path := filepath.Join(tasksDir, "messages", "events", filename)
@@ -224,7 +224,7 @@ func WritePresence(tasksDir, agentID, taskFile, branch string) error {
 		UpdatedAt: time.Now().UTC(),
 	}
 
-	path := filepath.Join(tasksDir, "messages", "presence", messageFilePart(agentID, "unknown")+".json")
+	path := filepath.Join(tasksDir, "messages", "presence", safeFilePart(agentID, "unknown")+".json")
 	if err := writeJSONAtomically(path, info); err != nil {
 		return fmt.Errorf("write presence: %w", err)
 	}
@@ -332,15 +332,14 @@ func CleanOldMessages(tasksDir string, maxAge time.Duration) {
 	}
 }
 
-// completionFilename encodes a task ID into a collision-resistant filename
-// safe for use inside the completions directory. Characters in [a-zA-Z0-9-]
-// pass through unchanged; all others are encoded as _XX where XX is the
-// lowercase hex value of the byte. This is reversible and guarantees
-// distinct task IDs map to distinct filenames.
-func completionFilename(taskID string) string {
+// safeEncode encodes an arbitrary string into a collision-resistant filename
+// component. Characters in [a-zA-Z0-9-] pass through unchanged; all others
+// are encoded as _XX where XX is the lowercase hex value of each byte. This
+// is reversible and guarantees distinct input strings map to distinct outputs.
+func safeEncode(s string) string {
 	var b strings.Builder
-	for i := 0; i < len(taskID); i++ {
-		c := taskID[i]
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' {
 			b.WriteByte(c)
 		} else {
@@ -348,7 +347,24 @@ func completionFilename(taskID string) string {
 			b.WriteString(hex.EncodeToString([]byte{c}))
 		}
 	}
-	s := b.String()
+	return b.String()
+}
+
+// safeFilePart encodes a value for use as a filename component using
+// collision-resistant encoding. If the value is empty or whitespace-only,
+// the fallback is returned instead.
+func safeFilePart(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return safeEncode(value)
+}
+
+// completionFilename encodes a task ID into a collision-resistant filename
+// safe for use inside the completions directory.
+func completionFilename(taskID string) string {
+	s := safeEncode(taskID)
 	if s == "" {
 		return "unknown"
 	}

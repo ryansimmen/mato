@@ -115,6 +115,7 @@ func TestCountFailureMarkers(t *testing.T) {
 		{"two", "<!-- failure: a1 at T1 step=WORK error=e1 -->\n<!-- failure: a2 at T2 step=WORK error=e2 -->", 2},
 		{"ignores review-failure", "<!-- failure: a at T step=WORK error=e -->\n<!-- review-failure: b at T step=REVIEW error=e -->", 1},
 		{"ignores body text", "# Task\n`CountFailureLines()` counts `<!-- failure: ... -->` records.\n<!-- failure: a at T step=WORK error=e -->", 1},
+		{"ignores fenced code", "# Task\n```\n<!-- failure: a at T step=WORK error=e -->\n```\n<!-- failure: b at T step=WORK error=e -->", 1},
 		{"empty", "", 0},
 	}
 	for _, tt := range tests {
@@ -137,6 +138,7 @@ func TestCountReviewFailureMarkers(t *testing.T) {
 		{"one", "<!-- review-failure: a at T step=REVIEW error=e -->", 1},
 		{"two", "<!-- review-failure: a at T1 step=REVIEW error=e1 -->\n<!-- review-failure: b at T2 step=REVIEW error=e2 -->", 2},
 		{"ignores task failure", "<!-- failure: a at T step=WORK error=e -->\n<!-- review-failure: b at T step=REVIEW error=e -->", 1},
+		{"ignores fenced code", "```\n<!-- review-failure: a at T step=REVIEW error=e -->\n```\n<!-- review-failure: b at T step=REVIEW error=e -->", 1},
 		{"empty", "", 0},
 	}
 	for _, tt := range tests {
@@ -161,6 +163,7 @@ func TestExtractFailureLines(t *testing.T) {
 			"<!-- failure: a at T1 step=WORK error=e1 -->\n<!-- failure: b at T2 step=WORK error=e2 -->"},
 		{"body reference ignored", "# Retry budget\n`CountFailureLines()` counts `<!-- failure: ... -->` records.\n<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed -->",
 			"<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed -->"},
+		{"ignores fenced code", "```\n<!-- failure: a at T step=WORK error=e -->\n```\n<!-- failure: b at T step=WORK error=e -->", "<!-- failure: b at T step=WORK error=e -->"},
 		{"empty", "", ""},
 	}
 	for _, tt := range tests {
@@ -228,6 +231,7 @@ func TestLastFailureReason(t *testing.T) {
 		{"multiple returns last", "<!-- failure: a at T1 — first error -->\n<!-- failure: b at T2 — second error -->", "second error"},
 		{"step error format", "<!-- failure: a at T1 step=WORK error=tests_failed -->", "tests_failed"},
 		{"step error with files changed", "<!-- failure: a at T1 step=WORK error=tests_failed files_changed=main.go -->", "tests_failed"},
+		{"ignores fenced code", "```\n<!-- failure: a at T — fenced error -->\n```\n<!-- failure: b at T — real error -->", "real error"},
 		{"empty", "", ""},
 	}
 	for _, tt := range tests {
@@ -250,6 +254,7 @@ func TestLastReviewRejectionReason(t *testing.T) {
 		{"single", "<!-- review-rejection: a at T — missing tests -->", "missing tests"},
 		{"multiple returns last", "<!-- review-rejection: a at T1 — first -->\n<!-- review-rejection: b at T2 — second -->", "second"},
 		{"ignores malformed", "<!-- review-rejection: a at T -->", ""},
+		{"ignores fenced code", "```\n<!-- review-rejection: a at T — fenced -->\n```\n<!-- review-rejection: b at T — real -->", "real"},
 		{"empty", "", ""},
 	}
 	for _, tt := range tests {
@@ -402,6 +407,7 @@ func TestContainsCancelledMarker(t *testing.T) {
 		{"present", "# Task\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n", true},
 		{"absent", "# Task\n<!-- failure: agent at 2026-01-01T00:00:00Z step=WORK error=fail -->\n", false},
 		{"inline body text ignored", "# Task\nUse `<!-- cancelled: ... -->` to document operator actions.\n", false},
+		{"fenced code ignored", "# Task\n```\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n```\n", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -441,6 +447,7 @@ func TestCountCycleFailureMarkers(t *testing.T) {
 		{"one", "# Task\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n", 1},
 		{"two", "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n<!-- cycle-failure: mato at 2026-01-02T00:00:00Z — circular dependency -->\n", 2},
 		{"mixed with failure", "<!-- failure: agent at T step=WORK error=e -->\n<!-- cycle-failure: mato at T — circular dependency -->\n", 1},
+		{"ignores fenced code", "```\n<!-- cycle-failure: mato at T — fenced -->\n```\n<!-- cycle-failure: mato at T — real -->\n", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -460,6 +467,7 @@ func TestLastCycleFailureReason(t *testing.T) {
 		{"present", "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n", "circular dependency"},
 		{"absent", "<!-- failure: agent at T step=WORK error=fail -->\n", ""},
 		{"multiple", "<!-- cycle-failure: mato at T — first -->\n<!-- cycle-failure: mato at T — circular dependency -->\n", "circular dependency"},
+		{"ignores fenced code", "```\n<!-- cycle-failure: mato at T — fenced -->\n```\n<!-- cycle-failure: mato at T — real -->\n", "real"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -546,6 +554,7 @@ func TestCountTerminalFailureMarkers(t *testing.T) {
 		{"two", "<!-- terminal-failure: mato at T1 — reason1 -->\n<!-- terminal-failure: mato at T2 — reason2 -->\n", 2},
 		{"mixed with failure", "<!-- failure: agent at T step=WORK error=e -->\n<!-- terminal-failure: mato at T — reason -->\n", 1},
 		{"mixed with cycle", "<!-- cycle-failure: mato at T — circular dependency -->\n<!-- terminal-failure: mato at T — reason -->\n", 1},
+		{"ignores fenced code", "```\n<!-- terminal-failure: mato at T — fenced -->\n```\n<!-- terminal-failure: mato at T — real -->\n", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -565,6 +574,7 @@ func TestLastTerminalFailureReason(t *testing.T) {
 		{"present", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n", "unparseable frontmatter"},
 		{"absent", "<!-- failure: agent at T step=WORK error=fail -->\n", ""},
 		{"multiple returns last", "<!-- terminal-failure: mato at T — first -->\n<!-- terminal-failure: mato at T — review retry exhausted -->\n", "review retry exhausted"},
+		{"ignores fenced code", "```\n<!-- terminal-failure: mato at T — fenced -->\n```\n<!-- terminal-failure: mato at T — real -->\n", "real"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -675,6 +685,12 @@ Body.
 			want:    "Body.",
 			notWant: []string{"<!-- failure:", "<!-- review-failure:"},
 		},
+		{
+			name:    "preserves fenced marker examples",
+			input:   "# Title\n\n```\n<!-- failure: fenced at T step=WORK error=e -->\n<!-- cancelled: operator at T -->\n```\n\n<!-- failure: real at T step=WORK error=e -->\n",
+			want:    "<!-- failure: fenced at T step=WORK error=e -->",
+			notWant: []string{"<!-- failure: real at T step=WORK error=e -->"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -706,5 +722,233 @@ func TestCountFailureMarkers_IgnoresCancelled(t *testing.T) {
 	data := []byte("<!-- failure: agent at T step=WORK error=e -->\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n")
 	if got := CountFailureMarkers(data); got != 1 {
 		t.Fatalf("CountFailureMarkers() = %d, want 1 (should ignore cancelled)", got)
+	}
+}
+
+// Regression tests: marker-like text in prose and fenced code must not be
+// treated as real scheduler metadata. Only standalone trimmed lines count.
+
+func TestParseClaimedBy_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		want   string
+		wantOK bool
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nThe `<!-- claimed-by: agent -->` marker is used for claims.\n",
+			"", false,
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- claimed-by: agent42 -->\n```\n",
+			"", false,
+		},
+		{
+			"embedded in sentence",
+			"# Task\nUse the <!-- claimed-by: agentX --> comment to claim.\n",
+			"", false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- claimed-by: real-agent  claimed-at: 2026-01-01T00:00:00Z -->\nSome prose about <!-- claimed-by: fake -->.\n",
+			"real-agent", true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseClaimedBy([]byte(tt.data))
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseClaimedAt_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		wantOK bool
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nThe `<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->` marker.\n",
+			false,
+		},
+		{
+			"embedded in sentence",
+			"# Task\nUse <!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z --> to mark.\n",
+			false,
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->\n```\n",
+			false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->\nProse about <!-- claimed-by: x  claimed-at: 2025-01-01T00:00:00Z -->.\n",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := ParseClaimedAt([]byte(tt.data))
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestContainsFailureFrom_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		agentID string
+		want    bool
+	}{
+		{
+			"inline prose",
+			"# Task\nLook for `<!-- failure: abc12345 at ... -->` records.\n",
+			"abc12345", false,
+		},
+		{
+			"prose sentence",
+			"# Task\nThe <!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail --> marker.\n",
+			"abc12345", false,
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail -->\n```\n",
+			"abc12345", false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail -->\nProse about <!-- failure: abc12345 -->.\n",
+			"abc12345", true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ContainsFailureFrom([]byte(tt.data), tt.agentID)
+			if got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsCycleFailure_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nThe `<!-- cycle-failure: mato at ... -->` marker is for cycle detection.\n",
+			false,
+		},
+		{
+			"prose sentence",
+			"# Task\nSee <!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency --> for details.\n",
+			false,
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n```\n",
+			false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\nProse about <!-- cycle-failure: -->.\n",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsCycleFailure([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsTerminalFailure_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nUse `<!-- terminal-failure: ... -->` for permanent errors.\n",
+			false,
+		},
+		{
+			"prose sentence",
+			"# Task\nThe <!-- terminal-failure: mato at T — reason --> marker is terminal.\n",
+			false,
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n```\n",
+			false,
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\nProse about <!-- terminal-failure: -->.\n",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsTerminalFailure([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractReviewRejections_IgnoresProseMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			"inline backtick prose",
+			"# Task\nThe `<!-- review-rejection: reviewer -->` comment is for rejection feedback.\n",
+			"",
+		},
+		{
+			"prose sentence",
+			"# Task\nSee the <!-- review-rejection: reviewer at T — reason --> for details.\n",
+			"",
+		},
+		{
+			"fenced code block",
+			"# Task\n```\n<!-- review-rejection: reviewer-1 at T — bad code -->\n```\n",
+			"",
+		},
+		{
+			"real marker on own line",
+			"# Task\n<!-- review-rejection: reviewer-1 at T — bad code -->\nProse about <!-- review-rejection: fake -->.\n",
+			"<!-- review-rejection: reviewer-1 at T — bad code -->",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractReviewRejections([]byte(tt.data))
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

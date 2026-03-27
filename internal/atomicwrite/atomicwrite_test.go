@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 )
@@ -378,5 +379,217 @@ func TestAppendToFile_ContentVerification(t *testing.T) {
 	want := "alpha\nbeta\ngamma\n"
 	if string(got) != want {
 		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+// saveSyncHooks saves the current sync hooks and returns a restore function.
+func saveSyncHooks(t *testing.T) {
+	t.Helper()
+	origSyncFile := syncFileFn
+	origSyncDir := syncDirFn
+	t.Cleanup(func() {
+		syncFileFn = origSyncFile
+		syncDirFn = origSyncDir
+	})
+}
+
+func TestWriteFunc_FsyncBeforeRename(t *testing.T) {
+	saveSyncHooks(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fsync-order.txt")
+
+	// Track the order of operations: fsync-file, rename, sync-dir.
+	var ops []string
+	var mu sync.Mutex
+	record := func(op string) {
+		mu.Lock()
+		ops = append(ops, op)
+		mu.Unlock()
+	}
+
+	syncFileFn = func(f *os.File) error {
+		record("fsync-file")
+		return f.Sync()
+	}
+
+	origRenameFn := renameFn
+	renameFn = func(old, new string) error {
+		record("rename")
+		return origRenameFn(old, new)
+	}
+	t.Cleanup(func() { renameFn = origRenameFn })
+
+	syncDirFn = func(dir string) error {
+		record("sync-dir")
+		return syncDir(dir)
+	}
+
+	if err := WriteFile(path, []byte("durable")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"fsync-file", "rename", "sync-dir"}
+	if len(ops) != len(want) {
+		t.Fatalf("ops = %v, want %v", ops, want)
+	}
+	for i, op := range ops {
+		if op != want[i] {
+			t.Errorf("ops[%d] = %q, want %q", i, op, want[i])
+		}
+	}
+}
+
+func TestWriteFunc_FsyncError(t *testing.T) {
+	saveSyncHooks(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fsync-err.txt")
+
+	syncErr := errors.New("simulated fsync failure")
+	syncFileFn = func(f *os.File) error { return syncErr }
+
+	err := WriteFile(path, []byte("data"))
+	if err == nil {
+		t.Fatal("expected error from fsync, got nil")
+	}
+	if !errors.Is(err, syncErr) {
+		t.Errorf("error = %v, want wrapping %v", err, syncErr)
+	}
+
+	// Target should not exist.
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Error("target file should not exist after fsync error")
+	}
+
+	// No leftover temp files.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		t.Errorf("leftover temp file: %s", e.Name())
+	}
+}
+
+func TestWriteFunc_SyncDirError(t *testing.T) {
+	saveSyncHooks(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "syncdir-err.txt")
+
+	dirSyncErr := errors.New("simulated dir sync failure")
+	syncDirFn = func(string) error { return dirSyncErr }
+
+	err := WriteFile(path, []byte("data"))
+	if err == nil {
+		t.Fatal("expected error from sync dir, got nil")
+	}
+	if !errors.Is(err, dirSyncErr) {
+		t.Errorf("error = %v, want wrapping %v", err, dirSyncErr)
+	}
+
+	// The file was renamed successfully before the dir sync error, so it
+	// should exist with correct content.
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile: %v", readErr)
+	}
+	if string(got) != "data" {
+		t.Errorf("content = %q, want %q", got, "data")
+	}
+}
+
+func TestWriteFunc_SyncDirCalled(t *testing.T) {
+	saveSyncHooks(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "syncdir.txt")
+
+	var syncDirCalled atomic.Int32
+	syncDirFn = func(d string) error {
+		if d != dir {
+			t.Errorf("syncDir called with %q, want %q", d, dir)
+		}
+		syncDirCalled.Add(1)
+		return nil
+	}
+
+	if err := WriteFile(path, []byte("test")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if syncDirCalled.Load() != 1 {
+		t.Errorf("syncDir called %d times, want 1", syncDirCalled.Load())
+	}
+}
+
+func TestWriteFunc_EXDEVFallbackSyncOrder(t *testing.T) {
+	saveSyncHooks(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exdev-sync.txt")
+
+	var ops []string
+	var mu sync.Mutex
+	record := func(op string) {
+		mu.Lock()
+		ops = append(ops, op)
+		mu.Unlock()
+	}
+
+	syncFileFn = func(f *os.File) error {
+		record("fsync-file")
+		return f.Sync()
+	}
+	syncDirFn = func(dir string) error {
+		record("sync-dir")
+		return syncDir(dir)
+	}
+
+	origRenameFn := renameFn
+	renameFn = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() { renameFn = origRenameFn })
+
+	if err := WriteFile(path, []byte("exdev durable")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Primary path fsyncs before the EXDEV rename attempt, then the
+	// fallback fsyncs its own copy and syncs the directory.
+	// Expect: fsync-file (primary), fsync-file (fallback copy), sync-dir.
+	if len(ops) < 2 {
+		t.Fatalf("ops = %v, want at least [fsync-file, ..., sync-dir]", ops)
+	}
+	if ops[0] != "fsync-file" {
+		t.Errorf("ops[0] = %q, want %q", ops[0], "fsync-file")
+	}
+	if ops[len(ops)-1] != "sync-dir" {
+		t.Errorf("ops[last] = %q, want %q", ops[len(ops)-1], "sync-dir")
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "exdev durable" {
+		t.Errorf("content = %q, want %q", got, "exdev durable")
+	}
+}
+
+func TestSyncDir(t *testing.T) {
+	dir := t.TempDir()
+
+	// syncDir should succeed on a valid directory.
+	if err := syncDir(dir); err != nil {
+		t.Fatalf("syncDir: %v", err)
+	}
+
+	// syncDir should fail on a nonexistent directory.
+	if err := syncDir(filepath.Join(dir, "nonexistent")); err == nil {
+		t.Error("expected error for nonexistent directory, got nil")
 	}
 }

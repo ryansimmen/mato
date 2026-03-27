@@ -16,6 +16,10 @@ tags: [feature, cli]
 estimated_complexity: medium
 ---
 
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the implemented design; see the source code for the
+> current behavior.
+
 # Add `mato pause` and `mato resume` Commands
 
 ## 1. Goal
