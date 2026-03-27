@@ -27,6 +27,11 @@ affects:
 tags: [feature, cli, ux]
 estimated_complexity: medium
 ---
+
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the implemented design; see the source code for the
+> current behavior.
+
 # Add `mato cancel` Command
 
 ## 1. Goal
