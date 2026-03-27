@@ -429,7 +429,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `internal/doctor/`
 - Health check command — `Run`, `RenderText`, `RenderJSON` (`doctor.go`, `checks.go`, `render.go`).
-- 7 checks: git, tools, docker, queue layout, task parsing, locks & orphans, dependencies.
+- 8 checks: git, tools, docker, queue layout, task parsing, locks & orphans, hygiene, dependencies.
 - Queue-only preflight usage via `mato doctor --only queue,tasks,deps`; queue-only runs skip unrelated Docker-image config resolution in command setup.
 - Fix mode for repairable issues — `--fix` flag.
 
