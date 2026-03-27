@@ -243,6 +243,10 @@ mato cancel fix-login-bug add-dark-mode
 ### `mato version`
 `mato version` prints the build version in a script-friendly format.
 
+Builds prefer the nearest reachable tag matching `v*`. Non-release tags are
+ignored for version stamping. When no matching release tag is reachable, the
+build falls back to the commit hash.
+
 Example usage:
 ```bash
 mato version
@@ -350,7 +354,7 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 `help` target.
 | Target | Description |
 | --- | --- |
-| `build` | Build `bin/mato` with `go build -ldflags "$(GO_LDFLAGS)" -o bin/mato ./cmd/mato`. By default `GO_LDFLAGS` stamps `main.version` from `git describe --tags --always --dirty`, falling back to `dev`. |
+| `build` | Build `bin/mato` with `go build -ldflags "$(GO_LDFLAGS)" -o bin/mato ./cmd/mato`. By default `GO_LDFLAGS` stamps `main.version` from `git describe --tags --match 'v*' --always --dirty`, which prefers release-style `v*` tags, falls back to the commit hash when no matching tag is reachable, and falls back to `dev` when git metadata is unavailable. |
 | `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when `opencode` is on `PATH`, `~/.config/opencode/skills/mato/`. The skill is a task planner that breaks down work into actionable task files. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
@@ -362,6 +366,6 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | `help` | Print the target list and descriptions. |
 Additional behavior:
 - `all` runs `fmt`, `vet`, `build`, and `test`.
-- `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --always --dirty` and falls back to `dev`.
+- `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --match 'v*' --always --dirty`, which ignores non-release tags, falls back to the commit hash when no matching release tag is reachable, and falls back to `dev` when git metadata is unavailable.
 - `REPO` is required for `make run` and may be supplied from `.env`.
 - `COPILOT_ARGS` is passed through to `mato`, which then forwards those arguments to Copilot CLI.
