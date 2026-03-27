@@ -718,7 +718,7 @@ func newDoctorCmd() *cobra.Command {
 	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&doctorRepo, "repo", "", "Path to git repository (default: current directory)")
-	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs)")
+	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs, Docker image pulls, stale events, temp files)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, hygiene, deps)")
 
@@ -798,6 +798,9 @@ func newRetryCmd() *cobra.Command {
 				return err
 			}
 			tasksDir := filepath.Join(repoRoot, dirs.Root)
+			if err := requireTasksDir(tasksDir); err != nil {
+				return err
+			}
 
 			var firstErr error
 			for _, name := range args {
@@ -921,6 +924,9 @@ func newCancelCmd() *cobra.Command {
 				return err
 			}
 			tasksDir := filepath.Join(repoRoot, dirs.Root)
+			if err := requireTasksDir(tasksDir); err != nil {
+				return err
+			}
 
 			var firstErr error
 			for _, ref := range args {

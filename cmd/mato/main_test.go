@@ -1703,6 +1703,29 @@ func TestRetryCmd_TaskNotFound(t *testing.T) {
 	}
 }
 
+func TestRetryCmd_MissingMatoDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "missing"})
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+	if stderr != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if execErr == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(execErr.Error(), ".mato/ directory not found - run 'mato init' first") {
+		t.Fatalf("unexpected error: %v", execErr)
+	}
+	var silentErr *SilentError
+	if errors.As(execErr, &silentErr) {
+		t.Fatalf("unexpected SilentError: %v", execErr)
+	}
+}
+
 func TestRetryCmd_FlagParsing(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2093,11 +2116,14 @@ func TestCancelCmd_MissingMatoDir(t *testing.T) {
 	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "missing"})
 	var execErr error
 	stderr := captureStderr(t, func() { execErr = cmd.Execute() })
-	if !strings.Contains(stderr, "mato error: task not found: missing") {
+	if stderr != "" {
 		t.Fatalf("unexpected stderr: %q", stderr)
 	}
 	if execErr == nil {
 		t.Fatal("expected error")
+	}
+	if !strings.Contains(execErr.Error(), ".mato/ directory not found - run 'mato init' first") {
+		t.Fatalf("unexpected error: %v", execErr)
 	}
 }
 

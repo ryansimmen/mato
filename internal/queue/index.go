@@ -328,29 +328,46 @@ func (idx *PollIndex) TasksByState(state string) []*TaskSnapshot {
 }
 
 // CompletedIDs returns the set of task IDs found in completed/. Both filename
-// stems and frontmatter IDs are included.
+// stems and frontmatter IDs are included. The returned map is a shallow copy;
+// callers may mutate it without affecting the index.
 func (idx *PollIndex) CompletedIDs() map[string]struct{} {
 	if idx == nil {
 		return nil
 	}
-	return idx.completedIDs
+	out := make(map[string]struct{}, len(idx.completedIDs))
+	for k, v := range idx.completedIDs {
+		out[k] = v
+	}
+	return out
 }
 
 // NonCompletedIDs returns the set of task IDs found in all directories except
-// completed/. Both filename stems and frontmatter IDs are included.
+// completed/. Both filename stems and frontmatter IDs are included. The
+// returned map is a shallow copy; callers may mutate it without affecting the
+// index.
 func (idx *PollIndex) NonCompletedIDs() map[string]struct{} {
 	if idx == nil {
 		return nil
 	}
-	return idx.nonCompletedIDs
+	out := make(map[string]struct{}, len(idx.nonCompletedIDs))
+	for k, v := range idx.nonCompletedIDs {
+		out[k] = v
+	}
+	return out
 }
 
 // AllIDs returns the set of task IDs found across all queue directories.
+// The returned map is a shallow copy; callers may mutate it without
+// affecting the index.
 func (idx *PollIndex) AllIDs() map[string]struct{} {
 	if idx == nil {
 		return nil
 	}
-	return idx.allIDs
+	out := make(map[string]struct{}, len(idx.allIDs))
+	for k, v := range idx.allIDs {
+		out[k] = v
+	}
+	return out
 }
 
 // HasActiveOverlap reports whether any task in the active directories
@@ -454,11 +471,17 @@ func (idx *PollIndex) ActiveAffects() []taskfile.ActiveTask {
 
 // ActiveBranches returns the set of branch names currently in use across
 // active directories (in-progress, ready-for-review, ready-to-merge).
+// The returned map is a shallow copy; callers may mutate it without
+// affecting the index.
 func (idx *PollIndex) ActiveBranches() map[string]struct{} {
 	if idx == nil {
 		return nil
 	}
-	return idx.activeBranches
+	out := make(map[string]struct{}, len(idx.activeBranches))
+	for k, v := range idx.activeBranches {
+		out[k] = v
+	}
+	return out
 }
 
 // BacklogByPriority returns backlog tasks sorted by priority (ascending),

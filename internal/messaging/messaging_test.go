@@ -2234,13 +2234,13 @@ func TestWritePresence_UnsafeAgentID(t *testing.T) {
 		agentID      string
 		wantFilePart string
 	}{
-		{"slashes", "../../etc/passwd", "etc-passwd"},
-		{"spaces", "agent one", "agent-one"},
-		{"special chars", "agent@host:1234", "agent-host-1234"},
+		{"slashes", "../../etc/passwd", "_2e_2e_2f_2e_2e_2fetc_2fpasswd"},
+		{"spaces", "agent one", "agent_20one"},
+		{"special chars", "agent@host:1234", "agent_40host_3a1234"},
 		{"empty", "", "unknown"},
 		{"whitespace only", "   ", "unknown"},
-		{"unicode", "agënt-ünit", "ag-nt--nit"},
-		{"dots only", "...", "unknown"},
+		{"unicode", "agënt-ünit", "ag_c3_abnt-_c3_bcnit"},
+		{"dots only", "...", "_2e_2e_2e"},
 		{"normal", "abc12345", "abc12345"},
 	}
 
@@ -2798,22 +2798,29 @@ func TestReadRecentMessages_EqualTimestampTieBreakParity(t *testing.T) {
 	}
 }
 
-func TestWritePresence_SanitizedFilenameCollision(t *testing.T) {
+func TestWritePresence_CollisionResistance(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	// Two agent IDs that differ only in characters replaced by sanitization.
-	// messageFilePart replaces non-[a-zA-Z0-9._-] with "-" and trims.
+	// Two agent IDs that would collide under the old lossy sanitization
+	// but produce distinct filenames with collision-resistant encoding.
 	agentA := "agent!one"
 	agentB := "agent@one"
 
-	// Verify they actually collide.
+	// Verify they would collide under the old lossy scheme.
 	sanitizedA := messageFilePart(agentA, "unknown")
 	sanitizedB := messageFilePart(agentB, "unknown")
 	if sanitizedA != sanitizedB {
-		t.Fatalf("expected collision: %q vs %q", sanitizedA, sanitizedB)
+		t.Fatalf("old sanitization should collide: %q vs %q", sanitizedA, sanitizedB)
+	}
+
+	// Verify they do NOT collide under the new encoding.
+	encodedA := safeFilePart(agentA, "unknown")
+	encodedB := safeFilePart(agentB, "unknown")
+	if encodedA == encodedB {
+		t.Fatalf("new encoding should not collide: %q vs %q", encodedA, encodedB)
 	}
 
 	if err := WritePresence(tasksDir, agentA, "task-a.md", "branch-a"); err != nil {
@@ -2823,7 +2830,7 @@ func TestWritePresence_SanitizedFilenameCollision(t *testing.T) {
 		t.Fatalf("WritePresence(agentB): %v", err)
 	}
 
-	// Both map to the same filename, so the second write overwrites the first.
+	// Both entries should survive as separate files.
 	presenceDir := filepath.Join(tasksDir, "messages", "presence")
 	entries, err := os.ReadDir(presenceDir)
 	if err != nil {
@@ -2835,37 +2842,38 @@ func TestWritePresence_SanitizedFilenameCollision(t *testing.T) {
 			jsonFiles++
 		}
 	}
-	// Document that collision causes overwrite: only 1 file on disk.
-	if jsonFiles != 1 {
-		t.Errorf("expected 1 presence file (collision overwrites), got %d", jsonFiles)
+	if jsonFiles != 2 {
+		t.Errorf("expected 2 presence files (no collision), got %d", jsonFiles)
 	}
 
-	// The surviving entry should be the last writer (agentB).
+	// Both entries should be readable.
 	presence, err := ReadAllPresence(tasksDir)
 	if err != nil {
 		t.Fatalf("ReadAllPresence: %v", err)
 	}
-	if len(presence) != 1 {
-		t.Fatalf("expected 1 presence entry, got %d", len(presence))
+	if len(presence) != 2 {
+		t.Fatalf("expected 2 presence entries, got %d", len(presence))
 	}
-	for _, info := range presence {
-		if info.AgentID != agentB {
-			t.Errorf("surviving presence has AgentID=%q, want %q (last writer wins)", info.AgentID, agentB)
-		}
-		if info.Task != "task-b.md" {
-			t.Errorf("surviving presence has Task=%q, want %q", info.Task, "task-b.md")
-		}
+	if info, ok := presence[agentA]; !ok {
+		t.Error("agentA presence entry missing")
+	} else if info.Task != "task-a.md" {
+		t.Errorf("agentA Task=%q, want %q", info.Task, "task-a.md")
+	}
+	if info, ok := presence[agentB]; !ok {
+		t.Error("agentB presence entry missing")
+	} else if info.Task != "task-b.md" {
+		t.Errorf("agentB Task=%q, want %q", info.Task, "task-b.md")
 	}
 }
 
-func TestWriteMessage_SanitizedFilenameCollision(t *testing.T) {
+func TestWriteMessage_CollisionResistance(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	// Two messages with the same SentAt and Type, but From and ID values
-	// that differ only in characters replaced by sanitization.
+	// that would collide under the old lossy sanitization.
 	sameTime := time.Date(2024, time.June, 15, 10, 0, 0, 0, time.UTC)
 
 	msgA := Message{
@@ -2879,12 +2887,17 @@ func TestWriteMessage_SanitizedFilenameCollision(t *testing.T) {
 		SentAt: sameTime,
 	}
 
-	// Verify the filename parts actually collide.
+	// Verify the old scheme would collide.
 	if messageFilePart(msgA.From, "unknown") != messageFilePart(msgB.From, "unknown") {
-		t.Fatal("From parts should collide")
+		t.Fatal("old From parts should collide")
 	}
 	if messageFilePart(msgA.ID, "message") != messageFilePart(msgB.ID, "message") {
-		t.Fatal("ID parts should collide")
+		t.Fatal("old ID parts should collide")
+	}
+
+	// Verify the new scheme produces distinct parts.
+	if safeFilePart(msgA.From, "unknown") == safeFilePart(msgB.From, "unknown") {
+		t.Fatal("new From parts should not collide")
 	}
 
 	if err := WriteMessage(tasksDir, msgA); err != nil {
@@ -2907,22 +2920,22 @@ func TestWriteMessage_SanitizedFilenameCollision(t *testing.T) {
 		}
 	}
 
-	// The two messages map to the same filename, so the second overwrites
-	// the first. This documents the current lossy behavior.
-	if jsonFiles != 1 {
-		t.Errorf("expected 1 event file (collision overwrites), got %d", jsonFiles)
+	// Both messages should survive as separate files.
+	if jsonFiles != 2 {
+		t.Errorf("expected 2 event files (no collision), got %d", jsonFiles)
 	}
 
-	// Only the second message should survive.
+	// Both messages should be readable.
 	msgs, err := ReadMessages(tasksDir, time.Time{})
 	if err != nil {
 		t.Fatalf("ReadMessages: %v", err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message after collision, got %d", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
-	if msgs[0].Body != "second" {
-		t.Errorf("surviving message Body=%q, want %q (last writer wins)", msgs[0].Body, "second")
+	bodies := map[string]bool{msgs[0].Body: true, msgs[1].Body: true}
+	if !bodies["first"] || !bodies["second"] {
+		t.Errorf("expected both messages to survive, got bodies %v", bodies)
 	}
 }
 

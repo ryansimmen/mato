@@ -935,6 +935,31 @@ func TestGatherStatus_PauseStateVariants(t *testing.T) {
 	}
 }
 
+func TestStatusDataToJSON_ZeroDependencyWaitingTask(t *testing.T) {
+	data := statusData{
+		queueCounts: map[string]int{},
+		waitingTasks: []waitingTaskSummary{
+			{
+				Name:         "no-deps.md",
+				Title:        "No deps",
+				Priority:     10,
+				State:        queue.DirWaiting,
+				Dependencies: nil,
+			},
+		},
+	}
+	out := statusDataToJSON(data)
+	if len(out.Waiting) != 1 {
+		t.Fatalf("expected 1 waiting task, got %d", len(out.Waiting))
+	}
+	if out.Waiting[0].Dependencies == nil {
+		t.Fatal("expected non-nil empty dependencies slice, got nil")
+	}
+	if len(out.Waiting[0].Dependencies) != 0 {
+		t.Fatalf("expected 0 dependencies, got %d: %+v", len(out.Waiting[0].Dependencies), out.Waiting[0].Dependencies)
+	}
+}
+
 func TestWaitingTasks_TextAndJSONConsistency(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	if err := messaging.Init(tasksDir); err != nil {
