@@ -10,7 +10,18 @@ import (
 func TestLoad_AllFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, configFileName)
-	if err := os.WriteFile(path, []byte("branch: main\ndocker_image: ubuntu:24.04\ndefault_model: claude-sonnet-4\nagent_timeout: 45m\nretry_cooldown: 5m\n"), 0o644); err != nil {
+	content := strings.Join([]string{
+		"branch: main",
+		"docker_image: ubuntu:24.04",
+		"task_model: claude-sonnet-4",
+		"review_model: gpt-5.4",
+		"task_reasoning_effort: high",
+		"review_reasoning_effort: medium",
+		"agent_timeout: 45m",
+		"retry_cooldown: 5m",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
@@ -25,8 +36,17 @@ func TestLoad_AllFields(t *testing.T) {
 	if cfg.DockerImage == nil || *cfg.DockerImage != "ubuntu:24.04" {
 		t.Fatalf("DockerImage = %v, want %q", cfg.DockerImage, "ubuntu:24.04")
 	}
-	if cfg.DefaultModel == nil || *cfg.DefaultModel != "claude-sonnet-4" {
-		t.Fatalf("DefaultModel = %v, want %q", cfg.DefaultModel, "claude-sonnet-4")
+	if cfg.TaskModel == nil || *cfg.TaskModel != "claude-sonnet-4" {
+		t.Fatalf("TaskModel = %v, want %q", cfg.TaskModel, "claude-sonnet-4")
+	}
+	if cfg.ReviewModel == nil || *cfg.ReviewModel != "gpt-5.4" {
+		t.Fatalf("ReviewModel = %v, want %q", cfg.ReviewModel, "gpt-5.4")
+	}
+	if cfg.TaskReasoningEffort == nil || *cfg.TaskReasoningEffort != "high" {
+		t.Fatalf("TaskReasoningEffort = %v, want %q", cfg.TaskReasoningEffort, "high")
+	}
+	if cfg.ReviewReasoningEffort == nil || *cfg.ReviewReasoningEffort != "medium" {
+		t.Fatalf("ReviewReasoningEffort = %v, want %q", cfg.ReviewReasoningEffort, "medium")
 	}
 	if cfg.AgentTimeout == nil || *cfg.AgentTimeout != "45m" {
 		t.Fatalf("AgentTimeout = %v, want %q", cfg.AgentTimeout, "45m")
@@ -51,17 +71,8 @@ func TestLoad_PartialFields(t *testing.T) {
 	if cfg.Branch == nil || *cfg.Branch != "develop" {
 		t.Fatalf("Branch = %v, want %q", cfg.Branch, "develop")
 	}
-	if cfg.DockerImage != nil {
-		t.Fatalf("DockerImage = %v, want nil", cfg.DockerImage)
-	}
-	if cfg.DefaultModel != nil {
-		t.Fatalf("DefaultModel = %v, want nil", cfg.DefaultModel)
-	}
-	if cfg.AgentTimeout != nil {
-		t.Fatalf("AgentTimeout = %v, want nil", cfg.AgentTimeout)
-	}
-	if cfg.RetryCooldown != nil {
-		t.Fatalf("RetryCooldown = %v, want nil", cfg.RetryCooldown)
+	if cfg.DockerImage != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil || cfg.AgentTimeout != nil || cfg.RetryCooldown != nil {
+		t.Fatalf("unexpected non-nil fields: %#v", cfg)
 	}
 }
 
@@ -107,7 +118,15 @@ func TestLoad_InvalidYAML(t *testing.T) {
 func TestLoad_EmptyStringValues(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, configFileName)
-	if err := os.WriteFile(path, []byte("branch: \"\"\ndefault_model: \"\"\n"), 0o644); err != nil {
+	content := strings.Join([]string{
+		"branch: \"\"",
+		"task_model: \"\"",
+		"review_model: \"\"",
+		"task_reasoning_effort: \"\"",
+		"review_reasoning_effort: \"\"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
@@ -115,7 +134,7 @@ func TestLoad_EmptyStringValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Branch != nil || cfg.DefaultModel != nil {
+	if cfg.Branch != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil {
 		t.Fatalf("cfg = %#v, want normalized nil string fields", cfg)
 	}
 }
@@ -123,7 +142,16 @@ func TestLoad_EmptyStringValues(t *testing.T) {
 func TestLoad_WhitespaceValues(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, configFileName)
-	if err := os.WriteFile(path, []byte("branch: \"   \"\nagent_timeout: \" \t \"\n"), 0o644); err != nil {
+	content := strings.Join([]string{
+		"branch: \"   \"",
+		"task_model: \" \t \"",
+		"review_model: \"   \"",
+		"task_reasoning_effort: \" \t \"",
+		"review_reasoning_effort: \"   \"",
+		"agent_timeout: \" \t \"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
@@ -131,7 +159,7 @@ func TestLoad_WhitespaceValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Branch != nil || cfg.AgentTimeout != nil {
+	if cfg.Branch != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil || cfg.AgentTimeout != nil {
 		t.Fatalf("cfg = %#v, want normalized nil string fields", cfg)
 	}
 }
@@ -152,32 +180,19 @@ func TestLoad_UnknownKeys(t *testing.T) {
 	}
 }
 
-func TestLoad_MultipleUnknownKeys(t *testing.T) {
+func TestLoad_DefaultModelRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, configFileName)
-	if err := os.WriteFile(path, []byte("typo_branch: main\ntypo_model: gpt\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("default_model: claude-sonnet-4\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
 	_, err := Load(dir)
 	if err == nil {
-		t.Fatal("expected error for unknown keys, got nil")
+		t.Fatal("expected error for default_model, got nil")
 	}
-}
-
-func TestLoad_UnknownKeyMixedWithValid(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
-	if err := os.WriteFile(path, []byte("branch: main\ndockr_image: ubuntu:24.04\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile: %v", err)
-	}
-
-	_, err := Load(dir)
-	if err == nil {
-		t.Fatal("expected error for unknown key 'dockr_image', got nil")
-	}
-	if !strings.Contains(err.Error(), "dockr_image") {
-		t.Fatalf("error should mention unknown key name, got: %v", err)
+	if !strings.Contains(err.Error(), "default_model") {
+		t.Fatalf("error should mention default_model, got: %v", err)
 	}
 }
 

@@ -1,12 +1,16 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
@@ -876,5 +880,47 @@ func TestReviewCandidates_Indexed_MalformedQuarantined(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "quarantining unparseable review candidate") {
 		t.Fatalf("expected quarantine warning in stderr, got:\n%s", stderr)
+	}
+}
+
+func TestRunReview_UsesReviewModelAndReasoningEffort(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	defer func() { execCommandContext = origExecCommandContext }()
+
+	var capturedArgs []string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		return cmd
+	}
+
+	repoRoot := testutil.SetupRepo(t)
+	env := envConfig{
+		workdir:               "/workspace",
+		repoRoot:              repoRoot,
+		reviewModel:           "gpt-5.4",
+		reviewReasoningEffort: "xhigh",
+		homeDir:               "/home/test",
+		image:                 "ubuntu:24.04",
+	}
+	run := runContext{timeout: time.Second}
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: filepath.Join(t.TempDir(), "task.md")}
+	if _, err := git.Output(repoRoot, "branch", task.Branch); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	if err := runReview(context.Background(), env, run, task, "main"); err != nil {
+		t.Fatalf("runReview: %v", err)
+	}
+
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "--model gpt-5.4") {
+		t.Fatalf("expected review model in docker args, got %s", joined)
+	}
+	if !strings.Contains(joined, "--reasoning-effort xhigh") {
+		t.Fatalf("expected review reasoning effort in docker args, got %s", joined)
 	}
 }

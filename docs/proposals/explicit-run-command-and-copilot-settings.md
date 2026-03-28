@@ -55,8 +55,8 @@ The root command gets these changes:
   and `mato -v` support (Cobra adds `-v` as a shorthand automatically
   when it is not already taken; see `command.go:1251`). The existing
   `newVersionCmd()` is kept so that `mato version` also continues to work.
-- Add `Args: usageNoArgs` — rejects all positional arguments on the root
-  command.
+- Add `Args: usageNoArgs` — keeps the root command explicit about accepting
+  no positional arguments when Cobra resolves execution to root.
 - Set `RunE` to a minimal function that shows help:
   ```go
   Args: usageNoArgs,
@@ -64,28 +64,21 @@ The root command gets these changes:
       return cmd.Help()
   },
   ```
-  Both `Args` and `RunE` are required. Cobra's `execute()` flow is:
-  1. `Runnable()` check — without `RunE`, this returns false and Cobra
-     short-circuits to `flag.ErrHelp` (showing help silently, exit 0),
-     skipping `ValidateArgs()` entirely (`command.go:955`).
-  2. `ValidateArgs()` — with `RunE` set, `Runnable()` is true and Cobra
-     reaches this step, where `usageNoArgs` rejects any positional args
-     (`mato foo`, `mato -- --model gpt-5.4`).
-  3. `RunE` — only reached when `Args` passes (i.e., no positional args),
-     so `RunE` just calls `cmd.Help()`.
-
-  Additionally, when `Args` is non-nil, Cobra's `Find()` skips the
-  `legacyArgs()` check (`command.go:775`), deferring unknown-command
-  detection to `ValidateArgs()` instead of producing its own error.
+  `RunE` is required so bare `mato` is runnable and can show help instead
+  of short-circuiting through Cobra's non-runnable help path. `Args`
+  remains useful for true root-command positional-arg validation, but the
+  verified behavior with the Cobra version used by this repo is that
+  unresolved tokens such as `mato foo` and post-`--` tokens such as
+  `mato -- --model gpt-5.4` still surface as unknown-command errors during
+  command resolution rather than as `usageNoArgs` failures.
 - Remove the documentation-only flag definitions for `--branch`, `--dry-run`
   on root (these move to `mato run`).
 
 Result: `mato` → help (exit 0), `mato --version` / `mato -v` →
 version (exit 0), `mato --help` → help (exit 0),
 `mato run` → orchestrator,
-`mato foo` → `usageNoArgs` error (positional arg rejected),
-`mato -- --model gpt-5.4` → `usageNoArgs` error (Cobra passes tokens
-after `--` as positional args),
+`mato foo` → `unknown command "foo" for "mato"`,
+`mato -- --model gpt-5.4` → `unknown command "--model" for "mato"`,
 `mato --model gpt-5.4` → unknown flag error.
 
 Root help text must not mention passthrough semantics. `mato run --help`
@@ -567,10 +560,11 @@ have their invocations updated in this step to keep the suite green.
    `--task-reasoning-effort`, `--review-reasoning-effort` on the run
    command.
 9. Set root `Args: usageNoArgs` and `RunE` to a minimal help-only
-   function. Both are needed: `RunE` makes the command `Runnable()` so
-   Cobra reaches `ValidateArgs()` (where `usageNoArgs` fires); `RunE`
-   itself only runs when `Args` passes (no positional args) and just
-   calls `cmd.Help()`.
+   function. `RunE` is needed so bare `mato` is runnable and shows help.
+   Keep `Args` for explicit no-arg validation when Cobra selects the root
+   command, but do not rely on it to rewrite unknown-command cases: the
+   verified behavior in this repo is still `unknown command "foo" for
+   "mato"` and `unknown command "--model" for "mato"` after `--`.
 10. Update root `Use`, `Short`, `Long`, and `Example` strings (remove
     forwarding examples like `mato --model gpt-5.4`).
 11. Add `root.AddCommand(newRunCmd())`.
@@ -632,16 +626,19 @@ expecting the run path must change to
 38. `mato --version` prints version via Cobra's built-in handler.
 39. `mato -v` prints version (Cobra auto-adds `-v` shorthand).
 40. `mato version` prints version via the existing version subcommand.
-41. Root positional args rejected (`mato foo` → `usageNoArgs` error).
+41. Root unknown subcommand rejected (`mato foo` → `unknown command "foo"
+    for "mato"`).
 42. Root `--` passthrough rejected (`mato -- --model gpt-5.4` →
-    `usageNoArgs` error).
-42. Table-driven precedence tests (CLI > env > config > default) for all
+    `unknown command "--model" for "mato"`).
+43. Run `--` passthrough rejected (`mato run -- --model gpt-5.4` →
+    `unknown command "--model" for "mato run"`).
+44. Table-driven precedence tests (CLI > env > config > default) for all
     four settings.
-43. Whitespace-only env values treated as unset.
-44. `validateReasoningEffort` accepts valid values, rejects invalid.
-45. `mato run --dry-run` calls `dryRunFn` with resolved opts.
-46. `default_model` in config causes error.
-47. Persistent `--repo` in multiple positions.
+45. Whitespace-only env values treated as unset.
+46. `validateReasoningEffort` accepts valid values, rejects invalid.
+47. `mato run --dry-run` calls `dryRunFn` with resolved opts.
+48. `default_model` in config causes error.
+49. Persistent `--repo` in multiple positions.
 
 ### Step 6: Remove per-subcommand `--repo` declarations
 
@@ -753,18 +750,15 @@ go build ./... && go vet ./... && go test -count=1 ./...
 
 ## 6. Error Handling
 
-- **Bare `mato`**: `usageNoArgs` passes (no args), `RunE` calls
-  `cmd.Help()`, exit 0.
-- **`mato foo`**: Cobra's `Find()` skips `legacyArgs()` because
-  `Args != nil`, returns root with `args = ["foo"]`. `Runnable()` is true
-  (has `RunE`), so `ValidateArgs()` fires → `usageNoArgs` rejects →
-  usage error. `RunE` is never reached.
-- **`mato -- --model gpt-5.4`**: Cobra passes tokens after `--` as
-  positional args → `usageNoArgs` rejects → usage error.
+- **Bare `mato`**: no positional args; `RunE` calls `cmd.Help()`, exit 0.
+- **`mato foo`**: verified Cobra behavior is `unknown command "foo" for
+  "mato"`.
+- **`mato -- --model gpt-5.4`**: verified Cobra behavior is
+  `unknown command "--model" for "mato"`.
 - **`mato --model gpt-5.4`**: Unknown flag → usage error.
 - **`mato -v`**: Cobra's auto-added `-v` shorthand → version (exit 0).
-- **`mato run -- --model gpt-5.4`**: `mato run` also has
-  `Args: usageNoArgs` → positional arg error.
+- **`mato run -- --model gpt-5.4`**: verified Cobra behavior is
+  `unknown command "--model" for "mato run"`.
 - **Unknown `mato run` flags**: Cobra rejects → `FlagErrorFunc` wraps with
   `UsageError`.
 - **Invalid reasoning effort**: `validateReasoningEffort` returns error
@@ -830,10 +824,12 @@ go build ./... && go vet ./... && go test -count=1 ./...
 - Precedence: CLI > env > config > default (table-driven).
 - Whitespace-only env values treated as unset.
 - Unknown root flags rejected.
-- Root positional args rejected (`mato foo` → `usageNoArgs` error).
+- Root unknown subcommand rejected (`mato foo` → `unknown command "foo"
+  for "mato"`).
 - Root `--` passthrough rejected (`mato -- --model gpt-5.4` →
-  `usageNoArgs` error).
-- Run `--` passthrough rejected (`mato run -- --model gpt-5.4`).
+  `unknown command "--model" for "mato"`).
+- Run `--` passthrough rejected (`mato run -- --model gpt-5.4` →
+  `unknown command "--model" for "mato run"`).
 - Persistent `--repo` in multiple positions.
 - `mato run --dry-run` calls `dryRunFn` with opts.
 - `default_model` in config causes error.

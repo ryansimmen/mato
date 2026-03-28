@@ -81,9 +81,9 @@ type envConfig struct {
 	hasGitTemplates                         bool
 	systemCertsDir                          string
 	hasSystemCerts                          bool
-	copilotArgs                             []string
 	repoRoot, tasksDir                      string
-	targetBranch, defaultModel              string
+	targetBranch, reviewModel               string
+	reviewReasoningEffort                   string
 	isTTY                                   bool
 }
 
@@ -91,10 +91,12 @@ type envConfig struct {
 // Each call to runOnce or runReview constructs its own runContext so that
 // mutable fields like cloneDir are never shared across concurrent calls.
 type runContext struct {
-	cloneDir string
-	prompt   string
-	agentID  string
-	timeout  time.Duration
+	cloneDir        string
+	prompt          string
+	agentID         string
+	model           string
+	reasoningEffort string
+	timeout         time.Duration
 }
 
 // isTerminal reports whether f is connected to a terminal (not just any
@@ -173,32 +175,10 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"-w", env.workdir,
 		env.image,
 		"copilot", "-p", run.prompt, "--autopilot", "--allow-all",
+		"--model", run.model,
+		"--reasoning-effort", run.reasoningEffort,
 	)
-	if !hasModelArg(env.copilotArgs) {
-		args = append(args, "--model", resolveDefaultModel(env.defaultModel))
-	}
-	args = append(args, env.copilotArgs...)
 	return args
-}
-
-func resolveDefaultModel(model string) string {
-	if model != "" {
-		return model
-	}
-	return defaultCopilotModel
-}
-
-func hasModelArg(args []string) bool {
-	for i := 0; i < len(args); i++ {
-		arg := strings.TrimSpace(args[i])
-		if arg == "--model" {
-			return true
-		}
-		if strings.HasPrefix(arg, "--model=") {
-			return true
-		}
-	}
-	return false
 }
 
 // configureReceiveDeny sets receive.denyCurrentBranch=updateInstead on the

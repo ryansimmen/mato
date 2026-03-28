@@ -272,30 +272,21 @@ func TestBuildDockerArgs_MessagingEnvVars(t *testing.T) {
 	}
 }
 
-func TestBuildDockerArgs_CopilotArgsPassthrough(t *testing.T) {
+func TestBuildDockerArgs_ModelAndReasoningEffort(t *testing.T) {
 	env := envConfig{
-		homeDir:     "/home/test",
-		image:       "ubuntu:24.04",
-		workdir:     "/workspace",
-		copilotArgs: []string{"--verbose", "--no-cache"},
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
 	}
-	run := runContext{prompt: "test"}
+	run := runContext{prompt: "test", model: "claude-opus-4.6", reasoningEffort: "high"}
 
 	args := buildDockerArgs(env, run, nil, nil)
-	// copilotArgs should appear after the image name.
-	imageIdx := -1
-	for i, a := range args {
-		if a == "ubuntu:24.04" {
-			imageIdx = i
-			break
-		}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--model claude-opus-4.6") {
+		t.Fatalf("expected task model in docker args, got: %s", joined)
 	}
-	if imageIdx == -1 {
-		t.Fatal("image not found in docker args")
-	}
-	tail := strings.Join(args[imageIdx:], " ")
-	if !strings.Contains(tail, "--verbose") || !strings.Contains(tail, "--no-cache") {
-		t.Fatalf("copilotArgs should be passed through after the image, got tail: %s", tail)
+	if !strings.Contains(joined, "--reasoning-effort high") {
+		t.Fatalf("expected reasoning effort in docker args, got: %s", joined)
 	}
 }
 
@@ -320,43 +311,17 @@ func TestBuildDockerArgs_PromptInArgs(t *testing.T) {
 	}
 }
 
-func TestResolveDefaultModel_FallbackToHardcoded(t *testing.T) {
-	if m := resolveDefaultModel(""); m != "claude-opus-4.6" {
-		t.Fatalf("expected hardcoded default model, got %q", m)
-	}
-}
+func TestBuildDockerArgs_DifferentModelValues(t *testing.T) {
+	env := envConfig{homeDir: "/home/test", image: "ubuntu:24.04", workdir: "/workspace"}
+	run := runContext{prompt: "test", model: "gpt-5.4", reasoningEffort: "xhigh"}
 
-func TestResolveDefaultModel_Configured(t *testing.T) {
-	if m := resolveDefaultModel("custom-model-v2"); m != "custom-model-v2" {
-		t.Fatalf("expected configured model, got %q", m)
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--model gpt-5.4") {
+		t.Fatalf("expected review model in docker args, got: %s", joined)
 	}
-}
-
-func TestHasModelArg_EmptySlice(t *testing.T) {
-	if hasModelArg(nil) {
-		t.Fatal("hasModelArg(nil) should return false")
-	}
-	if hasModelArg([]string{}) {
-		t.Fatal("hasModelArg([]) should return false")
-	}
-}
-
-func TestHasModelArg_ModelWithWhitespace(t *testing.T) {
-	// hasModelArg trims whitespace, so "  --model  " should match.
-	if !hasModelArg([]string{"  --model  ", "gpt-5"}) {
-		t.Fatal("hasModelArg should match --model with surrounding whitespace")
-	}
-}
-
-func TestHasModelArg_ModelEqualsWithValue(t *testing.T) {
-	if !hasModelArg([]string{"--model=claude-opus-4.6"}) {
-		t.Fatal("hasModelArg should match --model= syntax")
-	}
-}
-
-func TestHasModelArg_UnrelatedFlags(t *testing.T) {
-	if hasModelArg([]string{"--modeler", "--model-path", "--verbose"}) {
-		t.Fatal("hasModelArg should not match --modeler or --model-path")
+	if !strings.Contains(joined, "--reasoning-effort xhigh") {
+		t.Fatalf("expected xhigh reasoning effort in docker args, got: %s", joined)
 	}
 }
 
