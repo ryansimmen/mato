@@ -464,7 +464,7 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 	mustGitOutput(t, clone1, "push", "origin", "task/fix-bug")
 
 	// Agent 2 claims fix_bug.md; SelectAndClaimTask should disambiguate the branch.
-	claimed, err := queue.SelectAndClaimTask(tasksDir, "agent-2", nil, 0, nil)
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "agent-2", []string{"fix_bug.md"}, 0, nil)
 	if err != nil {
 		t.Fatalf("SelectAndClaimTask: %v", err)
 	}
@@ -788,16 +788,14 @@ func TestConcurrentSelectAndClaimTask(t *testing.T) {
 			fmt.Sprintf("# Claim task %d\nDo something.\n", i))
 	}
 
-	if err := queue.WriteQueueManifest(tasksDir, nil, nil); err != nil {
-		t.Fatalf("queue.WriteQueueManifest: %v", err)
-	}
-
 	const numGoroutines = 2
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	results := make([]*queue.ClaimedTask, numGoroutines)
 	errs := make([]error, numGoroutines)
 	var panics atomic.Int32
+	view := queue.ComputeRunnableBacklogView(tasksDir, nil)
+	candidates := queue.OrderedRunnableFilenames(view, nil)
 
 	for g := 0; g < numGoroutines; g++ {
 		wg.Add(1)
@@ -810,7 +808,7 @@ func TestConcurrentSelectAndClaimTask(t *testing.T) {
 			}()
 
 			<-start
-			ct, err := queue.SelectAndClaimTask(tasksDir, fmt.Sprintf("agent-%d", id), nil, 0, nil)
+			ct, err := queue.SelectAndClaimTask(tasksDir, fmt.Sprintf("agent-%d", id), candidates, 0, nil)
 			results[id] = ct
 			errs[id] = err
 		}(g)
