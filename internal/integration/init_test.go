@@ -57,7 +57,12 @@ func TestInitRepo_ThenDryRunWorks(t *testing.T) {
 	if _, err := setup.InitRepo(repoRoot, "mato"); err != nil {
 		t.Fatalf("InitRepo: %v", err)
 	}
-	if err := runner.DryRun(repoRoot, "mato"); err != nil {
+	if err := runner.DryRun(repoRoot, "mato", runner.RunOptions{
+		TaskModel:             runner.DefaultTaskModel,
+		ReviewModel:           runner.DefaultReviewModel,
+		TaskReasoningEffort:   runner.DefaultReasoningEffort,
+		ReviewReasoningEffort: runner.DefaultReasoningEffort,
+	}); err != nil {
 		t.Fatalf("DryRun after init: %v", err)
 	}
 }

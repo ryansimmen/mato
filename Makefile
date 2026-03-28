@@ -27,9 +27,9 @@ install: ## Install mato binary to GOBIN and mato skill to ~/.copilot/skills/
 integration-test: ## Run integration tests with race detector
 	go test -race -v ./internal/integration/...
 
-run: ## Run agent in Docker (use COPILOT_ARGS to pass args to copilot, e.g. COPILOT_ARGS="--model gpt-5.4")
+run: ## Run agent in Docker
 	@if [ -z "$(REPO)" ]; then echo "REPO is required. Set REPO=<path> in .env or pass it on the command line."; exit 1; fi
-	go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato --repo "$(REPO)" $(COPILOT_ARGS)
+	go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato run --repo "$(REPO)"
 
 test: ## Run tests with race detector
 	go test -race ./...

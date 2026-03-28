@@ -17,11 +17,14 @@ const configFileName = ".mato.yaml"
 // Config represents the settings from a .mato.yaml file.
 // All fields are pointers to distinguish "not set" from "zero value".
 type Config struct {
-	Branch        *string `yaml:"branch"`
-	DockerImage   *string `yaml:"docker_image"`
-	DefaultModel  *string `yaml:"default_model"`
-	AgentTimeout  *string `yaml:"agent_timeout"`
-	RetryCooldown *string `yaml:"retry_cooldown"`
+	Branch                *string `yaml:"branch"`
+	DockerImage           *string `yaml:"docker_image"`
+	TaskModel             *string `yaml:"task_model"`
+	ReviewModel           *string `yaml:"review_model"`
+	TaskReasoningEffort   *string `yaml:"task_reasoning_effort"`
+	ReviewReasoningEffort *string `yaml:"review_reasoning_effort"`
+	AgentTimeout          *string `yaml:"agent_timeout"`
+	RetryCooldown         *string `yaml:"retry_cooldown"`
 }
 
 // Load reads .mato.yaml from dir. Returns a zero Config when the file does not
@@ -58,7 +61,10 @@ func LoadFile(path string) (Config, error) {
 func normalize(cfg *Config) {
 	cfg.Branch = normalizeString(cfg.Branch)
 	cfg.DockerImage = normalizeString(cfg.DockerImage)
-	cfg.DefaultModel = normalizeString(cfg.DefaultModel)
+	cfg.TaskModel = normalizeString(cfg.TaskModel)
+	cfg.ReviewModel = normalizeString(cfg.ReviewModel)
+	cfg.TaskReasoningEffort = normalizeString(cfg.TaskReasoningEffort)
+	cfg.ReviewReasoningEffort = normalizeString(cfg.ReviewReasoningEffort)
 	cfg.AgentTimeout = normalizeString(cfg.AgentTimeout)
 	cfg.RetryCooldown = normalizeString(cfg.RetryCooldown)
 }

@@ -68,6 +68,15 @@ func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 	return string(stdoutData), string(stderrData)
 }
 
+func testRunOptions() RunOptions {
+	return RunOptions{
+		TaskModel:             DefaultTaskModel,
+		ReviewModel:           DefaultReviewModel,
+		TaskReasoningEffort:   DefaultReasoningEffort,
+		ReviewReasoningEffort: DefaultReasoningEffort,
+	}
+}
+
 func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
@@ -179,85 +188,24 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	}
 }
 
-func TestResolveDefaultModel(t *testing.T) {
-	t.Run("returns hardcoded default when unset", func(t *testing.T) {
-		if got := resolveDefaultModel(""); got != "claude-opus-4.6" {
-			t.Fatalf("resolveDefaultModel(empty) = %q, want %q", got, "claude-opus-4.6")
-		}
-	})
-
-	t.Run("returns configured model when set", func(t *testing.T) {
-		if got := resolveDefaultModel("claude-sonnet-4.5"); got != "claude-sonnet-4.5" {
-			t.Fatalf("resolveDefaultModel(...) = %q, want %q", got, "claude-sonnet-4.5")
-		}
-	})
-}
-
-func TestBuildDockerArgs_ModelPriority(t *testing.T) {
+func TestBuildDockerArgs_ModelAndReasoningEffort_FromRunContext(t *testing.T) {
 	baseEnv := envConfig{
 		homeDir: "/home/test",
 		image:   "ubuntu:24.04",
 		workdir: "/workspace",
 	}
 	baseRun := runContext{
-		prompt: "do stuff",
+		prompt:          "do stuff",
+		model:           "claude-opus-4.6",
+		reasoningEffort: "high",
 	}
 
-	findModelValue := func(args []string) string {
-		for i, a := range args {
-			if a == "--model" && i+1 < len(args) {
-				return args[i+1]
-			}
-		}
-		return ""
+	joined := strings.Join(buildDockerArgs(baseEnv, baseRun, nil, nil), " ")
+	if !strings.Contains(joined, "--model claude-opus-4.6") {
+		t.Fatalf("expected task model in docker args, got %s", joined)
 	}
-
-	t.Run("hardcoded default when no env and no args", func(t *testing.T) {
-		args := buildDockerArgs(baseEnv, baseRun, nil, nil)
-		if m := findModelValue(args); m != "claude-opus-4.6" {
-			t.Fatalf("expected hardcoded default, got %q", m)
-		}
-	})
-
-	t.Run("configured default overrides hardcoded default", func(t *testing.T) {
-		env := baseEnv
-		env.defaultModel = "custom-model"
-		args := buildDockerArgs(env, baseRun, nil, nil)
-		if m := findModelValue(args); m != "custom-model" {
-			t.Fatalf("expected configured model, got %q", m)
-		}
-	})
-
-	t.Run("explicit --model arg overrides configured default", func(t *testing.T) {
-		env := baseEnv
-		env.defaultModel = "custom-model"
-		env.copilotArgs = []string{"--model", "explicit-model"}
-		args := buildDockerArgs(env, baseRun, nil, nil)
-		// When --model is in copilotArgs, buildDockerArgs should NOT inject a default.
-		// The explicit model from copilotArgs appears in the final args.
-		if m := findModelValue(args); m != "explicit-model" {
-			t.Fatalf("expected explicit arg model, got %q", m)
-		}
-	})
-}
-
-func TestHasModelArg(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want bool
-	}{
-		{name: "no model flag", args: []string{"--autopilot"}, want: false},
-		{name: "model with value", args: []string{"--model", "gpt-5"}, want: true},
-		{name: "model equals syntax", args: []string{"--model=gpt-5"}, want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := hasModelArg(tt.args); got != tt.want {
-				t.Fatalf("hasModelArg(%v) = %v, want %v", tt.args, got, tt.want)
-			}
-		})
+	if !strings.Contains(joined, "--reasoning-effort high") {
+		t.Fatalf("expected reasoning effort in docker args, got %s", joined)
 	}
 }
 
@@ -1438,7 +1386,7 @@ func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, run := buildEnvAndRunContext("main", hostTools{homeDir: "/home/test"}, "agent", "name", "email", nil, "/repo", "/repo/.mato", tt.opts)
+			_, run := buildEnvAndRunContext("main", hostTools{homeDir: "/home/test"}, "agent", "name", "email", "/repo", "/repo/.mato", tt.opts)
 			if run.timeout != tt.want {
 				t.Fatalf("timeout = %v, want %v", run.timeout, tt.want)
 			}
@@ -2604,7 +2552,7 @@ func TestDryRun_BasicValidation(t *testing.T) {
 	taskContent := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n---\n# Task A\nDo something.\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskContent), 0o644)
 
-	err := DryRun(repoDir, "main")
+	err := DryRun(repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2632,7 +2580,7 @@ func TestDryRun_DetectsParseErrors(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badContent), 0o644)
 
 	// DryRun should succeed (parse errors are reported, not fatal)
-	err := DryRun(repoDir, "main")
+	err := DryRun(repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2656,7 +2604,7 @@ func TestDryRun_DetectsOverlaps(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 
-	err := DryRun(repoDir, "main")
+	err := DryRun(repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2679,7 +2627,7 @@ func TestDryRun_MissingDirectories(t *testing.T) {
 	// Only create some subdirs, leaving others missing
 	os.MkdirAll(filepath.Join(tasksDir, queue.DirBacklog), 0o755)
 
-	err := DryRun(repoDir, "main")
+	err := DryRun(repoDir, "main", testRunOptions())
 	if err == nil {
 		t.Fatal("DryRun should return error when directories are missing")
 	}
@@ -2708,7 +2656,7 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 	waitingContent := "---\nid: child-task\npriority: 10\ndepends_on:\n  - dep-task\n---\n# Child Task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "child-task.md"), []byte(waitingContent), 0o644)
 
-	err := DryRun(repoDir, "main")
+	err := DryRun(repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2739,7 +2687,7 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(taskContent), 0o644)
 
 	// DryRun should complete without attempting to claim or launch Docker
-	err := DryRun(repoDir, "main")
+	err := DryRun(repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2750,6 +2698,48 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirInProgress, "runnable.md")); statErr == nil {
 		t.Fatal("task should NOT be moved to in-progress/ during dry-run")
+	}
+}
+
+func TestDryRun_ResolvedSettingsOutput(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	opts := RunOptions{
+		TaskModel:             "claude-sonnet-4",
+		ReviewModel:           "gpt-5.4",
+		TaskReasoningEffort:   "medium",
+		ReviewReasoningEffort: "xhigh",
+	}
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := DryRun(repoDir, "main", opts); err != nil {
+			t.Fatalf("DryRun returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(stdout, "=== Resolved Settings ===") {
+		t.Fatalf("missing Resolved Settings section, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "task model:") || !strings.Contains(stdout, "claude-sonnet-4") {
+		t.Fatalf("missing task model output, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "review model:") || !strings.Contains(stdout, "gpt-5.4") {
+		t.Fatalf("missing review model output, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "task reasoning effort:") || !strings.Contains(stdout, "medium") {
+		t.Fatalf("missing task reasoning effort output, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "review reasoning effort:") || !strings.Contains(stdout, "xhigh") {
+		t.Fatalf("missing review reasoning effort output, got:\n%s", stdout)
 	}
 }
 
@@ -2775,7 +2765,7 @@ func TestDryRun_ExecutionOrder(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -2829,7 +2819,7 @@ func TestDryRun_BacklogTaskSummary(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -2894,7 +2884,7 @@ func TestDryRun_DependencySummary(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "main-task.md"), []byte(mainTask), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -2947,7 +2937,7 @@ func TestDryRun_DependencySummary_Ambiguous(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -2985,7 +2975,7 @@ func TestDryRun_DependencySummary_ActiveAndBacklogStates(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -3025,7 +3015,7 @@ func TestDryRun_DependencySummary_DuplicateWaitingIDIsAmbiguous(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -3057,7 +3047,7 @@ func TestDryRun_DependencySummary_ParseFailedTargetUsesQueueState(t *testing.T) 
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -3091,7 +3081,7 @@ func TestDryRun_AffectsConflictDetail(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -3128,7 +3118,7 @@ func TestDryRun_DependencyBlockedBacklogTask(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(runnable), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -3171,7 +3161,7 @@ func TestDryRun_ParseErrorsWithValidTasks(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badTask), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -3311,7 +3301,7 @@ func TestDryRun_SurfacesBuildWarnings(t *testing.T) {
 	}
 
 	_, stderr := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main"); err != nil {
+		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -4123,9 +4113,91 @@ func TestResolveGitIdentity_SetsLocalConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRun_InvalidRepoPath(t *testing.T) {
-	err := Run("/nonexistent/path/that/does/not/exist", "mato", nil, RunOptions{})
+	err := Run("/nonexistent/path/that/does/not/exist", "mato", testRunOptions())
 	if err == nil {
 		t.Fatal("expected error for invalid repo path")
+	}
+}
+
+func TestNormalizeAndValidateRunOptions(t *testing.T) {
+	t.Run("trims valid values", func(t *testing.T) {
+		opts, err := normalizeAndValidateRunOptions(RunOptions{
+			TaskModel:             "  claude-opus-4.6  ",
+			ReviewModel:           "  gpt-5.4  ",
+			TaskReasoningEffort:   "  high  ",
+			ReviewReasoningEffort: "  medium  ",
+		})
+		if err != nil {
+			t.Fatalf("normalizeAndValidateRunOptions returned error: %v", err)
+		}
+		if opts.TaskModel != "claude-opus-4.6" {
+			t.Fatalf("TaskModel = %q, want %q", opts.TaskModel, "claude-opus-4.6")
+		}
+		if opts.ReviewModel != "gpt-5.4" {
+			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, "gpt-5.4")
+		}
+		if opts.TaskReasoningEffort != "high" {
+			t.Fatalf("TaskReasoningEffort = %q, want %q", opts.TaskReasoningEffort, "high")
+		}
+		if opts.ReviewReasoningEffort != "medium" {
+			t.Fatalf("ReviewReasoningEffort = %q, want %q", opts.ReviewReasoningEffort, "medium")
+		}
+	})
+
+	tests := []struct {
+		name string
+		opts RunOptions
+		want string
+	}{
+		{
+			name: "missing task model",
+			opts: RunOptions{ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			want: "task model must not be empty",
+		},
+		{
+			name: "missing review model",
+			opts: RunOptions{TaskModel: DefaultTaskModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			want: "review model must not be empty",
+		},
+		{
+			name: "missing task reasoning effort",
+			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewReasoningEffort: DefaultReasoningEffort},
+			want: "task reasoning effort must not be empty",
+		},
+		{
+			name: "missing review reasoning effort",
+			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort},
+			want: "review reasoning effort must not be empty",
+		},
+		{
+			name: "whitespace task model",
+			opts: RunOptions{TaskModel: "   ", ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			want: "task model must not be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := normalizeAndValidateRunOptions(tt.opts)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultConstants(t *testing.T) {
+	if DefaultTaskModel != "claude-opus-4.6" {
+		t.Fatalf("DefaultTaskModel = %q, want %q", DefaultTaskModel, "claude-opus-4.6")
+	}
+	if DefaultReviewModel != "gpt-5.4" {
+		t.Fatalf("DefaultReviewModel = %q, want %q", DefaultReviewModel, "gpt-5.4")
+	}
+	if DefaultReasoningEffort != "high" {
+		t.Fatalf("DefaultReasoningEffort = %q, want %q", DefaultReasoningEffort, "high")
 	}
 }
 
@@ -4146,7 +4218,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	}
 
 	env, run := buildEnvAndRunContext("main", tools, "agent-123", "Test User", "test@test.com",
-		[]string{"--verbose"}, "/repo", "/repo/.mato", RunOptions{AgentTimeout: 45 * time.Minute})
+		"/repo", "/repo/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: 45 * time.Minute})
 
 	if env.image == "" {
 		t.Error("expected default docker image to be set")
@@ -4169,6 +4241,18 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	if run.timeout != 45*time.Minute {
 		t.Errorf("expected timeout %v, got %v", 45*time.Minute, run.timeout)
 	}
+	if run.model != DefaultTaskModel {
+		t.Errorf("expected task model %q, got %q", DefaultTaskModel, run.model)
+	}
+	if run.reasoningEffort != DefaultReasoningEffort {
+		t.Errorf("expected task reasoning effort %q, got %q", DefaultReasoningEffort, run.reasoningEffort)
+	}
+	if env.reviewModel != DefaultReviewModel {
+		t.Errorf("expected review model %q, got %q", DefaultReviewModel, env.reviewModel)
+	}
+	if env.reviewReasoningEffort != DefaultReasoningEffort {
+		t.Errorf("expected review reasoning effort %q, got %q", DefaultReasoningEffort, env.reviewReasoningEffort)
+	}
 	if !strings.Contains(run.prompt, "main") {
 		t.Error("expected prompt to contain branch name")
 	}
@@ -4176,25 +4260,34 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 
 func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{DockerImage: "custom:latest", AgentTimeout: time.Hour})
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, DockerImage: "custom:latest", AgentTimeout: time.Hour})
 
 	if env.image != "custom:latest" {
 		t.Errorf("expected custom image %q, got %q", "custom:latest", env.image)
 	}
 }
 
-func TestBuildEnvAndRunContext_DefaultModelOverride(t *testing.T) {
+func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{DefaultModel: "claude-sonnet-4", AgentTimeout: time.Hour})
+	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour})
 
-	if env.defaultModel != "claude-sonnet-4" {
-		t.Fatalf("defaultModel = %q, want %q", env.defaultModel, "claude-sonnet-4")
+	if run.model != "claude-sonnet-4" {
+		t.Fatalf("run.model = %q, want %q", run.model, "claude-sonnet-4")
+	}
+	if run.reasoningEffort != "medium" {
+		t.Fatalf("run.reasoningEffort = %q, want %q", run.reasoningEffort, "medium")
+	}
+	if env.reviewModel != "gpt-5.4" {
+		t.Fatalf("env.reviewModel = %q, want %q", env.reviewModel, "gpt-5.4")
+	}
+	if env.reviewReasoningEffort != "xhigh" {
+		t.Fatalf("env.reviewReasoningEffort = %q, want %q", env.reviewReasoningEffort, "xhigh")
 	}
 }
 
 func TestBuildEnvAndRunContext_PromptPlaceholders(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", nil, "/r", "/r/.mato", RunOptions{AgentTimeout: time.Hour})
+	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: time.Hour})
 
 	if strings.Contains(run.prompt, "TASKS_DIR_PLACEHOLDER") {
 		t.Error("prompt still contains TASKS_DIR_PLACEHOLDER")
