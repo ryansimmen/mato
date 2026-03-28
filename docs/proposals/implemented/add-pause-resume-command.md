@@ -12,8 +12,6 @@ affects:
   - README.md
   - docs/architecture.md
   - docs/configuration.md
-tags: [feature, cli]
-estimated_complexity: medium
 ---
 
 > **Status: Implemented** — This proposal has been fully implemented.

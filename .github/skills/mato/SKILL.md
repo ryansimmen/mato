@@ -55,8 +55,6 @@ priority: 10
 affects:
   - src/db/connection.go
   - src/db/connection_test.go
-tags: [bug, reliability]
-estimated_complexity: medium
 ---
 # Fix unclosed database connections on error paths
 
@@ -87,16 +85,6 @@ Most tasks only need the markdown body plus a few common scheduler fields
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `max_retries` | int | `3` | Max allowed failures before the task is moved to `failed/`. Only relevant when using mato as the task scheduler; can be omitted otherwise. |
-
-#### Informational fields
-
-| Field | Type | Default | Description |
-| --- | --- | --- | --- |
-| `tags` | string[] | `[]` | Free-form labels for categorization. Informational only; does not currently affect scheduling. |
-| `estimated_complexity` | string | — | `simple`, `medium`, or `complex`. Informational only; does not currently affect scheduling. |
-
-These are safe to omit. They are currently for human communication and tooling,
-not scheduler behavior.
 
 ### Writing Good Task Bodies
 

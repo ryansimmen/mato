@@ -30,7 +30,6 @@ cat > .mato/backlog/add-retry-logic.md << 'EOF'
 id: add-retry-logic
 priority: 10
 affects: [pkg/client/http.go]
-tags: [backend]
 ---
 # Add retry logic to HTTP client
 
@@ -71,7 +70,6 @@ id: add-retry-logic
 priority: 10
 depends_on: [setup-http-client]
 affects: [pkg/client/http.go]
-tags: [backend]
 ---
 ```
 

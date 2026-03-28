@@ -629,7 +629,6 @@ id: consistency-check
 priority: 7
 depends_on: [dep-a]
 affects: [api, cli]
-tags: [bug]
 max_retries: 5
 ---
 # Title

@@ -1,5 +1,9 @@
 # Explicit Run Command and Copilot Settings — Implementation Plan
 
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the implemented design; see the source code for the
+> current behavior.
+
 ## 1. Goal
 
 Replace the implicit passthrough-based CLI model with explicit `mato`-owned

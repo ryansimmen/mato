@@ -23,8 +23,6 @@ depends_on: [setup-http-client]
 affects:
   - pkg/client/http.go
   - pkg/client/retry.go
-tags: [backend, reliability]
-estimated_complexity: medium
 max_retries: 3
 ---
 <!-- failure: mato-recovery at 2026-01-01T00:05:00Z — agent was interrupted -->
@@ -65,21 +63,10 @@ For queue-focused preflight checks on task metadata and dependency integrity, us
 | --- | --- | --- | --- |
 | `max_retries` | int | `3` | Maximum number of `<!-- failure: ... -->` records before the task moves to `failed/`. Must be a non-negative integer (≥ 0); negative values are rejected at parse time. A task with `max_retries: 3` is moved to `failed/` once it accumulates 3 failure records (i.e. `failures >= max_retries`). The host merge queue reads this per-task from frontmatter (authoritative). The agent uses a global default via `MATO_MAX_RETRIES` env var (safety net). |
 
-### Informational fields
-
-| Field | Type | Default | Reference |
-| --- | --- | --- | --- |
-| `tags` | string array | empty | Free-form categorization labels. Parsed today, but not used by queue reconciliation. |
-| `estimated_complexity` | string | empty | Human hint for task size. Use `simple`, `medium`, or `complex` by convention; current parsing does not enforce these values. |
-
-These are safe to omit. They are currently for human communication and tooling,
-not queue behavior.
-
 ### Frontmatter syntax examples
 Inline arrays:
 ```yaml
 depends_on: [setup-http-client, add-config]
-tags: [backend, reliability]
 ```
 Block arrays:
 ```yaml
@@ -103,7 +90,6 @@ Scalars:
 ```yaml
 id: add-http-retries
 priority: 10
-estimated_complexity: medium
 max_retries: 3
 ```
 
@@ -147,8 +133,6 @@ priority: 10
 depends_on:
   - setup-http-client
 affects: [pkg/client/http.go, pkg/client/retry.go]
-tags: [backend, reliability]
-estimated_complexity: medium
 max_retries: 3
 ---
 # Add HTTP retries
@@ -207,8 +191,6 @@ Plain markdown task files work fine. If frontmatter is missing, mato applies the
 - `priority`: `50`
 - `depends_on`: empty
 - `affects`: empty
-- `tags`: empty
-- `estimated_complexity`: empty
 - `max_retries`: `3`
 
 That means older task files can stay as simple markdown instructions with no metadata at all.

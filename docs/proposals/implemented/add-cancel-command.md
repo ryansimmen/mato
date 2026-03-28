@@ -24,8 +24,6 @@ affects:
   - docs/architecture.md
   - docs/task-format.md
   - .github/skills/mato/SKILL.md
-tags: [feature, cli, ux]
-estimated_complexity: medium
 ---
 
 > **Status: Implemented** — This proposal has been fully implemented.
