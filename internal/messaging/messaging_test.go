@@ -1203,99 +1203,6 @@ func TestCompletionDetail_TraversalIDsResolveInsideCompletions(t *testing.T) {
 	}
 }
 
-func TestReadCompletionDetail_LegacyFallback(t *testing.T) {
-	tasksDir := t.TempDir()
-	if err := Init(tasksDir); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-
-	// Simulate a pre-existing file written with the old lossy sanitization.
-	// "foo/bar" was previously written as "foo-bar.json".
-	legacy := CompletionDetail{
-		TaskID:   "foo/bar",
-		TaskFile: "foo-bar.md",
-		Title:    "Legacy record",
-	}
-	legacyPath := filepath.Join(tasksDir, "messages", "completions", "foo-bar.json")
-	data, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	if err := os.WriteFile(legacyPath, data, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	// ReadCompletionDetail should fall back to the legacy filename.
-	got, err := ReadCompletionDetail(tasksDir, "foo/bar")
-	if err != nil {
-		t.Fatalf("ReadCompletionDetail: %v", err)
-	}
-	if got.Title != "Legacy record" {
-		t.Fatalf("Title = %q, want %q", got.Title, "Legacy record")
-	}
-}
-
-func TestReadCompletionDetail_LegacyFallbackOnlyOnNotExist(t *testing.T) {
-	tasksDir := t.TempDir()
-	if err := Init(tasksDir); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-
-	taskID := "foo/bar"
-	newName := completionFilename(taskID)
-	newPath := filepath.Join(tasksDir, "messages", "completions", newName+".json")
-
-	// Create the new-format path as a directory so os.ReadFile returns a
-	// portable non-ENOENT error even under root/containerized test environments.
-	if err := os.Mkdir(newPath, 0o755); err != nil {
-		t.Fatalf("Mkdir: %v", err)
-	}
-
-	// Also place a valid legacy file that would be consulted under the old code.
-	legacyPath := filepath.Join(tasksDir, "messages", "completions", "foo-bar.json")
-	legacyData, _ := json.Marshal(CompletionDetail{TaskID: taskID, Title: "Legacy"})
-	if err := os.WriteFile(legacyPath, legacyData, 0o644); err != nil {
-		t.Fatalf("WriteFile legacy: %v", err)
-	}
-
-	// ReadCompletionDetail must return the real non-ENOENT read error, not
-	// silently fall back to the legacy file.
-	_, err := ReadCompletionDetail(tasksDir, taskID)
-	if err == nil {
-		t.Fatal("expected error when new-format path is unreadable as a file, got nil")
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("error should not be ErrNotExist; got %v", err)
-	}
-	if !strings.Contains(err.Error(), taskID) {
-		t.Fatalf("error should mention task ID %q, got %v", taskID, err)
-	}
-}
-
-func TestReadCompletionDetail_LegacyFallbackWhenNewFileMissing(t *testing.T) {
-	tasksDir := t.TempDir()
-	if err := Init(tasksDir); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-
-	taskID := "foo/bar"
-
-	// Only the legacy file exists (no new-format file).
-	legacyPath := filepath.Join(tasksDir, "messages", "completions", "foo-bar.json")
-	legacyData, _ := json.Marshal(CompletionDetail{TaskID: taskID, Title: "Legacy OK"})
-	if err := os.WriteFile(legacyPath, legacyData, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	got, err := ReadCompletionDetail(tasksDir, taskID)
-	if err != nil {
-		t.Fatalf("ReadCompletionDetail: %v", err)
-	}
-	if got.Title != "Legacy OK" {
-		t.Fatalf("Title = %q, want %q", got.Title, "Legacy OK")
-	}
-}
-
 func TestWriteCompletionDetail_NormalIDUnchanged(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {
@@ -1997,7 +1904,7 @@ func TestWriteMessage_NonUTCSentAtMultipleZones(t *testing.T) {
 	}
 }
 
-func TestMessageFilePart_EdgeCases(t *testing.T) {
+func TestSafeFilePart_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name     string
 		value    string
@@ -2008,30 +1915,30 @@ func TestMessageFilePart_EdgeCases(t *testing.T) {
 		{"whitespace only spaces", "   ", "fallback", "fallback"},
 		{"whitespace only tabs", "\t\t", "fallback", "fallback"},
 		{"mixed whitespace", " \t \n ", "fallback", "fallback"},
-		{"punctuation only exclamation", "!!!", "fallback", "fallback"},
-		{"punctuation only parens", "(())", "fallback", "fallback"},
-		{"punctuation only at-signs", "@@@", "fallback", "fallback"},
-		{"punctuation slash and colon", "://", "fallback", "fallback"},
-		{"punctuation trimmed to empty", "...", "fallback", "fallback"},
-		{"leading trailing dots underscores dashes", ".-_hello_-.", "hello", "hello"},
+		{"punctuation only exclamation", "!!!", "fallback", "_21_21_21"},
+		{"punctuation only parens", "(())", "fallback", "_28_28_29_29"},
+		{"punctuation only at-signs", "@@@", "fallback", "_40_40_40"},
+		{"punctuation slash and colon", "://", "fallback", "_3a_2f_2f"},
+		{"punctuation preserved via encoding", "...", "fallback", "_2e_2e_2e"},
+		{"leading trailing dots underscores dashes", ".-_hello_-.", "hello", "_2e-_5fhello_5f-_2e"},
 		{"valid simple", "agent-1", "fallback", "agent-1"},
-		{"valid with dots", "v1.2.3", "fallback", "v1.2.3"},
-		{"special chars replaced then trimmed", "hello world!", "fallback", "hello-world"},
-		{"special chars then trimmed", " @agent@ ", "fallback", "agent"},
-		{"unicode replaced", "agënt", "fallback", "ag-nt"},
-		{"all unsafe chars", "***", "fallback", "fallback"},
+		{"valid with dots", "v1.2.3", "fallback", "v1_2e2_2e3"},
+		{"special chars encoded", "hello world!", "fallback", "hello_20world_21"},
+		{"special chars with trim", " @agent@ ", "fallback", "_40agent_40"},
+		{"unicode encoded", "agënt", "fallback", "ag_c3_abnt"},
+		{"all unsafe chars", "***", "fallback", "_2a_2a_2a"},
 		{"whitespace around valid", "  ok  ", "fallback", "ok"},
-		{"only trimchars after replace", "---", "fallback", "fallback"},
-		{"dots only", "...", "msg", "msg"},
-		{"underscores only", "___", "msg", "msg"},
-		{"mixed trim chars", "-._.-", "msg", "msg"},
+		{"only trimchars after replace", "---", "fallback", "---"},
+		{"dots only", "...", "msg", "_2e_2e_2e"},
+		{"underscores only", "___", "msg", "_5f_5f_5f"},
+		{"mixed trim chars", "-._.-", "msg", "-_2e_5f_2e-"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := messageFilePart(tt.value, tt.fallback)
+			got := safeFilePart(tt.value, tt.fallback)
 			if got != tt.want {
-				t.Errorf("messageFilePart(%q, %q) = %q, want %q", tt.value, tt.fallback, got, tt.want)
+				t.Errorf("safeFilePart(%q, %q) = %q, want %q", tt.value, tt.fallback, got, tt.want)
 			}
 		})
 	}
@@ -2804,23 +2711,14 @@ func TestWritePresence_CollisionResistance(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	// Two agent IDs that would collide under the old lossy sanitization
-	// but produce distinct filenames with collision-resistant encoding.
+	// Two agent IDs with similar shapes should still produce distinct filenames.
 	agentA := "agent!one"
 	agentB := "agent@one"
 
-	// Verify they would collide under the old lossy scheme.
-	sanitizedA := messageFilePart(agentA, "unknown")
-	sanitizedB := messageFilePart(agentB, "unknown")
-	if sanitizedA != sanitizedB {
-		t.Fatalf("old sanitization should collide: %q vs %q", sanitizedA, sanitizedB)
-	}
-
-	// Verify they do NOT collide under the new encoding.
 	encodedA := safeFilePart(agentA, "unknown")
 	encodedB := safeFilePart(agentB, "unknown")
 	if encodedA == encodedB {
-		t.Fatalf("new encoding should not collide: %q vs %q", encodedA, encodedB)
+		t.Fatalf("safeFilePart should not collide: %q vs %q", encodedA, encodedB)
 	}
 
 	if err := WritePresence(tasksDir, agentA, "task-a.md", "branch-a"); err != nil {
@@ -2872,8 +2770,8 @@ func TestWriteMessage_CollisionResistance(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	// Two messages with the same SentAt and Type, but From and ID values
-	// that would collide under the old lossy sanitization.
+	// Two messages with the same SentAt and Type but distinct From and ID values
+	// must produce distinct filenames.
 	sameTime := time.Date(2024, time.June, 15, 10, 0, 0, 0, time.UTC)
 
 	msgA := Message{
@@ -2887,17 +2785,11 @@ func TestWriteMessage_CollisionResistance(t *testing.T) {
 		SentAt: sameTime,
 	}
 
-	// Verify the old scheme would collide.
-	if messageFilePart(msgA.From, "unknown") != messageFilePart(msgB.From, "unknown") {
-		t.Fatal("old From parts should collide")
-	}
-	if messageFilePart(msgA.ID, "message") != messageFilePart(msgB.ID, "message") {
-		t.Fatal("old ID parts should collide")
-	}
-
-	// Verify the new scheme produces distinct parts.
 	if safeFilePart(msgA.From, "unknown") == safeFilePart(msgB.From, "unknown") {
-		t.Fatal("new From parts should not collide")
+		t.Fatal("safeFilePart should not collide for distinct From values")
+	}
+	if safeFilePart(msgA.ID, "message") == safeFilePart(msgB.ID, "message") {
+		t.Fatal("safeFilePart should not collide for distinct ID values")
 	}
 
 	if err := WriteMessage(tasksDir, msgA); err != nil {

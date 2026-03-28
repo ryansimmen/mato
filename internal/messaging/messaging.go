@@ -6,11 +6,9 @@ package messaging
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -58,8 +56,6 @@ var ValidMessageTypes = map[string]bool{
 	"completion":       true,
 	"progress":         true,
 }
-
-var safeMessageFilePart = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 // MessagingDirs lists the relative paths (from tasksDir) of the messaging
 // subdirectories created by Init(). Exported so that doctor can check for
@@ -371,17 +367,6 @@ func completionFilename(taskID string) string {
 	return s
 }
 
-// legacyCompletionFilename reproduces the old lossy sanitization so
-// ReadCompletionDetail can fall back to pre-existing files written before the
-// collision-resistant encoding was introduced.
-func legacyCompletionFilename(taskID string) string {
-	s := strings.Trim(safeMessageFilePart.ReplaceAllString(taskID, "-"), "-_. ")
-	if s == "" {
-		return "unknown"
-	}
-	return s
-}
-
 // WriteCompletionDetail writes a completion-detail JSON file for a merged task
 // so downstream dependent tasks can read what changed. The filename is derived
 // from TaskID using a collision-resistant encoding (see completionFilename).
@@ -403,29 +388,12 @@ func WriteCompletionDetail(tasksDir string, detail CompletionDetail) error {
 }
 
 // ReadCompletionDetail reads the completion-detail JSON for a given task ID.
-// It first tries the collision-resistant filename. If that file does not exist,
-// it falls back to the legacy lossy sanitized name for backward compatibility
-// with pre-existing completion files. If the new file exists but is unreadable
-// (permissions, I/O error, etc.), the real error is returned without consulting
-// the legacy file. Returns os.ErrNotExist if neither file exists.
 func ReadCompletionDetail(tasksDir, taskID string) (*CompletionDetail, error) {
 	name := completionFilename(taskID)
 	path := filepath.Join(tasksDir, "messages", "completions", name+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		// Only fall back to the legacy filename when the new file is absent.
-		// If it exists but is unreadable (permissions, etc.), surface the real error.
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("read completion detail %s: %w", taskID, err)
-		}
-		legacy := legacyCompletionFilename(taskID)
-		if legacy != name {
-			legacyPath := filepath.Join(tasksDir, "messages", "completions", legacy+".json")
-			data, err = os.ReadFile(legacyPath)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read completion detail %s: %w", taskID, err)
-		}
+		return nil, fmt.Errorf("read completion detail %s: %w", taskID, err)
 	}
 	var detail CompletionDetail
 	if err := json.Unmarshal(data, &detail); err != nil {
@@ -511,17 +479,4 @@ func writeJSONAtomically(path string, value any) error {
 	return atomicwrite.WriteFunc(path, func(f *os.File) error {
 		return json.NewEncoder(f).Encode(value)
 	})
-}
-
-func messageFilePart(value, fallback string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return fallback
-	}
-	value = safeMessageFilePart.ReplaceAllString(value, "-")
-	value = strings.Trim(value, "-._")
-	if value == "" {
-		return fallback
-	}
-	return value
 }

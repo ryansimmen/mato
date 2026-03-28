@@ -24,45 +24,42 @@ nothing.
 
 ## Evidence
 
-- `internal/frontmatter/frontmatter.go:33` — `Tags []string` is parsed and filtered
-  via `filterEmpty` (line 119) but never referenced downstream.
-- `internal/frontmatter/frontmatter.go:34-35` — `EstimatedComplexity` comment says
-  explicitly: "parsed for external consumers; not used internally."
+- Before removal, `internal/frontmatter/frontmatter.go` parsed both fields into
+  `TaskMeta`, and `tags` also passed through `filterEmpty(...)`, but neither field
+  had any downstream consumer.
 - No code path in `queue/`, `runner/`, `status/`, `dag/`, `doctor/`, `inspect/`, or
-  `graph/` reads `meta.Tags` or `meta.EstimatedComplexity`.
-- The "external consumers" referenced in the comment have no evidence of existing in
-  this repository or its integrations.
+  `graph/` read those fields.
+- The "external consumers" mentioned in the old struct comment had no evidence of
+  existing in this repository or its integrations.
 
 ## Idea
 
-Remove both fields from the supported task format:
+Remove both fields from the supported task format and scrub them from the repo:
 
 1. Remove `Tags` and `EstimatedComplexity` from the `TaskMeta` struct in
    `internal/frontmatter/frontmatter.go`.
 2. Remove the `filterEmpty(meta.Tags)` call.
-3. Remove both fields from documentation: `README.md` (Quick Start example),
-   `docs/task-format.md` (informational fields section, all examples),
-   `.github/skills/mato/SKILL.md`.
-4. Update tests in `frontmatter_test.go` and `taskfile_test.go` that reference
-   these fields.
-
-Existing task files containing these fields will continue to parse without errors —
-Go's YAML unmarshaler silently ignores unknown keys.
+3. Remove both fields from user-facing docs and examples: `README.md`,
+   `docs/task-format.md`, `.github/skills/mato/SKILL.md`, and any stale examples
+   in historical proposal docs that still teach these fields.
+4. Update tests in `frontmatter_test.go`, `taskfile_test.go`, and any other
+   fixtures that still mention the removed keys.
+5. Leave stale `tags` / `estimated_complexity` keys ignored if they still appear
+   in old task files; no special parsing or warnings are needed.
 
 ## Design Considerations
 
-- **Backward compatibility:** Existing task files with `tags` or
-  `estimated_complexity` will parse without warnings or errors. No migration is
-  needed.
+- **No special compatibility machinery:** Unknown frontmatter keys are already
+  ignored, so old files can remain harmlessly stale without adding deprecation
+  shims, warnings, or migration logic.
 - **External consumers:** The struct comment mentions "external consumers" but no
-  evidence of such consumers exists. If discovered, the fields could be deprecated
-  with a changelog note rather than removed immediately.
+  evidence of such consumers exists in this repo. The burden of proof should be on
+  a real consumer before carrying dead fields indefinitely.
 - **Scope creep guard:** If either field gains a concrete consumer in the future
-  (e.g., tag-based skill matching, complexity-aware scheduling), it can be re-added
-  at that point with a clear design and actual behavior.
-- **Coordinated update:** The removal touches user-facing docs in three places
-  (README, task-format.md, SKILL.md) and should be done as a single change to
-  avoid stale references.
+  (e.g., tag-based skill matching, complexity-aware scheduling), it can be added
+  back with an explicit design and actual behavior.
+- **Repo-wide cleanup:** This should be treated as a full consistency pass, not
+  just a parser change, so examples and tests stop reintroducing the dead fields.
 
 ## Relationship to Existing Features
 
