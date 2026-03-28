@@ -31,26 +31,32 @@ state diagram documented in `docs/architecture.md`.
 
 ## Idea
 
-Introduce a centralized `TransitionTask()` function with a validated transition
+Introduce a centralized `TransitionTask()` flow with a validated transition
 table that replaces bare `AtomicMove` calls for task state changes.
+
+The important change is centralization and validation, not the exact function
+signature. The simplest version is `validate + AtomicMove`, but the real codebase
+also has transitions with post-move writes, rollback on post-move failure,
+warnings, and retry behavior. The proposal should leave room for a thin helper
+plus transition-specific wrappers where needed.
 
 ```go
 // Declarative transition table
 var validTransitions = map[[2]string]bool{
-    {"waiting", "backlog"}:              true,
-    {"waiting", "failed"}:              true,
-    {"backlog", "in-progress"}:         true,
-    {"backlog", "waiting"}:             true,
-    {"backlog", "failed"}:              true,
-    {"in-progress", "ready-for-review"}: true,
-    {"in-progress", "backlog"}:         true,
-    {"in-progress", "failed"}:          true,
+    {"waiting", "backlog"}:               true,
+    {"waiting", "failed"}:                true,
+    {"backlog", "in-progress"}:           true,
+    {"backlog", "waiting"}:               true,
+    {"backlog", "failed"}:                true,
+    {"in-progress", "ready-for-review"}:  true,
+    {"in-progress", "backlog"}:           true,
+    {"in-progress", "failed"}:            true,
     // ... all valid transitions
 }
 
 func TransitionTask(tasksDir, filename, fromState, toState string) error {
     if !validTransitions[[2]string{fromState, toState}] {
-        return fmt.Errorf("invalid transition %s → %s for %s", fromState, toState, filename)
+        return fmt.Errorf("invalid transition %s -> %s for %s", fromState, toState, filename)
     }
     return AtomicMove(
         filepath.Join(tasksDir, fromState, filename),
@@ -70,8 +76,8 @@ func TransitionTask(tasksDir, filename, fromState, toState string) error {
   and similar test hooks exist because there is no centralized transition function
   to test against. A single `TransitionTask` function is a natural test seam.
 - **Provides a hook point**: an orchestration log (see
-  `orchestration-log-as-fsm-hook.md`) can emit structured events on each
-  transition without modifying every call site.
+  follow-up section below) can emit structured events on each transition
+  without modifying every call site.
 - **Makes future state additions cheap**: adding a new queue state becomes a table
   entry plus one subcommand, instead of 3-5 new `AtomicMove` call sites with
   bespoke error handling.
@@ -87,16 +93,71 @@ func TransitionTask(tasksDir, filename, fromState, toState string) error {
 ## Pre-Implementation Spike
 
 Before designing the API, catalog every existing `AtomicMove` call site and
-determine:
+group each one into a small number of transition classes:
 
-1. Which transitions require pre-move side effects (e.g. appending failure records
-   before moving to `failed/`)?
-2. Which require post-move side effects (e.g. writing branch markers after moving
-   to `ready-for-review/`)?
-3. Can post-move-with-rollback be the universal pattern, or do some transitions
-   genuinely need pre-move writes?
+1. **Plain move**: validate the state edge and move the file.
+2. **Move + post-write + rollback**: move first, write metadata, roll back if the
+   write fails.
+3. **Record + move**: append or persist some record before moving to the next
+   state.
+4. **Move + retry/backoff**: transitions that already wrap `AtomicMove` in retry
+   logic.
+5. **Quarantine + warn**: transitions that move a task while also reporting a
+   non-fatal operator warning.
 
-This is a 1-2 hour investigation that determines the API shape.
+That inventory should answer:
+
+1. Which transitions require pre-move side effects?
+2. Which require post-move side effects?
+3. Which require rollback if a follow-up write fails?
+4. Can one helper cover most transitions, or should a small validated core be
+   wrapped by specialized helpers?
+5. Which call sites are lowest risk to migrate first?
+
+This is a short spike, but it determines whether `TransitionTask()` stays a thin
+primitive or grows a small options struct.
+
+## Follow-up: Transition Journal
+
+Once task transitions are centralized, mato can optionally append a durable,
+append-only transition journal as a side effect of successful transitions.
+
+The key point is scope: this is **task history**, not scheduler-decision logging.
+It records which task moved between which states and when. It does not try to
+answer every "why was this task skipped this cycle?" question.
+
+### Sketch
+
+Append one JSON line per successful transition to
+`.mato/orchestration-log/transitions.jsonl`:
+
+```json
+{"at":"2026-03-26T15:04:06Z","task":"add-retry-logic.md","from":"backlog","to":"in-progress","agent":"a1b2c3d4"}
+{"at":"2026-03-26T15:11:10Z","task":"add-retry-logic.md","from":"in-progress","to":"ready-for-review","agent":"a1b2c3d4"}
+{"at":"2026-03-26T15:12:30Z","task":"add-retry-logic.md","from":"ready-for-review","to":"ready-to-merge"}
+{"at":"2026-03-26T15:15:00Z","task":"add-retry-logic.md","from":"ready-to-merge","to":"completed"}
+```
+
+### Narrow schema
+
+Each line should stay small and stable:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `at` | string | UTC RFC3339 timestamp |
+| `task` | string | Task filename |
+| `from` | string | Source state directory |
+| `to` | string | Destination state directory |
+| `agent` | string | Agent ID when applicable |
+| `reason` | string | Optional fixed reason code |
+
+### Design constraints
+
+- Best-effort only: if the journal write fails, the transition still succeeds.
+- Gitignore it: this is local operational history, not repository state.
+- Keep it append-only and narrow; do not turn it into a second source of truth.
+- Use it to power future task-history views such as `mato log`, not as a general
+  event bus.
 
 ## Design Considerations
 
@@ -107,14 +168,13 @@ This is a 1-2 hour investigation that determines the API shape.
   rollback, merge with retry).
 - The existing test coverage (concurrent tests, integration tests) provides safety
   nets for the refactor.
-- Consider whether `TransitionTask` should accept optional callbacks for pre/post
-  side effects, or whether callers should compose `TransitionTask` with their own
-  record-writing logic.
+- Keep "task history" and "scheduler-decision history" separate. This proposal is
+  only about the former.
 
 ## Relationship to Existing Features
 
-- Enables `orchestration-log-as-fsm-hook` as a transition hook rather than a
-  standalone system.
+- Enables a later transition journal and a richer `mato log` without introducing
+  a standalone orchestration event system.
 - Prerequisite for any future queue state additions (human-review gates, parallel
   agent support).
 - Simplifies the existing codebase by reducing scattered transition logic.
