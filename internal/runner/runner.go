@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -27,6 +28,8 @@ import (
 	"mato/internal/queue"
 )
 
+var execCommandContext = exec.CommandContext
+
 //go:embed task-instructions.md
 var taskInstructions string
 
@@ -37,7 +40,9 @@ var reviewInstructions string
 // containers.
 const defaultAgentTimeout = 30 * time.Minute
 
-const defaultCopilotModel = "claude-opus-4.6"
+const DefaultTaskModel = "claude-opus-4.6"
+const DefaultReviewModel = "gpt-5.4"
+const DefaultReasoningEffort = "high"
 
 // gracefulShutdownDelay is the time to wait after sending SIGTERM to a
 // Docker container before escalating to SIGKILL.
@@ -89,13 +94,42 @@ type idleHeartbeat struct {
 	startTime            time.Time
 }
 
-// RunOptions holds fully resolved configuration values for a mato run.
-// Zero values mean "use hardcoded default."
+// RunOptions holds configuration values for a mato run.
+//
+// TaskModel, ReviewModel, TaskReasoningEffort, and ReviewReasoningEffort
+// must already be resolved to non-empty values before calling Run or DryRun.
+// DockerImage, AgentTimeout, and RetryCooldown may be left zero to use
+// downstream defaults.
 type RunOptions struct {
-	DockerImage   string
-	DefaultModel  string
-	AgentTimeout  time.Duration
-	RetryCooldown time.Duration
+	DockerImage           string
+	TaskModel             string
+	ReviewModel           string
+	TaskReasoningEffort   string
+	ReviewReasoningEffort string
+	AgentTimeout          time.Duration
+	RetryCooldown         time.Duration
+}
+
+func normalizeAndValidateRunOptions(opts RunOptions) (RunOptions, error) {
+	opts.TaskModel = strings.TrimSpace(opts.TaskModel)
+	opts.ReviewModel = strings.TrimSpace(opts.ReviewModel)
+	opts.TaskReasoningEffort = strings.TrimSpace(opts.TaskReasoningEffort)
+	opts.ReviewReasoningEffort = strings.TrimSpace(opts.ReviewReasoningEffort)
+
+	if opts.TaskModel == "" {
+		return opts, fmt.Errorf("task model must not be empty")
+	}
+	if opts.ReviewModel == "" {
+		return opts, fmt.Errorf("review model must not be empty")
+	}
+	if opts.TaskReasoningEffort == "" {
+		return opts, fmt.Errorf("task reasoning effort must not be empty")
+	}
+	if opts.ReviewReasoningEffort == "" {
+		return opts, fmt.Errorf("review reasoning effort must not be empty")
+	}
+
+	return opts, nil
 }
 
 // newIdleHeartbeat creates an idleHeartbeat initialised with the given time.
@@ -171,12 +205,16 @@ func formatDurationShort(d time.Duration) string {
 // DryRun validates the task queue setup without launching Docker containers.
 // It runs one iteration of queue management (dependency promotion, overlap
 // detection, manifest writing) and reports the results, then exits.
-func DryRun(repoRoot, branch string) error {
+func DryRun(repoRoot, branch string, opts RunOptions) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
+	opts, err = normalizeAndValidateRunOptions(opts)
+	if err != nil {
+		return err
+	}
 
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
@@ -268,6 +306,13 @@ func DryRun(repoRoot, branch string) error {
 
 	// --- Backlog Task Summary ---
 	dryRunBacklogSummary(idx, deferredSet, blockedBacklog)
+
+	// --- Resolved Settings ---
+	fmt.Println("\n=== Resolved Settings ===")
+	fmt.Printf("  %-24s %s\n", "task model:", opts.TaskModel)
+	fmt.Printf("  %-24s %s\n", "review model:", opts.ReviewModel)
+	fmt.Printf("  %-24s %s\n", "task reasoning effort:", opts.TaskReasoningEffort)
+	fmt.Printf("  %-24s %s\n", "review reasoning effort:", opts.ReviewReasoningEffort)
 
 	// --- Queue Summary ---
 	// Count includes both successfully parsed tasks and parse failures
@@ -429,12 +474,16 @@ func resolveDepState(depID string, idx *queue.PollIndex) string {
 	return matchedState
 }
 
-func Run(repoRoot, branch string, copilotArgs []string, opts RunOptions) error {
+func Run(repoRoot, branch string, opts RunOptions) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
+	opts, err = normalizeAndValidateRunOptions(opts)
+	if err != nil {
+		return err
+	}
 
 	branchResult, err := git.EnsureBranch(repoRoot, branch)
 	if err != nil {
@@ -485,7 +534,7 @@ func Run(repoRoot, branch string, copilotArgs []string, opts RunOptions) error {
 		return err
 	}
 
-	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, copilotArgs, repoRoot, tasksDir, opts)
+	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, repoRoot, tasksDir, opts)
 
 	if err := ensureDockerImage(cfg.image); err != nil {
 		return err
@@ -521,12 +570,11 @@ func resolveGitIdentity(repoRoot string) (name, email string) {
 
 // buildEnvAndRunContext assembles the envConfig and runContext from resolved
 // host tools, agent identity, and runtime settings.
-func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail string, copilotArgs []string, repoRoot, tasksDir string, opts RunOptions) (envConfig, runContext) {
+func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail, repoRoot, tasksDir string, opts RunOptions) (envConfig, runContext) {
 	image := opts.DockerImage
 	if image == "" {
 		image = "ubuntu:24.04"
 	}
-	model := resolveDefaultModel(opts.DefaultModel)
 	timeout := opts.AgentTimeout
 	if timeout <= 0 {
 		timeout = defaultAgentTimeout
@@ -538,37 +586,39 @@ func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, git
 	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/"+dirs.Root+"/messages")
 
 	env := envConfig{
-		image:              image,
-		workdir:            workdir,
-		copilotPath:        tools.copilotPath,
-		gitPath:            tools.gitPath,
-		gitUploadPackPath:  tools.gitUploadPackPath,
-		gitReceivePackPath: tools.gitReceivePackPath,
-		ghPath:             tools.ghPath,
-		goRoot:             tools.goRoot,
-		copilotConfigDir:   tools.copilotConfigDir,
-		copilotCacheDir:    tools.copilotCacheDir,
-		gitName:            gitName,
-		gitEmail:           gitEmail,
-		homeDir:            tools.homeDir,
-		ghConfigDir:        tools.ghConfigDir,
-		hasGhConfig:        tools.hasGhConfig,
-		gitTemplatesDir:    tools.gitTemplatesDir,
-		hasGitTemplates:    tools.hasGitTemplates,
-		systemCertsDir:     tools.systemCertsDir,
-		hasSystemCerts:     tools.hasSystemCerts,
-		copilotArgs:        copilotArgs,
-		repoRoot:           repoRoot,
-		tasksDir:           tasksDir,
-		targetBranch:       branch,
-		defaultModel:       model,
-		isTTY:              isTerminal(os.Stdin),
+		image:                 image,
+		workdir:               workdir,
+		copilotPath:           tools.copilotPath,
+		gitPath:               tools.gitPath,
+		gitUploadPackPath:     tools.gitUploadPackPath,
+		gitReceivePackPath:    tools.gitReceivePackPath,
+		ghPath:                tools.ghPath,
+		goRoot:                tools.goRoot,
+		copilotConfigDir:      tools.copilotConfigDir,
+		copilotCacheDir:       tools.copilotCacheDir,
+		gitName:               gitName,
+		gitEmail:              gitEmail,
+		homeDir:               tools.homeDir,
+		ghConfigDir:           tools.ghConfigDir,
+		hasGhConfig:           tools.hasGhConfig,
+		gitTemplatesDir:       tools.gitTemplatesDir,
+		hasGitTemplates:       tools.hasGitTemplates,
+		systemCertsDir:        tools.systemCertsDir,
+		hasSystemCerts:        tools.hasSystemCerts,
+		repoRoot:              repoRoot,
+		tasksDir:              tasksDir,
+		targetBranch:          branch,
+		reviewModel:           opts.ReviewModel,
+		reviewReasoningEffort: opts.ReviewReasoningEffort,
+		isTTY:                 isTerminal(os.Stdin),
 	}
 
 	run := runContext{
-		prompt:  prompt,
-		agentID: agentID,
-		timeout: timeout,
+		prompt:          prompt,
+		agentID:         agentID,
+		model:           opts.TaskModel,
+		reasoningEffort: opts.TaskReasoningEffort,
+		timeout:         timeout,
 	}
 
 	return env, run

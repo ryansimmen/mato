@@ -95,272 +95,6 @@ func TestResolveEnvBranch(t *testing.T) {
 	})
 }
 
-func TestExtractKnownFlags(t *testing.T) {
-	tests := []struct {
-		name       string
-		args       []string
-		wantRepo   string
-		wantBranch string
-		wantDryRun bool
-		wantExtra  []string
-	}{
-		{
-			name:      "repo equals syntax",
-			args:      []string{"--repo=/tmp/repo"},
-			wantRepo:  "/tmp/repo",
-			wantExtra: []string{},
-		},
-		{
-			name:      "repo space syntax",
-			args:      []string{"--repo", "/tmp/repo"},
-			wantRepo:  "/tmp/repo",
-			wantExtra: []string{},
-		},
-		{
-			name:       "branch equals syntax",
-			args:       []string{"--branch=develop"},
-			wantBranch: "develop",
-			wantExtra:  []string{},
-		},
-		{
-			name:       "branch space syntax",
-			args:       []string{"--branch", "develop"},
-			wantBranch: "develop",
-			wantExtra:  []string{},
-		},
-		{
-			name:       "dry-run flag",
-			args:       []string{"--dry-run"},
-			wantDryRun: true,
-			wantExtra:  []string{},
-		},
-		{
-			name:       "dry-run equals true",
-			args:       []string{"--dry-run=true"},
-			wantDryRun: true,
-			wantExtra:  []string{},
-		},
-		{
-			name:       "dry-run equals false",
-			args:       []string{"--dry-run=false"},
-			wantDryRun: false,
-			wantExtra:  []string{},
-		},
-		{
-			name:       "dry-run equals 1",
-			args:       []string{"--dry-run=1"},
-			wantDryRun: true,
-			wantExtra:  []string{},
-		},
-		{
-			name:       "dry-run equals 0",
-			args:       []string{"--dry-run=0"},
-			wantDryRun: false,
-			wantExtra:  []string{},
-		},
-		{
-			name:       "dry-run=true with forwarded flags",
-			args:       []string{"--dry-run=true", "--model", "gpt-5"},
-			wantDryRun: true,
-			wantExtra:  []string{"--model", "gpt-5"},
-		},
-		{
-			name:       "dry-run=false with other known flags",
-			args:       []string{"--repo=/tmp/repo", "--dry-run=false"},
-			wantRepo:   "/tmp/repo",
-			wantDryRun: false,
-			wantExtra:  []string{},
-		},
-		{
-			name:      "unknown flags forwarded as copilot args",
-			args:      []string{"--repo=/tmp/repo", "--model", "gpt-5.2"},
-			wantRepo:  "/tmp/repo",
-			wantExtra: []string{"--model", "gpt-5.2"},
-		},
-		{
-			name:      "double dash separator",
-			args:      []string{"--repo=/tmp/repo", "--", "--model", "gpt-5.2"},
-			wantRepo:  "/tmp/repo",
-			wantExtra: []string{"--model", "gpt-5.2"},
-		},
-		{
-			name:      "no args",
-			args:      []string{},
-			wantExtra: []string{},
-		},
-		{
-			name:      "only unknown args",
-			args:      []string{"--model", "gpt-5"},
-			wantExtra: []string{"--model", "gpt-5"},
-		},
-		{
-			name:      "flag followed by valid non-flag value",
-			args:      []string{"--repo", "/tmp/foo", "--model", "gpt-5"},
-			wantRepo:  "/tmp/foo",
-			wantExtra: []string{"--model", "gpt-5"},
-		},
-		{
-			name:      "equals form accepts flag-like value",
-			args:      []string{"--repo=--model"},
-			wantRepo:  "--model",
-			wantExtra: []string{},
-		},
-		{
-			name:       "values with internal spaces accepted",
-			args:       []string{"--repo", "/path/with spaces", "--branch", "my branch"},
-			wantRepo:   "/path/with spaces",
-			wantBranch: "my branch",
-			wantExtra:  []string{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := extractKnownFlags(tt.args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if cfg.repo != tt.wantRepo {
-				t.Errorf("repo = %q, want %q", cfg.repo, tt.wantRepo)
-			}
-			if cfg.branch != tt.wantBranch {
-				t.Errorf("branch = %q, want %q", cfg.branch, tt.wantBranch)
-			}
-			if cfg.dryRun != tt.wantDryRun {
-				t.Errorf("dryRun = %v, want %v", cfg.dryRun, tt.wantDryRun)
-			}
-			if len(cfg.copilotArgs) != len(tt.wantExtra) {
-				t.Fatalf("extra = %v, want %v", cfg.copilotArgs, tt.wantExtra)
-			}
-			for i := range cfg.copilotArgs {
-				if cfg.copilotArgs[i] != tt.wantExtra[i] {
-					t.Errorf("extra[%d] = %q, want %q", i, cfg.copilotArgs[i], tt.wantExtra[i])
-				}
-			}
-		})
-	}
-}
-
-func TestExtractKnownFlags_MissingValue(t *testing.T) {
-	tests := []struct {
-		name    string
-		args    []string
-		wantErr string
-	}{
-		{
-			name:    "repo followed by another flag",
-			args:    []string{"--repo", "--model", "gpt-5"},
-			wantErr: "flag --repo requires a value, got flag --model",
-		},
-		{
-			name:    "repo at end of args",
-			args:    []string{"--repo"},
-			wantErr: "flag --repo requires a value",
-		},
-		{
-			name:    "branch at end of args",
-			args:    []string{"--branch"},
-			wantErr: "flag --branch requires a value",
-		},
-		{
-			name:    "repo equals empty value",
-			args:    []string{"--repo="},
-			wantErr: "flag --repo requires a value",
-		},
-		{
-			name:    "branch equals empty value",
-			args:    []string{"--branch="},
-			wantErr: "flag --branch requires a value",
-		},
-		{
-			name:    "dry-run invalid boolean",
-			args:    []string{"--dry-run=maybe"},
-			wantErr: `invalid value "maybe" for flag --dry-run: must be a boolean`,
-		},
-		{
-			name:    "dry-run empty equals value",
-			args:    []string{"--dry-run="},
-			wantErr: `invalid value "" for flag --dry-run: must be a boolean`,
-		},
-		{
-			name:    "version invalid boolean",
-			args:    []string{"--version=maybe"},
-			wantErr: `invalid value "maybe" for flag --version: must be a boolean`,
-		},
-		{
-			name:    "version empty equals value",
-			args:    []string{"--version="},
-			wantErr: `invalid value "" for flag --version: must be a boolean`,
-		},
-		{
-			name:    "repo whitespace-only equals form",
-			args:    []string{"--repo=   "},
-			wantErr: "flag --repo requires a value",
-		},
-		{
-			name:    "branch whitespace-only equals form",
-			args:    []string{"--branch=\t "},
-			wantErr: "flag --branch requires a value",
-		},
-		{
-			name:    "repo whitespace-only space form",
-			args:    []string{"--repo", "   "},
-			wantErr: "flag --repo requires a value",
-		},
-		{
-			name:    "branch whitespace-only space form",
-			args:    []string{"--branch", " \t "},
-			wantErr: "flag --branch requires a value",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := extractKnownFlags(tt.args)
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if err.Error() != tt.wantErr {
-				t.Errorf("error = %q, want %q", err.Error(), tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestExtractKnownFlags_Version(t *testing.T) {
-	tests := []struct {
-		name        string
-		args        []string
-		wantVersion bool
-		wantExtra   []string
-	}{
-		{name: "bare version flag", args: []string{"--version"}, wantVersion: true},
-		{name: "version true", args: []string{"--version=true"}, wantVersion: true},
-		{name: "version false", args: []string{"--version=false", "--model", "gpt-5"}, wantExtra: []string{"--model", "gpt-5"}},
-		{name: "version forwarded after separator", args: []string{"--", "--version"}, wantExtra: []string{"--version"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := extractKnownFlags(tt.args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if cfg.version != tt.wantVersion {
-				t.Fatalf("version = %v, want %v", cfg.version, tt.wantVersion)
-			}
-			if len(cfg.copilotArgs) != len(tt.wantExtra) {
-				t.Fatalf("extra = %v, want %v", cfg.copilotArgs, tt.wantExtra)
-			}
-			for i := range cfg.copilotArgs {
-				if cfg.copilotArgs[i] != tt.wantExtra[i] {
-					t.Errorf("extra[%d] = %q, want %q", i, cfg.copilotArgs[i], tt.wantExtra[i])
-				}
-			}
-		})
-	}
-}
-
 func TestRootCmd_Help(t *testing.T) {
 	tests := []struct {
 		name string
@@ -382,51 +116,51 @@ func TestRootCmd_Help(t *testing.T) {
 	}
 }
 
-func TestRootCmd_HelpAfterDoubleDashForwarded(t *testing.T) {
-	tests := []struct {
-		name      string
-		args      []string
-		wantExtra []string
-	}{
-		{
-			name:      "double dash then --help forwarded",
-			args:      []string{"--", "--help"},
-			wantExtra: []string{"--help"},
-		},
-		{
-			name:      "double dash then -h forwarded",
-			args:      []string{"--", "-h"},
-			wantExtra: []string{"-h"},
-		},
-		{
-			name:      "known flag then double dash then --help forwarded",
-			args:      []string{"--repo=/tmp/repo", "--", "--help"},
-			wantExtra: []string{"--help"},
-		},
+func TestRootCmd_PositionalArgsRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"foo"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
 	}
+	if !strings.Contains(err.Error(), "unknown command \"foo\" for \"mato\"") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var capturedArgs []string
-			cmd := newRootCmd()
-			cmd.SetArgs(tt.args)
-			cmd.RunE = func(cmd *cobra.Command, args []string) error {
-				cfg, _ := extractKnownFlags(args)
-				capturedArgs = cfg.copilotArgs
-				return nil
-			}
-			if err := cmd.Execute(); err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(capturedArgs) != len(tt.wantExtra) {
-				t.Fatalf("forwarded args = %v, want %v", capturedArgs, tt.wantExtra)
-			}
-			for i := range capturedArgs {
-				if capturedArgs[i] != tt.wantExtra[i] {
-					t.Errorf("forwarded args[%d] = %q, want %q", i, capturedArgs[i], tt.wantExtra[i])
-				}
-			}
-		})
+func TestRootCmd_DoubleDashRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--", "--model", "gpt-5.4"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown command \"--model\" for \"mato\"") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRootCmd_UnknownRootFlagRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--model", "gpt-5.4"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown flag: --model") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunCmd_DoubleDashRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--", "--model", "gpt-5.4"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown command \"--model\" for \"mato run\"") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -496,26 +230,6 @@ func writeRepoConfig(t *testing.T, repoRoot, content string) {
 	}
 }
 
-func TestRootCmd_UnknownFlagsForwarded(t *testing.T) {
-	var capturedArgs []string
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo=/tmp/repo", "--model", "gpt-5.2"})
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		cfg, _ := extractKnownFlags(args)
-		capturedArgs = cfg.copilotArgs
-		return nil
-	}
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(capturedArgs) != 2 {
-		t.Fatalf("expected 2 forwarded args, got %v", capturedArgs)
-	}
-	if capturedArgs[0] != "--model" || capturedArgs[1] != "gpt-5.2" {
-		t.Errorf("forwarded args = %v, want [--model gpt-5.2]", capturedArgs)
-	}
-}
-
 func TestRootCmd_HelpListsCompletionCommand(t *testing.T) {
 	cmd := newRootCmd()
 	var out bytes.Buffer
@@ -528,8 +242,8 @@ func TestRootCmd_HelpListsCompletionCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "completion") {
 		t.Fatalf("expected help to mention completion command, got:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "mato --model gpt-5.4") {
-		t.Fatalf("expected help to mention custom model forwarding, got:\n%s", out.String())
+	if !strings.Contains(out.String(), "run") {
+		t.Fatalf("expected help to mention run subcommand, got:\n%s", out.String())
 	}
 }
 
@@ -561,6 +275,24 @@ func TestVersionCmd_Output(t *testing.T) {
 				t.Fatalf("output = %q, want %q", out.String(), tt.want)
 			}
 		})
+	}
+}
+
+func TestVersionCmd_ShortFlag(t *testing.T) {
+	origVersion := version
+	defer func() { version = origVersion }()
+	version = "1.2.3"
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"-v"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.String() != "mato 1.2.3\n" {
+		t.Fatalf("output = %q, want %q", out.String(), "mato 1.2.3\n")
 	}
 }
 
@@ -909,6 +641,33 @@ func TestStatusCmd_FlagParsing(t *testing.T) {
 			}
 			if err := cmd.Execute(); err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestStatusCmd_PersistentRepoFlagBothPositions(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "root before subcommand",
+			args: []string{"--repo", repoRoot, "status"},
+		},
+		{
+			name: "subcommand local position",
+			args: []string{"status", "--repo", repoRoot},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute: %v", err)
 			}
 		})
 	}
@@ -1539,27 +1298,9 @@ func TestValidateRepoPath_NotAGitRepo(t *testing.T) {
 // --- Root command validation integration tests ---
 
 func TestRootCmd_InvalidBranchRejected(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--branch=foo..bar"})
-	// Override RunE to add validation without calling runner.Run
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		cfg, err := extractKnownFlags(args)
-		if err != nil {
-			return err
-		}
-		resolved, err := resolveRepo(cfg.repo)
-		if err != nil {
-			return err
-		}
-		if err := validateRepoPath(resolved); err != nil {
-			return err
-		}
-		br, err := resolveConfigBranch(configFixture(nil), cfg.branch)
-		if err != nil {
-			return err
-		}
-		return validateBranch(br)
-	}
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--branch=foo..bar"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for invalid branch, got nil")
@@ -1573,26 +1314,7 @@ func TestRootCmd_NonRepoPathRejected(t *testing.T) {
 	dir := t.TempDir()
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo=" + dir})
-	// Override RunE to test validation without runner.Run
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		cfg, err := extractKnownFlags(args)
-		if err != nil {
-			return err
-		}
-		resolved, err := resolveRepo(cfg.repo)
-		if err != nil {
-			return err
-		}
-		if err := validateRepoPath(resolved); err != nil {
-			return err
-		}
-		br, err := resolveConfigBranch(configFixture(nil), cfg.branch)
-		if err != nil {
-			return err
-		}
-		return validateBranch(br)
-	}
+	cmd.SetArgs([]string{"run", "--repo=" + dir})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for non-git repo, got nil")
@@ -2254,11 +1976,11 @@ func TestResolveRunOptions(t *testing.T) {
 	stringPtr := func(v string) *string { return &v }
 
 	t.Run("uses config values when env unset", func(t *testing.T) {
-		opts, err := resolveRunOptions(configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("45m"), stringPtr("5m")))
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("gpt-5.4"), stringPtr("medium"), stringPtr("xhigh"), stringPtr("45m"), stringPtr("5m")))
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		if opts.DockerImage != "custom:latest" || opts.DefaultModel != "claude-sonnet-4" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
 	})
@@ -2266,7 +1988,7 @@ func TestResolveRunOptions(t *testing.T) {
 	t.Run("env overrides invalid config", func(t *testing.T) {
 		t.Setenv("MATO_AGENT_TIMEOUT", "1h")
 		t.Setenv("MATO_RETRY_COOLDOWN", "90s")
-		opts, err := resolveRunOptions(configFixtureWithValues(nil, nil, stringPtr("bad"), stringPtr("also-bad")))
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, nil, nil, stringPtr("bad"), stringPtr("also-bad")))
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
@@ -2276,7 +1998,7 @@ func TestResolveRunOptions(t *testing.T) {
 	})
 
 	t.Run("invalid effective config errors", func(t *testing.T) {
-		_, err := resolveRunOptions(configFixtureWithValues(nil, nil, stringPtr("bad"), nil))
+		_, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, nil, nil, stringPtr("bad"), nil))
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -2284,7 +2006,7 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("invalid effective env timeout errors", func(t *testing.T) {
 		t.Setenv("MATO_AGENT_TIMEOUT", "bad")
-		_, err := resolveRunOptions(configFixture(nil))
+		_, err := resolveRunOptions(runFlags{}, configFixture(nil))
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -2292,7 +2014,7 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("invalid env cooldown rejected", func(t *testing.T) {
 		t.Setenv("MATO_RETRY_COOLDOWN", "bad")
-		_, err := resolveRunOptions(configFixture(nil))
+		_, err := resolveRunOptions(runFlags{}, configFixture(nil))
 		if err == nil {
 			t.Fatal("expected error for invalid MATO_RETRY_COOLDOWN, got nil")
 		}
@@ -2303,7 +2025,7 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("non-positive env cooldown rejected", func(t *testing.T) {
 		t.Setenv("MATO_RETRY_COOLDOWN", "-5m")
-		_, err := resolveRunOptions(configFixture(nil))
+		_, err := resolveRunOptions(runFlags{}, configFixture(nil))
 		if err == nil {
 			t.Fatal("expected error for non-positive MATO_RETRY_COOLDOWN, got nil")
 		}
@@ -2311,6 +2033,42 @@ func TestResolveRunOptions(t *testing.T) {
 			t.Fatalf("error should mention positive: %v", err)
 		}
 	})
+
+	t.Run("reasoning effort validation", func(t *testing.T) {
+		_, err := resolveRunOptions(runFlags{TaskReasoningEffort: "invalid"}, configFixture(nil))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "task-reasoning-effort") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestValidateReasoningEffort(t *testing.T) {
+	for _, value := range []string{"low", "medium", "high", "xhigh"} {
+		if err := validateReasoningEffort(value, "task-reasoning-effort"); err != nil {
+			t.Fatalf("validateReasoningEffort(%q): %v", value, err)
+		}
+	}
+	if err := validateReasoningEffort("invalid", "review-reasoning-effort"); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestResolveStringOption(t *testing.T) {
+	configVal := "from-config"
+	t.Setenv("MATO_TASK_MODEL", "from-env")
+	if got := resolveStringOption(" from-flag ", "MATO_TASK_MODEL", &configVal); got != "from-flag" {
+		t.Fatalf("got %q, want from-flag", got)
+	}
+	if got := resolveStringOption("  ", "MATO_TASK_MODEL", &configVal); got != "from-env" {
+		t.Fatalf("got %q, want from-env", got)
+	}
+	t.Setenv("MATO_TASK_MODEL", "  ")
+	if got := resolveStringOption("", "MATO_TASK_MODEL", &configVal); got != "from-config" {
+		t.Fatalf("got %q, want from-config", got)
+	}
 }
 
 func TestConfigFile_BranchFromConfig(t *testing.T) {
@@ -2322,7 +2080,7 @@ func TestConfigFile_BranchFromConfig(t *testing.T) {
 	defer func() { runFn = origRunFn }()
 
 	called := false
-	runFn = func(repoRootArg, branch string, copilotArgs []string, opts runner.RunOptions) error {
+	runFn = func(repoRootArg, branch string, opts runner.RunOptions) error {
 		called = true
 		if repoRootArg != repoRoot {
 			t.Fatalf("repoRoot = %q, want %q", repoRootArg, repoRoot)
@@ -2334,7 +2092,7 @@ func TestConfigFile_BranchFromConfig(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2350,7 +2108,7 @@ func TestConfigFile_BranchFromEnv(t *testing.T) {
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
 
-	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+	runFn = func(_ string, branch string, _ runner.RunOptions) error {
 		if branch != "main" {
 			t.Fatalf("branch = %q, want %q", branch, "main")
 		}
@@ -2358,7 +2116,7 @@ func TestConfigFile_BranchFromEnv(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2372,7 +2130,7 @@ func TestConfigFile_BranchFlagOverridesConfig(t *testing.T) {
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
 
-	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+	runFn = func(_ string, branch string, _ runner.RunOptions) error {
 		if branch != "feature" {
 			t.Fatalf("branch = %q, want %q", branch, "feature")
 		}
@@ -2380,7 +2138,7 @@ func TestConfigFile_BranchFlagOverridesConfig(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot, "--branch", "feature"})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--branch", "feature"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2394,7 +2152,7 @@ func TestConfigFile_BranchEnvOverridesConfig(t *testing.T) {
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
 
-	runFn = func(_ string, branch string, _ []string, _ runner.RunOptions) error {
+	runFn = func(_ string, branch string, _ runner.RunOptions) error {
 		if branch != "env-branch" {
 			t.Fatalf("branch = %q, want %q", branch, "env-branch")
 		}
@@ -2402,7 +2160,7 @@ func TestConfigFile_BranchEnvOverridesConfig(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2415,18 +2173,18 @@ func TestConfigFile_MissingConfig(t *testing.T) {
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
 
-	runFn = func(_ string, branch string, _ []string, opts runner.RunOptions) error {
+	runFn = func(_ string, branch string, opts runner.RunOptions) error {
 		if branch != "mato" {
 			t.Fatalf("branch = %q, want %q", branch, "mato")
 		}
-		if opts != (runner.RunOptions{}) {
+		if opts != defaultResolvedRunOptions() {
 			t.Fatalf("opts = %+v, want zero value", opts)
 		}
 		return nil
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2437,7 +2195,7 @@ func TestConfigFile_InvalidYAML(t *testing.T) {
 	writeRepoConfig(t, repoRoot, "branch: [\n")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -2452,7 +2210,7 @@ func TestConfigFile_InvalidAgentTimeout_RunMode(t *testing.T) {
 	writeRepoConfig(t, repoRoot, "agent_timeout: not-a-duration\n")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -2470,7 +2228,7 @@ func TestConfigFile_InvalidTimeout_EnvOverride(t *testing.T) {
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
 
-	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
 		if opts.AgentTimeout != time.Hour {
 			t.Fatalf("AgentTimeout = %v, want %v", opts.AgentTimeout, time.Hour)
 		}
@@ -2478,7 +2236,7 @@ func TestConfigFile_InvalidTimeout_EnvOverride(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2492,7 +2250,7 @@ func TestConfigFile_InvalidCooldown_EnvOverride(t *testing.T) {
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
 
-	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
 		if opts.RetryCooldown != 90*time.Second {
 			t.Fatalf("RetryCooldown = %v, want %v", opts.RetryCooldown, 90*time.Second)
 		}
@@ -2500,7 +2258,7 @@ func TestConfigFile_InvalidCooldown_EnvOverride(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2510,7 +2268,10 @@ func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	writeRepoConfig(t, repoRoot, strings.Join([]string{
 		"docker_image: custom:latest",
-		"default_model: claude-sonnet-4",
+		"task_model: claude-sonnet-4",
+		"review_model: gpt-5.4",
+		"task_reasoning_effort: medium",
+		"review_reasoning_effort: high",
 		"agent_timeout: 45m",
 		"retry_cooldown: 5m",
 		"",
@@ -2519,15 +2280,44 @@ func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
 	origRunFn := runFn
 	defer func() { runFn = origRunFn }()
 
-	runFn = func(_ string, _ string, _ []string, opts runner.RunOptions) error {
-		if opts.DockerImage != "custom:latest" || opts.DefaultModel != "claude-sonnet-4" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
+		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "high" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
 		return nil
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestRunCmd_TaskModelFlagOverridesResolvedOptions(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
+		if opts.TaskModel != "claude-sonnet-4" {
+			t.Fatalf("TaskModel = %q, want %q", opts.TaskModel, "claude-sonnet-4")
+		}
+		if opts.ReviewModel != runner.DefaultReviewModel {
+			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, runner.DefaultReviewModel)
+		}
+		if opts.TaskReasoningEffort != runner.DefaultReasoningEffort {
+			t.Fatalf("TaskReasoningEffort = %q, want %q", opts.TaskReasoningEffort, runner.DefaultReasoningEffort)
+		}
+		if opts.ReviewReasoningEffort != runner.DefaultReasoningEffort {
+			t.Fatalf("ReviewReasoningEffort = %q, want %q", opts.ReviewReasoningEffort, runner.DefaultReasoningEffort)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--task-model", "claude-sonnet-4"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2541,15 +2331,18 @@ func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
 	origDryRunFn := dryRunFn
 	defer func() { dryRunFn = origDryRunFn }()
 
-	dryRunFn = func(_ string, branch string) error {
+	dryRunFn = func(_ string, branch string, opts runner.RunOptions) error {
 		if branch != "main" {
 			t.Fatalf("branch = %q, want %q", branch, "main")
+		}
+		if opts != defaultResolvedRunOptions() {
+			t.Fatalf("opts = %+v", opts)
 		}
 		return nil
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot, "--dry-run"})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--dry-run"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2560,7 +2353,7 @@ func TestConfigFile_WhitespaceEnvBranchRejected(t *testing.T) {
 	t.Setenv("MATO_BRANCH", "   ")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--repo", repoRoot})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -2613,11 +2406,23 @@ func configFixture(branch *string) config.Config {
 	return config.Config{Branch: branch}
 }
 
-func configFixtureWithValues(dockerImage, defaultModel, agentTimeout, retryCooldown *string) config.Config {
+func defaultResolvedRunOptions() runner.RunOptions {
+	return runner.RunOptions{
+		TaskModel:             runner.DefaultTaskModel,
+		ReviewModel:           runner.DefaultReviewModel,
+		TaskReasoningEffort:   runner.DefaultReasoningEffort,
+		ReviewReasoningEffort: runner.DefaultReasoningEffort,
+	}
+}
+
+func configFixtureWithValues(dockerImage, taskModel, reviewModel, taskReasoningEffort, reviewReasoningEffort, agentTimeout, retryCooldown *string) config.Config {
 	return config.Config{
-		DockerImage:   dockerImage,
-		DefaultModel:  defaultModel,
-		AgentTimeout:  agentTimeout,
-		RetryCooldown: retryCooldown,
+		DockerImage:           dockerImage,
+		TaskModel:             taskModel,
+		ReviewModel:           reviewModel,
+		TaskReasoningEffort:   taskReasoningEffort,
+		ReviewReasoningEffort: reviewReasoningEffort,
+		AgentTimeout:          agentTimeout,
+		RetryCooldown:         retryCooldown,
 	}
 }

@@ -15,7 +15,8 @@ the host and bind-mounts those executables into agent containers.
 
 ## CLI Usage
 ```text
-mato [--repo <path>] [--branch <name>] [--dry-run] [--version] [copilot-args...]
+mato [--version] [--repo <path>]
+mato run [--repo <path>] [--branch <name>] [--dry-run] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
 mato init [--repo <path>] [--branch <name>]
 mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
@@ -42,11 +43,6 @@ files are modified.
 Status mode prints queue counts, active agents, waiting-task dependency summaries, and
 recent messages. `mato status` rejects both extra positional arguments and
 unrecognized flags such as `--branch`.
-Use `--` to stop `mato` flag parsing and forward the remaining arguments verbatim to
-Copilot CLI. In run mode, unrecognized arguments are also passed through to Copilot.
-Prefer `mato -- <copilot-args>` when you want to forward flags that could also be
-interpreted as mato flags.
-
 ## Config File
 `mato` optionally loads `.mato.yaml` from the repository root (next to `.git/`).
 All fields are optional:
@@ -54,7 +50,10 @@ All fields are optional:
 ```yaml
 branch: main
 docker_image: ubuntu:24.04
-default_model: claude-sonnet-4
+task_model: claude-opus-4.6
+review_model: gpt-5.4
+task_reasoning_effort: high
+review_reasoning_effort: high
 agent_timeout: 45m
 retry_cooldown: 5m
 ```
@@ -93,9 +92,12 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 | Setting | CLI Flag | Env Var | Config File | Default |
 | --- | --- | --- | --- | --- |
 | repo | `--repo` | — | — | current directory |
-| branch | `--branch` | `MATO_BRANCH` | `branch` | `mato` |
+| branch | `mato run --branch` | `MATO_BRANCH` | `branch` | `mato` |
 | docker image | — | `MATO_DOCKER_IMAGE` | `docker_image` | `ubuntu:24.04` |
-| default model | forwarded `--model` | `MATO_DEFAULT_MODEL` | `default_model` | `claude-opus-4.6` |
+| task model | `mato run --task-model` | `MATO_TASK_MODEL` | `task_model` | `claude-opus-4.6` |
+| review model | `mato run --review-model` | `MATO_REVIEW_MODEL` | `review_model` | `gpt-5.4` |
+| task reasoning effort | `mato run --task-reasoning-effort` | `MATO_TASK_REASONING_EFFORT` | `task_reasoning_effort` | `high` |
+| review reasoning effort | `mato run --review-reasoning-effort` | `MATO_REVIEW_REASONING_EFFORT` | `review_reasoning_effort` | `high` |
 | agent timeout | — | `MATO_AGENT_TIMEOUT` | `agent_timeout` | `30m` |
 | retry cooldown | — | `MATO_RETRY_COOLDOWN` | `retry_cooldown` | `2m` |
 
@@ -103,12 +105,14 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 Long flags support both `--flag value` and `--flag=value` forms.
 | Flag | Applies to | Default | Description |
 | --- | --- | --- | --- |
-| `--repo <path>` | run, init, status, doctor, graph, inspect, retry, cancel, pause, resume | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
-| `--branch <name>` | run, init, dry-run | `mato` | Target branch used for merge processing. Not accepted by `mato status`. |
-| `--dry-run` | run | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
-| `--version` | run | `false` | Print the mato build version and exit without starting the orchestrator. |
+| `--repo <path>` | root persistent flag and all repo-aware subcommands | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
+| `--branch <name>` | `mato run`, `mato init` | `mato` | Target branch used for merge processing. |
+| `--dry-run` | `mato run` | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
+| `--task-model <model>` | `mato run` | `claude-opus-4.6` | Copilot model used for task agents. |
+| `--review-model <model>` | `mato run` | `gpt-5.4` | Copilot model used for review agents. |
+| `--task-reasoning-effort <level>` | `mato run` | `high` | Reasoning effort for task agents. Valid values: `low`, `medium`, `high`, `xhigh`. |
+| `--review-reasoning-effort <level>` | `mato run` | `high` | Reasoning effort for review agents. Valid values: `low`, `medium`, `high`, `xhigh`. |
 | `--help`, `-h` | all commands | none | Show help and exit. |
-| `--` | run | none | Forward all following arguments directly to Copilot CLI without further `mato` parsing. |
 
 ## Subcommands
 ### `mato status`
@@ -297,9 +301,12 @@ vars.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MATO_BRANCH` | `mato` | Default target branch for `mato`, `mato --dry-run`, and `mato init` when `--branch` is not passed. Overrides `.mato.yaml` `branch`. Empty is treated as unset; whitespace-only values are rejected. |
+| `MATO_BRANCH` | `mato` | Default target branch for `mato run` and `mato init` when `--branch` is not passed. Overrides `.mato.yaml` `branch`. Empty is treated as unset; whitespace-only values are rejected. |
 | `MATO_DOCKER_IMAGE` | `ubuntu:24.04` | Docker image used for agent containers. Overrides `.mato.yaml` `docker_image`. |
-| `MATO_DEFAULT_MODEL` | `claude-opus-4.6` | Default Copilot model used when `--model` is not passed in copilot args. Overrides `.mato.yaml` `default_model`. Priority: explicit `--model` arg > `MATO_DEFAULT_MODEL` > `.mato.yaml` > hardcoded default. |
+| `MATO_TASK_MODEL` | `claude-opus-4.6` | Default Copilot model used for task agents. Overrides `.mato.yaml` `task_model`. |
+| `MATO_REVIEW_MODEL` | `gpt-5.4` | Default Copilot model used for review agents. Overrides `.mato.yaml` `review_model`. |
+| `MATO_TASK_REASONING_EFFORT` | `high` | Reasoning effort for task agents. Overrides `.mato.yaml` `task_reasoning_effort`. Valid values: `low`, `medium`, `high`, `xhigh`. |
+| `MATO_REVIEW_REASONING_EFFORT` | `high` | Reasoning effort for review agents. Overrides `.mato.yaml` `review_reasoning_effort`. Valid values: `low`, `medium`, `high`, `xhigh`. |
 | `MATO_AGENT_TIMEOUT` | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. Overrides `.mato.yaml` `agent_timeout`. |
 | `MATO_RETRY_COOLDOWN` | `2m` | Minimum time to wait after a task failure before the task can be claimed again. Prevents rapid retry churn when agents crash immediately after launch. Accepts Go duration strings (e.g. `2m`, `5m`, `30s`). Must be positive; invalid values cause an error. Overrides `.mato.yaml` `retry_cooldown`. |
 
@@ -370,8 +377,7 @@ ownership.
 - `GOPATH`, `GOMODCACHE`, and `GOCACHE` point at the mounted host cache paths.
 - `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=*` allow Git to trust mounted worktrees even if ownership looks unusual.
 - If Git user name/email are configured on the host repository or globally, `mato` forwards them as `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL`.
-- The container command is `copilot -p <embedded prompt> --autopilot --allow-all`.
-- If no model is present in forwarded Copilot arguments, `mato` adds `--model` using the resolved default model from env/config/default precedence.
+- The container command is `copilot -p <embedded prompt> --autopilot --allow-all --model <resolved-model> --reasoning-effort <resolved-effort>`.
 When choosing a custom Docker image via `MATO_DOCKER_IMAGE` or `.mato.yaml`, use an image compatible with the mounted
 host binaries and standard Linux filesystem layout expected above.
 
@@ -385,7 +391,7 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |
-| `run` | Run `go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato --repo "$(REPO)" $(COPILOT_ARGS)`. `REPO` is required; set it in `.env` or on the command line. |
+| `run` | Run `go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato run --repo "$(REPO)"`. `REPO` is required; set it in `.env` or on the command line. |
 | `test` | Run `go test -race ./...`. |
 | `vet` | Run `go vet ./...`. |
 | `lint` | Run `golangci-lint run ./...`. |
@@ -394,4 +400,3 @@ Additional behavior:
 - `all` runs `fmt`, `vet`, `build`, and `test`.
 - `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --match 'v*' --always --dirty`, which ignores non-release tags, falls back to the commit hash when no matching release tag is reachable, and falls back to `dev` when git metadata is unavailable.
 - `REPO` is required for `make run` and may be supplied from `.env`.
-- `COPILOT_ARGS` is passed through to `mato`, which then forwards those arguments to Copilot CLI.

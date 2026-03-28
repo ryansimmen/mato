@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -234,6 +233,8 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	run.prompt = strings.ReplaceAll(reviewInstructions, "TASKS_DIR_PLACEHOLDER", env.workdir+"/"+dirs.Root)
 	run.prompt = strings.ReplaceAll(run.prompt, "TARGET_BRANCH_PLACEHOLDER", branch)
 	run.prompt = strings.ReplaceAll(run.prompt, "MESSAGES_DIR_PLACEHOLDER", env.workdir+"/"+dirs.Root+"/messages")
+	run.model = env.reviewModel
+	run.reasoningEffort = env.reviewReasoningEffort
 
 	cloneDir, err := git.CreateClone(env.repoRoot)
 	if err != nil {
@@ -263,7 +264,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, run.timeout)
 	defer timeoutCancel()
 
-	cmd := exec.CommandContext(timeoutCtx, "docker", args...)
+	cmd := execCommandContext(timeoutCtx, "docker", args...)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}
