@@ -17,8 +17,6 @@ depends_on: [task-a, task-b]
 affects:
   - api
   - cli
-tags: [bug, urgent]
-estimated_complexity: high
 max_retries: 5
 ---
 # Title
@@ -34,13 +32,11 @@ Task body.
 	}
 
 	want := TaskMeta{
-		ID:                  "custom-id",
-		Priority:            7,
-		DependsOn:           []string{"task-a", "task-b"},
-		Affects:             []string{"api", "cli"},
-		Tags:                []string{"bug", "urgent"},
-		EstimatedComplexity: "high",
-		MaxRetries:          5,
+		ID:         "custom-id",
+		Priority:   7,
+		DependsOn:  []string{"task-a", "task-b"},
+		Affects:    []string{"api", "cli"},
+		MaxRetries: 5,
 	}
 	if !reflect.DeepEqual(meta, want) {
 		t.Fatalf("meta = %#v, want %#v", meta, want)
@@ -54,8 +50,6 @@ func TestParseTaskFile_PartialFrontmatterUsesDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial-task.md")
 	content := `---
 priority: 12
-tags:
-  - ops
 ---
 Body
 `
@@ -73,9 +67,6 @@ Body
 	}
 	if meta.Priority != 12 {
 		t.Fatalf("meta.Priority = %d, want 12", meta.Priority)
-	}
-	if !reflect.DeepEqual(meta.Tags, []string{"ops"}) {
-		t.Fatalf("meta.Tags = %#v, want %#v", meta.Tags, []string{"ops"})
 	}
 	if meta.MaxRetries != 3 {
 		t.Fatalf("meta.MaxRetries = %d, want 3", meta.MaxRetries)
@@ -274,7 +265,6 @@ id: known-id
 priority: 5
 unknown_field: xyz
 another: 123
-tags: [ops]
 ---
 Body
 `
@@ -287,7 +277,36 @@ Body
 		t.Fatalf("ParseTaskFile: %v", err)
 	}
 
-	want := TaskMeta{ID: "known-id", Priority: 5, Tags: []string{"ops"}, MaxRetries: 3}
+	want := TaskMeta{ID: "known-id", Priority: 5, MaxRetries: 3}
+	if !reflect.DeepEqual(meta, want) {
+		t.Fatalf("meta = %#v, want %#v", meta, want)
+	}
+	if body != "Body\n" {
+		t.Fatalf("body = %q, want %q", body, "Body\n")
+	}
+}
+
+func TestParseTaskFile_LegacyRemovedFieldsIgnored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-removed-fields.md")
+	content := `---
+id: legacy-fields
+priority: 4
+tags: [ops, reliability]
+estimated_complexity: medium
+max_retries: 2
+---
+Body
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	want := TaskMeta{ID: "legacy-fields", Priority: 4, MaxRetries: 2}
 	if !reflect.DeepEqual(meta, want) {
 		t.Fatalf("meta = %#v, want %#v", meta, want)
 	}
@@ -313,11 +332,10 @@ priority: 20
 	}
 }
 
-func TestParseTaskFile_SpecialCharacterValues(t *testing.T) {
+func TestParseTaskFile_SpecialCharacterID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "special-values.md")
 	content := `---
 id: my-task:v2
-tags: [front:end, "back-end"]
 ---
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -330,9 +348,6 @@ tags: [front:end, "back-end"]
 	}
 	if meta.ID != "my-task:v2" {
 		t.Fatalf("meta.ID = %q, want %q", meta.ID, "my-task:v2")
-	}
-	if !reflect.DeepEqual(meta.Tags, []string{"front:end", "back-end"}) {
-		t.Fatalf("meta.Tags = %#v, want %#v", meta.Tags, []string{"front:end", "back-end"})
 	}
 }
 
@@ -384,7 +399,6 @@ id: my-task
 priority: 10
 affects: [main.go]
 depends_on: [other-task]
-tags: [bugfix]
 max_retries: 5
 ---
 # Task title
@@ -404,7 +418,6 @@ Body text.
 		Priority:   10,
 		Affects:    []string{"main.go"},
 		DependsOn:  []string{"other-task"},
-		Tags:       []string{"bugfix"},
 		MaxRetries: 5,
 	}
 	if !reflect.DeepEqual(meta, want) {

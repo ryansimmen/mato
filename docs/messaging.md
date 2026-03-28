@@ -167,12 +167,10 @@ When the host claims a task that has `depends_on` entries, `runner.writeDependen
 
 Completion detail filenames are derived from the task ID using a collision-resistant encoding: characters matching `[a-zA-Z0-9-]` pass through unchanged; all other bytes are encoded as `_XX` (lowercase hex). For example, `foo/bar` becomes `foo_2fbar.json` and `foo-bar` becomes `foo-bar.json` — two distinct files, preventing the overwrite that the old lossy sanitization caused.
 
-For backward compatibility, `ReadCompletionDetail` tries the new encoded filename first, then falls back to the legacy sanitized name (where all non-`[a-zA-Z0-9._-]` characters were replaced with `-`). This means pre-existing completion files written before the encoding change are still readable without migration.
-
 ### Write and read helpers
 
 - `messaging.WriteCompletionDetail(tasksDir, detail)` atomically writes the JSON file using the collision-resistant filename encoding. It sets `merged_at` to the current UTC time if not already provided and validates that `task_id` is non-empty.
-- `messaging.ReadCompletionDetail(tasksDir, taskID)` reads and parses the JSON file. It tries the collision-resistant filename first, then falls back to the legacy sanitized name. Returns `os.ErrNotExist` if neither file is found.
+- `messaging.ReadCompletionDetail(tasksDir, taskID)` reads and parses the JSON file using the collision-resistant filename. Returns `os.ErrNotExist` if the file is not found.
 
 ## Presence
 Presence files live in `.mato/messages/presence/` and are host-managed.

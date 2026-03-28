@@ -26,14 +26,11 @@ type StrippedAffect struct {
 }
 
 type TaskMeta struct {
-	ID        string   `yaml:"id"`
-	Priority  int      `yaml:"priority"`
-	DependsOn []string `yaml:"depends_on"`
-	Affects   []string `yaml:"affects"`
-	Tags      []string `yaml:"tags"`
-	// EstimatedComplexity is parsed for external consumers; not used internally.
-	EstimatedComplexity string `yaml:"estimated_complexity"`
-	MaxRetries          int    `yaml:"max_retries"`
+	ID         string   `yaml:"id"`
+	Priority   int      `yaml:"priority"`
+	DependsOn  []string `yaml:"depends_on"`
+	Affects    []string `yaml:"affects"`
+	MaxRetries int      `yaml:"max_retries"`
 	// StrippedAffects records affects entries that were removed during
 	// sanitization (e.g. absolute paths, path traversal). Not serialized
 	// to YAML; populated at parse time for diagnostic reporting.
@@ -116,7 +113,6 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 		// Filter empty strings from arrays (YAML can produce them from ["", x])
 		meta.DependsOn = filterEmpty(meta.DependsOn)
 		meta.Affects, meta.StrippedAffects = sanitizeAffects(filterEmpty(meta.Affects))
-		meta.Tags = filterEmpty(meta.Tags)
 		body = strings.Join(lines[end+1:], "\n")
 	}
 
