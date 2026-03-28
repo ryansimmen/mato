@@ -50,8 +50,8 @@ Most tasks need only markdown instructions plus a few common scheduler fields
 | Field | Type | Default | Reference |
 | --- | --- | --- | --- |
 | `id` | string | filename without `.md` | Stable task ID. If omitted, `my-task.md` becomes `my-task`. Use this in `depends_on`. Completed deps match either explicit `id` or filename stem. |
-| `priority` | int | `50` | Lower numbers are higher priority. `.queue` is generated from `backlog/` sorted by priority ascending, then filename ascending. |
-| `depends_on` | string array | empty | IDs that must be completed before a task is claimable. `depends_on` is authoritative regardless of directory placement: tasks with unmet dependencies belong in `waiting/`, and if one is found in `backlog/` the host moves it back to `waiting/` before writing `.queue` or claiming work. No dependencies means the task is immediately ready. Circular dependencies (including self-dependencies) are detected and the affected tasks are moved to `failed/` with a `<!-- cycle-failure: -->` marker. |
+| `priority` | int | `50` | Lower numbers are higher priority. The host derives claim order from the effective runnable backlog, sorted by priority ascending and then filename ascending; `.queue` exports that same derived order for inspection. |
+| `depends_on` | string array | empty | IDs that must be completed before a task is claimable. `depends_on` is authoritative regardless of directory placement: tasks with unmet dependencies belong in `waiting/`, and if one is found in `backlog/` the host moves it back to `waiting/` during reconcile and again at claim time as a safety net. No dependencies means the task is immediately ready. Circular dependencies (including self-dependencies) are detected and the affected tasks are moved to `failed/` with a `<!-- cycle-failure: -->` marker. |
 | `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). Exact strings are compared literally; an entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Combining glob metacharacters with a trailing `/` is invalid and treated as a fatal task error: the queue moves such tasks to `failed/`, and `mato doctor` reports them at error severity (exit code 2). Unsafe path entries — absolute paths (e.g. `/etc/passwd`) and path-traversal entries that escape the repository root (e.g. `../../secret`) — are stripped during parsing and reported by `mato doctor` at error severity (code `tasks.unsafe_affects`). The stripped entries are recorded in structured metadata so diagnostics can report exactly which entries were removed and why. |
 
 For queue-focused preflight checks on task metadata and dependency integrity, use
@@ -158,11 +158,11 @@ Simplify the status summary formatting.
 ## Where to Place Tasks
 - Put tasks with dependencies in `waiting/` until they are satisfied.
 - Put tasks without dependencies in `backlog/`.
-- `waiting/` is the canonical state for tasks with unmet dependencies. Conflict-deferred tasks stay in `backlog/` but are excluded from the `.queue` manifest.
+- `waiting/` is the canonical state for tasks with unmet dependencies. Conflict-deferred tasks stay in `backlog/` but are excluded from the runnable backlog and the derived `.queue` manifest.
 - Manual or automatic placement in `backlog/` does not override `depends_on`; dependency-blocked backlog tasks are moved back to `waiting/`.
 - Tasks with circular dependencies (including self-dependencies) are automatically moved from `waiting/` to `failed/` with a `<!-- cycle-failure: -->` marker. To recover, fix the `depends_on` entries and move the task back to `waiting/`.
 - Completed agent work moves through `ready-for-review/` (AI review gate) before reaching `ready-to-merge/`.
-- mato writes `.queue` from the effective runnable backlog, ordered by priority and then filename.
+- mato writes `.queue` from the effective runnable backlog for operator visibility; the host uses that same runnable backlog model directly when deciding what to claim.
 
 ## Branch Naming
 Each task automatically gets a git branch derived from its filename. The branch name is computed by `SanitizeBranchName()` in `internal/frontmatter/frontmatter.go` and prefixed with `task/` by the runner.

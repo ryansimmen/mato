@@ -80,7 +80,7 @@ After the frontmatter, write normal markdown instructions for the agent.
 - Put blocked tasks in `waiting/`.
 - `depends_on` entries refer to task IDs.
 - `depends_on` is authoritative regardless of directory placement. Tasks with unsatisfied dependencies are dependency-blocked even if they were manually or automatically placed in `backlog/`.
-- On each loop, completed dependencies promote a task from `waiting/` to `backlog/`. If a dependency-blocked task is found in `backlog/`, mato moves it back to `waiting/` before writing `.queue` or claiming work.
+- On each loop, completed dependencies promote a task from `waiting/` to `backlog/`. If a dependency-blocked task is found in `backlog/`, mato moves it back to `waiting/` before refreshing the derived `.queue` manifest; claim-time validation also demotes it as a safety net if it changed after reconciliation.
 - Lower numbers mean higher priority.
 - `affects` is used for simple conflict prevention: if two backlog tasks have overlapping entries, the lower-priority task is excluded from the `.queue` manifest until the conflict clears. Entries are compared using three matching modes — exact strings are compared literally, entries ending with `/` are treated as directory prefixes that match any path underneath them (e.g. `pkg/client/` conflicts with `pkg/client/http.go`), and entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Conflict-deferred tasks remain in `backlog/` (they are not moved to `waiting/`). Invalid glob syntax (e.g. combining metacharacters with a trailing `/`) is a fatal task error: the queue quarantines the task into `failed/`, and `mato doctor` reports it at error severity.
 
@@ -136,9 +136,9 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 - conflict-deferred tasks with blocking details
 - the last 5 coordination messages from `.mato/messages/events/`
 
-The runnable backlog shows what the host will claim next, in the same priority
-order used by `.mato/.queue`. Use `--format json` to get the same ordered list
-as `runnable_backlog` in the JSON output.
+The runnable backlog shows what the host will claim next. `.mato/.queue` exports
+that same derived order for inspection and lightweight tooling. Use `--format
+json` to get the same ordered list as `runnable_backlog` in the JSON output.
 
 Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag
 sets the refresh period (default `2s`). The interval must be a positive duration;
