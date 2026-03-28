@@ -50,21 +50,42 @@ The root command gets these changes:
 - Set `Use` to `"mato"`.
 - Update `Long` to a brief description without passthrough references.
 - Update `Example` to show `mato run` instead of bare `mato`.
-- Add `Args: usageNoArgs` — rejects all positional arguments on the root
-  command. This makes `mato -- --model gpt-5.4` and `mato foo` fail with
-  clear usage errors, since Cobra passes tokens after `--` as positional
-  args.
 - Use Cobra's built-in version support: set `root.Version = version` and
-  configure `root.SetVersionTemplate(...)`. This means `mato --version` and
-  `mato version` both work without a custom `RunE` on the root.
-- Remove `RunE` entirely so bare `mato` (no subcommand, no `--version`)
-  shows help by Cobra's default behavior.
+  configure `root.SetVersionTemplate(...)`. This gives `mato --version`
+  and `mato -v` support (Cobra adds `-v` as a shorthand automatically
+  when it is not already taken; see `command.go:1251`). The existing
+  `newVersionCmd()` is kept so that `mato version` also continues to work.
+- Add `Args: usageNoArgs` — rejects all positional arguments on the root
+  command.
+- Set `RunE` to a minimal function that shows help:
+  ```go
+  Args: usageNoArgs,
+  RunE: func(cmd *cobra.Command, args []string) error {
+      return cmd.Help()
+  },
+  ```
+  Both `Args` and `RunE` are required. Cobra's `execute()` flow is:
+  1. `Runnable()` check — without `RunE`, this returns false and Cobra
+     short-circuits to `flag.ErrHelp` (showing help silently, exit 0),
+     skipping `ValidateArgs()` entirely (`command.go:955`).
+  2. `ValidateArgs()` — with `RunE` set, `Runnable()` is true and Cobra
+     reaches this step, where `usageNoArgs` rejects any positional args
+     (`mato foo`, `mato -- --model gpt-5.4`).
+  3. `RunE` — only reached when `Args` passes (i.e., no positional args),
+     so `RunE` just calls `cmd.Help()`.
+
+  Additionally, when `Args` is non-nil, Cobra's `Find()` skips the
+  `legacyArgs()` check (`command.go:775`), deferring unknown-command
+  detection to `ValidateArgs()` instead of producing its own error.
 - Remove the documentation-only flag definitions for `--branch`, `--dry-run`
   on root (these move to `mato run`).
 
-Result: `mato` → help (exit 0), `mato --version` → version (exit 0),
-`mato --help` → help (exit 0), `mato run` → orchestrator,
-`mato -- --model gpt-5.4` → positional arg error,
+Result: `mato` → help (exit 0), `mato --version` / `mato -v` →
+version (exit 0), `mato --help` → help (exit 0),
+`mato run` → orchestrator,
+`mato foo` → `usageNoArgs` error (positional arg rejected),
+`mato -- --model gpt-5.4` → `usageNoArgs` error (Cobra passes tokens
+after `--` as positional args),
 `mato --model gpt-5.4` → unknown flag error.
 
 Root help text must not mention passthrough semantics. `mato run --help`
@@ -120,13 +141,22 @@ Note: `mato version --repo /path` is accepted as a harmless no-op.
 
 ### 3.4 Whitespace-only `--repo` and `--branch` handling
 
+This is a **behavior change** from the current CLI. Today, `extractKnownFlags`
+trims whitespace from `--repo` and `--branch` values and rejects
+whitespace-only values early with `"flag %s requires a value"` errors
+(cmd/mato/main.go:190-193 for `=` form, lines 212-214 for space-separated
+form).
+
 Under Cobra-based parsing, Cobra delivers raw flag values without trimming.
 For `--repo`, whitespace-only values reach `resolveRepo`, which returns the
 raw string, then `validateRepoPath` fails with "does not exist." For
 `--branch`, whitespace-only values reach `validateBranch`, which delegates
 to `git check-ref-format --branch` and fails with "invalid branch name."
-No special whitespace rejection is added; existing validation surfaces the
-same errors.
+
+The error messages differ from today's `"flag %s requires a value"`, but
+the result is the same: whitespace-only values are rejected before any
+work begins. No special whitespace rejection is added; the downstream
+validation is sufficient.
 
 ### 3.5 Config struct changes
 
@@ -152,8 +182,8 @@ will fail with a parse error mentioning the field name.
 **`resolveRunOptions` in `cmd/mato/main.go` is the single authoritative
 layer for applying defaults to the four new settings.** No other function
 applies defaults for these settings. (The runner still applies its own
-defaults for Docker image, agent timeout, and retry cooldown as it does
-today.)
+defaults for Docker image and agent timeout as it does today. Retry
+cooldown defaults are applied downstream in `internal/queue/claim.go`.)
 
 A `resolveStringOption` helper keeps the four resolution chains DRY:
 
@@ -199,6 +229,12 @@ For each of the four settings, resolution follows:
 Removed: `MATO_DEFAULT_MODEL`
 
 **Hardcoded defaults:**
+
+These are **new product decisions**. The current codebase has a single
+model default (`defaultCopilotModel = "claude-opus-4.6"` in
+`internal/runner/runner.go:40`) used for both task and review agents, and
+no reasoning-effort concept. The values below are deliberate choices for
+the new split-model design:
 
 - task model: `"claude-opus-4.6"` (constant `runner.DefaultTaskModel`)
 - review model: `"gpt-5.4"` (constant `runner.DefaultReviewModel`)
@@ -447,11 +483,18 @@ read them).
     - `TestHasModelArg_ModelWithWhitespace` (config_test.go:344)
     - `TestHasModelArg_ModelEqualsWithValue` (config_test.go:351)
     - `TestHasModelArg_UnrelatedFlags` (config_test.go:357)
-14. Add tests verifying `buildDockerArgs` outputs `--model` and
+14. Remove or rewrite runner tests that depend on `DefaultModel`:
+    - `TestResolveDefaultModel` (runner_test.go:182) — tests the deleted
+      `resolveDefaultModel` function; remove entirely.
+    - `TestBuildEnvAndRunContext_DefaultModelOverride`
+      (runner_test.go:4186) — uses `RunOptions{DefaultModel: ...}` and
+      asserts `env.defaultModel`; rewrite to use `TaskModel`/`ReviewModel`
+      and assert `run.model`/`env.reviewModel`.
+15. Add tests verifying `buildDockerArgs` outputs `--model` and
     `--reasoning-effort` from `runContext`.
-15. Update all existing test setups to use new `envConfig`/`runContext`
+16. Update all existing test setups to use new `envConfig`/`runContext`
     fields.
-16. Update `RunOptions{DefaultModel: ...}` references in `main_test.go`.
+17. Update `RunOptions{DefaultModel: ...}` references in `main_test.go`.
 
 This step compiles because `RunOptions`, `envConfig`, `buildDockerArgs`,
 `buildEnvAndRunContext`, `resolveDefaultModel`, `hasModelArg`,
@@ -518,10 +561,16 @@ have their invocations updated in this step to keep the suite green.
 6. Register `--repo` as `root.PersistentFlags().StringVar(...)`.
 7. Set `root.Version = version` and configure `root.SetVersionTemplate(...)`
    for `mato --version` output. Remove the manual `--version` flag parsing.
+   Keep the existing `newVersionCmd()` so that `mato version` continues to
+   work.
 8. Register `--branch`, `--dry-run`, `--task-model`, `--review-model`,
    `--task-reasoning-effort`, `--review-reasoning-effort` on the run
    command.
-9. Remove root `RunE` entirely so bare `mato` shows help.
+9. Set root `Args: usageNoArgs` and `RunE` to a minimal help-only
+   function. Both are needed: `RunE` makes the command `Runnable()` so
+   Cobra reaches `ValidateArgs()` (where `usageNoArgs` fires); `RunE`
+   itself only runs when `Args` passes (no positional args) and just
+   calls `cmd.Help()`.
 10. Update root `Use`, `Short`, `Long`, and `Example` strings (remove
     forwarding examples like `mato --model gpt-5.4`).
 11. Add `root.AddCommand(newRunCmd())`.
@@ -581,9 +630,11 @@ expecting the run path must change to
 36. `mato run --task-model X` passes correct model to `runFn`.
 37. Unknown root flag returns Cobra error (not silently forwarded).
 38. `mato --version` prints version via Cobra's built-in handler.
-39. Root positional args rejected (`mato foo`).
-40. Root `--` passthrough rejected (`mato -- --model gpt-5.4`).
-41. Run `--` passthrough rejected (`mato run -- --model gpt-5.4`).
+39. `mato -v` prints version (Cobra auto-adds `-v` shorthand).
+40. `mato version` prints version via the existing version subcommand.
+41. Root positional args rejected (`mato foo` → `usageNoArgs` error).
+42. Root `--` passthrough rejected (`mato -- --model gpt-5.4` →
+    `usageNoArgs` error).
 42. Table-driven precedence tests (CLI > env > config > default) for all
     four settings.
 43. Whitespace-only env values treated as unset.
@@ -702,12 +753,16 @@ go build ./... && go vet ./... && go test -count=1 ./...
 
 ## 6. Error Handling
 
-- **Bare `mato`**: Shows help, exit 0.
-- **`mato foo`**: `Args: usageNoArgs` rejects positional args → usage
-  error.
-- **`mato -- --model gpt-5.4`**: Cobra passes as positional args →
-  `usageNoArgs` rejects → usage error.
+- **Bare `mato`**: `usageNoArgs` passes (no args), `RunE` calls
+  `cmd.Help()`, exit 0.
+- **`mato foo`**: Cobra's `Find()` skips `legacyArgs()` because
+  `Args != nil`, returns root with `args = ["foo"]`. `Runnable()` is true
+  (has `RunE`), so `ValidateArgs()` fires → `usageNoArgs` rejects →
+  usage error. `RunE` is never reached.
+- **`mato -- --model gpt-5.4`**: Cobra passes tokens after `--` as
+  positional args → `usageNoArgs` rejects → usage error.
 - **`mato --model gpt-5.4`**: Unknown flag → usage error.
+- **`mato -v`**: Cobra's auto-added `-v` shorthand → version (exit 0).
 - **`mato run -- --model gpt-5.4`**: `mato run` also has
   `Args: usageNoArgs` → positional arg error.
 - **Unknown `mato run` flags**: Cobra rejects → `FlagErrorFunc` wraps with
@@ -719,9 +774,11 @@ go build ./... && go vet ./... && go test -count=1 ./...
 - **`MATO_DEFAULT_MODEL` set**: Silently ignored (env lookup removed);
   document in migration notes.
 - **Whitespace-only `--repo`**: Reaches `validateRepoPath`, fails with
-  "does not exist".
+  "does not exist" (behavior change: today's `extractKnownFlags` rejects
+  with "flag --repo requires a value").
 - **Whitespace-only `--branch`**: Reaches `validateBranch` →
-  `git check-ref-format` rejects.
+  `git check-ref-format` rejects (behavior change: today's
+  `extractKnownFlags` rejects with "flag --branch requires a value").
 - **Whitespace-only env/CLI model/reasoning values**: Normalized to empty →
   unset → falls through to default.
 
@@ -744,6 +801,9 @@ go build ./... && go vet ./... && go test -count=1 ./...
 
 ### Unit tests (`internal/runner/runner_test.go`)
 
+- `TestResolveDefaultModel` (line 182) removed (function deleted).
+- `TestBuildEnvAndRunContext_DefaultModelOverride` (line 4186) rewritten to
+  verify `TaskModel`/`ReviewModel` propagation.
 - `buildEnvAndRunContext` populates `run.model`/`run.reasoningEffort` from
   opts.
 - `buildEnvAndRunContext` populates
@@ -761,6 +821,8 @@ go build ./... && go vet ./... && go test -count=1 ./...
 
 - Bare `mato` shows help, exit 0.
 - `mato --version` prints version.
+- `mato -v` prints version (Cobra auto-shorthand).
+- `mato version` prints version via version subcommand.
 - `mato run` triggers orchestrator.
 - Four new flags pass correct values.
 - `validateReasoningEffort` tests (valid and invalid).
@@ -768,8 +830,9 @@ go build ./... && go vet ./... && go test -count=1 ./...
 - Precedence: CLI > env > config > default (table-driven).
 - Whitespace-only env values treated as unset.
 - Unknown root flags rejected.
-- Root positional args rejected (`mato foo`).
-- Root `--` passthrough rejected (`mato -- --model gpt-5.4`).
+- Root positional args rejected (`mato foo` → `usageNoArgs` error).
+- Root `--` passthrough rejected (`mato -- --model gpt-5.4` →
+  `usageNoArgs` error).
 - Run `--` passthrough rejected (`mato run -- --model gpt-5.4`).
 - Persistent `--repo` in multiple positions.
 - `mato run --dry-run` calls `dryRunFn` with opts.
