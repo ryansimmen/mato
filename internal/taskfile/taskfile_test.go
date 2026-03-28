@@ -23,8 +23,6 @@ id: full-example
 priority: 10
 affects:
   - internal/foo/foo.go
-tags: [testing]
-estimated_complexity: simple
 ---
 # Full Example Task
 

@@ -1,4 +1,4 @@
-# Remove Dead `messageFilePart` Function
+# Remove Obsolete Legacy Message Filename Compatibility
 
 **Priority:** Low
 **Effort:** Trivial
@@ -6,38 +6,50 @@
 
 ## Problem
 
-The `messageFilePart` function in `internal/messaging/messaging.go` (line 516) is
-dead code. It was replaced by the collision-resistant `safeFilePart` / `safeEncode`
-pair but was never removed.
+`internal/messaging/messaging.go` still carries (or carried, before cleanup) an
+obsolete compatibility layer
+from the old lossy filename sanitization scheme:
 
-The old function uses regex-based lossy sanitization (`safeMessageFilePart` regex),
-which could produce filename collisions for distinct inputs. The replacement
-`safeFilePart` (line 356) uses `safeEncode` (line 339) with hex-encoding to avoid
-collisions entirely.
+- Dead helper `messageFilePart`
+- Legacy regex `safeMessageFilePart`
+- Legacy completion-file naming helper `legacyCompletionFilename`
+- Fallback logic in `ReadCompletionDetail` that tries old-format filenames
+
+The codebase already writes message and completion filenames with the
+collision-resistant `safeFilePart` / `safeEncode` path. The remaining legacy code
+is unnecessary compatibility baggage when old lossy-named completion files do not
+need to be preserved.
 
 ## Evidence
 
-- `messaging.go:516-527` — `messageFilePart` is defined but has zero callers in
-  production code. Only test files reference it.
-- `messaging.go:106-108` — `WriteMessage` uses `safeFilePart`, not
-  `messageFilePart`.
-- `messaging.go:227` — `WritePresence` uses `safeFilePart`.
-- The `safeMessageFilePart` regex (line 62) is still referenced by
-  `legacyCompletionFilename` (line 378) for backward-compatible filename matching,
-  but that function calls the regex directly, not `messageFilePart`.
+- `WriteMessage` and `WritePresence` already use `safeFilePart` for current
+  writes.
+- `messageFilePart` had zero production callers and was only referenced by tests.
+- Completion filenames already used collision-resistant encoding for writes, while
+  the legacy compatibility logic existed only on the read path.
+- In a fresh or single-user installation where all completion files already match
+  the current scheme, the compatibility path has no practical value.
 
 ## Idea
 
-1. Remove the `messageFilePart` function (lines 516-527) from `messaging.go`.
-2. Update or remove tests in `messaging_test.go` that exercise the dead function.
-3. Keep the `safeMessageFilePart` regex if still needed by `legacyCompletionFilename`.
+Remove the entire obsolete filename-compatibility path:
+
+1. Remove `messageFilePart` from `messaging.go`.
+2. Remove the legacy completion-detail fallback and any regex/helper code that only
+   exists to support it.
+3. Remove or rewrite tests in `messaging_test.go` that exist only to exercise the
+   deleted legacy path.
+4. Keep the collision-resistance tests, but express them in terms of current
+   behavior rather than comparing against removed helpers.
 
 ## Design Considerations
 
-- **Trivial scope:** This is a pure dead-code removal with no behavioral change.
-- **Test cleanup:** Several tests in `messaging_test.go` call `messageFilePart`
-  directly. These tests should be removed or migrated to test `safeFilePart`
-  instead.
-- **Legacy regex:** The `safeMessageFilePart` regex is used by
-  `legacyCompletionFilename` for backward compatibility with pre-existing completion
-  files. It should be preserved independently of the function removal.
+- **Prefer full cleanup over narrow cleanup:** Removing only `messageFilePart`
+  leaves dead code behind. The helper, its dedicated regex, and helper-only tests
+  should be removed together.
+- **Current-state assumption:** This cleanup is only safe when existing completion
+  files already use the current filename scheme or are otherwise disposable.
+- **Behavioral simplification:** `ReadCompletionDetail` becomes a single-path read,
+  which makes the dependency-context flow easier to reason about.
+- **Test cleanup:** Collision-resistance tests remain useful, but helper-only tests
+  should become current-behavior tests rather than historical comparisons.

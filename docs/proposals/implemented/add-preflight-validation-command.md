@@ -9,8 +9,6 @@ affects:
   - docs/architecture.md
   - docs/configuration.md
   - docs/task-format.md
-tags: [feature, cli, validation]
-estimated_complexity: simple
 ---
 # Add Queue-Only Preflight Validation to `mato doctor`
 

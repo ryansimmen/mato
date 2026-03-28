@@ -11,8 +11,6 @@ affects:
    - internal/taskfile/metadata_test.go
    - README.md
    - docs/architecture.md
-tags: [feature, cli, ux]
-estimated_complexity: medium
 ---
 
 > **Status: Implemented** — This proposal has been fully implemented.

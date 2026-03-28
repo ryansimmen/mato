@@ -20,8 +20,6 @@ affects:
   - docs/task-format.md
   - docs/architecture.md
   - docs/configuration.md
-tags: [feature, scheduling, correctness]
-estimated_complexity: medium
 ---
 # Make `depends_on` Authoritative Across Scheduling
 
