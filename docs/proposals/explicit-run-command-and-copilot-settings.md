@@ -493,7 +493,7 @@ This step compiles because `Run` and its callers update together.
 5. Update all `dryRunFn` test stubs in `main_test.go`.
 6. Update all `DryRun(...)` callsites in `internal/runner/runner_test.go`
    to pass `RunOptions{}` as the new third argument. There are ~17
-   callsites across `TestDryRun_*` tests (lines 2607–3314).
+   callsites across `TestDryRun_*` tests (lines 2585–3325).
 7. Add test verifying dry-run output includes the "Resolved Settings"
    section with effective model and reasoning effort values.
 
@@ -617,7 +617,7 @@ expecting the run path must change to
    `MATO_REVIEW_MODEL`, `MATO_TASK_REASONING_EFFORT`,
    `MATO_REVIEW_REASONING_EFFORT` (and remove `MATO_DEFAULT_MODEL`).
 2. Update `TestConfigFile_EndToEnd` (line 61) — change CLI invocation from
-   bare `mato --repo ... --dry-run` to `mato run --repo ... --dry-run`.
+   bare `mato --repo ...` to `mato run --repo ...`.
 3. Update `TestConfigFile_DryRunInvalidBranchFromConfig` (line 74) — same.
 4. Update `internal/integration/init_test.go:60`: Update `runner.DryRun`
    call to new signature with `RunOptions`.
