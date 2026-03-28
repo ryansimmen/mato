@@ -39,6 +39,20 @@ func IsFailedDirUnavailable(err error) bool {
 	return errors.Is(err, errFailedDirUnavailable)
 }
 
+func normalizeClaimCandidate(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+	if filepath.Base(name) != name {
+		return "", false
+	}
+	if !strings.HasSuffix(name, ".md") {
+		return "", false
+	}
+	return name, true
+}
+
 // defaultRetryCooldown is the default time to wait after a task failure before
 // the task becomes eligible for claiming again.
 const defaultRetryCooldown = 2 * time.Minute
@@ -173,19 +187,16 @@ func rollbackClaimToBacklog(name, dst, src string, claimErr error) error {
 	return nil
 }
 
-// SelectAndClaimTask picks the highest-priority available task, atomically
-// moves it to in-progress/, stamps the claimed-by header, and checks the
-// retry budget. Tasks whose retry budget is exhausted are moved directly to
-// failed/ and skipped. Returns nil when no claimable task remains.
+// SelectAndClaimTask picks the first claimable task from the caller-provided
+// ordered candidate list, atomically moves it to in-progress/, stamps the
+// claimed-by header, and checks the retry budget. Tasks whose retry budget is
+// exhausted are moved directly to failed/ and skipped. Returns nil when no
+// claimable task remains.
 //
 // When idx is non-nil, the index is used for active branch lookup and
 // pre-parsed metadata. When idx is nil, the filesystem is scanned directly.
-func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, cooldown time.Duration, idx *PollIndex) (*ClaimedTask, error) {
+func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown time.Duration, idx *PollIndex) (*ClaimedTask, error) {
 	idx = ensureIndex(tasksDir, idx)
-	candidates, err := selectCandidates(tasksDir, deferred)
-	if err != nil {
-		return nil, err
-	}
 
 	inProgressDir := filepath.Join(tasksDir, DirInProgress)
 	failedDir := filepath.Join(tasksDir, DirFailed)
@@ -195,6 +206,10 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 	depLookup := newDependencyLookup(idx)
 
 	for _, name := range candidates {
+		name, ok := normalizeClaimCandidate(name)
+		if !ok {
+			continue
+		}
 		src := filepath.Join(backlogDir, name)
 		dst := filepath.Join(inProgressDir, name)
 
@@ -285,75 +300,6 @@ func SelectAndClaimTask(tasksDir, agentID string, deferred map[string]struct{}, 
 	}
 
 	return nil, nil
-}
-
-// selectCandidates returns the ordered list of backlog candidate filenames.
-// It reads .queue if present for ordering, then appends any backlog/ files
-// not listed in the manifest. This ensures stale or incomplete manifests
-// cannot strand ready work. Without .queue, backlog/ is listed alphabetically.
-func selectCandidates(tasksDir string, deferred map[string]struct{}) ([]string, error) {
-	queueFile := filepath.Join(tasksDir, ".queue")
-	backlogDir := filepath.Join(tasksDir, DirBacklog)
-
-	var candidates []string
-
-	if data, err := os.ReadFile(queueFile); err == nil {
-		seen := make(map[string]struct{})
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || !strings.HasSuffix(line, ".md") {
-				continue
-			}
-			if deferred != nil {
-				if _, excluded := deferred[line]; excluded {
-					continue
-				}
-			}
-			if _, err := os.Stat(filepath.Join(backlogDir, line)); err != nil {
-				continue
-			}
-			if _, dup := seen[line]; dup {
-				continue
-			}
-			seen[line] = struct{}{}
-			candidates = append(candidates, line)
-		}
-
-		// Append backlog tasks missing from the manifest so a stale
-		// .queue file cannot strand ready work.
-		names, listErr := ListTaskFiles(backlogDir)
-		if listErr == nil {
-			for _, name := range names {
-				if _, already := seen[name]; already {
-					continue
-				}
-				if deferred != nil {
-					if _, excluded := deferred[name]; excluded {
-						continue
-					}
-				}
-				candidates = append(candidates, name)
-			}
-		}
-	} else {
-		names, err := ListTaskFiles(backlogDir)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("read backlog dir: %w", err)
-		}
-		for _, name := range names {
-			if deferred != nil {
-				if _, excluded := deferred[name]; excluded {
-					continue
-				}
-			}
-			candidates = append(candidates, name)
-		}
-	}
-
-	return candidates, nil
 }
 
 func prependClaimedBy(taskPath, agentID, claimedAt string) error {
