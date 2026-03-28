@@ -74,10 +74,11 @@ queue.ReconcileReadyQueue(tasksDir, idx)
 idx = queue.BuildIndex(tasksDir)           // rebuild after reconcile
 
 view := queue.ComputeRunnableBacklogView(tasksDir, idx)
-deferred := view.Deferred
-// merge failedDirExcluded into deferred and refresh .queue
-queue.WriteQueueManifestFromView(tasksDir, deferred, idx, view)
-if not paused: claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, cooldown, idx)
+// apply failedDirExcluded and refresh derived .queue
+queue.WriteQueueManifestFromView(tasksDir, failedDirExcluded, idx, view)
+if not paused:
+    candidates := queue.OrderedRunnableFilenames(view, failedDirExcluded)
+    claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, candidates, cooldown, idx)
 if FailedDirUnavailableError → add task to failedDirExcluded
 if claimed != nil:
     messaging.WriteMessage(...) intent
@@ -94,9 +95,9 @@ Important details from the implementation:
 - The poll loop builds a `PollIndex` (`queue.BuildIndex(tasksDir)`) at the start of each cycle. The index reads every task file once and provides O(1) lookups for task IDs, active branches, `affects` metadata, and state. All consumers in the cycle share this snapshot instead of independently scanning directories and parsing YAML frontmatter. The index is rebuilt after `ReconcileReadyQueue` since it may promote tasks from `waiting/` to `backlog/`. Functions that accept a `*PollIndex` parameter treat `nil` as "build a temporary index internally", preserving backward compatibility for callers outside the poll loop (e.g., `DryRun`, `status`, integration tests).
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
-- `.queue` is written once per iteration, after dependency enforcement and overlap deferral, so the manifest reflects the effective runnable backlog. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifestFromView()`. Dependency-blocked backlog tasks and conflict-deferred tasks are excluded from the manifest so agents will not select them. This refresh still happens while the repo is paused.
-- `queue.SelectAndClaimTask(...)` reads `.queue` if present, reparses each candidate from disk before claim-time validation, re-checks `depends_on`, counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). Dependency-blocked candidates are moved back to `waiting/` as a safety net if they were edited or requeued after the last reconcile pass. `HasAvailableTasks` is a separate helper but is not called in the polling loop.
-- When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, excluded tasks are merged into the `deferred` map before calling `SelectAndClaimTask`, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
+- `.queue` is written once per iteration, after dependency enforcement and overlap deferral, so the manifest reflects the effective runnable backlog. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifestFromView()`. Dependency-blocked backlog tasks and conflict-deferred tasks are excluded from the manifest. This refresh still happens while the repo is paused.
+- `queue.SelectAndClaimTask(...)` now receives an ordered candidate slice from the caller instead of reading `.queue`. In the polling loop that candidate list is derived from `ComputeRunnableBacklogView()`, so claim order, `mato status`, `mato inspect`, and `.queue` all share the same runnable backlog model. `SelectAndClaimTask(...)` still reparses each candidate from disk before claim-time validation, re-checks `depends_on`, counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). Dependency-blocked candidates are moved back to `waiting/` as a safety net if they were edited or requeued after the last reconcile pass. `HasAvailableTasks` is a separate helper but is not called in the polling loop.
+- When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, that set is applied as an extra exclusion when deriving ordered runnable candidates, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
@@ -159,8 +160,8 @@ copilot -p <embedded task prompt> --autopilot --allow-all --model <run.model> --
 ```
 `buildDockerArgs(...)` always appends `--model <run.model>` and `--reasoning-effort <run.reasoningEffort>` using the fully resolved values from `RunOptions`.
 ### Host-side task claiming
-Before launching a Docker container, the host calls `queue.SelectAndClaimTask(tasksDir, agentID, deferred)` which:
-1. Reads `.mato/.queue` if present, otherwise lists `backlog/*.md` alphabetically.
+Before launching a Docker container, the host derives ordered candidates from `ComputeRunnableBacklogView()` and calls `queue.SelectAndClaimTask(tasksDir, agentID, candidates, cooldown, idx)`, which:
+1. Iterates the caller-provided candidate filenames in order.
 2. Reparses each candidate from disk and re-checks `depends_on` against the current completed/non-completed snapshot.
 3. If a candidate is dependency-blocked, moves it from `backlog/` back to `waiting/` and continues.
 4. Counts `<!-- failure: ... -->` records and applies retry cooldown.

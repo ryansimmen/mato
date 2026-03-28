@@ -9,11 +9,6 @@ import (
 	"mato/internal/atomicwrite"
 )
 
-type queueEntry struct {
-	name     string
-	priority int
-}
-
 // ComputeQueueManifest returns the queue manifest content as a string without
 // writing it to disk. This is the read-only equivalent of WriteQueueManifest.
 // It returns an error if the backlog directory cannot be read.
@@ -32,18 +27,13 @@ func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}, idx *Pol
 func ComputeQueueManifestFromView(tasksDir string, exclude map[string]struct{}, idx *PollIndex, view RunnableBacklogView) (string, error) {
 	idx = ensureIndex(tasksDir, idx)
 
-	var queueEntries []queueEntry
 	for _, warn := range idx.BuildWarnings() {
 		fmt.Fprintf(os.Stderr, "warning: could not build queue index cleanly: read %s: %v\n", warn.Path, warn.Err)
 		if warn.State == DirBacklog {
 			return "", fmt.Errorf("read backlog dir: %w", warn.Err)
 		}
 	}
-	sorted := sortSnapshotsByPriority(view.Runnable, exclude)
-	queueEntries = make([]queueEntry, 0, len(sorted))
-	for _, snap := range sorted {
-		queueEntries = append(queueEntries, queueEntry{name: snap.Filename, priority: snap.Meta.Priority})
-	}
+	lines := OrderedRunnableFilenames(view, exclude)
 	for _, pf := range idx.BacklogParseFailures() {
 		if exclude != nil {
 			if _, excluded := exclude[pf.Filename]; excluded {
@@ -53,10 +43,6 @@ func ComputeQueueManifestFromView(tasksDir string, exclude map[string]struct{}, 
 		fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", pf.Filename, pf.Err)
 	}
 
-	lines := make([]string, 0, len(queueEntries))
-	for _, entry := range queueEntries {
-		lines = append(lines, entry.name)
-	}
 	manifest := strings.Join(lines, "\n")
 	if manifest != "" {
 		manifest += "\n"

@@ -716,36 +716,22 @@ var nowFn = time.Now
 
 func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool) {
 	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
-	deferred := make(map[string]struct{}, len(view.Deferred)+len(failedDirExcluded))
-	for name := range view.Deferred {
-		deferred[name] = struct{}{}
-	}
-	for name := range failedDirExcluded {
-		deferred[name] = struct{}{}
-	}
-	if err := queue.WriteQueueManifestFromView(tasksDir, deferred, idx, view); err != nil {
+	if err := queue.WriteQueueManifestFromView(tasksDir, failedDirExcluded, idx, view); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
 		return view, true
 	}
 	return view, false
 }
 
-// pollClaimAndRun uses the caller-provided runnable backlog view to compute the
-// deferred task set, select and claim a task from the backlog, write
+// pollClaimAndRun uses the caller-provided runnable backlog view to derive the
+// claim-order candidate list, select and claim a task from the backlog, write
 // coordination messages, run the agent, and recover the task if the agent left
 // it stuck in in-progress/. The failedDirExcluded map may be mutated when a
 // FailedDirUnavailableError is encountered. It returns whether a task was
 // claimed and whether any non-fatal error occurred.
 func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex, view queue.RunnableBacklogView) (claimed bool, hadError bool) {
-	deferred := make(map[string]struct{}, len(view.Deferred))
-	for name := range view.Deferred {
-		deferred[name] = struct{}{}
-	}
-	for name := range failedDirExcluded {
-		deferred[name] = struct{}{}
-	}
-
-	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, deferred, cooldown, idx)
+	candidates := queue.OrderedRunnableFilenames(view, failedDirExcluded)
+	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, candidates, cooldown, idx)
 	var fdErr *queue.FailedDirUnavailableError
 	if errors.As(claimErr, &fdErr) {
 		failedDirExcluded[fdErr.TaskFilename] = struct{}{}

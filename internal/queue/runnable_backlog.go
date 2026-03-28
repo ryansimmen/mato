@@ -85,6 +85,17 @@ func ComputeRunnableBacklogView(tasksDir string, idx *PollIndex) RunnableBacklog
 	}
 }
 
+// OrderedRunnableFilenames returns the runnable backlog filenames in claim/
+// manifest order after applying any extra caller-provided exclusions.
+func OrderedRunnableFilenames(view RunnableBacklogView, exclude map[string]struct{}) []string {
+	sorted := sortSnapshotsByPriority(view.Runnable, exclude)
+	names := make([]string, 0, len(sorted))
+	for _, snap := range sorted {
+		names = append(names, snap.Filename)
+	}
+	return names
+}
+
 func newDependencyLookup(idx *PollIndex) dependencyLookup {
 	completedIDs := idx.CompletedIDs()
 	nonCompletedIDs := idx.NonCompletedIDs()
