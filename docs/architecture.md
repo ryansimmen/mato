@@ -30,13 +30,13 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 +------------------+     ready-to-merge -> completed
 ```
 High-level flow:
-1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)`, bootstraps a repository via `setup.InitRepo(...)`, or routes to read-only subcommands such as `status.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
+1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)` via `mato run`, bootstraps a repository via `setup.InitRepo(...)`, or routes to read-only subcommands such as `status.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
 2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs.
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim and pushes `task/<sanitized-filename>`.
 4. The host merge queue squashes that task branch into the target branch and moves the task file to `completed/`.
 ## 2. Host Loop
 ### Startup
-`runner.Run(repoRoot, branch, copilotArgs, opts)` performs host initialization in this order:
+`runner.Run(repoRoot, branch, opts)` performs host initialization in this order:
 1. Resolve `repoRoot` with `git rev-parse --show-toplevel`.
 2. Ensure the target branch exists with `git.EnsureBranch(...)`; if the local branch exists, check it out; otherwise query the live `origin` branch first. If `origin/<branch>` exists, fetch it and create the local branch from the refreshed remote-tracking ref. If the remote is reachable and the branch is absent there, create the branch from `HEAD` and ignore any stale cached `origin/<branch>` ref. If `origin` is unavailable, fall back to a cached `origin/<branch>` ref when present; otherwise create from `HEAD`.
 3. Resolve `tasksDir` as `<repoRoot>/.mato`.
@@ -45,7 +45,7 @@ High-level flow:
 6. Generate an agent ID with `identity.GenerateAgentID()`.
 7. Register the process as active by writing `.mato/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
 8. Ensure `/.mato/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
-9. Resolve host tools and runtime dependencies: `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity. Docker image, default model, agent timeout, and retry cooldown are already resolved in `cmd/mato/main.go`.
+9. Resolve host tools and runtime dependencies: `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity. Docker image, task model, review model, task reasoning effort, review reasoning effort, agent timeout, and retry cooldown are already resolved in `cmd/mato/main.go`.
 10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.mato`, the configured target branch, and `/workspace/.mato/messages`.
 11. Install `SIGINT`/`SIGTERM` handlers.
 
@@ -155,9 +155,9 @@ Environment variables injected by the host:
 - `MATO_DEPENDENCY_CONTEXT=<file path>` (conditionally, only when the task has `depends_on` entries with available completion data; points to `/workspace/.mato/messages/dependency-context-<filename>.json`)
 The final command is:
 ```text
-copilot -p <embedded task prompt> --autopilot --allow-all [copilotArgs...]
+copilot -p <embedded task prompt> --autopilot --allow-all --model <run.model> --reasoning-effort <run.reasoningEffort>
 ```
-If forwarded arguments do not already contain `--model`, `runOnce(...)` appends `--model` with the value from `MATO_DEFAULT_MODEL` (or `claude-opus-4.6` if unset).
+`buildDockerArgs(...)` always appends `--model <run.model>` and `--reasoning-effort <run.reasoningEffort>` using the fully resolved values from `RunOptions`.
 ### Host-side task claiming
 Before launching a Docker container, the host calls `queue.SelectAndClaimTask(tasksDir, agentID, deferred)` which:
 1. Reads `.mato/.queue` if present, otherwise lists `backlog/*.md` alphabetically.
@@ -343,8 +343,8 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `cmd/mato/main.go`
 - CLI entrypoint.
 - `main()` builds the Cobra command tree for `run`, `status`, `doctor`, `graph`, `init`, `inspect`, `cancel`, `retry`, `pause`, `resume`, and `version`.
-- The root command resolves config and starts `runner.Run(...)`; subcommands dispatch to their package-specific handlers.
-- `extractKnownFlags(...)` handles `--repo`, `--branch`, `--dry-run`, `--help`, `--`, and forwards all other args to Copilot CLI.
+- The root command shows help/version and registers repo-aware subcommands.
+- `mato run` resolves config and starts `runner.Run(...)` with fully resolved task/review model and reasoning-effort settings.
 
 ### `internal/runner/`
 - Embeds `task-instructions.md` (the task agent prompt/state machine) and `review-instructions.md` (the review agent prompt).

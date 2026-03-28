@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -84,7 +83,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, run.timeout)
 	defer timeoutCancel()
 
-	cmd := exec.CommandContext(timeoutCtx, "docker", args...)
+	cmd := execCommandContext(timeoutCtx, "docker", args...)
 	cmd.Cancel = func() error {
 		// Gracefully stop the Docker container by sending SIGTERM.
 		return cmd.Process.Signal(syscall.SIGTERM)

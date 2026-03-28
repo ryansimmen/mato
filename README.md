@@ -38,7 +38,7 @@ Wrap fetchData in a retry loop with exponential backoff and add tests.
 EOF
 
 # Run the orchestrator (stays running and keeps polling for work)
-mato
+mato run
 
 # In a separate terminal, inspect queue health
 mato status
@@ -49,18 +49,17 @@ mato doctor
 
 Useful flags:
 
-- `--repo <path>`: target repository (defaults to the current directory); empty and whitespace-only values are rejected
-- `--branch <name>`: merge target branch (defaults to `mato`); empty and whitespace-only values are rejected
-- `--dry-run[=<bool>]`: validate queue setup without launching Docker containers (defaults to `false`; bare `--dry-run` is equivalent to `--dry-run=true`)
-- `--version[=<bool>]`: print the mato version and exit (`--version` is equivalent to `--version=true`)
+- `--repo <path>`: target repository (defaults to the current directory)
+- `mato run --branch <name>`: merge target branch (defaults to `mato`)
+- `mato run --dry-run`: validate queue setup without launching Docker containers
+- `mato run --task-model`, `--review-model`: override task and review agent models
+- `mato run --task-reasoning-effort`, `--review-reasoning-effort`: override task and review reasoning effort
 
 You can also set `MATO_BRANCH` for a host-side branch default that overrides `.mato.yaml` but is still overridden by `--branch`.
 
 Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe. When the branch is missing locally, `mato init` tells you whether it reused a local branch, created from live `origin/<branch>`, created from current `HEAD` because the remote branch was missing, or fell back to a cached remote-tracking ref because `origin` was unavailable.
 
-You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `default_model`, `agent_timeout`, and `retry_cooldown`. CLI flags still win over config, and host env vars still win over both.
-
-Arguments after a `--` separator are always forwarded to the Copilot CLI without interpretation. When you want to pass flags that might look like mato flags, prefer the explicit separator form.
+You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `task_model`, `review_model`, `task_reasoning_effort`, `review_reasoning_effort`, `agent_timeout`, and `retry_cooldown`. CLI flags still win over config, and host env vars still win over both.
 
 ## Task Files
 
@@ -290,10 +289,10 @@ mato --version
 
 ## Docker
 
-`mato` launches an `ubuntu:24.04` container by default. Override it with `MATO_DOCKER_IMAGE` or set `docker_image` in `.mato.yaml`. The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and forwards extra Copilot CLI args such as:
+`mato` launches an `ubuntu:24.04` container by default. Override it with `MATO_DOCKER_IMAGE` or set `docker_image` in `.mato.yaml`. The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and passes explicit model settings such as:
 
 ```bash
-mato --model gpt-5.4
+mato run --task-model claude-opus-4.6 --review-model gpt-5.4
 ```
 
 ## Shell Completion
