@@ -16,6 +16,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
+	"mato/internal/taskstate"
 )
 
 type mergeQueueTask struct {
@@ -139,6 +140,9 @@ func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask
 				}
 				continue
 			}
+			if err := taskstate.Delete(tasksDir, task.name); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", task.name, err)
+			}
 			cleanupTaskBranch(repoRoot, taskBranchName(task))
 			merged++
 			continue
@@ -188,6 +192,9 @@ func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask
 			bookkeepingComplete = true
 		}
 		if bookkeepingComplete {
+			if err := taskstate.Delete(tasksDir, task.name); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", task.name, err)
+			}
 			cleanupTaskBranch(repoRoot, taskBranchName(task))
 		}
 		merged++

@@ -11,6 +11,7 @@ import (
 	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/taskfile"
+	"mato/internal/taskstate"
 )
 
 // errFailedDirUnavailable is the sentinel wrapped by FailedDirUnavailableError.
@@ -210,6 +211,9 @@ func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
 		// while still retry-exhausted. Return a hard error so the
 		// host does not immediately re-claim and livelock.
 		return &FailedDirUnavailableError{TaskFilename: name, MoveErr: err}
+	}
+	if err := taskstate.Delete(filepath.Dir(failedDir), name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", name, err)
 	}
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
+	"mato/internal/taskstate"
 )
 
 var removeBranchMarkerFn = removeBranchMarker
@@ -21,10 +22,21 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 	if err := failMergeTask(task.path, dst, mergeErr.Error()); err != nil {
 		return err
 	}
+	if filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirFailed) {
+		if err := taskstate.Delete(tasksDir, task.name); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", task.name, err)
+		}
+	}
 	if errors.Is(mergeErr, errSquashMergeConflict) && filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirBacklog) {
 		cleanupTaskBranch(repoRoot, taskBranchName(task))
 		if err := removeBranchMarkerFn(dst); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not clear branch marker after merge-conflict cleanup for %s: %v\n", task.name, err)
+		}
+		if err := taskstate.Update(tasksDir, task.name, func(state *taskstate.TaskState) {
+			state.TaskBranch = taskBranchName(task)
+			state.LastOutcome = "merge-conflict-cleanup"
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not record merge-conflict cleanup taskstate for %s: %v\n", task.name, err)
 		}
 	}
 	return nil

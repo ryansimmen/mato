@@ -16,6 +16,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
+	"mato/internal/taskstate"
 	"mato/internal/testutil"
 )
 
@@ -1058,6 +1059,49 @@ func TestPostAgentPush_NoOpResumedBranchSkipsPush(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, taskFile)); !os.IsNotExist(err) {
 		t.Fatal("task should not move to ready-for-review/ when branch tip is unchanged")
+	}
+}
+
+func TestPostAgentPush_RecordsWorkTaskState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "taskstate.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Taskstate\n"), 0o644)
+
+	cloneDir := setupGitCloneWithCommits(t, "main", "task/taskstate")
+	currentTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	currentTip = strings.TrimSpace(currentTip)
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/taskstate", Title: "Taskstate", TaskPath: inProgressPath}
+	env := envConfig{tasksDir: tasksDir, targetBranch: "main"}
+	if err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef"); err != nil {
+		t.Fatalf("postAgentPush: %v", err)
+	}
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to be written")
+	}
+	if state.TaskBranch != claimed.Branch {
+		t.Fatalf("TaskBranch = %q, want %q", state.TaskBranch, claimed.Branch)
+	}
+	if state.TargetBranch != "main" {
+		t.Fatalf("TargetBranch = %q, want %q", state.TargetBranch, "main")
+	}
+	if state.LastHeadSHA != currentTip {
+		t.Fatalf("LastHeadSHA = %q, want %q", state.LastHeadSHA, currentTip)
+	}
+	if state.LastOutcome != "work-pushed" {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "work-pushed")
 	}
 }
 

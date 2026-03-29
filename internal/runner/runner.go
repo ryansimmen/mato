@@ -26,6 +26,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
+	"mato/internal/taskstate"
 )
 
 var execCommandContext = exec.CommandContext
@@ -669,6 +670,9 @@ func pollCleanup(tasksDir string) {
 	queue.CleanStaleReviewLocks(tasksDir)
 	messaging.CleanStalePresence(tasksDir)
 	messaging.CleanOldMessages(tasksDir, 24*time.Hour)
+	if err := taskstate.Sweep(tasksDir); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not clean stale taskstate: %v\n", err)
+	}
 }
 
 // pollReconcile builds a poll index snapshot, surfaces any build warnings,
@@ -780,7 +784,7 @@ func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, br
 	}
 	defer reviewCleanup()
 
-	if !VerifyReviewBranch(env.repoRoot, reviewTask, agentID) {
+	if !VerifyReviewBranch(env.repoRoot, tasksDir, reviewTask, agentID) {
 		return true
 	}
 
@@ -994,3 +998,9 @@ func checkIdleTransition(isIdle bool, wasIdle *bool) bool {
 // appendToFileFn is the function used to append text to files in post-agent
 // and review flows. It is a variable so tests can inject failures.
 var appendToFileFn = atomicwrite.AppendToFile
+
+func recordTaskStateUpdate(tasksDir, filename, action string, fn func(*taskstate.TaskState)) {
+	if err := taskstate.Update(tasksDir, filename, fn); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not %s for %s: %v\n", action, filename, err)
+	}
+}

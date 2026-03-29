@@ -274,7 +274,7 @@ func TestReviewLifecycle_MissingTaskBranch(t *testing.T) {
 	// Exercise the real host pre-check that runs inside pollLoop before
 	// any review agent is launched.  The branch does not exist in the
 	// test repo, so VerifyReviewBranch must return false.
-	ok := runner.VerifyReviewBranch(repoRoot, task, "review-host")
+	ok := runner.VerifyReviewBranch(repoRoot, tasksDir, task, "review-host")
 	if ok {
 		t.Fatal("VerifyReviewBranch returned true for a branch that does not exist")
 	}

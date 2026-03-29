@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"mato/internal/git"
+	"mato/internal/merge"
 	"mato/internal/queue"
 	"mato/internal/runner"
+	"mato/internal/taskstate"
 	"mato/internal/testutil"
 )
 
@@ -101,5 +103,50 @@ func TestResumeWorkAfterReviewRejection_ReusesBranchAndBranchContents(t *testing
 	branchMarker := readFile(t, secondClaim.TaskPath)
 	if strings.Count(branchMarker, "<!-- branch:") != 1 {
 		t.Fatalf("expected one branch marker after reclaim, got:\n%s", branchMarker)
+	}
+}
+
+func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskFile := "cleanup-taskstate.md"
+	branch := "task/cleanup-taskstate"
+	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, strings.Join([]string{
+		"<!-- branch: " + branch + " -->",
+		"# Cleanup Taskstate",
+		"Review and merge this task.",
+		"",
+	}, "\n"))
+	createTaskBranch(t, repoRoot, branch, map[string]string{"cleanup.txt": "hello\n"}, "cleanup taskstate")
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.LastOutcome = "review-launched"
+		state.TaskBranch = branch
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	writeVerdict(t, tasksDir, taskFile, map[string]string{"verdict": "approve"})
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	runner.PostReviewAction(tasksDir, "review-host", &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   branch,
+		Title:    "Cleanup Taskstate",
+		TaskPath: reviewPath,
+	})
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load after approval: %v", err)
+	}
+	if state == nil || state.LastOutcome != "review-approved" {
+		t.Fatalf("taskstate after approval = %+v, want LastOutcome=review-approved", state)
+	}
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
+	}
+	state, err = taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load after merge: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should be removed after merge, got %+v", state)
 	}
 }

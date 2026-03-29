@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"mato/internal/queue"
+	"mato/internal/taskstate"
 )
 
 func TestTaskHasMergeSuccessRecord(t *testing.T) {
@@ -252,6 +253,46 @@ func TestHandleMergeFailure_ConflictInFailedKeepsBranchMarker(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- branch: task/conflict -->") {
 		t.Fatalf("failed task should retain branch marker, got:\n%s", string(data))
+	}
+}
+
+func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
+	repoRoot := t.TempDir()
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyMerge, queue.DirBacklog} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	taskPath := filepath.Join(tasksDir, queue.DirReadyMerge, "cleanup.md")
+	content := strings.Join([]string{
+		"<!-- branch: task/cleanup -->",
+		"---",
+		"max_retries: 3",
+		"---",
+		"# Cleanup",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, "cleanup.md", func(state *taskstate.TaskState) {
+		state.LastOutcome = "review-approved"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	task := mergeQueueTask{name: "cleanup.md", path: taskPath, branch: "task/cleanup"}
+	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
+		t.Fatalf("handleMergeFailure: %v", err)
+	}
+	state, err := taskstate.Load(tasksDir, task.name)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "merge-conflict-cleanup" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=merge-conflict-cleanup", state)
 	}
 }
 

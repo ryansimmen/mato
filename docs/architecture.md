@@ -46,7 +46,7 @@ High-level flow:
 7. Register the process as active by writing `.mato/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
 8. Ensure `/.mato/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
 9. Resolve host tools and runtime dependencies: `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity. Docker image, task model, review model, task reasoning effort, review reasoning effort, agent timeout, and retry cooldown are already resolved in `cmd/mato/main.go`.
-10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.mato`, the configured target branch, and `/workspace/.mato/messages`.
+10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.mato`, the configured target branch, and `/workspace/.mato/messages`. Review launches also interpolate a host-written review-context block describing the task branch, current branch tip, prior reviewed tip (if known), and prior rejection reason (if known).
 11. Install `SIGINT`/`SIGTERM` handlers.
 
 ### Explicit initialization path
@@ -68,6 +68,7 @@ queue.CleanStaleLocks(tasksDir)
 queue.CleanStaleReviewLocks(tasksDir)
 messaging.CleanStalePresence(tasksDir)
 messaging.CleanOldMessages(tasksDir, 24*time.Hour)
+taskstate.Sweep(tasksDir)
 
 idx := queue.BuildIndex(tasksDir)          // build poll index once
 queue.ReconcileReadyQueue(tasksDir, idx)
@@ -101,6 +102,7 @@ Important details from the implementation:
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
+- Lightweight runtime metadata lives under `.mato/runtime/taskstate/<task-filename>.json`. Work pushes and review launches/completions update this file best-effort so follow-up reviews can carry explicit host-curated context even before durable Copilot session resume exists.
 - Pause mode is controlled by `.mato/.paused`, which stores the UTC RFC3339 time
   when the repo was paused. While present, the host skips new claims and review
   launches but continues merge processing.
@@ -185,7 +187,7 @@ State-by-state behavior:
 - `COMMIT`: `git add -A`, commit with the task title, and exit. The host detects commits and handles push + review transition.
 - `ON_FAILURE`: append a structured `<!-- failure: ... -->` record, try to check out the target branch, then always move the task back to `backlog/`. The host checks the failure record budget on the next cycle via `SelectAndClaimTask`.
 
-After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, and sends `conflict-warning` and `completion` messages.
+After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, updates `.mato/runtime/taskstate/<task-filename>.json` with the pushed branch tip and outcome, and sends `conflict-warning` and `completion` messages.
 
 The prompt enforces several invariants: one task per run; agents never push any branches (the host handles all pushes); they send at most 4 messages per task (3 `progress` + 1 for `ON_FAILURE`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States
@@ -302,13 +304,13 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 ### How it works
 1. `selectTaskForReview(tasksDir)` scans `ready-for-review/*.md` for the next task to review.
 2. The host verifies the task branch exists (`git rev-parse --verify`). If the branch is missing, the host writes a `<!-- review-failure: ... -->` record and skips the review.
-3. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts).
+3. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts). Before launch, the host resolves the current branch tip, loads any existing `.mato/runtime/taskstate/<task-filename>.json`, reads the most recent review-rejection reason from the task file, renders a `Review context:` block into the embedded review prompt, and records a best-effort `review-launched` taskstate update.
 4. The review agent diffs the task branch against the target branch, analyzes the changes, and writes a JSON verdict file to `.mato/messages/verdict-<filename>.json` with `{"verdict":"approve"}`, `{"verdict":"reject","reason":"..."}`, or `{"verdict":"error","reason":"..."}`.
 5. After the review agent exits, the host reads the verdict file via `postReviewAction(...)`:
-   - **Approved**: host writes `<!-- reviewed: ... -->` to the task file, moves it to `ready-to-merge/`, and sends a completion message.
-   - **Rejected**: host writes `<!-- review-rejection: ... -->` to the task file, moves it back to `backlog/`, and sends a completion message.
-   - **Error**: host writes a `<!-- review-failure: ... -->` record; the task stays in `ready-for-review/`.
-   - **No verdict file** (agent crashed): host falls back to checking for HTML markers in the task file, then writes a `<!-- review-failure: ... -->` record if none found.
+   - **Approved**: host writes `<!-- reviewed: ... -->` to the task file, moves it to `ready-to-merge/`, records `review-approved` in taskstate, and sends a completion message.
+   - **Rejected**: host writes `<!-- review-rejection: ... -->` to the task file, moves it back to `backlog/`, records `review-rejected` in taskstate, and sends a completion message.
+   - **Error**: host writes a `<!-- review-failure: ... -->` record, records `review-error`, and leaves the task in `ready-for-review/`.
+   - **No verdict file** (agent crashed): host falls back to checking for HTML markers in the task file, then writes a `<!-- review-failure: ... -->` record and records `review-incomplete` if none found.
 
 ### Key properties
 - Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` records are counted for the task's failure record budget.
@@ -452,6 +454,7 @@ Concrete examples:
 - **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Entries are stored as the literal `affects:` keys, including directory prefixes ending with `/`. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
 - **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records, writes them to a file, and injects the file path as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
 - **Review feedback**: When the review agent rejects a task, it appends `<!-- review-rejection: ... -->` to the task file. On the next attempt, the host reads these lines and injects them as `MATO_REVIEW_FEEDBACK`, so the implementing agent can address the reviewer's concerns.
+- **Review continuity metadata**: The host stores lightweight runtime metadata in `.mato/runtime/taskstate/` and injects an explicit review-context block into review prompts. This keeps follow-up reviews auditable and independent of any future durable Copilot session resume support.
 
 This pattern keeps agents stateless and single-task-focused while the host provides the coordination intelligence. No agent needs to query other agents directly — the host curates and delivers the relevant context at launch time.
 
