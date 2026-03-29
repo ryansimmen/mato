@@ -1517,7 +1517,7 @@ func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 		targetBranch: "main",
 	}
 
-	err := postAgentPush(env, "agent1", claimed, cloneDir)
+	err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
 
 	// Should return an error indicating the destination exists.
 	if err == nil {
@@ -1590,15 +1590,15 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 		targetBranch: "main",
 	}
 
-	// Inject appendToFileFn failure so the branch marker write fails
+	// Inject branch marker write failure so the branch marker write fails
 	// after os.Link has already moved the file to ready-for-review/.
-	origAppend := appendToFileFn
-	t.Cleanup(func() { appendToFileFn = origAppend })
-	appendToFileFn = func(path, text string) error {
+	origWriteBranchMarker := writeBranchMarkerFn
+	t.Cleanup(func() { writeBranchMarkerFn = origWriteBranchMarker })
+	writeBranchMarkerFn = func(path, branch string) error {
 		return fmt.Errorf("simulated disk full")
 	}
 
-	err := postAgentPush(env, "agent1", claimed, cloneDir)
+	err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
 
 	// Should return a fatal error mentioning the write failure.
 	if err == nil {
@@ -1677,18 +1677,18 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 		targetBranch: "main",
 	}
 
-	// Inject appendToFileFn failure AND sneak a file back into in-progress/
+	// Inject branch marker write failure AND sneak a file back into in-progress/
 	// so the rollback os.Link hits EEXIST.
-	origAppend := appendToFileFn
-	t.Cleanup(func() { appendToFileFn = origAppend })
-	appendToFileFn = func(path, text string) error {
+	origWriteBranchMarker := writeBranchMarkerFn
+	t.Cleanup(func() { writeBranchMarkerFn = origWriteBranchMarker })
+	writeBranchMarkerFn = func(path, branch string) error {
 		// Re-create the in-progress file to simulate a race (another agent
 		// placed a file there), so rollback link will fail with EEXIST.
 		os.WriteFile(inProgressPath, []byte("<!-- claimed-by: other -->\n# Other\n"), 0o644)
 		return fmt.Errorf("simulated write error")
 	}
 
-	err := postAgentPush(env, "agent1", claimed, cloneDir)
+	err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
 
 	if err == nil {
 		t.Fatal("expected error when both marker write and rollback fail")

@@ -65,16 +65,19 @@ var (
 	claimRollbackFn        = AtomicMove
 	retryExhaustedMoveFn   = AtomicMove
 	retryExhaustedRollback = AtomicMove
+	claimReadFileFn        = os.ReadFile
+	claimWriteFileFn       = atomicwrite.WriteFile
 	timeNowFn              = time.Now
 )
 
 // ClaimedTask holds the pre-resolved metadata for a task claimed on the host
 // side, before the agent container is launched.
 type ClaimedTask struct {
-	Filename string // e.g. "add-hello.md"
-	Branch   string // e.g. "task/add-hello"
-	Title    string // first heading or filename stem
-	TaskPath string // host-side path in in-progress/
+	Filename              string // e.g. "add-hello.md"
+	Branch                string // e.g. "task/add-hello"
+	Title                 string // first heading or filename stem
+	TaskPath              string // host-side path in in-progress/
+	HadRecordedBranchMark bool   // task already had <!-- branch: ... --> before this claim
 }
 
 // CollectActiveBranches scans in-progress/, ready-for-review/, and
@@ -114,21 +117,36 @@ func readBranchFromFile(path string) string {
 	if err != nil {
 		return ""
 	}
-	branch, _ := taskfile.ParseBranchComment(data)
+	branch, _ := taskfile.ParseBranchMarkerLine(data)
 	return branch
 }
 
-// writeBranchComment inserts a <!-- branch: ... --> HTML comment immediately
-// after the first <!-- claimed-by: ... --> line in the task file. If no
-// claimed-by line is found, it prepends the comment at the top.
-func writeBranchComment(taskPath, branch string) error {
-	data, err := os.ReadFile(taskPath)
+// WriteBranchMarker records the branch marker in the task file. It reuses the
+// existing marker when it already matches, replaces the first standalone marker
+// when it differs, or inserts a new marker after the first claimed-by line.
+func WriteBranchMarker(taskPath, branch string) error {
+	data, err := claimReadFileFn(taskPath)
 	if err != nil {
-		return fmt.Errorf("read task file for branch comment: %w", err)
+		return fmt.Errorf("read task file for branch marker: %w", err)
 	}
+
+	if existing, ok := taskfile.ParseBranchMarkerLine(data); ok && existing == branch {
+		return nil
+	}
+
+	if replaced, found, didReplace := taskfile.ReplaceBranchMarkerLine(data, branch); found {
+		if !didReplace {
+			return nil
+		}
+		if err := claimWriteFileFn(taskPath, replaced); err != nil {
+			return fmt.Errorf("write branch marker: %w", err)
+		}
+		return nil
+	}
+
 	var comment strings.Builder
 	if err := taskfile.WriteBranchComment(&comment, branch); err != nil {
-		return fmt.Errorf("format branch comment: %w", err)
+		return fmt.Errorf("format branch marker: %w", err)
 	}
 	commentStr := comment.String()
 	lines := strings.Split(string(data), "\n")
@@ -150,10 +168,30 @@ func writeBranchComment(taskPath, branch string) error {
 
 	content := []byte(strings.Join(result, "\n"))
 
-	if err := atomicwrite.WriteFile(taskPath, content); err != nil {
-		return fmt.Errorf("write branch comment: %w", err)
+	if err := claimWriteFileFn(taskPath, content); err != nil {
+		return fmt.Errorf("write branch marker: %w", err)
 	}
 	return nil
+}
+
+func restoreClaimedTaskContents(path string, content []byte) error {
+	if err := claimWriteFileFn(path, content); err != nil {
+		return fmt.Errorf("restore claimed task contents: %w", err)
+	}
+	return nil
+}
+
+func chooseClaimBranch(name string, activeBranches map[string]struct{}, existing string) string {
+	if existing != "" {
+		if _, taken := activeBranches[existing]; !taken {
+			return existing
+		}
+	}
+	branch := "task/" + frontmatter.SanitizeBranchName(name)
+	if _, taken := activeBranches[branch]; taken {
+		branch = branch + "-" + frontmatter.BranchDisambiguator(name)
+	}
+	return branch
 }
 
 // handleRetryExhaustedTask moves a retry-exhausted task from in-progress/ to
@@ -272,6 +310,17 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			continue
 		}
 
+		originalData, err := claimReadFileFn(dst)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not read claimed task %s before stamping claim metadata: %v\n", name, err)
+			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
+				return nil, rbErr
+			}
+			continue
+		}
+
+		existingBranchBeforeClaim, hadRecordedBranchMark := taskfile.ParseBranchMarkerLine(originalData)
+
 		claimedAt := time.Now().UTC().Format(time.RFC3339)
 		if err := claimPrependFn(dst, agentID, claimedAt); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write claimed-by header for %s: %v\n", name, err)
@@ -281,21 +330,45 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			continue
 		}
 
-		branch := "task/" + frontmatter.SanitizeBranchName(name)
-		if _, taken := activeBranches[branch]; taken {
-			branch = branch + "-" + frontmatter.BranchDisambiguator(name)
+		claimedData, err := claimReadFileFn(dst)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not read claimed task %s for branch marker: %v\n", name, err)
+			if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
+				return nil, fmt.Errorf("read claimed task for branch marker: %w (also failed to restore task contents: %v)", err, restoreErr)
+			}
+			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
+				return nil, rbErr
+			}
+			continue
 		}
+
+		existingBranch, _ := taskfile.ParseBranchMarkerLine(claimedData)
+		if existingBranch == "" && hadRecordedBranchMark {
+			existingBranch = existingBranchBeforeClaim
+		}
+		branch := chooseClaimBranch(name, activeBranches, existingBranch)
 		title := frontmatter.ExtractTitle(name, body)
 
-		if err := writeBranchComment(dst, branch); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write branch comment for %s: %v\n", name, err)
+		if existingBranch != branch {
+			if err := WriteBranchMarker(dst, branch); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write branch marker for %s: %v\n", name, err)
+				if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
+					return nil, fmt.Errorf("write branch marker for %s: %w (also failed to restore task contents: %v)", name, err, restoreErr)
+				}
+				if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
+					return nil, rbErr
+				}
+				continue
+			}
 		}
+		activeBranches[branch] = struct{}{}
 
 		return &ClaimedTask{
-			Filename: name,
-			Branch:   branch,
-			Title:    title,
-			TaskPath: dst,
+			Filename:              name,
+			Branch:                branch,
+			Title:                 title,
+			TaskPath:              dst,
+			HadRecordedBranchMark: hadRecordedBranchMark,
 		}, nil
 	}
 

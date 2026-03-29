@@ -49,8 +49,8 @@ based parsers such as `ParseClaimedBy`, `ParseClaimedAt`,
 `CountFailureMarkers`, and `ExtractReviewRejections`. Only honor
 `<!-- branch: ... -->` on standalone lines outside code fences.
 
-`ParseBranchComment` is retained as a low-level regex helper but is no longer
-used by branch-identity readers.
+A low-level regex helper may still exist internally, but branch-identity
+readers should no longer expose or depend on a non-fence-aware parser.
 
 `internal/taskfile/taskfile.go` should remain the thin file-reading wrapper.
 `ParseBranch(path string)` should continue to read the file and delegate to the
@@ -75,16 +75,17 @@ is sufficient for parsing, but not for safe in-place replacement.
 
 | Consumer | Location | Change |
 |----------|----------|--------|
-| `ParseBranch` | `internal/taskfile/taskfile.go` | keep file read here; delegate `ParseBranchComment` -> `ParseBranchMarkerLine` |
-| `readBranchFromFile` | `internal/queue/claim.go` | `ParseBranchComment` -> `ParseBranchMarkerLine` |
-| `BuildIndex` | `internal/queue/index.go` | `ParseBranchComment` -> `ParseBranchMarkerLine` |
+| `ParseBranch` | `internal/taskfile/taskfile.go` | keep file read here; delegate branch parsing to `ParseBranchMarkerLine` |
+| `readBranchFromFile` | `internal/queue/claim.go` | use `ParseBranchMarkerLine` |
+| `BuildIndex` | `internal/queue/index.go` | use `ParseBranchMarkerLine` |
 
 Downstream consumers automatically become fence-aware: merge, review, and
 `CollectActiveBranches`.
 
 Migration safety: `ParseBranchMarkerLine` is strictly more conservative than
-`ParseBranchComment`. It rejects matches inside code fences and only processes
-standalone marker lines. This should eliminate false positives, not valid cases.
+the old regex-only parsing behavior. It rejects matches inside code fences and
+only processes standalone marker lines. This should eliminate false positives,
+not valid cases.
 
 #### 3.1.4 Exported Branch Marker Writer (`internal/queue/claim.go`)
 

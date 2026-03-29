@@ -22,6 +22,17 @@ import (
 
 var createCloneFn = git.CreateClone
 var removeCloneFn = git.RemoveClone
+var ensureBranchFn = git.EnsureBranch
+var writeBranchMarkerFn = queue.WriteBranchMarker
+
+func allowRecordedBranchResume(source git.BranchSource) bool {
+	switch source {
+	case git.BranchSourceLocal, git.BranchSourceRemote:
+		return true
+	default:
+		return false
+	}
+}
 
 func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.ClaimedTask) error {
 	cloneDir, err := createCloneFn(env.repoRoot)
@@ -45,15 +56,26 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 
 	maxRetries := 3
 	extraEnvs := []string{}
+	startingTip := ""
 	if claimed != nil {
 		if meta, _, err := frontmatter.ParseTaskFile(claimed.TaskPath); err == nil {
 			maxRetries = meta.MaxRetries
 		}
 
-		// Create task branch in the clone before launching the agent.
-		if _, err := git.Output(cloneDir, "checkout", "-b", claimed.Branch); err != nil {
-			return fmt.Errorf("create task branch %s: %w", claimed.Branch, err)
+		hasRecordedBranch := claimed.HadRecordedBranchMark
+		branchResult, err := ensureBranchFn(cloneDir, claimed.Branch)
+		if err != nil {
+			return fmt.Errorf("ensure task branch %s: %w", claimed.Branch, err)
 		}
+		if hasRecordedBranch && !allowRecordedBranchResume(branchResult.Source) {
+			return fmt.Errorf("resume recorded task branch %s: unsupported branch source %s", claimed.Branch, branchResult.SourceDescription())
+		}
+
+		startingTip, err = git.Output(cloneDir, "rev-parse", "HEAD")
+		if err != nil {
+			return fmt.Errorf("capture starting tip for %s: %w", claimed.Branch, err)
+		}
+		startingTip = strings.TrimSpace(startingTip)
 
 		extraEnvs = append(extraEnvs,
 			"MATO_TASK_FILE="+claimed.Filename,
@@ -103,7 +125,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 	// commits, push the branch and move the task to ready-for-review/.
 	var postPushErr error
 	if claimed != nil {
-		if err := postAgentPush(env, run.agentID, claimed, cloneDir); err != nil {
+		if err := postAgentPush(env, run.agentID, claimed, cloneDir, startingTip); err != nil {
 			cleanupClone = false
 			postPushErr = fmt.Errorf("post-agent push failed; preserving clone at %s: %w", cloneDir, err)
 		}
@@ -121,18 +143,17 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 // postAgentPush checks whether the agent committed work on the task branch.
 // If commits exist and the task is still in in-progress/, the host pushes the
 // branch, writes the branch marker, and moves the task to ready-for-review/.
-func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cloneDir string) error {
+func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cloneDir, startingTip string) error {
 	// Task must still be in in-progress/ (agent no longer moves files).
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
 		return nil
 	}
 
-	// Check whether the agent made any commits above the target branch.
-	logOut, err := git.Output(cloneDir, "log", "--oneline", env.targetBranch+"..HEAD")
+	currentTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
 	if err != nil {
-		return fmt.Errorf("determine whether agent committed work: %w", err)
+		return fmt.Errorf("determine current task branch tip: %w", err)
 	}
-	if strings.TrimSpace(logOut) == "" {
+	if strings.TrimSpace(currentTip) == startingTip {
 		return nil // no commits; recoverStuckTask will handle recovery
 	}
 
@@ -198,7 +219,7 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 
 	// Write branch marker AFTER the move so that a failed move does not
 	// leave the in-progress file with an incorrect marker.
-	if err := appendToFileFn(readyPath, fmt.Sprintf("\n<!-- branch: %s -->\n", branch)); err != nil {
+	if err := writeBranchMarkerFn(readyPath, branch); err != nil {
 		// Roll back: move file from ready-for-review/ back to in-progress/.
 		if rollbackErr := queue.AtomicMove(readyPath, claimed.TaskPath); rollbackErr != nil {
 			fmt.Fprintf(os.Stderr, "error: branch marker write failed and rollback to in-progress/ also failed: %v\n", rollbackErr)

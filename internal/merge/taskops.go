@@ -14,12 +14,18 @@ import (
 	"mato/internal/taskfile"
 )
 
+var removeBranchMarkerFn = removeBranchMarker
+
 func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr error) error {
-	if err := failMergeTask(task.path, mergeFailureDestination(tasksDir, task.path, task.name), mergeErr.Error()); err != nil {
+	dst := mergeFailureDestination(tasksDir, task.path, task.name)
+	if err := failMergeTask(task.path, dst, mergeErr.Error()); err != nil {
 		return err
 	}
-	if errors.Is(mergeErr, errSquashMergeConflict) {
+	if errors.Is(mergeErr, errSquashMergeConflict) && filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirBacklog) {
 		cleanupTaskBranch(repoRoot, taskBranchName(task))
+		if err := removeBranchMarkerFn(dst); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not clear branch marker after merge-conflict cleanup for %s: %v\n", task.name, err)
+		}
 	}
 	return nil
 }
@@ -99,6 +105,21 @@ func appendTaskRecord(path, format string, args ...any) error {
 
 	if err := atomicwrite.WriteFile(path, []byte(updated)); err != nil {
 		return fmt.Errorf("write merge record: %w", err)
+	}
+	return nil
+}
+
+func removeBranchMarker(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read task file for branch marker removal: %w", err)
+	}
+	updated, _, removed := taskfile.RemoveBranchMarkerLine(data)
+	if !removed {
+		return nil
+	}
+	if err := atomicwrite.WriteFile(path, updated); err != nil {
+		return fmt.Errorf("write task file without branch marker: %w", err)
 	}
 	return nil
 }
