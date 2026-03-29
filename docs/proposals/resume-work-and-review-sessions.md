@@ -3,219 +3,218 @@
 ## 1. Goal
 
 Reduce retry churn after review rejection and transient agent failures by fixing
-two cold-start behaviors:
+the two cold-start behaviors that waste the most work today:
 
-1. **Worktree continuity**: When a task already has a task branch, the next work
-   attempt resumes from that branch tip instead of creating a fresh branch.
-2. **Review continuity**: Follow-up reviews receive explicit host-curated context
-   about the previous review.
+1. **Worktree continuity**: when a task already has a task branch, the next work
+   attempt should resume from that branch tip instead of recreating the branch
+   from the target branch tip and force-pushing over prior work.
+2. **Session continuity**: work retries and follow-up reviews should each resume
+   their own prior Copilot session instead of starting a brand-new session every
+   time.
 
-Two independently shippable phases. Phase 3 (optional work-session resume) is
-out of scope.
+This proposal intentionally treats work and review as separate long-lived
+sessions. A task may bounce between `backlog/`, `in-progress/`, and
+`ready-for-review/`, but the implementation session and the review session
+should not be conflated.
 
 ## 2. Scope
 
 ### In scope
 
-- Phase 1: Fence-aware branch marker parsing across all readers; branch identity
+- Phase 1: fence-aware branch marker parsing across all readers; branch identity
   reuse at claim time; resume from existing task branch tip; single-marker
   normalization; adjusted commit detection with explicit SHA error handling
-- Phase 2: Review context injection; runtime metadata with load-modify-save;
-  centralized cleanup
+- Phase 2: explicit review continuity via host-curated prompt context plus small
+  runtime metadata with load-modify-save semantics and centralized cleanup
+- Phase 3: durable session resume for both work and review via separate session
+  records and `copilot --resume=<session-id>`
 
 ### Out of scope
 
 - Recovering unpublished work from deleted temp clones
-- Persistent reviewer conversations / cross-task session reuse
+- Sharing one Copilot session across work and review phases
+- Persisting full terminal logs or full prompt payloads for every run
 - Changing queue states, retry budgets, or review semantics
-- Phase 3 (optional work-session resume)
+- Cross-task session reuse
 
 ## 3. Design
 
 ### 3.1 Phase 1: Git Branch Resume for Work Runs
 
-#### 3.1.1 Fence-Aware Branch Marker Parsing (taskfile/taskfile.go)
+#### 3.1.1 Fence-Aware Branch Marker Parsing (`internal/taskfile/metadata.go`)
 
-Add `ParseBranchMarkerLine(data []byte) (string, bool)` using
-`forEachMarkerLine`. Only honors `<!-- branch: ... -->` on standalone lines
-outside code fences. Follows the pattern of `ParseClaimedBy`,
-`CountFailureMarkers`, etc.
+Add `ParseBranchMarkerLine(data []byte) (string, bool)` in
+`internal/taskfile/metadata.go`, alongside the existing `forEachMarkerLine`-
+based parsers such as `ParseClaimedBy`, `ParseClaimedAt`,
+`CountFailureMarkers`, and `ExtractReviewRejections`. Only honor
+`<!-- branch: ... -->` on standalone lines outside code fences.
 
-`ParseBranchComment` retained as low-level regex helper but no longer called by
-any branch-identity reader.
+`ParseBranchComment` is retained as a low-level regex helper but is no longer
+used by branch-identity readers.
 
-#### 3.1.2 Branch Marker Replacement (taskfile/taskfile.go)
+`internal/taskfile/taskfile.go` should remain the thin file-reading wrapper.
+`ParseBranch(path string)` should continue to read the file and delegate to the
+data-level parser in `metadata.go`.
+
+#### 3.1.2 Branch Marker Replacement (`internal/taskfile/metadata.go`)
 
 Add `ReplaceBranchMarkerLine(data []byte, newBranch string) (result []byte, found bool, replaced bool)`:
 
-- No standalone marker → data unchanged, found=false
-- Marker matches → data unchanged, found=true, replaced=false
-- Marker differs → first standalone marker replaced in-place, found=true,
-  replaced=true
+- No standalone marker: data unchanged, `found=false`
+- Marker matches: data unchanged, `found=true`, `replaced=false`
+- Marker differs: first standalone marker replaced in-place, `found=true`,
+  `replaced=true`
+
+Implementation detail: `ReplaceBranchMarkerLine` should use `forEachTaskLine`,
+not `forEachMarkerLine`. Replacement needs the original line text plus fence
+state so the file can be reconstructed with exactly one branch-marker line
+updated in place. `forEachMarkerLine` only exposes the trimmed marker text and
+is sufficient for parsing, but not for safe in-place replacement.
 
 #### 3.1.3 Migrate All Branch-Identity Readers
 
 | Consumer | Location | Change |
 |----------|----------|--------|
-| `ParseBranch` | taskfile/metadata.go | `ParseBranchComment` → `ParseBranchMarkerLine` |
-| `readBranchFromFile` | queue/claim.go:117 | `ParseBranchComment` → `ParseBranchMarkerLine` |
-| `BuildIndex` | queue/index.go:~200 | `ParseBranchComment` → `ParseBranchMarkerLine` |
+| `ParseBranch` | `internal/taskfile/taskfile.go` | keep file read here; delegate `ParseBranchComment` -> `ParseBranchMarkerLine` |
+| `readBranchFromFile` | `internal/queue/claim.go` | `ParseBranchComment` -> `ParseBranchMarkerLine` |
+| `BuildIndex` | `internal/queue/index.go` | `ParseBranchComment` -> `ParseBranchMarkerLine` |
 
-Downstream consumers automatically become fence-aware: merge.go:92,
-review.go:164, CollectActiveBranches.
+Downstream consumers automatically become fence-aware: merge, review, and
+`CollectActiveBranches`.
 
 Migration safety: `ParseBranchMarkerLine` is strictly more conservative than
-`ParseBranchComment` — it rejects matches inside code fences and only processes
-standalone marker lines. This cannot break correct behavior; it only eliminates
-false positives from body-embedded markers.
+`ParseBranchComment`. It rejects matches inside code fences and only processes
+standalone marker lines. This should eliminate false positives, not valid cases.
 
-#### 3.1.4 Exported Branch Marker Writer (queue/claim.go)
+#### 3.1.4 Exported Branch Marker Writer (`internal/queue/claim.go`)
 
 Add `WriteBranchMarker(taskPath, branch string) error`:
 
-1. Read → `ParseBranchMarkerLine`
-2. Matches → nil (no-op)
-3. Differs → `ReplaceBranchMarkerLine` + `atomicwrite.WriteFile`
-4. Not found → `writeBranchComment` (insert after claimed-by)
+1. Read file and parse with `ParseBranchMarkerLine`
+2. If marker already matches, return nil
+3. If marker differs, call `ReplaceBranchMarkerLine` and atomically write back
+4. If no marker exists, insert one after the first claimed-by marker as today
 
-#### 3.1.5 Branch Identity Preservation with Collision Safety (queue/claim.go)
+#### 3.1.5 Branch Identity Preservation with Collision Safety (`internal/queue/claim.go`)
 
-In `SelectAndClaimTask`, after claimed-by write:
+In `SelectAndClaimTask`, after the claimed-by marker is written:
 
-1. Read file, check for standalone branch marker
-2. Found + no collision with `activeBranches` → reuse (skip write)
-3. Found + collision → derive new name
-4. Not found → derive new name
-5. Deriving: **MANDATORY** `WriteBranchMarker` — failure triggers claim rollback
-6. Reusing: best-effort skip (marker already correct)
+1. Read the claimed file and check for an existing standalone branch marker
+2. If found and not colliding with another active task, reuse it
+3. If found but colliding, derive a new branch name
+4. If not found, derive a new branch name
+5. When deriving a branch, `WriteBranchMarker` is mandatory and failure rolls
+   the claim back to `backlog/`
+6. When reusing a matching marker, skip the write
 
-**Mandatory vs. best-effort boundary**: When the selected branch differs from
-the file's current marker (or no marker exists), the marker write is mandatory.
-Without this, downstream consumers (index, merge, review) would see the wrong
-branch. When the existing marker already matches, no write is needed.
+This keeps branch identity stable across review rejection, host recovery, and
+other non-terminal retries.
 
-#### 3.1.6 Branch Content Resume (runner/task.go)
+#### 3.1.6 Branch Content Resume (`internal/runner/task.go`)
 
-Add `checkoutOrCreateBranch(cloneDir, branch string) error`:
+Prefer reusing the existing `internal/git.EnsureBranch` helper instead of
+adding a second branch-selection implementation in `runner/task.go`.
 
-1. **Probe**: `git ls-remote --exit-code --heads origin refs/heads/<branch>`
-   - Exit 0 → exists
-   - Exit 2 → confirmed absent
-   - Other → hard error
+The runner should call `git.EnsureBranch(cloneDir, branch)` after cloning and
+before launching the agent. The current `EnsureBranch` API already returns the
+source needed for the runner to enforce stricter recorded-branch resume policy,
+so Phase 1 should default to a runner-side policy check rather than assuming any
+changes to `internal/git/git.go` are required.
 
-2. **If exists**:
-   ```
-   git fetch origin <branch>
-   // Validate: refs/remotes/origin/<branch> exists after fetch
-   git checkout -B <branch> origin/<branch>
-   ```
-   The explicit `origin/<branch>` start-point ensures the local branch is reset
-   to the remote task branch tip, not the clone's current HEAD. Matches the
-   pattern in `internal/git/git.go:138`.
+If implementation reveals an edge case that the current `EnsureBranch` result
+contract cannot express cleanly, then a small targeted `internal/git` change is
+still reasonable. But it should not be assumed up front.
 
-3. **If absent**: `git checkout -b <branch>` (fresh from HEAD = target branch)
+Runner policy should distinguish fresh branches from recorded-branch resumes:
 
-4. **If ambiguous**: hard error (prevents silent data loss)
+- **Fresh branch path**: when the task has no recorded `<!-- branch: ... -->`
+  marker, `EnsureBranch` may use its existing generic fallback behavior.
+- **Recorded branch path**: when the task already has a recorded branch marker,
+  the runner must fail closed rather than silently restarting from `HEAD`.
 
-Function variable: `var checkoutOrCreateBranchFn = checkoutOrCreateBranch`
+For recorded branches, the runner should accept only these `EnsureBranch`
+results:
 
-#### 3.1.7 Starting-Tip Capture (runner/task.go)
+- `BranchSourceLocal`
+- `BranchSourceRemote`
 
-After `checkoutOrCreateBranch`, before agent launch:
+`BranchSourceRemoteCached` is out of scope for v1 recorded-branch resume. The
+first implementation should require a live remote check for recorded branches
+and fail closed otherwise. An explicit degraded/offline resume mode can be
+considered later if there is a real operator need.
+
+For recorded branches, the runner should reject:
+
+- `BranchSourceHeadRemoteMissing`
+- `BranchSourceHeadRemoteUnavailable`
+
+Expected behavior therefore becomes:
+
+1. If `origin/<branch>` exists, fetch it and create the local branch from that
+   remote tip
+2. If the task has no recorded branch and the branch is confirmed absent, create
+   a fresh branch from `HEAD`
+3. If the task has a recorded branch and the branch is absent or the remote is
+   unavailable, return a hard error instead of silently restarting from `HEAD`
+4. Ambiguous probe/fetch failures remain hard errors
+
+#### 3.1.7 Starting-Tip Capture (`internal/runner/task.go`)
+
+After branch selection completes, before agent launch, capture the starting tip:
 
 ```go
 startingTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
-if err != nil {
-    return fmt.Errorf("capture starting tip after branch checkout: %w", err)
-}
-startingTip = strings.TrimSpace(startingTip)
 ```
 
-**Hard error**: If `rev-parse` fails, `runOnce` returns an error. The task stays
-in in-progress/ and `recoverStuckTask` moves it back to backlog/. This is safe
-because no agent was launched and no work was done.
+If this fails, return a hard error before launching the agent. No work has been
+done yet, so the task can safely roll back to `backlog/`.
 
-Thread `startingTip` to `postAgentPush` as a parameter.
+Thread `startingTip` into `postAgentPush`.
 
-#### 3.1.8 Adjusted Commit Detection (runner/task.go)
+#### 3.1.8 Adjusted Commit Detection (`internal/runner/task.go`)
 
-In `postAgentPush`, replace `git log targetBranch..HEAD`:
+In `postAgentPush`, replace target-branch-relative commit detection with a direct
+tip comparison:
 
 ```go
 currentTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
-if err != nil {
-    return fmt.Errorf("determine current branch tip after agent exit: %w", err)
-}
 if strings.TrimSpace(currentTip) == startingTip {
-    return nil  // no new commits
+    return nil
 }
 ```
 
-**Hard error**: If `rev-parse` fails, `postAgentPush` returns an error. The
-caller (`runOnce`) preserves the clone and returns the error. `recoverStuckTask`
-then moves the task back to backlog/.
+This correctly detects no-op retries on resumed branches.
 
-Keep `targetBranch..HEAD` for changed-files detection only (conflict warnings,
-completion messages).
+Keep `targetBranch..HEAD` only for changed-files reporting and related
+diagnostics.
 
-#### 3.1.9 Marker Normalization in moveTaskToReviewWithMarker (runner/task.go)
+#### 3.1.9 Marker Normalization in `moveTaskToReviewWithMarker` (`internal/runner/task.go`)
 
-Replace `appendToFileFn` with `writeBranchMarkerFn` (function variable →
-`queue.WriteBranchMarker`). Tests override for failure injection, matching the
-existing `appendToFileFn` pattern.
+Replace append-only branch-marker writes with `queue.WriteBranchMarker` so new
+retries stop accumulating duplicate `<!-- branch: ... -->` markers.
 
-#### 3.1.10 Legacy Multi-Marker Files
+Legacy files with duplicate markers are tolerated. The new parser reads the
+first standalone marker and the replacer updates only that first marker.
 
-New code produces single markers. Legacy files with pre-existing duplicate
-markers (from prior append-only behavior): `ParseBranchMarkerLine` returns the
-first standalone marker; `ReplaceBranchMarkerLine` replaces that first marker.
-No retroactive deduplication.
+#### 3.1.10 Testing Strategy for Phase 1
 
-#### 3.1.11 Testing Strategy for Phase 1
+Add unit coverage for:
 
-**`internal/taskfile/taskfile_test.go`** (9 tests):
+- fence-aware branch parsing and replacement
+- claim-time branch reuse, collision handling, and rollback on write failure
+- branch checkout resume from `origin/<branch>`
+- fresh-branch fallback when branch is absent
+- no-op retry detection via starting-tip comparison
+- review-rejection retry preserving branch contents across the next work run
 
-- `TestParseBranchMarkerLine_StandaloneLine`
-- `TestParseBranchMarkerLine_InsideCodeFence`
-- `TestParseBranchMarkerLine_InsideProseText`
-- `TestParseBranchMarkerLine_MultipleStandaloneMarkers`
-- `TestParseBranchMarkerLine_NoMarker`
-- `TestReplaceBranchMarkerLine_NoExisting`
-- `TestReplaceBranchMarkerLine_SameValue`
-- `TestReplaceBranchMarkerLine_DifferentValue`
-- `TestReplaceBranchMarkerLine_InsideCodeFence`
+### 3.2 Phase 2: Explicit Review Continuity and Lightweight Runtime Metadata
 
-**`internal/queue/claim_test.go`** (6 tests):
-
-- `TestSelectAndClaimTask_ReusesExistingBranchMarker`
-- `TestSelectAndClaimTask_DerivesBranchWhenNoMarker`
-- `TestSelectAndClaimTask_IgnoresBranchMarkerInCodeFence`
-- `TestSelectAndClaimTask_NormalizesMarkerOnCollision`
-- `TestSelectAndClaimTask_MarkerWriteFailure_RollsBack`
-- `TestSelectAndClaimTask_SkipsWriteWhenMarkerMatches`
-
-**`internal/runner/task_test.go`** (12 tests):
-
-- `TestCheckoutOrCreateBranch_ExistingBranch` — verifies HEAD == origin tip
-- `TestCheckoutOrCreateBranch_ConfirmedAbsentBranch`
-- `TestCheckoutOrCreateBranch_AmbiguousFetchFailure`
-- `TestCheckoutOrCreateBranch_PostFetchRefValidation`
-- `TestRunOnce_StartingTipCaptureFails`
-- `TestRunOnce_ResumedBranchNoNewCommit`
-- `TestRunOnce_ResumedBranchWithNewCommit`
-- `TestRunOnce_FreshBranchWithNewCommit`
-- `TestRunOnce_FreshBranchNoCommit`
-- `TestMoveTaskToReviewWithMarker_WriteFails_RollsBack`
-- `TestMoveTaskToReviewWithMarker_ExistingMarkerReplaced`
-- `TestMoveTaskToReviewWithMarker_NoExistingMarker`
-
-**`internal/integration/resume_test.go`** (1 test):
-
-- `TestReviewRejectionRetryPreservesBranch`
-
-### 3.2 Phase 2: Review Continuity + Runtime Metadata
+Phase 2 keeps review continuity explicit and auditable even before durable
+review-session resume is added.
 
 #### 3.2.1 Runtime Metadata Package (`internal/taskstate/`)
+
+Add a small host-owned package:
 
 ```go
 type TaskState struct {
@@ -230,255 +229,409 @@ type TaskState struct {
 }
 ```
 
-**API**:
+Suggested file path:
 
-- `Load(tasksDir, taskFilename string) (*TaskState, error)`:
-  - File not found → `(nil, nil)`
-  - File exists, valid JSON → `(*TaskState, nil)`
-  - File exists, corrupt JSON → `(nil, error)` — caller decides
-- `Update(tasksDir, taskFilename string, fn func(*TaskState)) error`:
-  1. `os.MkdirAll(filepath.Dir(stateFilePath(...)), 0o755)` — lazy dir creation
-  2. Load existing (if valid); create empty `TaskState{}` if missing or corrupt
-  3. Apply caller's mutation function
-  4. Set Version=1, UpdatedAt=UTC RFC3339
-  5. `atomicwrite.WriteFile`
-- `Delete(tasksDir, taskFilename string) error` — returns error, caller handles
-
-**State file path**: `<tasksDir>/runtime/task-state-<filename>.json`
-
-**Load-modify-save semantics**: Work and review paths write to the same state
-file but update different fields. `Update` always loads first, preventing one
-writer from clobbering the other's fields.
-
-**Lifecycle example**:
-
-1. Push → `Update(fn: set LastHeadSHA, TaskBranch, TargetBranch, LastOutcome="pushed")`
-2. Review rejects → `Update(fn: set LastReviewedSHA, LastOutcome="review-rejected")` — preserves LastHeadSHA
-3. Rework + push → `Update(fn: set LastHeadSHA, LastOutcome="pushed")` — preserves LastReviewedSHA
-4. Follow-up review sees LastReviewedSHA from step 2
-
-#### 3.2.2 Review Context Injection
-
-Add `REVIEW_CONTEXT_PLACEHOLDER` to `internal/runner/review-instructions.md`
-between `## Paths` and `## Folder Structure`.
-
-Add follow-up review guidance at end of `## STATE: REVIEW`:
-
-- This may be a continuation of an earlier review cycle
-- The current branch tip may differ from the one reviewed previously
-- Re-evaluate the current diff independently
-- Verify whether earlier rejection findings were addressed
-- Do not assume earlier rejection reasons still apply unchanged
-
-**`buildReviewContext(repoRoot string, task *queue.ClaimedTask, tasksDir string) string`**:
-
-- **Current tip**: `git.Output(repoRoot, "rev-parse", "--short", task.Branch)`
-  — resolves against the **host repository**, where the task branch exists as a
-  local branch (pushed by `postAgentPush`, verified by `VerifyReviewBranch`).
-  This runs before the review clone is created, matching the existing prompt
-  construction pattern in `runReview`.
-- **Prior SHA**: from `taskstate.Load` → `LastReviewedSHA` — omitted on error
-- **Rejection**: from `taskfile.LastReviewRejectionReason` — independent of
-  runtime state
-
-**Fallback matrix**:
-
-| Runtime state | Rejection | Mode | Shows prior SHA? |
-|--------------|-----------|------|-----------------|
-| Valid | Yes | follow-up | Yes |
-| Valid | No | initial | Yes |
-| Corrupt/missing | Yes | follow-up | No |
-| Corrupt/missing | No | initial | No |
-
-In `runReview`:
-
-```go
-reviewCtx := buildReviewContext(env.repoRoot, task, env.tasksDir)
-run.prompt = strings.ReplaceAll(run.prompt, "REVIEW_CONTEXT_PLACEHOLDER", reviewCtx)
+```text
+<tasksDir>/runtime/taskstate/<filename>.json
 ```
+
+API shape:
+
+- `Load(tasksDir, taskFilename string) (*TaskState, error)`
+- `Update(tasksDir, taskFilename string, fn func(*TaskState)) error`
+- `Delete(tasksDir, taskFilename string) error`
+
+`Update` should use load-modify-save semantics so work and review paths can
+update different fields without clobbering each other.
+
+#### 3.2.2 Review Context Injection (`internal/runner/review.go`)
+
+Add `REVIEW_CONTEXT_PLACEHOLDER` to `internal/runner/review-instructions.md` and
+render a host-written block into it before launching the review agent.
+
+The block should include:
+
+- task branch name
+- current branch tip SHA
+- last reviewed branch tip SHA, if known
+- previous review rejection reason, if known
+- an explicit reminder to reassess the current diff independently
+
+Example:
+
+```text
+Review context:
+- task branch: task/add-foo
+- current branch tip: abc123
+- last reviewed branch tip: def456
+- previous rejection: missing unit tests for retry backoff
+- review mode: follow-up review; reassess the current diff independently
+```
+
+If no prior review context exists, render an explicit neutral block instead of
+omitting the section.
 
 #### 3.2.3 Recording State
 
-**Review**: Capture `reviewedSHA` in `pollReview` before `runReview`. Thread to
-`postReviewAction` (add parameter). Update with load-modify-save. Best-effort.
+- On work push: update `LastHeadSHA`, branch, target branch, and outcome
+- On review launch/completion: capture and store `LastReviewedSHA` and outcome
+- On merge-conflict cleanup that intentionally deletes the task branch: record a
+  distinct outcome such as `merge-conflict-cleanup` so the next work run can
+  allow a fresh branch start without treating the missing remote branch as an
+  unexpected continuity failure
 
-**Work**: In `postAgentPush`, after push. Update with load-modify-save.
-Best-effort.
+These writes are best-effort. Failure should warn and continue.
 
-#### 3.2.4 Centralized Cleanup
+#### 3.2.4 Cleanup
 
-**Point cleanup** (4 sites, AFTER confirmed terminal transition):
+Delete stale runtime metadata under `.mato/runtime/` when tasks reach terminal
+states such as `completed/`, `failed/`, or cancelled terminal paths. Add a
+periodic stale sweep as a backstop for terminal transitions that are not
+individually instrumented.
 
-- `merge.go` `executeMergeRound`: → completed/
-- `claim.go` `handleRetryExhaustedTask`: → failed/
-- `cancel.go` `CancelTask`: → failed/
-- `review.go` `reviewCandidates`: unparseable/review-exhausted → failed/
+This should be a hybrid strategy:
 
-**Sweep-only paths** (covered by periodic stale sweep, not point cleanup):
+- point cleanup on centralized terminal transitions where the task outcome is
+  already known
+- periodic stale sweep in `pollCleanup` for fragmented failure paths, crashes,
+  and interrupted runs
 
-- Reconcile-to-failed (unparseable, invalid glob, cycles, duplicates)
-- Merge failure exhaustion
-- Any other future terminal transition
-
-**Periodic stale sweep** in `pollCleanup`:
-
-- Scans `<tasksDir>/runtime/` using `os.ReadDir`
-- Extracts task filename from state file naming convention
-- Checks ALL non-terminal dirs: waiting/, backlog/, in-progress/,
-  ready-for-review/, ready-to-merge/
-- Deletes only when confirmed absent from ALL
-- On ambiguous stat error → preserves (conservative)
-
-The periodic sweep is the backstop for any terminal transition not covered by
-point cleanup. It catches all paths without requiring changes to every transition
-site.
+The sweep is required because terminal `failed/` transitions are currently
+spread across queue, review, merge, and cancel paths.
 
 #### 3.2.5 Testing Strategy for Phase 2
 
-**`internal/taskstate/taskstate_test.go`** (10 tests):
+Add tests for:
 
-- `TestLoadUpdate_RoundTrip`
-- `TestUpdate_CreatesNew`
-- `TestUpdate_PreservesExistingFields`
-- `TestUpdate_RejectedThenPushed_PreservesReviewedSHA`
-- `TestUpdate_CorruptedExistingFile`
-- `TestUpdate_CreatesRuntimeDir`
-- `TestLoad_MissingFile`
-- `TestLoad_CorruptedFile` — returns (nil, error)
-- `TestDelete_ExistingFile`
-- `TestDelete_MissingFile`
+- load/update/delete semantics in `internal/taskstate/`
+- review prompt placeholder replacement
+- initial vs follow-up review context construction
+- missing/corrupt runtime metadata fallback
+- stale runtime metadata cleanup
 
-**`internal/runner/review_test.go`** (7 tests):
+### 3.3 Phase 3: Durable Work and Review Session Resume
 
-- `TestBuildReviewContext_InitialReview`
-- `TestBuildReviewContext_FollowUpReview`
-- `TestBuildReviewContext_WithPriorRejection_NoState`
-- `TestBuildReviewContext_CorruptedState_WithRejection`
-- `TestBuildReviewContext_CorruptedState_NoRejection`
-- `TestBuildReviewContext_MissingSHA`
-- `TestReviewPrompt_PlaceholderReplaced`
+Phase 1 fixes the highest-value correctness bug. Phase 2 makes review continuity
+explicit and inspectable. Phase 3 adds durable Copilot session resume for both
+work and review because branch continuity alone does not eliminate the full
+restart cost.
 
-**`internal/runner/runner_test.go`** (4 tests):
+#### 3.3.1 Separate Session Model
 
-- `TestCleanStaleRuntimeState_RemovesOrphanedFiles`
-- `TestCleanStaleRuntimeState_PreservesActiveInBacklog`
-- `TestCleanStaleRuntimeState_PreservesActiveInWaiting`
-- `TestCleanStaleRuntimeState_PreservesOnAmbiguousError`
+Each task gets up to two durable session records:
 
-**Integration** (3 tests):
+- `work` session: the implementing agent's long-lived Copilot session
+- `review` session: the reviewing agent's long-lived Copilot session
 
-- `TestFollowUpReviewReceivesContext`
-- `TestRuntimeMetadataCleanup_Merge`
-- `TestCorruptedRuntimeMetadata_Fallback`
+These sessions must remain separate because they have different prompts, goals,
+models, and success criteria.
+
+`taskstate` and `sessionmeta` should remain separate packages. `taskstate`
+tracks host-owned branch/review continuity state, while `sessionmeta` tracks
+Copilot resume state. They have different responsibilities and failure
+semantics.
+
+#### 3.3.2 Session Storage Location
+
+Store session metadata under `.mato/runtime/sessionmeta/`:
+
+```text
+.mato/runtime/sessionmeta/
+  work-<task-filename>.json
+  review-<task-filename>.json
+```
+
+This keeps session state out of `messages/`, which is already the home for
+inter-agent coordination artifacts such as `events/`, `presence/`,
+`completions/`, verdict files, file-claims indexes, and dependency-context
+files. Sessions are runtime state, not messages, so they fit better under a
+dedicated runtime subtree.
+
+Recommended `.mato/` layout after this change:
+
+```text
+.mato/
+  messages/
+    events/
+    presence/
+    completions/
+    verdict-*.json
+    file-claims.json
+    dependency-context-*.json
+  runtime/
+    taskstate/
+      <task-filename>.json
+    sessionmeta/
+      work-<task-filename>.json
+      review-<task-filename>.json
+```
+
+#### 3.3.3 Session Record Shape
+
+Start with a minimal session record. Do not overbuild compatibility fields until
+the implementation actually needs them.
+
+Suggested minimum schema:
+
+```json
+{
+  "version": 1,
+  "kind": "work",
+  "task_file": "add-foo.md",
+  "task_branch": "task/add-foo",
+  "copilot_session_id": "0cb916db-26aa-40f2-86b5-1ba81b225fd2",
+  "updated_at": "2026-03-29T12:23:55Z",
+  "last_head_sha": "abc123..."
+}
+```
+
+Notes:
+
+- `copilot_session_id` is the durable identifier passed to
+  `copilot --resume=<id>`
+- `last_head_sha` records the branch tip most recently associated with the
+  session
+- Additional fields such as `target_branch`, `attempt`, `model`,
+  `reasoning_effort`, `prompt_hash`, `status`, or `last_outcome` can be added
+  later if resume safety or debugging proves they are necessary
+- V1 should not invalidate sessions on prompt or model changes. Compatibility
+  fields should wait until a concrete problem appears
+- `mato` should treat the stored session record as the source of truth for the
+  session ID it intends to reuse, rather than depending on scraping IDs from
+  Copilot output
+
+#### 3.3.4 Session Lifecycle
+
+Work session lifecycle:
+
+- create on the first successful claim before launching `runOnce()`
+- keep active across `backlog/`, `in-progress/`, `ready-for-review/`, and review
+  rejection back to `backlog/`
+- close when the task reaches `completed/`, `failed/`, or a cancelled terminal
+  path
+
+Review session lifecycle:
+
+- create on the first review launch after branch verification succeeds
+- keep active across repeated reviews of the same task after fixes and transient
+  review failures
+- close when the task reaches `completed/`, `failed/`, or a cancelled terminal
+  path
+
+Review-session resume should be independently disableable from work-session
+resume. Recommended initial surface:
+
+- `.mato.yaml`: `review_session_resume_enabled: true`
+- env override: `MATO_REVIEW_SESSION_RESUME_ENABLED=false`
+
+Do not add a CLI flag initially unless a concrete operator workflow demands it.
+
+#### 3.3.5 Copilot CLI Plumbing
+
+Extend runner launch plumbing so `buildDockerArgs()` can append
+`--resume=<session-id>` when a session record exists.
+
+If the Copilot CLI reliably accepts caller-supplied session IDs, prefer letting
+`mato` generate and persist the ID up front. That is simpler and more durable
+than trying to discover the session ID from Copilot output after the fact.
+
+The runner should:
+
+- load or create the `work` session before launching a task run
+- load or create the `review` session before launching a review run
+- pass the correct session ID to Copilot for that phase only
+- update the session record after each run with at least the current branch tip
+  and any additional compatibility fields the implementation actually uses
+
+#### 3.3.6 Review Re-anchoring Guardrail
+
+Even with durable review-session resume, follow-up reviews must not blindly
+reuse earlier conclusions.
+
+The prompt should still state:
+
+- this may be a continuation of an earlier review cycle
+- the current branch tip may differ from the one reviewed previously
+- re-evaluate the current diff independently
+- verify whether earlier rejection findings were addressed
+- do not assume earlier rejection reasons still apply unchanged
+
+Session resume improves continuity; explicit prompt context prevents stale
+anchoring from becoming the only source of truth.
+
+Review-session resume should also remain independently disableable from
+work-session resume. If follow-up reviews prove too sticky in practice, mato
+should be able to keep work-session resume plus explicit review context while
+temporarily disabling durable review-session resume without redesigning the rest
+of the system.
+
+#### 3.3.7 Fresh-Start Conditions
+
+Fall back to a fresh session when:
+
+- the stored session metadata is missing or corrupt
+- the CLI rejects the resume request
+- the prompt contract changes incompatibly
+- the configured model changes incompatibly
+
+Fall back to a fresh branch start when:
+
+- the recorded task branch no longer exists on `origin`
+- the task branch was intentionally deleted after merge-conflict handling
+- branch metadata is absent or unusable
+
+The default policy should remain conservative: resume when metadata is coherent
+and the CLI accepts it, otherwise fall back cleanly.
+
+For v1, intentional branch deletion after merge-conflict handling should not
+trigger session cleanup by itself. The task is still active and may be retried.
+Instead, retain `.mato/runtime/taskstate/` and `.mato/runtime/sessionmeta/`,
+record the merge-conflict-cleanup outcome, and allow the next work run to start
+from a fresh branch while reusing the existing work session.
+
+#### 3.3.8 Testing Strategy for Phase 3
+
+Add tests for:
+
+- separate work and review session records for the same task
+- `buildDockerArgs()` appending `--resume=<id>` only when set
+- repeated work retries reusing the same work session ID
+- repeated follow-up reviews reusing the same review session ID
+- corrupt session metadata falling back safely
+- session cleanup on terminal task states
 
 ## 4. Step-by-Step Implementation Order
 
-### Phase 1 — 9 steps
+### Phase 1
 
-| Step | Description | Files | Deps |
-|------|-------------|-------|------|
-| 1 | `ParseBranchMarkerLine` + `ReplaceBranchMarkerLine` | taskfile/taskfile.go, _test.go | — |
-| 2 | Migrate `ParseBranch`, `readBranchFromFile`, `BuildIndex` | taskfile/metadata.go, queue/claim.go, queue/index.go | 1 |
-| 3 | `WriteBranchMarker` (exported) | queue/claim.go | 1 |
-| 4 | Branch identity + collision + mandatory write | queue/claim.go, _test.go | 1-3 |
-| 5 | `checkoutOrCreateBranch` with explicit `origin/<branch>` | runner/task.go | — |
-| 6 | Starting-tip capture (hard error) + replace checkout | runner/task.go | 5 |
-| 7 | Adjusted commit detection (hard error) | runner/task.go, _test.go | 6 |
-| 8 | `writeBranchMarkerFn` + normalization in review path | runner/task.go, _test.go | 1, 3 |
-| 9 | Integration test | integration/resume_test.go | 1-8 |
+1. Add `ParseBranchMarkerLine` and `ReplaceBranchMarkerLine` in `metadata.go`
+2. Migrate all branch readers to the fence-aware parser
+3. Add `WriteBranchMarker`
+4. Reuse branch identity during claim with collision handling
+5. Reuse `internal/git.EnsureBranch` and add runner-side recorded-branch policy
+6. Capture `startingTip` before agent launch
+7. Replace no-op detection with starting-tip SHA comparison
+8. Replace append-only branch writes with marker normalization
+9. Add unit and integration tests for branch resume
 
-### Phase 2 — 9 steps
+### Phase 2
 
-| Step | Description | Files | Deps |
-|------|-------------|-------|------|
-| 10 | `internal/taskstate/` with `Update` + lazy dir | taskstate/*.go | — |
-| 11 | `REVIEW_CONTEXT_PLACEHOLDER` + guidance | runner/review-instructions.md | — |
-| 12 | `buildReviewContext` + prompt replacement | runner/review.go, _test.go | 10-11 |
-| 13 | Record work state via `Update` | runner/task.go | 10 |
-| 14 | Capture reviewed SHA + record review state | runner/review.go, runner.go | 10 |
-| 15 | Point cleanup at 4 terminal transitions | merge.go, claim.go, cancel.go, review.go | 10 |
-| 16 | Periodic stale cleanup | runner/runner.go, _test.go | 10 |
-| 17 | Integration tests | integration/resume_test.go | 10-16 |
-| 18 | Update docs | docs/architecture.md | 10-16 |
+10. Add `internal/taskstate/` with `Load`, `Update`, and `Delete`
+11. Add `REVIEW_CONTEXT_PLACEHOLDER` and follow-up review guidance
+12. Implement `buildReviewContext` and prompt interpolation
+13. Record work and review SHAs/outcomes via `taskstate.Update`
+14. Add terminal cleanup plus periodic stale cleanup
+15. Add unit and integration tests for explicit review continuity
+
+### Phase 3
+
+16. Add a small session metadata helper package, for example
+    `internal/sessionmeta/`
+17. Add minimal work and review session record creation/load/update/close
+    helpers under `.mato/runtime/sessionmeta/` with `mato`-generated session IDs
+18. Extend config/env/run-option plumbing for
+    `review_session_resume_enabled`
+19. Extend runner launch plumbing to support `--resume=<session-id>`
+20. Wire work runs to resume the durable work session
+21. Wire review runs to resume the durable review session, gated by
+    `review_session_resume_enabled`
+22. Add point cleanup for terminal paths plus periodic stale sweep for
+    `.mato/runtime/taskstate/` and `.mato/runtime/sessionmeta/`
+23. Add unit and integration tests for session resume
+24. Update architecture docs
 
 ## 5. File Changes Summary
 
-### Phase 1 (9 files)
+### Phase 1
 
-| File | Action | Description |
-|------|--------|-------------|
-| `internal/taskfile/taskfile.go` | Modify | `ParseBranchMarkerLine`, `ReplaceBranchMarkerLine` |
-| `internal/taskfile/taskfile_test.go` | Modify | Fence-aware + replacement tests |
-| `internal/taskfile/metadata.go` | Modify | `ParseBranch` → fence-aware |
-| `internal/queue/claim.go` | Modify | `WriteBranchMarker`; `readBranchFromFile` migrated; branch reuse + collision + mandatory |
-| `internal/queue/claim_test.go` | Modify | 6 new tests |
-| `internal/queue/index.go` | Modify | Branch parsing migrated |
-| `internal/runner/task.go` | Modify | `checkoutOrCreateBranch`; starting-tip (hard error); commit detection (hard error); `writeBranchMarkerFn` |
-| `internal/runner/task_test.go` | Modify | 12 new tests |
-| `internal/integration/resume_test.go` | Create | Full lifecycle |
+- `internal/taskfile/taskfile_test.go`
+- `internal/taskfile/metadata.go`
+- `internal/queue/claim.go`
+- `internal/queue/claim_test.go`
+- `internal/queue/index.go`
+- `internal/runner/task.go`
+- `internal/runner/task_test.go`
+- `internal/integration/resume_test.go`
 
-### Phase 2 (14 files)
+### Phase 2
 
-| File | Action | Description |
-|------|--------|-------------|
-| `internal/taskstate/taskstate.go` | Create | TaskState, Load/Update/Delete, lazy dir |
-| `internal/taskstate/taskstate_test.go` | Create | 10 tests |
-| `internal/runner/review-instructions.md` | Modify | Placeholder + guidance |
-| `internal/runner/review.go` | Modify | `buildReviewContext`; record state; cleanup |
-| `internal/runner/runner.go` | Modify | Thread SHA; stale cleanup |
-| `internal/runner/task.go` | Modify | Record work state |
-| `internal/merge/merge.go` | Modify | Delete state |
-| `internal/queue/claim.go` | Modify | Delete state |
-| `internal/queue/cancel.go` | Modify | Delete state |
-| `internal/runner/review_test.go` | Modify | 7 tests |
-| `internal/runner/task_test.go` | Modify | Work state tests |
-| `internal/runner/runner_test.go` | Modify | 4 tests |
-| `internal/integration/resume_test.go` | Modify | 3 integration tests |
-| `docs/architecture.md` | Modify | Branch resume + runtime metadata |
+- `internal/taskstate/taskstate.go`
+- `internal/taskstate/taskstate_test.go`
+- `internal/runner/review-instructions.md`
+- `internal/runner/review.go`
+- `internal/runner/runner.go`
+- `internal/runner/task.go`
+- terminal cleanup call sites in merge/claim/cancel/review paths
+- `internal/runner/review_test.go`
+- `internal/runner/runner_test.go`
+- `internal/integration/resume_test.go`
+- `docs/architecture.md`
+
+### Phase 3
+
+- `internal/sessionmeta/sessionmeta.go`
+- `internal/sessionmeta/sessionmeta_test.go`
+- `internal/config/config.go`
+- `cmd/mato/main.go`
+- `cmd/mato/main_test.go`
+- `internal/runner/config.go`
+- `internal/runner/config_test.go`
+- `internal/runner/task.go`
+- `internal/runner/review.go`
+- `internal/runner/runner.go`
+- `internal/runner/task_test.go`
+- `internal/runner/review_test.go`
+- `internal/integration/resume_test.go`
+- `docs/architecture.md`
 
 ## 6. Error Handling
 
 | Scenario | Behavior |
 |----------|----------|
-| No branch marker | Derive + insert (mandatory); rollback on failure |
-| Marker matches | Skip write |
-| Marker differs | Replace (mandatory); rollback on failure |
-| `ls-remote` 0/2/other | exists/absent/hard error |
+| No branch marker | Derive and insert; rollback claim on mandatory write failure |
+| Marker matches | Reuse and skip write |
+| Marker differs | Replace in place; rollback claim on mandatory write failure |
+| Recorded branch + `EnsureBranch` returns local/remote | Resume from recorded branch tip |
+| Recorded branch + `EnsureBranch` returns head fallback | Hard error; do not silently restart from `HEAD` |
+| Fresh branch + `EnsureBranch` returns head fallback | Allowed; create from `HEAD` |
+| Recorded branch + remote unavailable but cached remote ref exists | Not enabled by default; possible future degraded/offline resume mode |
 | Post-fetch ref missing | Hard error with diagnostics |
-| `startingTip` rev-parse fails | **Hard error** — runOnce returns; recoverStuckTask handles |
-| `currentTip` rev-parse fails | **Hard error** — postAgentPush returns; clone preserved |
-| HEAD == startingTip | No push |
-| HEAD ≠ startingTip | Push + move |
-| Review context rev-parse fails | **Best-effort** — shows "unknown"; review proceeds |
-| `Load` on missing file | (nil, nil) |
-| `Load` on corrupt JSON | (nil, error) |
-| `Update` on corrupt file | Creates fresh, applies mutation |
-| `Update` I/O failure | Warning, continue |
-| `Delete` failure | Return error; caller warns; sweep catches |
-| Stale sweep stat error | Preserve |
+| `startingTip` rev-parse fails | Hard error; do not launch agent |
+| `currentTip` rev-parse fails | Hard error; preserve clone, retry later |
+| HEAD == `startingTip` | No push |
+| HEAD != `startingTip` | Push and advance queue state |
+| Review context SHA lookup fails | Best-effort; show unknown and continue |
+| `taskstate.Load` on missing file | `(nil, nil)` |
+| `taskstate.Load` on corrupt JSON | `(nil, error)` |
+| `taskstate.Update` on corrupt file | Recreate fresh state and continue |
+| Session metadata missing/corrupt | Fresh session fallback |
+| Copilot resume rejected | Fresh session fallback |
+| Cleanup delete failure | Warn and continue; stale sweep backstops |
 
 ## 7. Risks and Mitigations
 
 | Risk | Mitigation |
 |------|-----------|
-| Body-embedded marker | Fence-aware parser across all readers |
-| Collision with active branch | Check + fallback + mandatory write |
-| Stale/conflicting markers | Replace-in-place normalization |
-| Mandatory write fails | Claim rollback |
-| Ambiguous fetch failure | Hard error from ls-remote |
-| No-op retry misdetected | Starting-tip SHA comparison |
-| rev-parse failure | Hard error for control flow; best-effort for review context |
-| Work overwrites review state | Load-modify-save (`Update`) |
-| Stale runtime files | Point cleanup + periodic sweep |
-| Waiting/ state loss | Sweep checks all non-terminal dirs |
-| Corrupt runtime state | Task-file data independent; Update recreates fresh |
-| Runtime dir missing | Lazy `os.MkdirAll` in `Update` |
-| Rollback test coverage | `writeBranchMarkerFn` variable |
+| Body-embedded branch marker false positives | Fence-aware parser across all readers |
+| Collision with another active branch | Reuse only when not colliding; otherwise derive + rewrite |
+| Duplicate legacy markers | Read first standalone marker; replace first only |
+| Ambiguous remote branch probe | Hard error instead of silent data loss |
+| No-op retry misdetected on resumed branch | Starting-tip SHA comparison |
+| Review agent anchors too strongly on old findings | Keep explicit follow-up-review guidance in the prompt |
+| Work and review session state interfere | Separate session records and session IDs |
+| Review-session resume proves too sticky in practice | Gate it independently with config/env kill switch |
+| Corrupt runtime/session metadata | Fresh fallback and best-effort recreation |
+| Temp-clone-only work remains unrecoverable | Explicitly accepted limitation |
 
-## 8. Open Questions
+## 8. Version 1 Decisions
 
-1. **Function variable for `checkoutOrCreateBranch`?** Yes — follows codebase
-   convention.
-2. **Sweep frequency?** Every poll cycle; fast operation.
-3. **Deprecate `ParseBranchComment`?** Not now; retained as low-level helper.
-4. **State history depth?** Last-only; extend if needed.
+1. Recorded-branch resume requires a live remote check in v1.
+   `BranchSourceRemoteCached` is not allowed for recorded-branch resume by
+   default.
+2. V1 session metadata stays minimal.
+   Prompt/model compatibility fields and invalidation rules are deferred until a
+   concrete resume-safety problem appears.
+3. Intentional task-branch deletion after merge-conflict handling does not
+   trigger session cleanup in v1.
+   Keep runtime state, record a distinct merge-conflict-cleanup outcome, and let
+   the next work run start from a fresh branch while reusing the work session.
