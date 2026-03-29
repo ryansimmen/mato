@@ -5,6 +5,8 @@ The host handles all file moves, metadata markers, and completion messages after
 - Task queue: TASKS_DIR_PLACEHOLDER
 - Messages: MESSAGES_DIR_PLACEHOLDER
 - Target branch: TARGET_BRANCH_PLACEHOLDER
+## Review Context
+REVIEW_CONTEXT_PLACEHOLDER
 ## Folder Structure
 ```text
 .mato/
@@ -102,6 +104,10 @@ done
 
 Compare what the task file requested against what the diff actually implements.
 
+If the review context says this is a follow-up review, use it as background only.
+You must still evaluate the current diff independently and verify whether any
+previously rejected issues were actually fixed.
+
 **Check for these issues (reject-worthy):**
 1. **Bugs and logic errors** — incorrect algorithms, off-by-one errors, nil dereferences, resource leaks, deadlocks.
 2. **Regressions** — changes that break existing behavior (e.g., `defer` inside a loop, changed function signatures that break callers).
@@ -139,12 +145,14 @@ echo "Approved $FILENAME on $BRANCH. Host will move to ready-to-merge/."
 Write the verdict file with a specific, actionable reason. The reason must explain exactly what needs to be fixed.
 **Commands:**
 ```bash
-cat > "$VERDICT_PATH" << VERDICTEOF
-{"verdict":"reject","reason":"<one-paragraph summary of the specific issue(s) found>"}
+REJECT_REASON='<one-paragraph summary of the specific issue(s) found>'
+ESCAPED_REASON=$(printf '%s' "$REJECT_REASON" | sed 's/\\/\\\\/g; s/"/\\"/g; :a;N;$!ba;s/\n/\\n/g')
+cat > "$VERDICT_PATH" <<VERDICTEOF
+{"verdict":"reject","reason":"$ESCAPED_REASON"}
 VERDICTEOF
 echo "Rejected $FILENAME. Host will move back to backlog/."
 ```
-**Important:** Replace `<one-paragraph summary ...>` with the actual rejection reason. Escape any double quotes in the reason with a backslash. Keep the reason to one paragraph.
+**Important:** Replace `<one-paragraph summary ...>` with the actual rejection reason. Keep the reason to one paragraph.
 
 **Decision table:**
 | If | Then |
@@ -163,8 +171,10 @@ echo "Rejected $FILENAME. Host will move back to backlog/."
 Use this state for unrecoverable errors only, such as inability to fetch the branch or read the task file.
 **Commands:**
 ```bash
-cat > "$VERDICT_PATH" << VERDICTEOF
-{"verdict":"error","reason":"${FAIL_STEP:-REVIEW}: ${FAIL_REASON:-unknown error}"}
+ERROR_REASON="${FAIL_STEP:-REVIEW}: ${FAIL_REASON:-unknown error}"
+ESCAPED_ERROR_REASON=$(printf '%s' "$ERROR_REASON" | sed 's/\\/\\\\/g; s/"/\\"/g; :a;N;$!ba;s/\n/\\n/g')
+cat > "$VERDICT_PATH" <<VERDICTEOF
+{"verdict":"error","reason":"$ESCAPED_ERROR_REASON"}
 VERDICTEOF
 ```
 **Decision table:**

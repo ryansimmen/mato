@@ -18,6 +18,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
+	"mato/internal/taskstate"
 )
 
 var createCloneFn = git.CreateClone
@@ -153,7 +154,8 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 	if err != nil {
 		return fmt.Errorf("determine current task branch tip: %w", err)
 	}
-	if strings.TrimSpace(currentTip) == startingTip {
+	currentTip = strings.TrimSpace(currentTip)
+	if currentTip == startingTip {
 		return nil // no commits; recoverStuckTask will handle recovery
 	}
 
@@ -174,6 +176,12 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 	if err := moveTaskToReviewWithMarker(env.tasksDir, claimed, claimed.Branch); err != nil {
 		return err
 	}
+	recordTaskStateUpdate(env.tasksDir, claimed.Filename, "record work push taskstate", func(state *taskstate.TaskState) {
+		state.TaskBranch = claimed.Branch
+		state.TargetBranch = env.targetBranch
+		state.LastHeadSHA = currentTip
+		state.LastOutcome = "work-pushed"
+	})
 
 	// Send conflict-warning with changed files.
 	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", env.targetBranch+"..HEAD")

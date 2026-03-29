@@ -21,6 +21,7 @@ import (
 	"mato/internal/process"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
+	"mato/internal/taskstate"
 )
 
 func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
@@ -3577,6 +3578,42 @@ func TestPollCleanup_EmptyDir(t *testing.T) {
 	captureStdoutStderr(t, func() {
 		pollCleanup(tasksDir)
 	})
+}
+
+func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "active.md"), []byte("# Active\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile active task: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "done.md"), []byte("# Done\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile done task: %v", err)
+	}
+	for _, name := range []string{"active.md", "done.md", "gone.md"} {
+		if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+			state.LastOutcome = name
+		}); err != nil {
+			t.Fatalf("seed taskstate %s: %v", name, err)
+		}
+	}
+	captureStdoutStderr(t, func() {
+		pollCleanup(tasksDir)
+	})
+	active, err := taskstate.Load(tasksDir, "active.md")
+	if err != nil {
+		t.Fatalf("Load active taskstate: %v", err)
+	}
+	if active == nil {
+		t.Fatal("active taskstate should remain after pollCleanup")
+	}
+	for _, name := range []string{"done.md", "gone.md"} {
+		state, err := taskstate.Load(tasksDir, name)
+		if err != nil {
+			t.Fatalf("Load %s taskstate: %v", name, err)
+		}
+		if state != nil {
+			t.Fatalf("stale taskstate %s should be removed", name)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
