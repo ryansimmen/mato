@@ -148,6 +148,12 @@ For recorded branches, the runner should reject:
 - `BranchSourceHeadRemoteMissing`
 - `BranchSourceHeadRemoteUnavailable`
 
+Exception: if mato intentionally deleted the task branch as part of
+merge-conflict cleanup, it must also remove the `<!-- branch: ... -->` marker
+from the task file during the same host-side transition. That makes the next
+claim unambiguously take the fresh-branch path without depending on later
+runtime metadata.
+
 Expected behavior therefore becomes:
 
 1. If `origin/<branch>` exists, fetch it and create the local branch from that
@@ -196,7 +202,20 @@ retries stop accumulating duplicate `<!-- branch: ... -->` markers.
 Legacy files with duplicate markers are tolerated. The new parser reads the
 first standalone marker and the replacer updates only that first marker.
 
-#### 3.1.10 Testing Strategy for Phase 1
+#### 3.1.10 Intentional Branch Deletion (`internal/merge/taskops.go`)
+
+When merge-conflict handling intentionally deletes a task branch, Phase 1 must
+also clear the task file's branch marker during that same transition.
+
+That keeps the branch-marker contract simple:
+
+- marker present = resume expected
+- marker absent = fresh branch allowed
+
+This avoids a Phase 1 mismatch where a deleted branch plus a stale marker would
+otherwise trigger the recorded-branch hard-error path.
+
+#### 3.1.11 Testing Strategy for Phase 1
 
 Add unit coverage for:
 
@@ -204,6 +223,7 @@ Add unit coverage for:
 - claim-time branch reuse, collision handling, and rollback on write failure
 - branch checkout resume from `origin/<branch>`
 - fresh-branch fallback when branch is absent
+- intentional merge-conflict branch deletion clearing the branch marker
 - no-op retry detection via starting-tip comparison
 - review-rejection retry preserving branch contents across the next work run
 
@@ -276,9 +296,10 @@ omitting the section.
 - On work push: update `LastHeadSHA`, branch, target branch, and outcome
 - On review launch/completion: capture and store `LastReviewedSHA` and outcome
 - On merge-conflict cleanup that intentionally deletes the task branch: record a
-  distinct outcome such as `merge-conflict-cleanup` so the next work run can
-  allow a fresh branch start without treating the missing remote branch as an
-  unexpected continuity failure
+  distinct outcome such as `merge-conflict-cleanup` as supplementary context for
+  later runs and diagnostics. Phase 1 correctness should not depend on this
+  metadata because the branch marker is already cleared during the same host-side
+  transition
 
 These writes are best-effort. Failure should warn and continue.
 
@@ -509,36 +530,38 @@ Add tests for:
 3. Add `WriteBranchMarker`
 4. Reuse branch identity during claim with collision handling
 5. Reuse `internal/git.EnsureBranch` and add runner-side recorded-branch policy
-6. Capture `startingTip` before agent launch
-7. Replace no-op detection with starting-tip SHA comparison
-8. Replace append-only branch writes with marker normalization
-9. Add unit and integration tests for branch resume
+6. Clear the branch marker when merge-conflict cleanup intentionally deletes the
+   task branch
+7. Capture `startingTip` before agent launch
+8. Replace no-op detection with starting-tip SHA comparison
+9. Replace append-only branch writes with marker normalization
+10. Add unit and integration tests for branch resume
 
 ### Phase 2
 
-10. Add `internal/taskstate/` with `Load`, `Update`, and `Delete`
-11. Add `REVIEW_CONTEXT_PLACEHOLDER` and follow-up review guidance
-12. Implement `buildReviewContext` and prompt interpolation
-13. Record work and review SHAs/outcomes via `taskstate.Update`
-14. Add terminal cleanup plus periodic stale cleanup
-15. Add unit and integration tests for explicit review continuity
+11. Add `internal/taskstate/` with `Load`, `Update`, and `Delete`
+12. Add `REVIEW_CONTEXT_PLACEHOLDER` and follow-up review guidance
+13. Implement `buildReviewContext` and prompt interpolation
+14. Record work and review SHAs/outcomes via `taskstate.Update`
+15. Add terminal cleanup plus periodic stale cleanup
+16. Add unit and integration tests for explicit review continuity
 
 ### Phase 3
 
-16. Add a small session metadata helper package, for example
+17. Add a small session metadata helper package, for example
     `internal/sessionmeta/`
-17. Add minimal work and review session record creation/load/update/close
+18. Add minimal work and review session record creation/load/update/close
     helpers under `.mato/runtime/sessionmeta/` with `mato`-generated session IDs
-18. Extend config/env/run-option plumbing for
+19. Extend config/env/run-option plumbing for
     `review_session_resume_enabled`
-19. Extend runner launch plumbing to support `--resume=<session-id>`
-20. Wire work runs to resume the durable work session
-21. Wire review runs to resume the durable review session, gated by
+20. Extend runner launch plumbing to support `--resume=<session-id>`
+21. Wire work runs to resume the durable work session
+22. Wire review runs to resume the durable review session, gated by
     `review_session_resume_enabled`
-22. Add point cleanup for terminal paths plus periodic stale sweep for
+23. Add point cleanup for terminal paths plus periodic stale sweep for
     `.mato/runtime/taskstate/` and `.mato/runtime/sessionmeta/`
-23. Add unit and integration tests for session resume
-24. Update architecture docs
+24. Add unit and integration tests for session resume
+25. Update architecture docs
 
 ## 5. File Changes Summary
 
@@ -549,6 +572,7 @@ Add tests for:
 - `internal/queue/claim.go`
 - `internal/queue/claim_test.go`
 - `internal/queue/index.go`
+- `internal/merge/taskops.go`
 - `internal/runner/task.go`
 - `internal/runner/task_test.go`
 - `internal/integration/resume_test.go`
@@ -593,6 +617,7 @@ Add tests for:
 | Marker differs | Replace in place; rollback claim on mandatory write failure |
 | Recorded branch + `EnsureBranch` returns local/remote | Resume from recorded branch tip |
 | Recorded branch + `EnsureBranch` returns head fallback | Hard error; do not silently restart from `HEAD` |
+| Intentional branch deletion during merge-conflict cleanup | Delete branch and clear branch marker so the next claim takes the fresh-branch path |
 | Fresh branch + `EnsureBranch` returns head fallback | Allowed; create from `HEAD` |
 | Recorded branch + remote unavailable but cached remote ref exists | Not enabled by default; possible future degraded/offline resume mode |
 | Post-fetch ref missing | Hard error with diagnostics |
@@ -631,7 +656,11 @@ Add tests for:
 2. V1 session metadata stays minimal.
    Prompt/model compatibility fields and invalidation rules are deferred until a
    concrete resume-safety problem appears.
-3. Intentional task-branch deletion after merge-conflict handling does not
+3. Intentional task-branch deletion after merge-conflict handling must also
+   clear the branch marker in v1.
+   That makes Phase 1 self-contained and preserves the contract that marker
+   presence implies resume intent.
+4. Intentional task-branch deletion after merge-conflict handling does not
    trigger session cleanup in v1.
    Keep runtime state, record a distinct merge-conflict-cleanup outcome, and let
    the next work run start from a fresh branch while reusing the work session.
