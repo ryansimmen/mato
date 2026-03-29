@@ -740,6 +740,9 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 	if !strings.Contains(string(data), "<!-- failure: merge-queue") {
 		t.Fatalf("backlog conflicted task should contain merge failure record, got %q", string(data))
 	}
+	if strings.Contains(string(data), "<!-- branch:") {
+		t.Fatalf("backlog conflicted task should have branch marker cleared after cleanup, got %q", string(data))
+	}
 	if out, err := git.Output(repoRoot, "ls-remote", "--heads", "origin", conflictBranch); err != nil {
 		t.Fatalf("git ls-remote after ProcessQueue: %v", err)
 	} else if strings.TrimSpace(out) != "" {

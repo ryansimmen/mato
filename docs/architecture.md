@@ -293,7 +293,7 @@ Affects: internal/runner/runner.go, internal/runner/runner_test.go
 ### Conflict and failure handling
 Merge failure handling is branch-specific:
 1. Missing task branch: append `<!-- failure: merge-queue ... -->` and move the task to `backlog/` if retries remain, or `failed/` if `max_retries` is exhausted.
-2. Squash merge conflict: append `<!-- failure: merge-queue ... -->`, move the task to `backlog/` (or `failed/` if retries exhausted), and delete the stale task branch locally and on `origin` so a future agent run can push a fresh branch.
+2. Squash merge conflict: append `<!-- failure: merge-queue ... -->`, move the task to `backlog/` (or `failed/` if retries exhausted). When the task is requeued to `backlog/`, mato also deletes the stale task branch locally and on `origin` and clears the task file's branch marker so the next work run can start from a fresh branch. Terminal `failed/` tasks keep their branch marker/history.
 3. Push failure after a successful squash commit: append `<!-- failure: merge-queue ... -->` but leave the task file in `ready-to-merge/` for retry on the next merge pass.
 4. Parse errors are also recorded as merge-queue failures and requeued to `backlog/`.
 ## 7. Review Agent
@@ -400,7 +400,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `WriteFunc` — atomically writes via a caller-supplied callback with the same fsync-before-rename and dir-sync-after-rename guarantees.
 
 ### `internal/taskfile/`
-- Branch comment parsing — `ParseBranch`, `ParseBranchComment`, `ParseClaimedBy`, `ParseClaimedAt` (`taskfile.go`, `metadata.go`).
+- Branch marker parsing — `ParseBranch`, `ParseBranchMarkerLine`, `ParseClaimedBy`, `ParseClaimedAt` (`taskfile.go`, `metadata.go`).
 - Failure/review-failure tracking — `CountFailureMarkers`, `ExtractFailureLines`, `AppendFailureRecord`, etc. (`metadata.go`).
 - Cycle-failure tracking — `AppendCycleFailureRecord`, `ContainsCycleFailure`, `CountCycleFailureMarkers`, `LastCycleFailureReason` (`metadata.go`). Cycle-failure markers use `<!-- cycle-failure: ... -->` and do not count against the task's `max_retries` budget.
 - Active task collection — `CollectActiveAffects` scans in-progress/review/merge directories (`active.go`).
