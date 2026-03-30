@@ -113,7 +113,7 @@ Expected comment patterns:
 
 What they mean:
 - `claimed-by` records which agent owns an in-progress task.
-- `branch:` records the pushed task branch name after a successful agent push; the merge queue reads this first and falls back to the filename-derived branch when absent. Only complete markers with the closing `-->` are recognized; unterminated or malformed branch comments are ignored.
+- `branch:` records the task branch identity selected by the host. On claim, mato reuses an existing standalone branch marker when safe; otherwise it derives a sanitized branch name from the filename and may append a disambiguation suffix when another active task already uses that branch. The merge queue reads this marker first and falls back to the filename-derived branch when absent. Only complete markers with the closing `-->` are recognized; unterminated or malformed branch comments are ignored.
 - `failure:` records a failed task agent attempt; failure records are counted against the task's `max_retries` budget. Recovery and merge logic may also append `failure:` records (e.g. `mato-recovery` or `merge-queue`).
 - `review-failure:` records a review infrastructure failure (e.g. network blip during `git fetch`, diff timeout). These are tracked separately from task failure records and do **not** count against the task's `max_retries` budget. Only review-failure records are counted for the review retry budget.
 - `review-rejection:` records feedback from the review agent when rejecting a task. Format: `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->`. Review rejections do **not** count against `max_retries`. The feedback is passed to the implementing agent via the `MATO_REVIEW_FEEDBACK` environment variable on the next attempt.
@@ -165,7 +165,7 @@ Simplify the status summary formatting.
 - mato writes `.queue` from the effective runnable backlog for operator visibility; the host uses that same runnable backlog model directly when deciding what to claim.
 
 ## Branch Naming
-Each task automatically gets a git branch derived from its filename. The branch name is computed by `SanitizeBranchName()` in `internal/frontmatter/frontmatter.go` and prefixed with `task/` by the runner.
+Each task gets a stable git branch identity managed by the host. When a task already has a standalone `<!-- branch: ... -->` marker, mato reuses that branch on the next claim unless it collides with another active task. Otherwise mato derives a branch from the filename and prefixes it with `task/`. If that derived branch is already in use by another active task, mato appends a deterministic disambiguation suffix.
 
 **Sanitization rules (applied in order):**
 1. Strip the `.md` suffix
@@ -183,7 +183,7 @@ Each task automatically gets a git branch derived from its filename. The branch 
 | `--leading-dashes--.md` | `task/leading-dashes` |
 | `___.md` | `task/unnamed` |
 
-Users don't need to do anything special — just pick a descriptive kebab-case filename and mato handles the rest. The `<!-- branch: ... -->` runtime comment records the actual branch name after the agent pushes, but the branch is always deterministic from the filename.
+Users don't need to do anything special — just pick a descriptive kebab-case filename and mato handles the rest. The `<!-- branch: ... -->` runtime comment records the authoritative branch name for future retries and review cycles. When no marker exists yet, the initial branch is still derived deterministically from the filename (with a collision suffix when needed).
 
 ## Backward Compatibility
 Plain markdown task files work fine. If frontmatter is missing, mato applies these defaults:

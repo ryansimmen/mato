@@ -334,7 +334,7 @@ func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
 		},
 		{
 			name:   "embedded newlines",
-			reason: `line one\\nline two`,
+			reason: "line one\nline two",
 			check: func(t *testing.T, v reviewVerdict) {
 				t.Helper()
 				if !strings.Contains(v.Reason, "\n") {

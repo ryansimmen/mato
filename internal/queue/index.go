@@ -197,7 +197,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 				continue
 			}
 
-			branch, _ := taskfile.ParseBranchComment(data)
+			branch, _ := taskfile.ParseBranchMarkerLine(data)
 			claimedBy, _ := taskfile.ParseClaimedBy(data)
 			claimedAt, _ := taskfile.ParseClaimedAt(data)
 			cancelled := taskfile.ContainsCancelledMarker(data)

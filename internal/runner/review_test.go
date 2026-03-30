@@ -11,10 +11,13 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/queue"
+	"mato/internal/sessionmeta"
+	"mato/internal/taskstate"
 	"mato/internal/testutil"
 )
 
@@ -408,6 +411,11 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget(t *testing.T) {
 		"<!-- review-failure: agent2 at 2026-01-02T00:00:00Z — fail 2 -->\n" +
 		"<!-- review-failure: agent3 at 2026-01-03T00:00:00Z — fail 3 -->\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"), []byte(content), 0o644)
+	if err := taskstate.Update(tasksDir, "exhausted.md", func(state *taskstate.TaskState) {
+		state.LastOutcome = "review-launched"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
 		candidates := reviewCandidates(tasksDir, nil)
@@ -423,6 +431,13 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget(t *testing.T) {
 	// Task should be moved to failed/.
 	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); err != nil {
 		t.Fatal("exhausted task should be moved to failed/")
+	}
+	state, err := taskstate.Load(tasksDir, "exhausted.md")
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should be deleted for exhausted review task, got %+v", state)
 	}
 }
 
@@ -559,6 +574,53 @@ func TestPostReviewAction_VerdictFileCleanedUpOnAllPaths(t *testing.T) {
 				t.Fatalf("verdict file should be cleaned up after processing %s verdict", tt.name)
 			}
 		})
+	}
+}
+
+func TestBuildReviewContext_TruncatesPreviousRejection(t *testing.T) {
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task"}
+	longReason := strings.Repeat("x", maxReviewContextReasonLen+50)
+	contextBlock := buildReviewContext(task, "abc123", nil, longReason)
+	if !strings.Contains(contextBlock, "... [truncated]") {
+		t.Fatalf("expected truncated rejection marker in context:\n%s", contextBlock)
+	}
+}
+
+func TestPostReviewAction_ErrorVerdictRecordsTaskState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	taskFile := "error.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	os.WriteFile(reviewPath, []byte("# Task\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json"), []byte(`{"verdict":"error","reason":"boom"}`), 0o644)
+	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/error", Title: "Error", TaskPath: reviewPath})
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "review-error" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=review-error", state)
+	}
+}
+
+func TestPostReviewAction_MalformedVerdictRecordsIncompleteTaskState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	taskFile := "malformed.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	os.WriteFile(reviewPath, []byte("# Task\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json"), []byte(`{bad json`), 0o644)
+	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/malformed", Title: "Malformed", TaskPath: reviewPath})
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "review-incomplete" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=review-incomplete", state)
 	}
 }
 
@@ -791,7 +853,7 @@ func TestVerifyReviewBranch_BranchExists(t *testing.T) {
 	}
 	os.WriteFile(task.TaskPath, []byte("# Feature X\n"), 0o644)
 
-	result := VerifyReviewBranch(repoDir, task, "agent-test")
+	result := VerifyReviewBranch(repoDir, t.TempDir(), task, "agent-test")
 	if !result {
 		t.Fatal("expected VerifyReviewBranch to return true for existing branch")
 	}
@@ -818,7 +880,7 @@ func TestVerifyReviewBranch_BranchMissing(t *testing.T) {
 	}
 
 	_, stderr := captureStdoutStderr(t, func() {
-		result := VerifyReviewBranch(repoDir, task, "agent-test")
+		result := VerifyReviewBranch(repoDir, taskDir, task, "agent-test")
 		if result {
 			t.Fatal("expected VerifyReviewBranch to return false for missing branch")
 		}
@@ -835,6 +897,16 @@ func TestVerifyReviewBranch_BranchMissing(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "not found in host repo") {
 		t.Fatal("review-failure should mention branch not found")
+	}
+	state, err := taskstate.Load(taskDir, task.Filename)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("missing branch should record taskstate")
+	}
+	if state.LastOutcome != "review-branch-missing" {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-branch-missing")
 	}
 }
 
@@ -922,5 +994,253 @@ func TestRunReview_UsesReviewModelAndReasoningEffort(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--reasoning-effort xhigh") {
 		t.Fatalf("expected review reasoning effort in docker args, got %s", joined)
+	}
+}
+
+func TestBuildReviewContext_InitialReview(t *testing.T) {
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task"}
+	contextBlock := buildReviewContext(task, "abc123", nil, "")
+	if !strings.Contains(contextBlock, "- current branch tip: abc123") {
+		t.Fatalf("current tip missing from context:\n%s", contextBlock)
+	}
+	if !strings.Contains(contextBlock, "- last reviewed branch tip: none") {
+		t.Fatalf("initial context should include neutral last-reviewed value:\n%s", contextBlock)
+	}
+	if !strings.Contains(contextBlock, "- previous rejection: none") {
+		t.Fatalf("initial context should include neutral rejection value:\n%s", contextBlock)
+	}
+	if !strings.Contains(contextBlock, "initial review; assess the current diff independently") {
+		t.Fatalf("initial review mode missing from context:\n%s", contextBlock)
+	}
+}
+
+func TestBuildReviewContext_FollowUpReview(t *testing.T) {
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task"}
+	state := &taskstate.TaskState{LastReviewedSHA: "def456"}
+	contextBlock := buildReviewContext(task, "abc123", state, "missing unit tests")
+	if !strings.Contains(contextBlock, "- last reviewed branch tip: def456") {
+		t.Fatalf("follow-up context should include prior review SHA:\n%s", contextBlock)
+	}
+	if !strings.Contains(contextBlock, "- previous rejection: missing unit tests") {
+		t.Fatalf("follow-up context should include previous rejection:\n%s", contextBlock)
+	}
+	if !strings.Contains(contextBlock, "follow-up review; reassess the current diff independently") {
+		t.Fatalf("follow-up review mode missing from context:\n%s", contextBlock)
+	}
+}
+
+func TestBuildReviewContext_TruncatesPreviousRejectionAtRuneBoundary(t *testing.T) {
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task"}
+	longReason := strings.Repeat("界", maxReviewContextReasonLen+10)
+	contextBlock := buildReviewContext(task, "abc123", nil, longReason)
+	if !utf8.ValidString(contextBlock) {
+		t.Fatalf("context should remain valid UTF-8, got %q", contextBlock)
+	}
+	if !strings.Contains(contextBlock, "... [truncated]") {
+		t.Fatalf("expected truncation marker in context:\n%s", contextBlock)
+	}
+}
+
+func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	defer func() { execCommandContext = origExecCommandContext }()
+
+	var capturedArgs []string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		return cmd
+	}
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskPath := filepath.Join(tasksDir, queue.DirReadyReview, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — missing tests -->\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/task"); err != nil {
+		t.Fatalf("create review branch: %v", err)
+	}
+	currentTip, err := git.Output(repoRoot, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	currentTip = strings.TrimSpace(currentTip)
+	if err := taskstate.Update(tasksDir, "task.md", func(state *taskstate.TaskState) {
+		state.LastReviewedSHA = "older-sha"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	env := envConfig{
+		workdir:                    "/workspace",
+		repoRoot:                   repoRoot,
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: true,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
+	}
+	run := runContext{timeout: time.Second}
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
+
+	if err := runReview(context.Background(), env, run, task, "main"); err != nil {
+		t.Fatalf("runReview: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "Review context:") {
+		t.Fatalf("docker args should contain review context prompt, got %s", joined)
+	}
+	if !strings.Contains(joined, "- current branch tip: "+currentTip) {
+		t.Fatalf("prompt should include current tip, got %s", joined)
+	}
+	if !strings.Contains(joined, "- last reviewed branch tip: older-sha") {
+		t.Fatalf("prompt should include previous reviewed SHA, got %s", joined)
+	}
+	if !strings.Contains(joined, "- previous rejection: missing tests") {
+		t.Fatalf("prompt should include previous rejection, got %s", joined)
+	}
+	state, err := taskstate.Load(tasksDir, "task.md")
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state.LastReviewedSHA != currentTip {
+		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, currentTip)
+	}
+	if state.LastOutcome != "review-launched" {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-launched")
+	}
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	if err != nil {
+		t.Fatalf("Load review session: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected review session to be created")
+	}
+	if !strings.Contains(joined, "--resume="+session.CopilotSessionID) {
+		t.Fatalf("docker args should contain review resume session, got %s", joined)
+	}
+}
+
+func TestRunReview_DisabledResumeSkipsSessionCreation(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	defer func() { execCommandContext = origExecCommandContext }()
+
+	var capturedArgs []string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		return cmd
+	}
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskPath := filepath.Join(tasksDir, queue.DirReadyReview, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/task"); err != nil {
+		t.Fatalf("create review branch: %v", err)
+	}
+
+	env := envConfig{
+		workdir:                    "/workspace",
+		repoRoot:                   repoRoot,
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: false,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
+	}
+	run := runContext{timeout: time.Second}
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
+
+	if err := runReview(context.Background(), env, run, task, "main"); err != nil {
+		t.Fatalf("runReview: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if strings.Contains(joined, "--resume=") {
+		t.Fatalf("docker args should not contain review resume session, got %s", joined)
+	}
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	if err != nil {
+		t.Fatalf("Load review session: %v", err)
+	}
+	if session != nil {
+		t.Fatalf("expected no review session when disabled, got %+v", session)
+	}
+}
+
+func TestRunReview_CloneFailureDoesNotCreateReviewSessionOrLaunchState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", sub, err)
+		}
+	}
+	taskPath := filepath.Join(tasksDir, queue.DirReadyReview, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+
+	env := envConfig{
+		workdir:                    "/workspace",
+		repoRoot:                   filepath.Join(t.TempDir(), "missing-repo"),
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: true,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
+	}
+	run := runContext{timeout: time.Second}
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
+
+	err := runReview(context.Background(), env, run, task, "main")
+	if err == nil {
+		t.Fatal("expected runReview error")
+	}
+	if !strings.Contains(err.Error(), "create clone for review") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	state, err := taskstate.Load(tasksDir, "task.md")
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should not be created on clone failure, got %+v", state)
+	}
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	if err != nil {
+		t.Fatalf("Load review session: %v", err)
+	}
+	if session != nil {
+		t.Fatalf("review session should not be created on clone failure, got %+v", session)
+	}
+}
+
+func TestLoadTaskStateForReview_CorruptFallsBackToNil(t *testing.T) {
+	tasksDir := t.TempDir()
+	path := filepath.Join(tasksDir, "runtime", "taskstate", "task.md.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{bad json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, stderr := captureStdoutStderr(t, func() {
+		state := loadTaskStateForReview(tasksDir, "task.md")
+		if state != nil {
+			t.Fatalf("loadTaskStateForReview returned %+v, want nil", state)
+		}
+	})
+	if !strings.Contains(stderr, "could not load taskstate") {
+		t.Fatalf("expected corrupt taskstate warning, got:\n%s", stderr)
 	}
 }
