@@ -284,6 +284,101 @@ func TestExtractReviewRejections(t *testing.T) {
 	}
 }
 
+func TestParseFailureMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want []MarkerRecord
+	}{
+		{
+			name: "parses em dash and error formats",
+			data: strings.Join([]string{
+				"<!-- failure: agent-a at 2026-01-01T00:00:00Z — tests failed -->",
+				"<!-- failure: agent-b at 2026-01-01T00:01:00Z step=WORK error=build_failed -->",
+			}, "\n"),
+			want: []MarkerRecord{
+				{Timestamp: mustRFC3339(t, "2026-01-01T00:00:00Z"), AgentID: "agent-a", Reason: "tests failed"},
+				{Timestamp: mustRFC3339(t, "2026-01-01T00:01:00Z"), AgentID: "agent-b", Reason: "build_failed"},
+			},
+		},
+		{
+			name: "ignores prose fenced code and malformed markers",
+			data: strings.Join([]string{
+				"Mention `<!-- failure: prose at 2026-01-01T00:00:00Z — nope -->` in docs.",
+				"```",
+				"<!-- failure: fenced at 2026-01-01T00:00:00Z — nope -->",
+				"```",
+				"<!-- failure: broken at 2026-01-01T00:00:00Z -->",
+				"<!-- failure: broken-step at 2026-01-01T00:01:00Z step=WORK -->",
+				"<!-- failure: broken-text at 2026-01-01T00:01:30Z missing reason format -->",
+				"<!-- failure: agent-real at 2026-01-01T00:02:00Z step=WORK error=real -->",
+			}, "\n"),
+			want: []MarkerRecord{{Timestamp: mustRFC3339(t, "2026-01-01T00:02:00Z"), AgentID: "agent-real", Reason: "real"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFailureMarkers([]byte(tt.data))
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d (%v)", len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if !got[i].Timestamp.Equal(tt.want[i].Timestamp) || got[i].AgentID != tt.want[i].AgentID || got[i].Reason != tt.want[i].Reason {
+					t.Fatalf("record[%d] = %#v, want %#v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParseReviewRejectionMarkers(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want []MarkerRecord
+	}{
+		{
+			name: "parses em dash and historical reason formats",
+			data: strings.Join([]string{
+				"<!-- review-rejection: reviewer-a at 2026-01-01T00:00:00Z — missing integration coverage -->",
+				"<!-- review-rejection: reviewer-b at 2026-01-01T00:01:00Z reason=missing_tests -->",
+			}, "\n"),
+			want: []MarkerRecord{
+				{Timestamp: mustRFC3339(t, "2026-01-01T00:00:00Z"), AgentID: "reviewer-a", Reason: "missing integration coverage"},
+				{Timestamp: mustRFC3339(t, "2026-01-01T00:01:00Z"), AgentID: "reviewer-b", Reason: "missing_tests"},
+			},
+		},
+		{
+			name: "ignores prose fenced code and malformed markers",
+			data: strings.Join([]string{
+				"See <!-- review-rejection: prose at 2026-01-01T00:00:00Z — nope --> for details.",
+				"~~~",
+				"<!-- review-rejection: fenced at 2026-01-01T00:00:00Z — nope -->",
+				"~~~",
+				"<!-- review-rejection: broken at 2026-01-01T00:00:00Z -->",
+				"<!-- review-rejection: broken-text at 2026-01-01T00:01:00Z missing dash -->",
+				"<!-- review-rejection: reviewer-real at 2026-01-01T00:02:00Z — real reason -->",
+			}, "\n"),
+			want: []MarkerRecord{{Timestamp: mustRFC3339(t, "2026-01-01T00:02:00Z"), AgentID: "reviewer-real", Reason: "real reason"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseReviewRejectionMarkers([]byte(tt.data))
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d (%v)", len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if !got[i].Timestamp.Equal(tt.want[i].Timestamp) || got[i].AgentID != tt.want[i].AgentID || got[i].Reason != tt.want[i].Reason {
+					t.Fatalf("record[%d] = %#v, want %#v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestContainsFailureFrom(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -339,6 +434,7 @@ func TestLastReviewRejectionReason(t *testing.T) {
 		{"none", "# Task\nNo rejections.", ""},
 		{"single", "<!-- review-rejection: a at T — missing tests -->", "missing tests"},
 		{"multiple returns last", "<!-- review-rejection: a at T1 — first -->\n<!-- review-rejection: b at T2 — second -->", "second"},
+		{"historical reason format", "<!-- review-rejection: a at 2026-01-01T00:00:00Z reason=missing_tests -->", "missing_tests"},
 		{"ignores malformed", "<!-- review-rejection: a at T -->", ""},
 		{"ignores fenced code", "```\n<!-- review-rejection: a at T — fenced -->\n```\n<!-- review-rejection: b at T — real -->", "real"},
 		{"empty", "", ""},
@@ -351,6 +447,15 @@ func TestLastReviewRejectionReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustRFC3339(t *testing.T, value string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("time.Parse(%q): %v", value, err)
+	}
+	return ts
 }
 
 func TestWriteBranchComment(t *testing.T) {

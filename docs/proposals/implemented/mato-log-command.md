@@ -1,4 +1,8 @@
-# Proposal: `mato log`
+ # Proposal: `mato log`
+
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for
+> the current implementation.
 
 ## 1. Goal
 
