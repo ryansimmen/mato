@@ -78,6 +78,11 @@ func loadMergeCandidates(dir, tasksDir string, activeBranches map[string]struct{
 		return nil, err
 	}
 
+	reservedBranches := make(map[string]struct{}, len(activeBranches)+len(names))
+	for branch := range activeBranches {
+		reservedBranches[branch] = struct{}{}
+	}
+
 	tasks := make([]mergeQueueTask, 0, len(names))
 	for _, name := range names {
 		path := filepath.Join(dir, name)
@@ -93,10 +98,11 @@ func loadMergeCandidates(dir, tasksDir string, activeBranches map[string]struct{
 		taskBranch := taskfile.ParseBranch(path)
 		if taskBranch == "" {
 			taskBranch = "task/" + frontmatter.SanitizeBranchName(name)
-			if _, taken := activeBranches[taskBranch]; taken {
+			if _, taken := reservedBranches[taskBranch]; taken {
 				taskBranch = taskBranch + "-" + frontmatter.BranchDisambiguator(name)
 			}
 		}
+		reservedBranches[taskBranch] = struct{}{}
 
 		tasks = append(tasks, mergeQueueTask{
 			name:     name,

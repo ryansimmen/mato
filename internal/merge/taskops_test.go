@@ -344,19 +344,25 @@ func TestMergeFailureDestination(t *testing.T) {
 	}
 }
 
-func TestShouldFailTask(t *testing.T) {
+func TestShouldFailTaskAfterNextFailure(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
 		want    bool
 	}{
 		{
-			name:    "below max retries",
+			name:    "below max retries before next failure",
 			content: "---\nmax_retries: 3\n---\n# Task\n<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=x -->\n",
 			want:    false,
 		},
 		{
-			name: "at max retries",
+			name: "next failure exhausts retries",
+			content: "---\nmax_retries: 2\n---\n# Task\n" +
+				"<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=x -->\n",
+			want: true,
+		},
+		{
+			name: "already at max retries",
 			content: "---\nmax_retries: 2\n---\n# Task\n" +
 				"<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=x -->\n" +
 				"<!-- failure: b at 2026-01-02T00:00:00Z step=WORK error=y -->\n",
@@ -384,9 +390,9 @@ func TestShouldFailTask(t *testing.T) {
 				t.Fatalf("WriteFile: %v", err)
 			}
 
-			got := shouldFailTask(path)
+			got := shouldFailTaskAfterNextFailure(path)
 			if got != tt.want {
-				t.Errorf("shouldFailTask() = %v, want %v", got, tt.want)
+				t.Errorf("shouldFailTaskAfterNextFailure() = %v, want %v", got, tt.want)
 			}
 		})
 	}

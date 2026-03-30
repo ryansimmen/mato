@@ -17,6 +17,7 @@ import (
 	"mato/internal/identity"
 	"mato/internal/lockfile"
 	"mato/internal/taskfile"
+	"mato/internal/taskstate"
 )
 
 // ParseClaimedBy extracts the agent ID from a task file's claimed-by metadata.
@@ -87,6 +88,13 @@ func RecoverOrphanedTasks(tasksDir string) {
 			continue
 		}
 
+		if recovered, err := recoverPushedTaskToReadyReview(tasksDir, name, src); recovered {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not recover pushed task %s to ready-for-review: %v\n", name, err)
+			}
+			continue
+		}
+
 		dst := filepath.Join(tasksDir, DirBacklog, name)
 		if err := AtomicMove(src, dst); err != nil {
 			if !errors.Is(err, ErrDestinationExists) {
@@ -114,6 +122,40 @@ func RecoverOrphanedTasks(tasksDir string) {
 
 		fmt.Fprintf(os.Stderr, "Recovered orphaned task %s back to backlog\n", name)
 	}
+}
+
+func recoverPushedTaskToReadyReview(tasksDir, name, src string) (bool, error) {
+	state, err := taskstate.Load(tasksDir, name)
+	if err != nil {
+		return false, fmt.Errorf("load taskstate: %w", err)
+	}
+	if state == nil || state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
+		return false, nil
+	}
+
+	branch := strings.TrimSpace(state.TaskBranch)
+	if branch == "" {
+		return true, fmt.Errorf("taskstate for %s is missing task branch", name)
+	}
+
+	dst := filepath.Join(tasksDir, DirReadyReview, name)
+	if err := AtomicMove(src, dst); err != nil {
+		return true, fmt.Errorf("move task to ready-for-review: %w", err)
+	}
+	if err := WriteBranchMarker(dst, branch); err != nil {
+		if rollbackErr := AtomicMove(dst, src); rollbackErr != nil {
+			return true, fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", dst, err, rollbackErr)
+		}
+		return true, fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", dst, err)
+	}
+	if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+		state.TaskBranch = branch
+		state.LastOutcome = "work-pushed"
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not record recovered pushed taskstate for %s: %v\n", name, err)
+	}
+	fmt.Fprintf(os.Stderr, "Recovered pushed task %s to ready-for-review\n", name)
+	return true, nil
 }
 
 // resolveOrphanCollision handles the case where an orphan in in-progress/
@@ -221,11 +263,7 @@ func AtomicMove(src, dst string) error {
 		}
 		return fmt.Errorf("atomic move %s → %s: link: %w", src, dst, err)
 	}
-	if err := removeFn(src); err != nil {
-		// The move is logically complete (dst exists), so warn but don't fail.
-		fmt.Fprintf(os.Stderr, "warning: could not remove source %s after linking to %s: %v\n", src, dst, err)
-	}
-	return nil
+	return finalizeAtomicMove(src, dst, "linking")
 }
 
 // crossDeviceMove handles the EXDEV case where src and dst are on different
@@ -252,8 +290,16 @@ func crossDeviceMove(src, dst string) error {
 		removeFn(dst)
 		return fmt.Errorf("atomic move %s → %s: close destination: %w", src, dst, err)
 	}
+	return finalizeAtomicMove(src, dst, "copying")
+}
+
+func finalizeAtomicMove(src, dst, mode string) error {
 	if err := removeFn(src); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not remove source %s after copying to %s: %v\n", src, dst, err)
+		cleanupErr := removeFn(dst)
+		if cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+			return fmt.Errorf("atomic move %s → %s: remove source after %s: %w (also failed to remove destination during rollback: %v)", src, dst, mode, err, cleanupErr)
+		}
+		return fmt.Errorf("atomic move %s → %s: remove source after %s: %w", src, dst, mode, err)
 	}
 	return nil
 }

@@ -205,8 +205,8 @@ func TestCancelTask_MoveLeavesDuplicateCopies(t *testing.T) {
 	defer func() { removeFn = origRemove }()
 
 	_, err := CancelTask(tasksDir, "task")
-	if err == nil || !strings.Contains(err.Error(), "duplicate task copies") {
-		t.Fatalf("err = %v, want duplicate-copy error", err)
+	if err == nil || !strings.Contains(err.Error(), "remove source after linking") {
+		t.Fatalf("err = %v, want source-removal error", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(tasksDir, DirBacklog, "task.md")); statErr != nil {
 		t.Fatalf("source task should remain after duplicate-copy detection: %v", statErr)
