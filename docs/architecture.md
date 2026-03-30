@@ -47,7 +47,8 @@ High-level flow:
 8. Ensure `/.mato/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
 9. Resolve host tools and runtime dependencies: `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity. Docker image, task model, review model, task reasoning effort, review reasoning effort, agent timeout, and retry cooldown are already resolved in `cmd/mato/main.go`.
 10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.mato`, the configured target branch, and `/workspace/.mato/messages`. Review launches also interpolate a host-written review-context block describing the task branch, current branch tip, prior reviewed tip (if known), and prior rejection reason (if known).
-11. Install `SIGINT`/`SIGTERM` handlers.
+11. Prepare durable Copilot session metadata under `.mato/runtime/sessionmeta/`. Work runs always load or create a `work-<task>.json` record and pass `copilot --resume=<session-id>`. Review runs do the same for `review-<task>.json` when `review_session_resume_enabled` is true (default true, configurable via `.mato.yaml` or `MATO_REVIEW_SESSION_RESUME_ENABLED=false`). If Copilot rejects a stored resume ID, `mato` resets that phase's session record and retries once with a fresh generated session ID.
+12. Install `SIGINT`/`SIGTERM` handlers.
 
 ### Explicit initialization path
 `mato init` uses `setup.InitRepo(repoRoot, branch)` for lightweight repository bootstrap without Docker. This path intentionally stays separate from `runner.Run(...)` so the runtime Docker gate and existing runner ordering do not change. `setup.InitRepo(...)` composes shared helpers such as `git.EnsureBranch(...)`, `git.EnsureIdentity(...)`, `git.EnsureGitignoreContains(...)`, and `messaging.Init(...)` to:
@@ -69,6 +70,7 @@ queue.CleanStaleReviewLocks(tasksDir)
 messaging.CleanStalePresence(tasksDir)
 messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 taskstate.Sweep(tasksDir)
+sessionmeta.Sweep(tasksDir)
 
 idx := queue.BuildIndex(tasksDir)          // build poll index once
 queue.ReconcileReadyQueue(tasksDir, idx)
@@ -103,6 +105,7 @@ Important details from the implementation:
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
 - Lightweight runtime metadata lives under `.mato/runtime/taskstate/<task-filename>.json`. Work pushes and review launches/completions update this file best-effort so follow-up reviews can carry explicit host-curated context even before durable Copilot session resume exists.
+- Durable Copilot resume metadata lives under `.mato/runtime/sessionmeta/work-<task-filename>.json` and `.mato/runtime/sessionmeta/review-<task-filename>.json`. Work and review sessions are intentionally separate. Terminal task transitions delete both taskstate and sessionmeta; `pollCleanup()` also sweeps stale runtime files whose task is no longer active.
 - Pause mode is controlled by `.mato/.paused`, which stores the UTC RFC3339 time
   when the repo was paused. While present, the host skips new claims and review
   launches but continues merge processing.
@@ -158,9 +161,9 @@ Environment variables injected by the host:
 - `MATO_DEPENDENCY_CONTEXT=<file path>` (conditionally, only when the task has `depends_on` entries with available completion data; points to `/workspace/.mato/messages/dependency-context-<filename>.json`)
 The final command is:
 ```text
-copilot -p <embedded task prompt> --autopilot --allow-all --model <run.model> --reasoning-effort <run.reasoningEffort>
+copilot [--resume=<session-id>] -p <embedded task prompt> --autopilot --allow-all --model <run.model> --reasoning-effort <run.reasoningEffort>
 ```
-`buildDockerArgs(...)` always appends `--model <run.model>` and `--reasoning-effort <run.reasoningEffort>` using the fully resolved values from `RunOptions`.
+`buildDockerArgs(...)` always appends `--model <run.model>` and `--reasoning-effort <run.reasoningEffort>` using the fully resolved values from `RunOptions`, and appends `--resume=<session-id>` only when the host has a durable session record for that phase.
 ### Host-side task claiming
 Before launching a Docker container, the host derives ordered candidates from `ComputeRunnableBacklogView()` and calls `queue.SelectAndClaimTask(tasksDir, agentID, candidates, cooldown, idx)`, which:
 1. Iterates the caller-provided candidate filenames in order.
@@ -187,7 +190,7 @@ State-by-state behavior:
 - `COMMIT`: `git add -A`, commit with the task title, and exit. The host detects commits and handles push + review transition.
 - `ON_FAILURE`: append a structured `<!-- failure: ... -->` record, try to check out the target branch, then always move the task back to `backlog/`. The host checks the failure record budget on the next cycle via `SelectAndClaimTask`.
 
-After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, updates `.mato/runtime/taskstate/<task-filename>.json` with the pushed branch tip and outcome, and sends `conflict-warning` and `completion` messages.
+After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, updates `.mato/runtime/taskstate/<task-filename>.json` with the pushed branch tip and outcome, updates the `work` session's `last_head_sha`, and sends `conflict-warning` and `completion` messages.
 
 The prompt enforces several invariants: one task per run; agents never push any branches (the host handles all pushes); they send at most 4 messages per task (3 `progress` + 1 for `ON_FAILURE`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States

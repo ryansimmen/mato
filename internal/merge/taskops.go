@@ -11,6 +11,7 @@ import (
 	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/queue"
+	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
 )
@@ -23,9 +24,7 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 		return err
 	}
 	if filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirFailed) {
-		if err := taskstate.Delete(tasksDir, task.name); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", task.name, err)
-		}
+		runtimecleanup.DeleteAll(tasksDir, task.name)
 	}
 	if errors.Is(mergeErr, errSquashMergeConflict) && filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirBacklog) {
 		cleanupTaskBranch(repoRoot, taskBranchName(task))
@@ -41,7 +40,6 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 	}
 	return nil
 }
-
 func mergeFailureDestination(tasksDir, taskPath, taskName string) string {
 	dir := queue.DirBacklog
 	if shouldFailTask(taskPath) {

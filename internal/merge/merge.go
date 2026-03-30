@@ -15,8 +15,8 @@ import (
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 )
 
 type mergeQueueTask struct {
@@ -134,15 +134,17 @@ func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask
 				if _, statErr := os.Stat(completedPath); statErr == nil {
 					if removeErr := os.Remove(task.path); removeErr != nil {
 						fmt.Fprintf(os.Stderr, "warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
+					} else {
+						runtimecleanup.DeleteAll(tasksDir, task.name)
+						cleanupTaskBranch(repoRoot, taskBranchName(task))
+						merged++
 					}
 				} else {
 					fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
 				}
 				continue
 			}
-			if err := taskstate.Delete(tasksDir, task.name); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", task.name, err)
-			}
+			runtimecleanup.DeleteAll(tasksDir, task.name)
 			cleanupTaskBranch(repoRoot, taskBranchName(task))
 			merged++
 			continue
@@ -192,9 +194,7 @@ func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask
 			bookkeepingComplete = true
 		}
 		if bookkeepingComplete {
-			if err := taskstate.Delete(tasksDir, task.name); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", task.name, err)
-			}
+			runtimecleanup.DeleteAll(tasksDir, task.name)
 			cleanupTaskBranch(repoRoot, taskBranchName(task))
 		}
 		merged++

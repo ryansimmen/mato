@@ -4,10 +4,12 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,6 +28,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
+	"mato/internal/sessionmeta"
 	"mato/internal/taskstate"
 )
 
@@ -102,13 +105,14 @@ type idleHeartbeat struct {
 // DockerImage, AgentTimeout, and RetryCooldown may be left zero to use
 // downstream defaults.
 type RunOptions struct {
-	DockerImage           string
-	TaskModel             string
-	ReviewModel           string
-	TaskReasoningEffort   string
-	ReviewReasoningEffort string
-	AgentTimeout          time.Duration
-	RetryCooldown         time.Duration
+	DockerImage                string
+	TaskModel                  string
+	ReviewModel                string
+	ReviewSessionResumeEnabled bool
+	TaskReasoningEffort        string
+	ReviewReasoningEffort      string
+	AgentTimeout               time.Duration
+	RetryCooldown              time.Duration
 }
 
 func normalizeAndValidateRunOptions(opts RunOptions) (RunOptions, error) {
@@ -312,6 +316,7 @@ func DryRun(repoRoot, branch string, opts RunOptions) error {
 	fmt.Println("\n=== Resolved Settings ===")
 	fmt.Printf("  %-24s %s\n", "task model:", opts.TaskModel)
 	fmt.Printf("  %-24s %s\n", "review model:", opts.ReviewModel)
+	fmt.Printf("  %-24s %t\n", "review session resume:", opts.ReviewSessionResumeEnabled)
 	fmt.Printf("  %-24s %s\n", "task reasoning effort:", opts.TaskReasoningEffort)
 	fmt.Printf("  %-24s %s\n", "review reasoning effort:", opts.ReviewReasoningEffort)
 
@@ -587,31 +592,32 @@ func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, git
 	prompt = strings.ReplaceAll(prompt, "MESSAGES_DIR_PLACEHOLDER", workdir+"/"+dirs.Root+"/messages")
 
 	env := envConfig{
-		image:                 image,
-		workdir:               workdir,
-		copilotPath:           tools.copilotPath,
-		gitPath:               tools.gitPath,
-		gitUploadPackPath:     tools.gitUploadPackPath,
-		gitReceivePackPath:    tools.gitReceivePackPath,
-		ghPath:                tools.ghPath,
-		goRoot:                tools.goRoot,
-		copilotConfigDir:      tools.copilotConfigDir,
-		copilotCacheDir:       tools.copilotCacheDir,
-		gitName:               gitName,
-		gitEmail:              gitEmail,
-		homeDir:               tools.homeDir,
-		ghConfigDir:           tools.ghConfigDir,
-		hasGhConfig:           tools.hasGhConfig,
-		gitTemplatesDir:       tools.gitTemplatesDir,
-		hasGitTemplates:       tools.hasGitTemplates,
-		systemCertsDir:        tools.systemCertsDir,
-		hasSystemCerts:        tools.hasSystemCerts,
-		repoRoot:              repoRoot,
-		tasksDir:              tasksDir,
-		targetBranch:          branch,
-		reviewModel:           opts.ReviewModel,
-		reviewReasoningEffort: opts.ReviewReasoningEffort,
-		isTTY:                 isTerminal(os.Stdin),
+		image:                      image,
+		workdir:                    workdir,
+		copilotPath:                tools.copilotPath,
+		gitPath:                    tools.gitPath,
+		gitUploadPackPath:          tools.gitUploadPackPath,
+		gitReceivePackPath:         tools.gitReceivePackPath,
+		ghPath:                     tools.ghPath,
+		goRoot:                     tools.goRoot,
+		copilotConfigDir:           tools.copilotConfigDir,
+		copilotCacheDir:            tools.copilotCacheDir,
+		gitName:                    gitName,
+		gitEmail:                   gitEmail,
+		homeDir:                    tools.homeDir,
+		ghConfigDir:                tools.ghConfigDir,
+		hasGhConfig:                tools.hasGhConfig,
+		gitTemplatesDir:            tools.gitTemplatesDir,
+		hasGitTemplates:            tools.hasGitTemplates,
+		systemCertsDir:             tools.systemCertsDir,
+		hasSystemCerts:             tools.hasSystemCerts,
+		repoRoot:                   repoRoot,
+		tasksDir:                   tasksDir,
+		targetBranch:               branch,
+		reviewModel:                opts.ReviewModel,
+		reviewReasoningEffort:      opts.ReviewReasoningEffort,
+		reviewSessionResumeEnabled: opts.ReviewSessionResumeEnabled,
+		isTTY:                      isTerminal(os.Stdin),
 	}
 
 	run := runContext{
@@ -672,6 +678,9 @@ func pollCleanup(tasksDir string) {
 	messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 	if err := taskstate.Sweep(tasksDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not clean stale taskstate: %v\n", err)
+	}
+	if err := sessionmeta.Sweep(tasksDir); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not clean stale sessionmeta: %v\n", err)
 	}
 }
 
@@ -1003,4 +1012,93 @@ func recordTaskStateUpdate(tasksDir, filename, action string, fn func(*taskstate
 	if err := taskstate.Update(tasksDir, filename, fn); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not %s for %s: %v\n", action, filename, err)
 	}
+}
+
+func recordSessionUpdate(tasksDir, kind, filename, action string, fn func(*sessionmeta.Session)) {
+	if err := sessionmeta.Update(tasksDir, kind, filename, fn); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not %s for %s: %v\n", action, filename, err)
+	}
+}
+
+func loadOrCreateSession(tasksDir, kind, filename, branch string) *sessionmeta.Session {
+	session, err := sessionmeta.LoadOrCreate(tasksDir, kind, filename, branch)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not prepare %s session for %s: %v\n", kind, filename, err)
+		return nil
+	}
+	return session
+}
+
+func resetSession(tasksDir, kind, filename, branch string) string {
+	session, err := sessionmeta.ResetSessionID(tasksDir, kind, filename, branch)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not reset %s session for %s: %v\n", kind, filename, err)
+		return ""
+	}
+	if session == nil {
+		return ""
+	}
+	return session.CopilotSessionID
+}
+
+func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extraEnvs []string, extraVolumes []string, label string, resetResumeSession func() string) error {
+	runAttempt := func(current runContext) (error, string) {
+		args := buildDockerArgs(env, current, extraEnvs, extraVolumes)
+		timeoutCtx, timeoutCancel := context.WithTimeout(ctx, current.timeout)
+		defer timeoutCancel()
+
+		cmd := execCommandContext(timeoutCtx, "docker", args...)
+		cmd.Cancel = func() error {
+			return cmd.Process.Signal(syscall.SIGTERM)
+		}
+		cmd.WaitDelay = gracefulShutdownDelay
+		cmd.Stdin = os.Stdin
+
+		var stdoutBuf bytes.Buffer
+		var stderrBuf bytes.Buffer
+		cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
+		cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+
+		err := cmd.Run()
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			fmt.Fprintf(os.Stderr, "error: %s timed out after %v\n", label, current.timeout)
+		} else if ctx.Err() != nil {
+			fmt.Fprintf(os.Stderr, "%s interrupted by signal\n", label)
+		}
+		return err, stdoutBuf.String() + "\n" + stderrBuf.String()
+	}
+
+	err, output := runAttempt(run)
+	if err == nil || strings.TrimSpace(run.resumeSessionID) == "" || resetResumeSession == nil || !resumeRejected(output) {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "warning: Copilot resume rejected; retrying with a fresh session\n")
+	if freshSessionID := strings.TrimSpace(resetResumeSession()); freshSessionID != "" && freshSessionID != run.resumeSessionID {
+		run.resumeSessionID = freshSessionID
+		freshErr, _ := runAttempt(run)
+		return freshErr
+	}
+	return err
+}
+
+func resumeRejected(output string) bool {
+	for _, rawLine := range strings.Split(output, "\n") {
+		line := strings.ToLower(strings.TrimSpace(rawLine))
+		if line == "" {
+			continue
+		}
+		if !strings.Contains(line, "resume") && !strings.Contains(line, "session") {
+			continue
+		}
+		if !strings.Contains(line, "error") && !strings.Contains(line, "failed") && !strings.Contains(line, "invalid") {
+			continue
+		}
+		for _, marker := range []string{"resume session", "--resume", "cannot resume", "failed to resume", "invalid session", "unknown session", "session not found", "resume rejected", "invalid value for '--resume'", "unknown option '--resume'"} {
+			if strings.Contains(line, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }

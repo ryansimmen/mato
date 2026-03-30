@@ -21,6 +21,7 @@ type Config struct {
 	DockerImage           *string `yaml:"docker_image"`
 	TaskModel             *string `yaml:"task_model"`
 	ReviewModel           *string `yaml:"review_model"`
+	ReviewSessionResume   *bool   `yaml:"review_session_resume_enabled"`
 	TaskReasoningEffort   *string `yaml:"task_reasoning_effort"`
 	ReviewReasoningEffort *string `yaml:"review_reasoning_effort"`
 	AgentTimeout          *string `yaml:"agent_timeout"`

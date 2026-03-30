@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"mato/internal/frontmatter"
+	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 )
 
 // appendCancelledRecordFn is the function used to append the cancelled marker.
@@ -52,9 +52,7 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		if err := appendCancelledRecordFn(match.Path); err != nil {
 			return CancelResult{}, fmt.Errorf("write cancelled marker to %s: %w", match.Path, err)
 		}
-		if err := taskstate.Delete(tasksDir, match.Filename); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", match.Filename, err)
-		}
+		runtimecleanup.DeleteAll(tasksDir, match.Filename)
 		return result, nil
 	}
 
@@ -76,13 +74,10 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		}
 		return CancelResult{}, fmt.Errorf("write cancelled marker to %s: %w (rolled back to %s/)", failedPath, err, match.State)
 	}
-	if err := taskstate.Delete(tasksDir, match.Filename); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", match.Filename, err)
-	}
+	runtimecleanup.DeleteAll(tasksDir, match.Filename)
 
 	return result, nil
 }
-
 func downstreamWarnings(tasksDir string, idx *PollIndex, match TaskMatch) []string {
 	stem := frontmatter.TaskFileStem(match.Filename)
 	taskID := stem

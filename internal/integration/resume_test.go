@@ -10,6 +10,7 @@ import (
 	"mato/internal/merge"
 	"mato/internal/queue"
 	"mato/internal/runner"
+	"mato/internal/sessionmeta"
 	"mato/internal/taskstate"
 	"mato/internal/testutil"
 )
@@ -148,5 +149,44 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 	}
 	if state != nil {
 		t.Fatalf("taskstate should be removed after merge, got %+v", state)
+	}
+}
+
+func TestTerminalCleanup_RemovesSessionMetadata(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskFile := "cleanup-sessionmeta.md"
+	branch := "task/cleanup-sessionmeta"
+	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, strings.Join([]string{
+		"<!-- branch: " + branch + " -->",
+		"# Cleanup Sessionmeta",
+		"Review and merge this task.",
+		"",
+	}, "\n"))
+	createTaskBranch(t, repoRoot, branch, map[string]string{"cleanup.txt": "hello\n"}, "cleanup sessionmeta")
+	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
+		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, taskFile, branch); err != nil {
+			t.Fatalf("seed %s session: %v", kind, err)
+		}
+	}
+
+	writeVerdict(t, tasksDir, taskFile, map[string]string{"verdict": "approve"})
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	runner.PostReviewAction(tasksDir, "review-host", &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   branch,
+		Title:    "Cleanup Sessionmeta",
+		TaskPath: reviewPath,
+	})
+	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
+	}
+	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
+		session, err := sessionmeta.Load(tasksDir, kind, taskFile)
+		if err != nil {
+			t.Fatalf("Load %s session after merge: %v", kind, err)
+		}
+		if session != nil {
+			t.Fatalf("%s session should be removed after merge, got %+v", kind, session)
+		}
 	}
 }

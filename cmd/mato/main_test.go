@@ -1976,11 +1976,12 @@ func TestResolveRunOptions(t *testing.T) {
 	stringPtr := func(v string) *string { return &v }
 
 	t.Run("uses config values when env unset", func(t *testing.T) {
-		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("gpt-5.4"), stringPtr("medium"), stringPtr("xhigh"), stringPtr("45m"), stringPtr("5m")))
+		resumeDisabled := false
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("gpt-5.4"), &resumeDisabled, stringPtr("medium"), stringPtr("xhigh"), stringPtr("45m"), stringPtr("5m")))
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
 	})
@@ -1988,7 +1989,7 @@ func TestResolveRunOptions(t *testing.T) {
 	t.Run("env overrides invalid config", func(t *testing.T) {
 		t.Setenv("MATO_AGENT_TIMEOUT", "1h")
 		t.Setenv("MATO_RETRY_COOLDOWN", "90s")
-		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, nil, nil, stringPtr("bad"), stringPtr("also-bad")))
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, nil, nil, nil, stringPtr("bad"), stringPtr("also-bad")))
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
@@ -1998,9 +1999,42 @@ func TestResolveRunOptions(t *testing.T) {
 	})
 
 	t.Run("invalid effective config errors", func(t *testing.T) {
-		_, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, nil, nil, stringPtr("bad"), nil))
+		_, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, nil, nil, nil, stringPtr("bad"), nil))
 		if err == nil {
 			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("review session resume defaults to enabled", func(t *testing.T) {
+		opts, err := resolveRunOptions(runFlags{}, configFixture(nil))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if !opts.ReviewSessionResumeEnabled {
+			t.Fatal("ReviewSessionResumeEnabled should default to true")
+		}
+	})
+
+	t.Run("review session resume env overrides config", func(t *testing.T) {
+		resumeEnabled := true
+		t.Setenv("MATO_REVIEW_SESSION_RESUME_ENABLED", "false")
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, &resumeEnabled, nil, nil, nil, nil))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.ReviewSessionResumeEnabled {
+			t.Fatal("ReviewSessionResumeEnabled should respect env override")
+		}
+	})
+
+	t.Run("invalid review session resume env errors", func(t *testing.T) {
+		t.Setenv("MATO_REVIEW_SESSION_RESUME_ENABLED", "maybe")
+		_, err := resolveRunOptions(runFlags{}, configFixture(nil))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "MATO_REVIEW_SESSION_RESUME_ENABLED") {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
@@ -2281,7 +2315,7 @@ func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
 	defer func() { runFn = origRunFn }()
 
 	runFn = func(_ string, _ string, opts runner.RunOptions) error {
-		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "high" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || !opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "high" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
 		return nil
@@ -2408,18 +2442,20 @@ func configFixture(branch *string) config.Config {
 
 func defaultResolvedRunOptions() runner.RunOptions {
 	return runner.RunOptions{
-		TaskModel:             runner.DefaultTaskModel,
-		ReviewModel:           runner.DefaultReviewModel,
-		TaskReasoningEffort:   runner.DefaultReasoningEffort,
-		ReviewReasoningEffort: runner.DefaultReasoningEffort,
+		TaskModel:                  runner.DefaultTaskModel,
+		ReviewModel:                runner.DefaultReviewModel,
+		ReviewSessionResumeEnabled: true,
+		TaskReasoningEffort:        runner.DefaultReasoningEffort,
+		ReviewReasoningEffort:      runner.DefaultReasoningEffort,
 	}
 }
 
-func configFixtureWithValues(dockerImage, taskModel, reviewModel, taskReasoningEffort, reviewReasoningEffort, agentTimeout, retryCooldown *string) config.Config {
+func configFixtureWithValues(dockerImage, taskModel, reviewModel *string, reviewSessionResume *bool, taskReasoningEffort, reviewReasoningEffort, agentTimeout, retryCooldown *string) config.Config {
 	return config.Config{
 		DockerImage:           dockerImage,
 		TaskModel:             taskModel,
 		ReviewModel:           reviewModel,
+		ReviewSessionResume:   reviewSessionResume,
 		TaskReasoningEffort:   taskReasoningEffort,
 		ReviewReasoningEffort: reviewReasoningEffort,
 		AgentTimeout:          agentTimeout,

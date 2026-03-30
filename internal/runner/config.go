@@ -84,6 +84,7 @@ type envConfig struct {
 	repoRoot, tasksDir                      string
 	targetBranch, reviewModel               string
 	reviewReasoningEffort                   string
+	reviewSessionResumeEnabled              bool
 	isTTY                                   bool
 }
 
@@ -96,6 +97,7 @@ type runContext struct {
 	agentID         string
 	model           string
 	reasoningEffort string
+	resumeSessionID string
 	timeout         time.Duration
 }
 
@@ -174,7 +176,13 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	args = append(args,
 		"-w", env.workdir,
 		env.image,
-		"copilot", "-p", run.prompt, "--autopilot", "--allow-all",
+		"copilot",
+	)
+	if sessionID := strings.TrimSpace(run.resumeSessionID); sessionID != "" {
+		args = append(args, "--resume="+sessionID)
+	}
+	args = append(args,
+		"-p", run.prompt, "--autopilot", "--allow-all",
 		"--model", run.model,
 		"--reasoning-effort", run.reasoningEffort,
 	)

@@ -71,10 +71,11 @@ func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 
 func testRunOptions() RunOptions {
 	return RunOptions{
-		TaskModel:             DefaultTaskModel,
-		ReviewModel:           DefaultReviewModel,
-		TaskReasoningEffort:   DefaultReasoningEffort,
-		ReviewReasoningEffort: DefaultReasoningEffort,
+		TaskModel:                  DefaultTaskModel,
+		ReviewModel:                DefaultReviewModel,
+		ReviewSessionResumeEnabled: true,
+		TaskReasoningEffort:        DefaultReasoningEffort,
+		ReviewReasoningEffort:      DefaultReasoningEffort,
 	}
 }
 
@@ -4159,10 +4160,11 @@ func TestRun_InvalidRepoPath(t *testing.T) {
 func TestNormalizeAndValidateRunOptions(t *testing.T) {
 	t.Run("trims valid values", func(t *testing.T) {
 		opts, err := normalizeAndValidateRunOptions(RunOptions{
-			TaskModel:             "  claude-opus-4.6  ",
-			ReviewModel:           "  gpt-5.4  ",
-			TaskReasoningEffort:   "  high  ",
-			ReviewReasoningEffort: "  medium  ",
+			TaskModel:                  "  claude-opus-4.6  ",
+			ReviewModel:                "  gpt-5.4  ",
+			ReviewSessionResumeEnabled: true,
+			TaskReasoningEffort:        "  high  ",
+			ReviewReasoningEffort:      "  medium  ",
 		})
 		if err != nil {
 			t.Fatalf("normalizeAndValidateRunOptions returned error: %v", err)
@@ -4188,27 +4190,27 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 	}{
 		{
 			name: "missing task model",
-			opts: RunOptions{ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
 			want: "task model must not be empty",
 		},
 		{
 			name: "missing review model",
-			opts: RunOptions{TaskModel: DefaultTaskModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
 			want: "review model must not be empty",
 		},
 		{
 			name: "missing task reasoning effort",
-			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, ReviewReasoningEffort: DefaultReasoningEffort},
 			want: "task reasoning effort must not be empty",
 		},
 		{
 			name: "missing review reasoning effort",
-			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort},
 			want: "review reasoning effort must not be empty",
 		},
 		{
 			name: "whitespace task model",
-			opts: RunOptions{TaskModel: "   ", ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: "   ", ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
 			want: "task model must not be empty",
 		},
 	}
@@ -4255,7 +4257,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	}
 
 	env, run := buildEnvAndRunContext("main", tools, "agent-123", "Test User", "test@test.com",
-		"/repo", "/repo/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: 45 * time.Minute})
+		"/repo", "/repo/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: 45 * time.Minute})
 
 	if env.image == "" {
 		t.Error("expected default docker image to be set")
@@ -4290,6 +4292,9 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	if env.reviewReasoningEffort != DefaultReasoningEffort {
 		t.Errorf("expected review reasoning effort %q, got %q", DefaultReasoningEffort, env.reviewReasoningEffort)
 	}
+	if !env.reviewSessionResumeEnabled {
+		t.Fatal("expected review session resume to be enabled")
+	}
 	if !strings.Contains(run.prompt, "main") {
 		t.Error("expected prompt to contain branch name")
 	}
@@ -4297,7 +4302,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 
 func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, DockerImage: "custom:latest", AgentTimeout: time.Hour})
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, DockerImage: "custom:latest", AgentTimeout: time.Hour})
 
 	if env.image != "custom:latest" {
 		t.Errorf("expected custom image %q, got %q", "custom:latest", env.image)
@@ -4306,7 +4311,7 @@ func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 
 func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour})
+	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", ReviewSessionResumeEnabled: false, TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour})
 
 	if run.model != "claude-sonnet-4" {
 		t.Fatalf("run.model = %q, want %q", run.model, "claude-sonnet-4")
@@ -4320,11 +4325,14 @@ func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	if env.reviewReasoningEffort != "xhigh" {
 		t.Fatalf("env.reviewReasoningEffort = %q, want %q", env.reviewReasoningEffort, "xhigh")
 	}
+	if env.reviewSessionResumeEnabled {
+		t.Fatal("expected review session resume to reflect RunOptions")
+	}
 }
 
 func TestBuildEnvAndRunContext_PromptPlaceholders(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: time.Hour})
+	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: time.Hour})
 
 	if strings.Contains(run.prompt, "TASKS_DIR_PLACEHOLDER") {
 		t.Error("prompt still contains TASKS_DIR_PLACEHOLDER")
@@ -4334,6 +4342,26 @@ func TestBuildEnvAndRunContext_PromptPlaceholders(t *testing.T) {
 	}
 	if strings.Contains(run.prompt, "MESSAGES_DIR_PLACEHOLDER") {
 		t.Error("prompt still contains MESSAGES_DIR_PLACEHOLDER")
+	}
+}
+
+func TestResumeRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{name: "copilot invalid resume flag", output: "error: invalid value for '--resume': session not found", want: true},
+		{name: "copilot failed to resume", output: "failed to resume session 123", want: true},
+		{name: "normal discussion text", output: "the review session discussed an invalid task state", want: false},
+		{name: "keywords across lines", output: "session\nnot found", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resumeRejected(tt.output); got != tt.want {
+				t.Fatalf("resumeRejected(%q) = %v, want %v", tt.output, got, tt.want)
+			}
+		})
 	}
 }
 

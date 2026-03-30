@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 
 	"mato/internal/frontmatter"
+	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 )
 
 // promotableTask describes a waiting task whose dependencies are satisfied.
@@ -260,9 +260,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 }
 
 func deleteTaskState(tasksDir, filename string) {
-	if err := taskstate.Delete(tasksDir, filename); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", filename, err)
-	}
+	runtimecleanup.DeleteAll(tasksDir, filename)
 }
 
 // CountPromotableWaitingTasks is a read-only variant of ReconcileReadyQueue.
