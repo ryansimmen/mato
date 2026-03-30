@@ -13,6 +13,13 @@ import (
 	"mato/internal/atomicwrite"
 )
 
+// MarkerRecord is a typed durable marker parsed from a task file.
+type MarkerRecord struct {
+	Timestamp time.Time
+	AgentID   string
+	Reason    string
+}
+
 func forEachTaskLine(content string, fn func(line, trimmed string, inFence bool) bool) {
 	inFence := false
 	for _, line := range strings.Split(content, "\n") {
@@ -237,6 +244,42 @@ func ExtractReviewRejections(data []byte) string {
 	return strings.Join(rejections, "\n")
 }
 
+// ParseFailureMarkers returns typed records for standalone
+// <!-- failure: ... --> markers outside code fences. Malformed markers are
+// skipped silently.
+func ParseFailureMarkers(data []byte) []MarkerRecord {
+	var records []MarkerRecord
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if !strings.HasPrefix(trimmed, failurePrefix) || strings.HasPrefix(trimmed, reviewFailureStr) {
+			return false
+		}
+		record, ok := parseMarkerRecord(trimmed, failurePrefix)
+		if ok {
+			records = append(records, record)
+		}
+		return false
+	})
+	return records
+}
+
+// ParseReviewRejectionMarkers returns typed records for standalone
+// <!-- review-rejection: ... --> markers outside code fences. Malformed
+// markers are skipped silently.
+func ParseReviewRejectionMarkers(data []byte) []MarkerRecord {
+	var records []MarkerRecord
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if !strings.HasPrefix(trimmed, reviewRejectionStr) {
+			return false
+		}
+		record, ok := parseMarkerRecord(trimmed, reviewRejectionStr)
+		if ok {
+			records = append(records, record)
+		}
+		return false
+	})
+	return records
+}
+
 // ContainsFailureFrom reports whether data contains a failure record written
 // by the given agent as a standalone line starting with
 // "<!-- failure: <agentID> ". Marker-like text in prose is ignored.
@@ -287,6 +330,38 @@ func LastReviewRejectionReason(data []byte) string {
 	return last
 }
 
+func parseMarkerRecord(line, prefix string) (MarkerRecord, bool) {
+	if !strings.HasSuffix(line, "-->") {
+		return MarkerRecord{}, false
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, prefix), "-->"))
+	agentID, rest, ok := strings.Cut(body, " at ")
+	if !ok {
+		return MarkerRecord{}, false
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return MarkerRecord{}, false
+	}
+	timestampToken, _, ok := strings.Cut(strings.TrimSpace(rest), " ")
+	if !ok {
+		timestampToken = strings.TrimSpace(rest)
+	}
+	timestamp, err := time.Parse(time.RFC3339, timestampToken)
+	if err != nil {
+		return MarkerRecord{}, false
+	}
+	reason := failureReasonFromLine(line)
+	if reason == "" {
+		return MarkerRecord{}, false
+	}
+	return MarkerRecord{
+		Timestamp: timestamp,
+		AgentID:   agentID,
+		Reason:    reason,
+	}, true
+}
+
 func failureReasonFromLine(line string) string {
 	if idx := strings.Index(line, "—"); idx >= 0 {
 		return trimCommentSuffix(line[idx+len("—"):])
@@ -297,6 +372,9 @@ func failureReasonFromLine(line string) string {
 			reason = reason[:metaIdx]
 		}
 		return strings.TrimSpace(reason)
+	}
+	if idx := strings.Index(line, "reason="); idx >= 0 {
+		return strings.TrimSpace(trimCommentSuffix(line[idx+len("reason="):]))
 	}
 	return ""
 }

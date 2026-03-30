@@ -185,6 +185,28 @@ then reports the current queue state, the actionable status (`blocked`,
 `completed`, `failed`, or `invalid`), and the most relevant next step. The
 command is read-only: it never moves tasks or writes markers.
 
+## Log Command
+
+`mato log` shows recent durable task outcomes so you can answer "what happened
+recently?" without manually inspecting multiple queue locations:
+
+```bash
+# Compact text timeline (default)
+mato log
+
+# Show more events
+mato log --limit 50
+
+# Machine-readable JSON
+mato log --format json
+```
+
+Phase 1 is intentionally a partial durable-outcomes view. It reads only
+host-written completion detail files from `.mato/messages/completions/` plus
+durable task markers for failures (`<!-- failure: ... -->`) and review
+rejections (`<!-- review-rejection: ... -->`). The output is newest first,
+`--limit` defaults to `20`, and `--limit 0` means unlimited.
+
 ## Doctor Command
 
 `mato doctor` runs a structured health check across the repository and task queue:

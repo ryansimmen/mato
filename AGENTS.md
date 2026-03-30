@@ -170,6 +170,7 @@ import (
 - Before editing or describing an existing PR, verify it is **open** with `gh pr view` and confirm its `headRefName` matches the branch you are working on.
 - Never update the title/body of a merged or closed PR just because its number or past branch name seems related to the current work.
 - If the current branch has no open PR, create a new one instead of reusing an old merged PR.
+- When asked to create a PR, default to the current checked-out branch. Do not create a new branch, cherry-pick commits, rebase, or otherwise reshape PR scope unless the user explicitly asks for that or the current branch cannot be used. If the branch contains extra commits, report that and ask whether to proceed as-is or make a clean branch.
 
 ## Key Architecture
 
