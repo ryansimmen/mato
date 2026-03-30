@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"mato/internal/atomicwrite"
@@ -17,6 +16,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/sessionmeta"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
 )
@@ -77,6 +77,14 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 			return fmt.Errorf("capture starting tip for %s: %w", claimed.Branch, err)
 		}
 		startingTip = strings.TrimSpace(startingTip)
+		session := loadOrCreateSession(env.tasksDir, sessionmeta.KindWork, claimed.Filename, claimed.Branch)
+		if session != nil {
+			run.resumeSessionID = session.CopilotSessionID
+		}
+		recordSessionUpdate(env.tasksDir, sessionmeta.KindWork, claimed.Filename, "record work session", func(session *sessionmeta.Session) {
+			session.TaskBranch = claimed.Branch
+			session.LastHeadSHA = startingTip
+		})
 
 		extraEnvs = append(extraEnvs,
 			"MATO_TASK_FILE="+claimed.Filename,
@@ -100,27 +108,12 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		}
 	}
 	extraEnvs = append(extraEnvs, fmt.Sprintf("MATO_MAX_RETRIES=%d", maxRetries))
-
-	args := buildDockerArgs(env, run, extraEnvs, nil)
-
-	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, run.timeout)
-	defer timeoutCancel()
-
-	cmd := execCommandContext(timeoutCtx, "docker", args...)
-	cmd.Cancel = func() error {
-		// Gracefully stop the Docker container by sending SIGTERM.
-		return cmd.Process.Signal(syscall.SIGTERM)
-	}
-	cmd.WaitDelay = gracefulShutdownDelay
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	agentErr := cmd.Run()
-	if timeoutCtx.Err() == context.DeadlineExceeded {
-		fmt.Fprintf(os.Stderr, "error: agent timed out after %v\n", run.timeout)
-	} else if ctx.Err() != nil {
-		fmt.Fprintf(os.Stderr, "agent interrupted by signal\n")
-	}
+	agentErr := runCopilotCommand(ctx, env, run, extraEnvs, nil, "agent", func() string {
+		if claimed == nil {
+			return ""
+		}
+		return resetSession(env.tasksDir, sessionmeta.KindWork, claimed.Filename, claimed.Branch)
+	})
 
 	// Post-agent: if the task is still in in-progress/ and the agent made
 	// commits, push the branch and move the task to ready-for-review/.
@@ -181,6 +174,10 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 		state.TargetBranch = env.targetBranch
 		state.LastHeadSHA = currentTip
 		state.LastOutcome = "work-pushed"
+	})
+	recordSessionUpdate(env.tasksDir, sessionmeta.KindWork, claimed.Filename, "record work session", func(session *sessionmeta.Session) {
+		session.TaskBranch = claimed.Branch
+		session.LastHeadSHA = currentTip
 	})
 
 	// Send conflict-warning with changed files.

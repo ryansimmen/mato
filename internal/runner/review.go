@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -18,6 +17,8 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/runtimecleanup"
+	"mato/internal/sessionmeta"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
 )
@@ -248,14 +249,6 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	state := loadTaskStateForReview(env.tasksDir, task.Filename)
 	previousRejection := lastReviewRejectionReason(task.TaskPath)
 	run.prompt = strings.ReplaceAll(run.prompt, reviewContextPlaceholder, buildReviewContext(task, currentTip, state, previousRejection))
-	recordTaskStateUpdate(env.tasksDir, task.Filename, "record review launch taskstate", func(state *taskstate.TaskState) {
-		state.TaskBranch = task.Branch
-		state.TargetBranch = branch
-		if currentTip != "unknown" {
-			state.LastReviewedSHA = currentTip
-		}
-		state.LastOutcome = "review-launched"
-	})
 
 	cloneDir, err := git.CreateClone(env.repoRoot)
 	if err != nil {
@@ -268,6 +261,28 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	}
 
 	run.cloneDir = cloneDir
+	if env.reviewSessionResumeEnabled {
+		session := loadOrCreateSession(env.tasksDir, sessionmeta.KindReview, task.Filename, task.Branch)
+		if session != nil {
+			run.resumeSessionID = session.CopilotSessionID
+		}
+	}
+	recordTaskStateUpdate(env.tasksDir, task.Filename, "record review launch taskstate", func(state *taskstate.TaskState) {
+		state.TaskBranch = task.Branch
+		state.TargetBranch = branch
+		if currentTip != "unknown" {
+			state.LastReviewedSHA = currentTip
+		}
+		state.LastOutcome = "review-launched"
+	})
+	if env.reviewSessionResumeEnabled {
+		recordSessionUpdate(env.tasksDir, sessionmeta.KindReview, task.Filename, "record review session", func(session *sessionmeta.Session) {
+			session.TaskBranch = task.Branch
+			if currentTip != "unknown" {
+				session.LastHeadSHA = currentTip
+			}
+		})
+	}
 
 	fmt.Printf("Launching review agent from %s (clone: %s)\n", env.repoRoot, cloneDir)
 
@@ -280,26 +295,12 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/%s/messages/verdict-%s.json", env.workdir, dirs.Root, task.Filename),
 	}
 
-	args := buildDockerArgs(env, run, extraEnvs, nil)
-
-	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, run.timeout)
-	defer timeoutCancel()
-
-	cmd := execCommandContext(timeoutCtx, "docker", args...)
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(syscall.SIGTERM)
-	}
-	cmd.WaitDelay = gracefulShutdownDelay
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	runErr := cmd.Run()
-	if timeoutCtx.Err() == context.DeadlineExceeded {
-		fmt.Fprintf(os.Stderr, "error: review agent timed out after %v\n", run.timeout)
-	} else if ctx.Err() != nil {
-		fmt.Fprintf(os.Stderr, "review agent interrupted by signal\n")
-	}
-	return runErr
+	return runCopilotCommand(ctx, env, run, extraEnvs, nil, "review agent", func() string {
+		if !env.reviewSessionResumeEnabled {
+			return ""
+		}
+		return resetSession(env.tasksDir, sessionmeta.KindReview, task.Filename, task.Branch)
+	})
 }
 
 // reviewDisposition captures the three values that differ between an approval
@@ -582,9 +583,7 @@ func lastReviewRejectionReason(taskPath string) string {
 }
 
 func deleteTaskState(tasksDir, filename string) {
-	if err := taskstate.Delete(tasksDir, filename); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", filename, err)
-	}
+	runtimecleanup.DeleteAll(tasksDir, filename)
 }
 
 func truncateRunes(s string, max int) string {

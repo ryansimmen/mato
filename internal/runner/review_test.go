@@ -16,6 +16,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/queue"
+	"mato/internal/sessionmeta"
 	"mato/internal/taskstate"
 	"mato/internal/testutil"
 )
@@ -1074,13 +1075,14 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 	}
 
 	env := envConfig{
-		workdir:               "/workspace",
-		repoRoot:              repoRoot,
-		tasksDir:              tasksDir,
-		reviewModel:           "gpt-5.4",
-		reviewReasoningEffort: "high",
-		homeDir:               "/home/test",
-		image:                 "ubuntu:24.04",
+		workdir:                    "/workspace",
+		repoRoot:                   repoRoot,
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: true,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
 	}
 	run := runContext{timeout: time.Second}
 	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
@@ -1110,6 +1112,116 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 	}
 	if state.LastOutcome != "review-launched" {
 		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-launched")
+	}
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	if err != nil {
+		t.Fatalf("Load review session: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected review session to be created")
+	}
+	if !strings.Contains(joined, "--resume="+session.CopilotSessionID) {
+		t.Fatalf("docker args should contain review resume session, got %s", joined)
+	}
+}
+
+func TestRunReview_DisabledResumeSkipsSessionCreation(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	defer func() { execCommandContext = origExecCommandContext }()
+
+	var capturedArgs []string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		return cmd
+	}
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskPath := filepath.Join(tasksDir, queue.DirReadyReview, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/task"); err != nil {
+		t.Fatalf("create review branch: %v", err)
+	}
+
+	env := envConfig{
+		workdir:                    "/workspace",
+		repoRoot:                   repoRoot,
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: false,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
+	}
+	run := runContext{timeout: time.Second}
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
+
+	if err := runReview(context.Background(), env, run, task, "main"); err != nil {
+		t.Fatalf("runReview: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if strings.Contains(joined, "--resume=") {
+		t.Fatalf("docker args should not contain review resume session, got %s", joined)
+	}
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	if err != nil {
+		t.Fatalf("Load review session: %v", err)
+	}
+	if session != nil {
+		t.Fatalf("expected no review session when disabled, got %+v", session)
+	}
+}
+
+func TestRunReview_CloneFailureDoesNotCreateReviewSessionOrLaunchState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", sub, err)
+		}
+	}
+	taskPath := filepath.Join(tasksDir, queue.DirReadyReview, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+
+	env := envConfig{
+		workdir:                    "/workspace",
+		repoRoot:                   filepath.Join(t.TempDir(), "missing-repo"),
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: true,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
+	}
+	run := runContext{timeout: time.Second}
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
+
+	err := runReview(context.Background(), env, run, task, "main")
+	if err == nil {
+		t.Fatal("expected runReview error")
+	}
+	if !strings.Contains(err.Error(), "create clone for review") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	state, err := taskstate.Load(tasksDir, "task.md")
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should not be created on clone failure, got %+v", state)
+	}
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	if err != nil {
+		t.Fatalf("Load review session: %v", err)
+	}
+	if session != nil {
+		t.Fatalf("review session should not be created on clone failure, got %+v", session)
 	}
 }
 
