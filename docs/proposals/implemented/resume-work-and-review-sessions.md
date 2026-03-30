@@ -1,3 +1,7 @@
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for the
+> current implementation.
+
 # Implementation Plan: Resume Work and Review Sessions
 
 ## 1. Goal
