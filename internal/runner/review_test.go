@@ -1107,8 +1107,8 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state.LastReviewedSHA != currentTip {
-		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, currentTip)
+	if state.LastReviewedSHA != "older-sha" {
+		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "older-sha")
 	}
 	if state.LastOutcome != "review-launched" {
 		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-launched")
@@ -1122,6 +1122,84 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--resume="+session.CopilotSessionID) {
 		t.Fatalf("docker args should contain review resume session, got %s", joined)
+	}
+}
+
+func TestPostReviewAction_ApprovedUpdatesLastReviewedSHA(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	taskFile := "approved-state.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	if err := os.WriteFile(reviewPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.LastHeadSHA = "current-tip"
+		state.LastReviewedSHA = "older-tip"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json"), []byte(`{"verdict":"approve"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile verdict: %v", err)
+	}
+
+	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/approved-state", Title: "Approved", TaskPath: reviewPath})
+
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to exist")
+	}
+	if state.LastReviewedSHA != "current-tip" {
+		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "current-tip")
+	}
+	if state.LastOutcome != "review-approved" {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-approved")
+	}
+}
+
+func TestPostReviewAction_RejectedUpdatesLastReviewedSHA(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	taskFile := "rejected-state.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	if err := os.WriteFile(reviewPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.LastHeadSHA = "rejected-tip"
+		state.LastReviewedSHA = "older-tip"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json"), []byte(`{"verdict":"reject","reason":"missing tests"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile verdict: %v", err)
+	}
+
+	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/rejected-state", Title: "Rejected", TaskPath: reviewPath})
+
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to exist")
+	}
+	if state.LastReviewedSHA != "rejected-tip" {
+		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "rejected-tip")
+	}
+	if state.LastOutcome != "review-rejected" {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-rejected")
 	}
 }
 

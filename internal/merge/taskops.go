@@ -42,13 +42,13 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 }
 func mergeFailureDestination(tasksDir, taskPath, taskName string) string {
 	dir := queue.DirBacklog
-	if shouldFailTask(taskPath) {
+	if shouldFailTaskAfterNextFailure(taskPath) {
 		dir = queue.DirFailed
 	}
 	return filepath.Join(tasksDir, dir, taskName)
 }
 
-func shouldFailTask(taskPath string) bool {
+func shouldFailTaskAfterNextFailure(taskPath string) bool {
 	maxRetries := 3
 	meta, _, err := frontmatter.ParseTaskFile(taskPath)
 	if err == nil {
@@ -61,7 +61,7 @@ func shouldFailTask(taskPath string) bool {
 		return false
 	}
 
-	return failures >= maxRetries
+	return failures+1 >= maxRetries
 }
 
 func failMergeTask(src, dst, reason string) error {

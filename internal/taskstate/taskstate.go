@@ -16,6 +16,10 @@ import (
 
 const version = 1
 
+// OutcomeWorkBranchPushed marks a task whose branch push succeeded but whose
+// queue transition to ready-for-review has not completed yet.
+const OutcomeWorkBranchPushed = "work-branch-pushed"
+
 // TaskState records lightweight runtime metadata for a task.
 type TaskState struct {
 	Version         int    `json:"version"`

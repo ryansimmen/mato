@@ -190,6 +190,84 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	}
 }
 
+func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	for _, sub := range []string{"messages", "messages/events", "messages/completions", "messages/presence"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "pushed-task.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/pushed-task -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.TaskBranch = "task/pushed-task"
+		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/pushed-task", Title: "Example Task", TaskPath: inProgressPath}
+	stdout, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+	if !strings.Contains(stdout, "Recovered pushed task") {
+		t.Fatalf("expected pushed-task recovery message in stdout, got:\n%s", stdout)
+	}
+	if strings.Contains(stderr, "warning:") {
+		t.Fatalf("expected no stderr warnings, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to backlog, got err: %v", err)
+	}
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	data, err := os.ReadFile(readyPath)
+	if err != nil {
+		t.Fatalf("task should be moved to ready-for-review: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- branch: task/pushed-task -->") {
+		t.Fatalf("ready-for-review task should keep branch marker, got:\n%s", string(data))
+	}
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "work-pushed" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=work-pushed", state)
+	}
+	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	var hasConflictWarning bool
+	var hasCompletion bool
+	for _, msg := range msgs {
+		if msg.Task != taskFile {
+			continue
+		}
+		switch msg.Type {
+		case "conflict-warning":
+			hasConflictWarning = true
+		case "completion":
+			hasCompletion = true
+		}
+	}
+	if !hasConflictWarning {
+		t.Fatal("expected recovered pushed task to emit conflict-warning message")
+	}
+	if !hasCompletion {
+		t.Fatal("expected recovered pushed task to emit completion message")
+	}
+}
+
 func TestBuildDockerArgs_ModelAndReasoningEffort_FromRunContext(t *testing.T) {
 	baseEnv := envConfig{
 		homeDir: "/home/test",
@@ -3614,6 +3692,65 @@ func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
 		if state != nil {
 			t.Fatalf("stale taskstate %s should be removed", name)
 		}
+	}
+}
+
+func TestPollCleanup_RebuildsFileClaimsAfterRecoveringPushedTask(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("seed file claims: %v", err)
+	}
+	content := strings.Join([]string{
+		"<!-- claimed-by: deadagent1  claimed-at: 2026-01-01T00:00:00Z -->",
+		"<!-- branch: task/pushed-claims -->",
+		"---",
+		"id: pushed-claims",
+		"affects:",
+		"  - src/api.go",
+		"---",
+		"# Pushed Claims",
+		"",
+	}, "\n")
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, "pushed-claims.md")
+	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, "pushed-claims.md", func(state *taskstate.TaskState) {
+		state.TaskBranch = "task/pushed-claims"
+		state.TargetBranch = "mato"
+		state.LastHeadSHA = "deadbeef"
+		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	captureStdoutStderr(t, func() {
+		pollCleanup(tasksDir)
+	})
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, "pushed-claims.md")); err != nil {
+		t.Fatalf("recovered pushed task should be in ready-for-review: %v", err)
+	}
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("rebuild file claims after recovery: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("read file-claims.json: %v", err)
+	}
+	var claims map[string]messaging.FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("parse file-claims.json: %v", err)
+	}
+	claim, ok := claims["src/api.go"]
+	if !ok {
+		t.Fatal("expected recovered pushed task to appear in file-claims.json")
+	}
+	if claim.Task != "pushed-claims.md" {
+		t.Fatalf("claim.Task = %q, want %q", claim.Task, "pushed-claims.md")
+	}
+	if claim.Status != queue.DirReadyReview {
+		t.Fatalf("claim.Status = %q, want %q", claim.Status, queue.DirReadyReview)
 	}
 }
 

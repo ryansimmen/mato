@@ -538,6 +538,75 @@ func TestProcessQueue_BranchCollisionDisambiguation(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_LegacyBranchCollisionReservesDisambiguatedBranchPerPass(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskA := "legacy collide one.md"
+	taskB := "legacy_collide_one.md"
+	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskA)
+	disambiguatedBranch := derivedBranch + "-" + frontmatter.BranchDisambiguator(taskB)
+	if got := "task/" + frontmatter.SanitizeBranchName(taskB); got != derivedBranch {
+		t.Fatalf("test setup: expected both filenames to derive same branch, got %q and %q", derivedBranch, got)
+	}
+
+	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "legacy-a.txt"), []byte("task A\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile legacy-a.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "legacy-a.txt"); err != nil {
+		t.Fatalf("git add legacy-a.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "legacy task A work"); err != nil {
+		t.Fatalf("git commit task A: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	if _, err := git.Output(repoRoot, "checkout", "-b", disambiguatedBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", disambiguatedBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "legacy-b.txt"), []byte("task B\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile legacy-b.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "legacy-b.txt"); err != nil {
+		t.Fatalf("git add legacy-b.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "legacy task B work"); err != nil {
+		t.Fatalf("git commit task B: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	content := "---\npriority: 5\n---\n# Legacy task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskA), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile task A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskB), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile task B: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 2 {
+		t.Fatalf("ProcessQueue() = %d, want 2", got)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "legacy-a.txt")); err != nil {
+		t.Fatalf("expected derived branch change to merge: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "legacy-b.txt")); err != nil {
+		t.Fatalf("expected disambiguated branch change to merge: %v", err)
+	}
+}
+
 // TestProcessQueue_StalePollIndexDoesNotAffectFallbackBranch verifies that
 // a legacy task (no <!-- branch: --> marker) in ready-to-merge/ resolves the
 // correct disambiguated branch even when a colliding branch appears in
@@ -917,22 +986,25 @@ func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
 
-	backlogFile := filepath.Join(tasksDir, queue.DirBacklog, "missing branch.md")
-	data, err := os.ReadFile(backlogFile)
+	failedFile := filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")
+	data, err := os.ReadFile(failedFile)
 	if err != nil {
-		t.Fatalf("backlog task file missing: %v", err)
+		t.Fatalf("failed task file missing: %v", err)
 	}
 	if !strings.Contains(string(data), "task branch not pushed by agent") {
-		t.Fatalf("backlog task should mention missing branch push, got %q", string(data))
+		t.Fatalf("failed task should mention missing branch push, got %q", string(data))
 	}
 	if got := strings.Count(string(data), "<!-- failure:"); got != 3 {
-		t.Fatalf("backlog task failure count = %d, want 3\ncontents:\n%s", got, string(data))
+		t.Fatalf("failed task failure count = %d, want 3\ncontents:\n%s", got, string(data))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")); !os.IsNotExist(err) {
-		t.Fatalf("missing-branch task should not be moved to failed yet, stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")); err != nil {
+		t.Fatalf("missing-branch task should be moved to failed once the new failure exhausts retries, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "missing branch.md")); !os.IsNotExist(err) {
+		t.Fatalf("missing-branch task should not remain in backlog once retries are exhausted, stat err = %v", err)
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
-		t.Fatalf("ready-to-merge task should be moved to backlog, stat err = %v", err)
+		t.Fatalf("ready-to-merge task should be moved to failed, stat err = %v", err)
 	}
 }
 

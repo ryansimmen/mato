@@ -1282,6 +1282,82 @@ func TestPostAgentPush_RecordsWorkTaskState(t *testing.T) {
 	}
 }
 
+func TestPostAgentPush_BranchMarkerWriteFailureLeavesPushedTaskState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "marker-state.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/marker-state -->\n# Marker State\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+
+	cloneDir := t.TempDir()
+	remoteDir := t.TempDir()
+	gitRun := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	gitRun(remoteDir, "git", "init", "--bare", "-b", "main")
+	gitRun(cloneDir, "git", "init", "-b", "main")
+	gitRun(cloneDir, "git", "config", "user.name", "test")
+	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
+	if err := os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile init: %v", err)
+	}
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "init")
+	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
+	gitRun(cloneDir, "git", "push", "origin", "main")
+	gitRun(cloneDir, "git", "checkout", "-b", "task/marker-state")
+	if err := os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644); err != nil {
+		t.Fatalf("WriteFile branch change: %v", err)
+	}
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "task work")
+	currentTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	currentTip = strings.TrimSpace(currentTip)
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/marker-state", Title: "Marker State", TaskPath: inProgressPath}
+	env := envConfig{tasksDir: tasksDir, targetBranch: "main"}
+	origWriteBranchMarker := writeBranchMarkerFn
+	t.Cleanup(func() { writeBranchMarkerFn = origWriteBranchMarker })
+	writeBranchMarkerFn = func(path, branch string) error {
+		return fmt.Errorf("simulated disk full")
+	}
+
+	err = postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error when branch marker write fails")
+	}
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to be written")
+	}
+	if state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeWorkBranchPushed)
+	}
+	if state.LastHeadSHA != currentTip {
+		t.Fatalf("LastHeadSHA = %q, want %q", state.LastHeadSHA, currentTip)
+	}
+}
+
 func TestRunOnce_RecordedBranchResumeRequiresLocalOrRemoteSource(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "resume-guard.md"
