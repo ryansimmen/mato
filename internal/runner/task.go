@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -264,7 +265,10 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 		return
 	}
 
-	if recoverPushedTaskToReview(tasksDir, claimed) {
+	if recovered, branch, currentTip, filesChanged := recoverPushedTaskToReview(tasksDir, claimed); recovered {
+		if branch != "" {
+			finalizePushedTask(tasksDir, loadRecoveredTargetBranch(tasksDir, claimed.Filename), "host-recovery", claimed.Filename, branch, currentTip, filesChanged, false)
+		}
 		return
 	}
 
@@ -287,14 +291,14 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	fmt.Printf("Recovered task %s after agent exit\n", claimed.Filename)
 }
 
-func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) bool {
+func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (bool, string, string, []string) {
 	state, err := taskstate.Load(tasksDir, claimed.Filename)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not load taskstate for %s during pushed-task recovery: %v\n", claimed.Filename, err)
-		return false
+		return false, "", "", nil
 	}
 	if state == nil || state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
-		return false
+		return false, "", "", nil
 	}
 
 	branch := strings.TrimSpace(state.TaskBranch)
@@ -303,15 +307,33 @@ func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) bool
 	}
 	if strings.TrimSpace(branch) == "" {
 		fmt.Fprintf(os.Stderr, "warning: pushed task %s is missing task branch metadata; leaving it in in-progress/\n", claimed.Filename)
-		return true
+		return true, "", "", nil
 	}
 	if err := moveTaskToReviewWithMarker(tasksDir, claimed, branch); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not recover pushed task %s to ready-for-review: %v\n", claimed.Filename, err)
-		return true
+		return true, "", "", nil
 	}
-	finalizePushedTask(tasksDir, state.TargetBranch, "host-recovery", claimed.Filename, branch, state.LastHeadSHA, nil, false)
 	fmt.Printf("Recovered pushed task %s to ready-for-review/\n", claimed.Filename)
-	return true
+	return true, branch, strings.TrimSpace(state.LastHeadSHA), recoveredFilesChanged(tasksDir, claimed.Filename)
+}
+
+func loadRecoveredTargetBranch(tasksDir, filename string) string {
+	state, err := taskstate.Load(tasksDir, filename)
+	if err != nil || state == nil {
+		return ""
+	}
+	return strings.TrimSpace(state.TargetBranch)
+}
+
+func recoveredFilesChanged(tasksDir, filename string) []string {
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, filename)
+	meta, _, err := frontmatter.ParseTaskFile(readyPath)
+	if err != nil || len(meta.Affects) == 0 {
+		return nil
+	}
+	filesChanged := append([]string(nil), meta.Affects...)
+	sort.Strings(filesChanged)
+	return filesChanged
 }
 
 // agentWroteFailureRecord checks whether the task file already contains a

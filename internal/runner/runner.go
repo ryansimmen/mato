@@ -671,7 +671,9 @@ func signalChan(ctx context.Context) chan<- os.Signal {
 // removes stale presence files, and purges old messages. These housekeeping
 // operations run at the start of every poll cycle.
 func pollCleanup(tasksDir string) {
-	queue.RecoverOrphanedTasks(tasksDir)
+	for _, recovery := range queue.RecoverOrphanedTasks(tasksDir) {
+		finalizePushedTask(tasksDir, recovery.TargetBranch, "host-recovery", recovery.Filename, recovery.Branch, recovery.LastHeadSHA, recoveredFilesChanged(tasksDir, recovery.Filename), false)
+	}
 	queue.CleanStaleLocks(tasksDir)
 	queue.CleanStaleReviewLocks(tasksDir)
 	messaging.CleanStalePresence(tasksDir)

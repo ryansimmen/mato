@@ -696,7 +696,7 @@ func TestRecoverOrphanedTasks_HandlesStrandedWithoutClaimedBy(t *testing.T) {
 	// (the scenario that occurs after a double failure).
 	testutil.WriteFile(t, filepath.Join(dir, DirInProgress, "orphan.md"), "# Orphan\nDo orphan.\n")
 
-	RecoverOrphanedTasks(dir)
+	_ = RecoverOrphanedTasks(dir)
 
 	// Task should be recovered to backlog
 	if _, err := os.Stat(filepath.Join(dir, DirBacklog, "orphan.md")); err != nil {

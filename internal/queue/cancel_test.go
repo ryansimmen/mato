@@ -216,6 +216,29 @@ func TestCancelTask_MoveLeavesDuplicateCopies(t *testing.T) {
 	}
 }
 
+func TestCancelTask_SucceedsWithoutSourceCleanupPostCheck(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirBacklog, "task.md", "---\nid: task\n---\n# Task\n")
+
+	result, err := CancelTask(tasksDir, "task")
+	if err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	if result.Filename != "task.md" {
+		t.Fatalf("Filename = %q, want %q", result.Filename, "task.md")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task.md")); !os.IsNotExist(err) {
+		t.Fatalf("backlog task should be removed after cancel, stat err = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "task.md"))
+	if err != nil {
+		t.Fatalf("failed task missing: %v", err)
+	}
+	if !taskfile.ContainsCancelledMarker(data) {
+		t.Fatalf("cancelled marker missing from failed task: %s", data)
+	}
+}
+
 func TestCancelTask_DownstreamWarnings(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	writeTask(t, tasksDir, DirBacklog, "dep.md", "---\nid: dep-id\n---\n# Dep\n")

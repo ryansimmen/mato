@@ -266,6 +266,14 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	if !hasCompletion {
 		t.Fatal("expected recovered pushed task to emit completion message")
 	}
+	for _, msg := range msgs {
+		if msg.Task != taskFile {
+			continue
+		}
+		if (msg.Type == "conflict-warning" || msg.Type == "completion") && len(msg.Files) != 0 {
+			t.Fatalf("recovered pushed task without affects should emit empty file list, got %v for %s", msg.Files, msg.Type)
+		}
+	}
 }
 
 func TestBuildDockerArgs_ModelAndReasoningEffort_FromRunContext(t *testing.T) {
@@ -3751,6 +3759,92 @@ func TestPollCleanup_RebuildsFileClaimsAfterRecoveringPushedTask(t *testing.T) {
 	}
 	if claim.Status != queue.DirReadyReview {
 		t.Fatalf("claim.Status = %q, want %q", claim.Status, queue.DirReadyReview)
+	}
+	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	var hasConflictWarning bool
+	var hasCompletion bool
+	for _, msg := range msgs {
+		if msg.Task != "pushed-claims.md" {
+			continue
+		}
+		switch msg.Type {
+		case "conflict-warning":
+			hasConflictWarning = true
+			want := []string{"src/api.go"}
+			if len(msg.Files) != len(want) || msg.Files[0] != want[0] {
+				t.Fatalf("conflict-warning files = %v, want %v", msg.Files, want)
+			}
+		case "completion":
+			hasCompletion = true
+			want := []string{"src/api.go"}
+			if len(msg.Files) != len(want) || msg.Files[0] != want[0] {
+				t.Fatalf("completion files = %v, want %v", msg.Files, want)
+			}
+		}
+	}
+	if !hasConflictWarning {
+		t.Fatal("expected pollCleanup recovery to emit conflict-warning message")
+	}
+	if !hasCompletion {
+		t.Fatal("expected pollCleanup recovery to emit completion message")
+	}
+}
+
+func TestRecoverStuckTask_PushedTaskRecoveryUsesAffectsForMessageFiles(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	content := strings.Join([]string{
+		"<!-- claimed-by: deadagent1  claimed-at: 2026-01-01T00:00:00Z -->",
+		"<!-- branch: task/recovered-files -->",
+		"---",
+		"id: recovered-files",
+		"affects:",
+		"  - src/b.go",
+		"  - src/a.go",
+		"---",
+		"# Recovered Files",
+		"",
+	}, "\n")
+	taskFile := "recovered-files.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.TaskBranch = "task/recovered-files"
+		state.TargetBranch = "mato"
+		state.LastHeadSHA = "deadbeef"
+		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/recovered-files", Title: "Recovered Files", TaskPath: inProgressPath}
+	captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+
+	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	var gotFiles []string
+	for _, msg := range msgs {
+		if msg.Task == taskFile && msg.Type == "completion" {
+			gotFiles = msg.Files
+			break
+		}
+	}
+	want := []string{"src/a.go", "src/b.go"}
+	if len(gotFiles) != len(want) {
+		t.Fatalf("completion files = %v, want %v", gotFiles, want)
+	}
+	for i := range want {
+		if gotFiles[i] != want[i] {
+			t.Fatalf("completion files = %v, want %v", gotFiles, want)
+		}
 	}
 }
 
