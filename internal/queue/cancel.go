@@ -63,9 +63,6 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		}
 		return CancelResult{}, fmt.Errorf("move task to failed/: %w", err)
 	}
-	if err := ensureMoveSourceRemoved(match.Path, failedPath); err != nil {
-		return CancelResult{}, err
-	}
 
 	if err := appendCancelledRecordFn(failedPath); err != nil {
 		if rollbackErr := AtomicMove(failedPath, match.Path); rollbackErr != nil {
@@ -117,18 +114,4 @@ func dependsOnCancelledTask(dependsOn []string, stem, taskID string) bool {
 		}
 	}
 	return false
-}
-
-func ensureMoveSourceRemoved(srcPath, dstPath string) error {
-	_, err := os.Stat(srcPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("verify source removal after move: %w", err)
-	}
-	if removeErr := os.Remove(dstPath); removeErr != nil && !os.IsNotExist(removeErr) {
-		return fmt.Errorf("cancel left duplicate task copies at %s and %s (cleanup failed: %v)", srcPath, dstPath, removeErr)
-	}
-	return fmt.Errorf("cancel left duplicate task copies at %s and %s; source removal failed during move", srcPath, dstPath)
 }

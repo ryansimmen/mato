@@ -506,7 +506,7 @@ func TestOrphanRecoveryDuringConcurrentWork(t *testing.T) {
 	deadTask := writeTask(t, tasksDir, queue.DirInProgress, "dead-task.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Dead\nNeeds recovery.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
 
-	queue.RecoverOrphanedTasks(tasksDir)
+	_ = queue.RecoverOrphanedTasks(tasksDir)
 
 	mustExist(t, aliveTask)
 	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "alive-task.md"))

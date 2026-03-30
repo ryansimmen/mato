@@ -222,6 +222,13 @@ func withRemoveFn(t *testing.T, fn func(string) error) {
 	t.Cleanup(func() { removeFn = orig })
 }
 
+func withWriteBranchMarkerRecoveryFn(t *testing.T, fn func(string, string) error) {
+	t.Helper()
+	orig := writeBranchMarkerRecoveryFn
+	writeBranchMarkerRecoveryFn = fn
+	t.Cleanup(func() { writeBranchMarkerRecoveryFn = orig })
+}
+
 func TestAtomicMove_CrossDeviceSuccess(t *testing.T) {
 	withLinkFn(t, func(_, _ string) error {
 		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
@@ -547,7 +554,7 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 	orphan := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
 	os.WriteFile(orphan, []byte("# Fix bug\nDo the thing.\n"), 0o644)
 
-	RecoverOrphanedTasks(tasksDir)
+	_ = RecoverOrphanedTasks(tasksDir)
 
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatal("orphaned task was not removed from in-progress/")
@@ -574,7 +581,7 @@ func TestRecoverOrphanedTasks_IgnoresNonMd(t *testing.T) {
 	other := filepath.Join(tasksDir, DirInProgress, "notes.txt")
 	os.WriteFile(other, []byte("hello"), 0o644)
 
-	RecoverOrphanedTasks(tasksDir)
+	_ = RecoverOrphanedTasks(tasksDir)
 
 	if _, err := os.Stat(other); err != nil {
 		t.Fatalf("non-.md file should not be moved: %v", err)
@@ -583,7 +590,7 @@ func TestRecoverOrphanedTasks_IgnoresNonMd(t *testing.T) {
 
 func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{DirBacklog, DirInProgress, DirReadyReview} {
+	for _, sub := range []string{DirBacklog, DirInProgress, DirReadyReview, "messages", "messages/events", "messages/completions", "messages/presence"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -608,7 +615,7 @@ func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	}
 
 	stderr := captureStderr(t, func() {
-		RecoverOrphanedTasks(tasksDir)
+		_ = RecoverOrphanedTasks(tasksDir)
 	})
 	if !strings.Contains(stderr, "Recovered pushed task") {
 		t.Fatalf("expected pushed-task recovery message, got %q", stderr)
@@ -633,6 +640,49 @@ func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	}
 }
 
+func TestRecoverOrphanedTasks_PushedTaskUsesBranchMarkerHook(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirBacklog, DirInProgress, DirReadyReview} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "hook-task.md"
+	inProgressPath := filepath.Join(tasksDir, DirInProgress, name)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent-1 -->\n# Hook Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+		state.TaskBranch = "task/hook-task"
+		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	called := false
+	withWriteBranchMarkerRecoveryFn(t, func(path, branch string) error {
+		called = true
+		return fmt.Errorf("simulated marker failure")
+	})
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !called {
+		t.Fatal("expected branch marker recovery hook to be called")
+	}
+	if !strings.Contains(stderr, "write branch marker") {
+		t.Fatalf("expected branch marker warning, got %q", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("task should roll back to in-progress after marker failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirReadyReview, name)); !os.IsNotExist(err) {
+		t.Fatalf("task should not remain in ready-for-review after marker failure, stat err = %v", err)
+	}
+}
+
 func TestRecoverOrphanedTasks_CollisionIdenticalContent(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{DirBacklog, DirInProgress} {
@@ -646,7 +696,7 @@ func TestRecoverOrphanedTasks_CollisionIdenticalContent(t *testing.T) {
 	os.WriteFile(orphanPath, content, 0o644)
 
 	stderr := captureStderr(t, func() {
-		RecoverOrphanedTasks(tasksDir)
+		_ = RecoverOrphanedTasks(tasksDir)
 	})
 
 	if !strings.Contains(stderr, "Removed duplicate orphan") {
@@ -678,7 +728,7 @@ func TestRecoverOrphanedTasks_CollisionDifferentContent(t *testing.T) {
 	os.WriteFile(orphanPath, []byte("# Recovered task\n"), 0o644)
 
 	stderr := captureStderr(t, func() {
-		RecoverOrphanedTasks(tasksDir)
+		_ = RecoverOrphanedTasks(tasksDir)
 	})
 
 	if !strings.Contains(stderr, "content differs from backlog copy") {
@@ -809,7 +859,7 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	os.WriteFile(task, []byte(content), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
 
-	RecoverOrphanedTasks(tasksDir)
+	_ = RecoverOrphanedTasks(tasksDir)
 
 	if _, err := os.Stat(task); err != nil {
 		t.Fatal("task claimed by active agent should NOT be recovered")
@@ -838,7 +888,7 @@ func TestRecoverOrphanedTasks_RemovesStaleInProgressCopyWhenTaskAlreadyAdvanced(
 				t.Fatalf("write authoritative task: %v", err)
 			}
 
-			RecoverOrphanedTasks(tasksDir)
+			_ = RecoverOrphanedTasks(tasksDir)
 
 			if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 				t.Fatalf("stale in-progress copy should be removed, stat err = %v", err)
@@ -891,7 +941,7 @@ func TestRecoverOrphanedTasks_AppendFailureLogsWarning(t *testing.T) {
 	// re-create it in in-progress and call recovery.
 	backlogPath := filepath.Join(tasksDir, DirBacklog, "unwritable.md")
 	// First, do a normal recovery to get the file into backlog
-	RecoverOrphanedTasks(tasksDir)
+	_ = RecoverOrphanedTasks(tasksDir)
 
 	if _, err := os.Stat(backlogPath); err != nil {
 		t.Fatalf("task should be in backlog: %v", err)
@@ -923,7 +973,7 @@ func TestRecoverOrphanedTasks_StillMovesWhenAppendFails(t *testing.T) {
 	})
 
 	stderr := captureStderr(t, func() {
-		RecoverOrphanedTasks(tasksDir)
+		_ = RecoverOrphanedTasks(tasksDir)
 	})
 
 	// Task should still be moved to backlog even though append fails
@@ -978,7 +1028,7 @@ func TestRecoverOrphanedTasks_ConcurrentCalls(t *testing.T) {
 				}
 			}()
 			<-start
-			RecoverOrphanedTasks(tasksDir)
+			_ = RecoverOrphanedTasks(tasksDir)
 		}()
 	}
 
