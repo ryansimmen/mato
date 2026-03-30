@@ -325,6 +325,26 @@ func TestBuildDockerArgs_DifferentModelValues(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_AppendsResumeWhenSessionIDSet(t *testing.T) {
+	env := envConfig{homeDir: "/home/test", image: "ubuntu:24.04", workdir: "/workspace"}
+	run := runContext{prompt: "test", model: "gpt-5.4", reasoningEffort: "high", resumeSessionID: "session-123"}
+
+	joined := strings.Join(buildDockerArgs(env, run, nil, nil), " ")
+	if !strings.Contains(joined, "copilot --resume=session-123 -p test") {
+		t.Fatalf("expected --resume in docker args, got: %s", joined)
+	}
+}
+
+func TestBuildDockerArgs_OmitsResumeWhenSessionIDEmpty(t *testing.T) {
+	env := envConfig{homeDir: "/home/test", image: "ubuntu:24.04", workdir: "/workspace"}
+	run := runContext{prompt: "test", model: "gpt-5.4", reasoningEffort: "high"}
+
+	joined := strings.Join(buildDockerArgs(env, run, nil, nil), " ")
+	if strings.Contains(joined, "--resume=") {
+		t.Fatalf("did not expect --resume in docker args, got: %s", joined)
+	}
+}
+
 func TestIsTerminal_RegularFile(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "terminal-test")
 	if err != nil {

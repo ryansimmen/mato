@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"mato/internal/queue"
+	"mato/internal/taskstate"
 )
 
 func TestTaskHasMergeSuccessRecord(t *testing.T) {
@@ -194,6 +197,103 @@ func TestMoveTaskWithRetry(t *testing.T) {
 			t.Error("expected error when source does not exist")
 		}
 	})
+}
+
+func TestRemoveBranchMarker(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	content := "<!-- branch: task/remove-me -->\n# Task\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := removeBranchMarker(path); err != nil {
+		t.Fatalf("removeBranchMarker: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "<!-- branch:") {
+		t.Fatalf("branch marker should be removed, got:\n%s", string(data))
+	}
+}
+
+func TestHandleMergeFailure_ConflictInFailedKeepsBranchMarker(t *testing.T) {
+	repoRoot := t.TempDir()
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyMerge, queue.DirFailed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	taskPath := filepath.Join(tasksDir, queue.DirReadyMerge, "conflict.md")
+	content := strings.Join([]string{
+		"<!-- branch: task/conflict -->",
+		"---",
+		"max_retries: 1",
+		"---",
+		"<!-- failure: prior-agent at 2026-01-01T00:00:00Z step=WORK error=prior -->",
+		"# Conflict",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	task := mergeQueueTask{name: "conflict.md", path: taskPath, branch: "task/conflict"}
+	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
+		t.Fatalf("handleMergeFailure: %v", err)
+	}
+	failedPath := filepath.Join(tasksDir, queue.DirFailed, "conflict.md")
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- branch: task/conflict -->") {
+		t.Fatalf("failed task should retain branch marker, got:\n%s", string(data))
+	}
+}
+
+func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
+	repoRoot := t.TempDir()
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyMerge, queue.DirBacklog} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	taskPath := filepath.Join(tasksDir, queue.DirReadyMerge, "cleanup.md")
+	content := strings.Join([]string{
+		"<!-- branch: task/cleanup -->",
+		"---",
+		"max_retries: 3",
+		"---",
+		"# Cleanup",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, "cleanup.md", func(state *taskstate.TaskState) {
+		state.LastOutcome = "review-approved"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	task := mergeQueueTask{name: "cleanup.md", path: taskPath, branch: "task/cleanup"}
+	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
+		t.Fatalf("handleMergeFailure: %v", err)
+	}
+	state, err := taskstate.Load(tasksDir, task.name)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "merge-conflict-cleanup" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=merge-conflict-cleanup", state)
+	}
 }
 
 func TestMergeFailureDestination(t *testing.T) {

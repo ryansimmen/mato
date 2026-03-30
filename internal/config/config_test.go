@@ -15,6 +15,7 @@ func TestLoad_AllFields(t *testing.T) {
 		"docker_image: ubuntu:24.04",
 		"task_model: claude-sonnet-4",
 		"review_model: gpt-5.4",
+		"review_session_resume_enabled: false",
 		"task_reasoning_effort: high",
 		"review_reasoning_effort: medium",
 		"agent_timeout: 45m",
@@ -41,6 +42,9 @@ func TestLoad_AllFields(t *testing.T) {
 	}
 	if cfg.ReviewModel == nil || *cfg.ReviewModel != "gpt-5.4" {
 		t.Fatalf("ReviewModel = %v, want %q", cfg.ReviewModel, "gpt-5.4")
+	}
+	if cfg.ReviewSessionResume == nil || *cfg.ReviewSessionResume {
+		t.Fatalf("ReviewSessionResume = %v, want false", cfg.ReviewSessionResume)
 	}
 	if cfg.TaskReasoningEffort == nil || *cfg.TaskReasoningEffort != "high" {
 		t.Fatalf("TaskReasoningEffort = %v, want %q", cfg.TaskReasoningEffort, "high")
@@ -71,7 +75,7 @@ func TestLoad_PartialFields(t *testing.T) {
 	if cfg.Branch == nil || *cfg.Branch != "develop" {
 		t.Fatalf("Branch = %v, want %q", cfg.Branch, "develop")
 	}
-	if cfg.DockerImage != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil || cfg.AgentTimeout != nil || cfg.RetryCooldown != nil {
+	if cfg.DockerImage != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.ReviewSessionResume != nil || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil || cfg.AgentTimeout != nil || cfg.RetryCooldown != nil {
 		t.Fatalf("unexpected non-nil fields: %#v", cfg)
 	}
 }
@@ -122,6 +126,7 @@ func TestLoad_EmptyStringValues(t *testing.T) {
 		"branch: \"\"",
 		"task_model: \"\"",
 		"review_model: \"\"",
+		"review_session_resume_enabled: true",
 		"task_reasoning_effort: \"\"",
 		"review_reasoning_effort: \"\"",
 		"",
@@ -134,7 +139,7 @@ func TestLoad_EmptyStringValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Branch != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil {
+	if cfg.Branch != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.ReviewSessionResume == nil || !*cfg.ReviewSessionResume || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil {
 		t.Fatalf("cfg = %#v, want normalized nil string fields", cfg)
 	}
 }

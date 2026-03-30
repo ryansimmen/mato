@@ -125,6 +125,22 @@ func TestParseBranch_BranchWithSlashes(t *testing.T) {
 	}
 }
 
+func TestParseBranch_IgnoresMarkersInCodeFences(t *testing.T) {
+	f := testutil.WriteTempFile(t, "```\n<!-- branch: task/fenced -->\n```\n# Task\n")
+	got := ParseBranch(f)
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+func TestParseBranch_IgnoresInlineMarkerText(t *testing.T) {
+	f := testutil.WriteTempFile(t, "branch is <!-- branch: task/inline --> in prose\n")
+	got := ParseBranch(f)
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
 func TestParseBranch_CorruptMarkers(t *testing.T) {
 	tests := []struct {
 		name    string

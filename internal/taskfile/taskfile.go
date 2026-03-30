@@ -6,14 +6,15 @@ import (
 	"os"
 )
 
-// ParseBranch reads a task file at path and extracts the branch name from
-// a complete <!-- branch: ... --> HTML comment. Returns "" if the marker is
-// missing, malformed, unterminated, or the file cannot be read.
+// ParseBranch reads a task file at path and extracts the branch name from a
+// standalone <!-- branch: ... --> HTML comment outside code fences. Returns ""
+// if the marker is missing, malformed, unterminated, or the file cannot be
+// read.
 func ParseBranch(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	branch, _ := ParseBranchComment(data)
+	branch, _ := ParseBranchMarkerLine(data)
 	return branch
 }
