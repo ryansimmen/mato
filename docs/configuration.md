@@ -52,6 +52,7 @@ branch: main
 docker_image: ubuntu:24.04
 task_model: claude-opus-4.6
 review_model: gpt-5.4
+review_session_resume_enabled: true
 task_reasoning_effort: high
 review_reasoning_effort: high
 agent_timeout: 45m
@@ -96,6 +97,7 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 | docker image | — | `MATO_DOCKER_IMAGE` | `docker_image` | `ubuntu:24.04` |
 | task model | `mato run --task-model` | `MATO_TASK_MODEL` | `task_model` | `claude-opus-4.6` |
 | review model | `mato run --review-model` | `MATO_REVIEW_MODEL` | `review_model` | `gpt-5.4` |
+| review session resume | — | `MATO_REVIEW_SESSION_RESUME_ENABLED` | `review_session_resume_enabled` | `true` |
 | task reasoning effort | `mato run --task-reasoning-effort` | `MATO_TASK_REASONING_EFFORT` | `task_reasoning_effort` | `high` |
 | review reasoning effort | `mato run --review-reasoning-effort` | `MATO_REVIEW_REASONING_EFFORT` | `review_reasoning_effort` | `high` |
 | agent timeout | — | `MATO_AGENT_TIMEOUT` | `agent_timeout` | `30m` |
@@ -305,6 +307,7 @@ vars.
 | `MATO_DOCKER_IMAGE` | `ubuntu:24.04` | Docker image used for agent containers. Overrides `.mato.yaml` `docker_image`. |
 | `MATO_TASK_MODEL` | `claude-opus-4.6` | Default Copilot model used for task agents. Overrides `.mato.yaml` `task_model`. |
 | `MATO_REVIEW_MODEL` | `gpt-5.4` | Default Copilot model used for review agents. Overrides `.mato.yaml` `review_model`. |
+| `MATO_REVIEW_SESSION_RESUME_ENABLED` | `true` | Enables durable Copilot session resume for review agents. Accepts `true`/`false` style boolean values. Overrides `.mato.yaml` `review_session_resume_enabled`. There is intentionally no CLI flag for this setting. |
 | `MATO_TASK_REASONING_EFFORT` | `high` | Reasoning effort for task agents. Overrides `.mato.yaml` `task_reasoning_effort`. Valid values: `low`, `medium`, `high`, `xhigh`. |
 | `MATO_REVIEW_REASONING_EFFORT` | `high` | Reasoning effort for review agents. Overrides `.mato.yaml` `review_reasoning_effort`. Valid values: `low`, `medium`, `high`, `xhigh`. |
 | `MATO_AGENT_TIMEOUT` | `30m` | Maximum wall-clock time for a single agent run. Accepts Go duration strings (e.g. `45m`, `1h`). Must be positive. Overrides `.mato.yaml` `agent_timeout`. |
@@ -377,7 +380,7 @@ ownership.
 - `GOPATH`, `GOMODCACHE`, and `GOCACHE` point at the mounted host cache paths.
 - `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=*` allow Git to trust mounted worktrees even if ownership looks unusual.
 - If Git user name/email are configured on the host repository or globally, `mato` forwards them as `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL`.
-- The container command is `copilot -p <embedded prompt> --autopilot --allow-all --model <resolved-model> --reasoning-effort <resolved-effort>`.
+- The container command is `copilot [--resume=<session-id>] -p <embedded prompt> --autopilot --allow-all --model <resolved-model> --reasoning-effort <resolved-effort>`. `mato` only appends `--resume=<session-id>` when durable session metadata exists for the current task or review phase.
 When choosing a custom Docker image via `MATO_DOCKER_IMAGE` or `.mato.yaml`, use an image compatible with the mounted
 host binaries and standard Linux filesystem layout expected above.
 

@@ -1,7 +1,7 @@
 # Mato Architecture
 This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `inspect/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
 ## 1. System Overview
-`mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, and squash-merges completed task branches back into a target branch. An optional `.mato/.paused` sentinel can temporarily stop new claims and review launches without stopping the host process. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, create one task branch, make changes in an isolated clone, push the branch, move the task file to `ready-to-merge/`, and exit.
+`mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, runs an AI review pass for completed work, and squash-merges approved task branches back into a target branch. An optional `.mato/.paused` sentinel can temporarily stop new claims and review launches without stopping the host process. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, work in an isolated clone on the host-selected task branch, commit its changes, and exit. The host then pushes the task branch, moves the task to `ready-for-review/`, processes the review verdict, and later merges approved work.
 ```text
 +-------------------------+      +-----------------------------+
 | CLI: mato               |      | CLI: mato status            |
@@ -32,8 +32,10 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 High-level flow:
 1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)` via `mato run`, bootstraps a repository via `setup.InitRepo(...)`, or routes to read-only subcommands such as `status.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
 2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs.
-3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim and pushes `task/<sanitized-filename>`.
-4. The host merge queue squashes that task branch into the target branch and moves the task file to `completed/`.
+3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, chooses a stable task branch (reusing any recorded branch marker when safe, otherwise deriving a sanitized/disambiguated branch), then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim, works on the preselected branch, and commits locally.
+4. After the agent exits, the host pushes the task branch and moves the task file to `ready-for-review/`.
+5. A review agent evaluates the pushed branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with recorded feedback.
+6. The host merge queue squashes approved task branches into the target branch and moves the task file to `completed/`.
 ## 2. Host Loop
 ### Startup
 `runner.Run(repoRoot, branch, opts)` performs host initialization in this order:
@@ -307,7 +309,7 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 ### How it works
 1. `selectTaskForReview(tasksDir)` scans `ready-for-review/*.md` for the next task to review.
 2. The host verifies the task branch exists (`git rev-parse --verify`). If the branch is missing, the host writes a `<!-- review-failure: ... -->` record and skips the review.
-3. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts). Before launch, the host resolves the current branch tip, loads any existing `.mato/runtime/taskstate/<task-filename>.json`, reads the most recent review-rejection reason from the task file, renders a `Review context:` block into the embedded review prompt, and records a best-effort `review-launched` taskstate update.
+3. `runReview(...)` launches a review agent in the same Docker container model as task agents (ephemeral container, temp clone, identical bind mounts). Before launch, the host resolves the current branch tip, loads any existing `.mato/runtime/taskstate/<task-filename>.json`, reads the most recent review-rejection reason from the task file, renders a `Review context:` block into the embedded review prompt, and, after clone setup succeeds, records a best-effort `review-launched` taskstate update. When review-session resume is enabled, the host also loads or creates a durable `review` session record and passes `copilot --resume=<session-id>` to the review run.
 4. The review agent diffs the task branch against the target branch, analyzes the changes, and writes a JSON verdict file to `.mato/messages/verdict-<filename>.json` with `{"verdict":"approve"}`, `{"verdict":"reject","reason":"..."}`, or `{"verdict":"error","reason":"..."}`.
 5. After the review agent exits, the host reads the verdict file via `postReviewAction(...)`:
    - **Approved**: host writes `<!-- reviewed: ... -->` to the task file, moves it to `ready-to-merge/`, records `review-approved` in taskstate, and sends a completion message.
@@ -457,7 +459,7 @@ Concrete examples:
 - **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Entries are stored as the literal `affects:` keys, including directory prefixes ending with `/`. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
 - **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records, writes them to a file, and injects the file path as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
 - **Review feedback**: When the review agent rejects a task, it appends `<!-- review-rejection: ... -->` to the task file. On the next attempt, the host reads these lines and injects them as `MATO_REVIEW_FEEDBACK`, so the implementing agent can address the reviewer's concerns.
-- **Review continuity metadata**: The host stores lightweight runtime metadata in `.mato/runtime/taskstate/` and injects an explicit review-context block into review prompts. This keeps follow-up reviews auditable and independent of any future durable Copilot session resume support.
+- **Review continuity metadata**: The host stores lightweight runtime metadata in `.mato/runtime/taskstate/` and injects an explicit review-context block into review prompts. This keeps follow-up reviews auditable and complements durable Copilot session resume rather than relying on it as the only source of continuity.
 
 This pattern keeps agents stateless and single-task-focused while the host provides the coordination intelligence. No agent needs to query other agents directly — the host curates and delivers the relevant context at launch time.
 
