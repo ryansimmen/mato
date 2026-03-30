@@ -1037,6 +1037,115 @@ func TestSelectAndClaimTask_BranchCollisionAddsDisambiguator(t *testing.T) {
 	}
 }
 
+func TestSelectAndClaimTask_ReusesExistingBranchMarker(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	content := strings.Join([]string{
+		"<!-- branch: task/existing-branch -->",
+		"# Retry task",
+		"",
+	}, "\n")
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "retry.md"), content)
+
+	task, err := SelectAndClaimTask(dir, "agent-reuse", candidates("retry.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected claimed task, got nil")
+	}
+	if task.Branch != "task/existing-branch" {
+		t.Fatalf("Branch = %q, want %q", task.Branch, "task/existing-branch")
+	}
+	if !task.HadRecordedBranchMark {
+		t.Fatal("HadRecordedBranchMark = false, want true")
+	}
+	data, err := os.ReadFile(task.TaskPath)
+	if err != nil {
+		t.Fatalf("read claimed task: %v", err)
+	}
+	if strings.Count(string(data), "<!-- branch:") != 1 {
+		t.Fatalf("expected exactly one branch marker, got:\n%s", string(data))
+	}
+}
+
+func TestSelectAndClaimTask_NewTaskDoesNotSetRecordedBranchFlag(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "fresh.md"), "# Fresh\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-fresh", candidates("fresh.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected claimed task, got nil")
+	}
+	if task.HadRecordedBranchMark {
+		t.Fatal("HadRecordedBranchMark = true, want false")
+	}
+}
+
+func TestSelectAndClaimTask_RewritesCollidingExistingBranchMarker(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, DirReadyReview, "active.md"), "<!-- branch: task/existing-branch -->\n# Active\n")
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "retry.md"), "<!-- branch: task/existing-branch -->\n# Retry\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-collision", candidates("retry.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected claimed task, got nil")
+	}
+	if task.Branch == "task/existing-branch" {
+		t.Fatalf("expected branch collision rewrite, got %q", task.Branch)
+	}
+	data, err := os.ReadFile(task.TaskPath)
+	if err != nil {
+		t.Fatalf("read claimed task: %v", err)
+	}
+	if strings.Contains(string(data), "<!-- branch: task/existing-branch -->") {
+		t.Fatalf("stale branch marker should be replaced, got:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), "<!-- branch: "+task.Branch+" -->") {
+		t.Fatalf("new branch marker missing, got:\n%s", string(data))
+	}
+}
+
+func TestSelectAndClaimTask_BranchMarkerWriteFailureRollsBackToBacklog(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	taskPath := filepath.Join(dir, DirBacklog, "retry.md")
+	original := "# Retry\n"
+	testutil.WriteFile(t, taskPath, original)
+
+	origWrite := claimWriteFileFn
+	t.Cleanup(func() { claimWriteFileFn = origWrite })
+	claimWriteFileFn = func(path string, data []byte) error {
+		if path == filepath.Join(dir, DirInProgress, "retry.md") && strings.Contains(string(data), "<!-- branch:") {
+			return fmt.Errorf("simulated branch marker write failure")
+		}
+		return origWrite(path, data)
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-fail", candidates("retry.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected nil task after rollback, got %+v", task)
+	}
+	mustBacklog := filepath.Join(dir, DirBacklog, "retry.md")
+	data, err := os.ReadFile(mustBacklog)
+	if err != nil {
+		t.Fatalf("read rolled-back task: %v", err)
+	}
+	if string(data) != original {
+		t.Fatalf("rolled-back task = %q, want %q", string(data), original)
+	}
+	if _, err := os.Stat(filepath.Join(dir, DirInProgress, "retry.md")); !os.IsNotExist(err) {
+		t.Fatal("task should not remain in in-progress/ after rollback")
+	}
+}
+
 func TestSelectAndClaimTask_BranchCollisionFromMalformedActiveTask(t *testing.T) {
 	dir := setupClaimTestDir(t)
 	broken := strings.Join([]string{
@@ -1131,14 +1240,14 @@ func TestReadBranchFromFile(t *testing.T) {
 	}
 }
 
-func TestWriteBranchComment(t *testing.T) {
+func TestWriteBranchMarker(t *testing.T) {
 	dir := t.TempDir()
 	taskPath := filepath.Join(dir, "task.md")
 	original := "<!-- claimed-by: agent-1 -->\n# My Task\nDo it.\n"
 	testutil.WriteFile(t, taskPath, original)
 
-	if err := writeBranchComment(taskPath, "task/my-task"); err != nil {
-		t.Fatalf("writeBranchComment: %v", err)
+	if err := WriteBranchMarker(taskPath, "task/my-task"); err != nil {
+		t.Fatalf("WriteBranchMarker: %v", err)
 	}
 
 	data, err := os.ReadFile(taskPath)
@@ -1151,6 +1260,28 @@ func TestWriteBranchComment(t *testing.T) {
 	want := "<!-- claimed-by: agent-1 -->\n<!-- branch: task/my-task -->\n# My Task\nDo it.\n"
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestWriteBranchMarker_ReplacesExistingStandaloneMarker(t *testing.T) {
+	dir := t.TempDir()
+	taskPath := filepath.Join(dir, "task.md")
+	original := "<!-- claimed-by: agent-1 -->\n<!-- branch: task/old -->\n# My Task\n"
+	testutil.WriteFile(t, taskPath, original)
+
+	if err := WriteBranchMarker(taskPath, "task/new"); err != nil {
+		t.Fatalf("WriteBranchMarker: %v", err)
+	}
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "task/old") {
+		t.Fatalf("old branch marker still present:\n%s", got)
+	}
+	if !strings.Contains(got, "<!-- branch: task/new -->") {
+		t.Fatalf("new branch marker missing:\n%s", got)
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/sessionmeta"
+	"mato/internal/taskstate"
 	"mato/internal/testutil"
 )
 
@@ -164,6 +166,59 @@ func TestProcessQueueEmptyReadyToMergeReturnsZero(t *testing.T) {
 
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
 		t.Fatalf("ProcessQueue() = %d, want 0", got)
+	}
+}
+
+func TestProcessQueue_AlreadyMergedDuplicateDestinationCleansRuntimeState(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskName := "already-merged-runtime-cleanup.md"
+	taskBranch := "task/already-merged-runtime-cleanup"
+	readyPath := filepath.Join(tasksDir, queue.DirReadyMerge, taskName)
+	completedPath := filepath.Join(tasksDir, queue.DirCompleted, taskName)
+	readyContent := "---\nid: already-merged-runtime-cleanup\npriority: 5\n---\n<!-- branch: " + taskBranch + " -->\n# Already Merged Runtime Cleanup\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"
+	if err := os.WriteFile(readyPath, []byte(readyContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile ready task: %v", err)
+	}
+	if err := os.WriteFile(completedPath, []byte("already moved\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile completed task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskName, func(state *taskstate.TaskState) {
+		state.LastOutcome = "review-approved"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
+		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, taskName, taskBranch); err != nil {
+			t.Fatalf("seed %s session: %v", kind, err)
+		}
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+	state, err := taskstate.Load(tasksDir, taskName)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should be deleted, got %+v", state)
+	}
+	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
+		session, err := sessionmeta.Load(tasksDir, kind, taskName)
+		if err != nil {
+			t.Fatalf("Load %s session: %v", kind, err)
+		}
+		if session != nil {
+			t.Fatalf("%s session should be deleted, got %+v", kind, session)
+		}
 	}
 }
 
@@ -739,6 +794,9 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- failure: merge-queue") {
 		t.Fatalf("backlog conflicted task should contain merge failure record, got %q", string(data))
+	}
+	if strings.Contains(string(data), "<!-- branch:") {
+		t.Fatalf("backlog conflicted task should have branch marker cleared after cleanup, got %q", string(data))
 	}
 	if out, err := git.Output(repoRoot, "ls-remote", "--heads", "origin", conflictBranch); err != nil {
 		t.Fatalf("git ls-remote after ProcessQueue: %v", err)

@@ -493,42 +493,55 @@ func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
 	}
 }
 
-func TestHostReplacesExistingRemoteBranch(t *testing.T) {
-	// When a task is retried, the host creates a fresh branch and force-pushes,
-	// replacing the stale branch from the prior attempt.
+func TestHostRetryResumesExistingRemoteBranch(t *testing.T) {
+	// When a task is retried with a recorded branch, the host should resume from
+	// the existing task branch tip instead of recreating the branch from target.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", "<!-- claimed-by: test-agent-stale  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
+	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", "<!-- claimed-by: test-agent-stale  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/my-task -->\n# My Task\n")
 
-	// Simulate a prior attempt that left a stale branch on the host repo.
+	// Simulate a prior attempt that already pushed work to the task branch.
 	mustGitOutput(t, repoRoot, "checkout", "-b", "task/my-task", "mato")
-	testutil.WriteFile(t, filepath.Join(repoRoot, "stale.txt"), "stale branch\n")
-	mustGitOutput(t, repoRoot, "add", "stale.txt")
-	mustGitOutput(t, repoRoot, "commit", "-m", "stale branch work")
+	testutil.WriteFile(t, filepath.Join(repoRoot, "resume.txt"), "previous branch work\n")
+	mustGitOutput(t, repoRoot, "add", "resume.txt")
+	mustGitOutput(t, repoRoot, "commit", "-m", "previous branch work")
 	mustGitOutput(t, repoRoot, "checkout", "mato")
 	testutil.WriteFile(t, filepath.Join(repoRoot, "base.txt"), "advanced target\n")
 	mustGitOutput(t, repoRoot, "add", "base.txt")
 	mustGitOutput(t, repoRoot, "commit", "-m", "advance mato")
 
-	// Host creates a fresh clone and new task branch from the current target.
+	// A retry clone should resume from the existing remote task branch.
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
-	mustGitOutput(t, cloneDir, "checkout", "-b", "task/my-task")
+	result, err := git.EnsureBranch(cloneDir, "task/my-task")
+	if err != nil {
+		t.Fatalf("git.EnsureBranch: %v", err)
+	}
+	if result.Source != git.BranchSourceRemote {
+		t.Fatalf("EnsureBranch source = %q, want %q", result.Source, git.BranchSourceRemote)
+	}
 
-	// Agent makes changes and commits on the fresh branch.
-	testutil.WriteFile(t, filepath.Join(cloneDir, "fresh.txt"), "fresh branch\n")
-	mustGitOutput(t, cloneDir, "add", "fresh.txt")
+	if got := strings.TrimSpace(mustGitOutput(t, cloneDir, "show", "HEAD:resume.txt")); got != "previous branch work" {
+		t.Fatalf("resume.txt in resumed clone = %q, want %q", got, "previous branch work")
+	}
+	if _, err := git.Output(cloneDir, "show", "HEAD:base.txt"); err == nil {
+		t.Fatal("did not expect resumed branch tip to silently restart from advanced target branch")
+	}
+
+	// Agent makes follow-up changes on the resumed branch.
+	testutil.WriteFile(t, filepath.Join(cloneDir, "followup.txt"), "follow-up work\n")
+	mustGitOutput(t, cloneDir, "add", "followup.txt")
 	mustGitOutput(t, cloneDir, "commit", "-m", "My Task")
 
-	// Host force-pushes, replacing the stale branch.
-	mustGitOutput(t, cloneDir, "push", "--force-with-lease", "origin", "task/my-task")
+	// Host pushes the updated resumed branch.
+	mustGitOutput(t, cloneDir, "push", "origin", "task/my-task")
 
-	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "task/my-task:fresh.txt")); got != "fresh branch" {
-		t.Fatalf("fresh.txt on remote branch = %q, want %q", got, "fresh branch")
+	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "task/my-task:resume.txt")); got != "previous branch work" {
+		t.Fatalf("resume.txt on remote branch = %q, want %q", got, "previous branch work")
 	}
-	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "task/my-task:base.txt")); got != "advanced target" {
-		t.Fatalf("base.txt on remote branch = %q, want %q", got, "advanced target")
+	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "task/my-task:followup.txt")); got != "follow-up work" {
+		t.Fatalf("followup.txt on remote branch = %q, want %q", got, "follow-up work")
 	}
-	if _, err := git.Output(repoRoot, "show", "task/my-task:stale.txt"); err == nil {
-		t.Fatal("expected pre-existing remote branch content to be replaced by the newly pushed task branch")
+	if _, err := git.Output(repoRoot, "show", "task/my-task:base.txt"); err == nil {
+		t.Fatal("did not expect advanced target-only content to appear on resumed branch without merge")
 	}
 }
 

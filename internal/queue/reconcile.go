@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"mato/internal/frontmatter"
+	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
 )
 
@@ -71,6 +72,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
 		} else {
+			deleteTaskState(tasksDir, pf.Filename)
 			moved = true
 		}
 	}
@@ -83,6 +85,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
 		} else {
+			deleteTaskState(tasksDir, pf.Filename)
 			moved = true
 		}
 	}
@@ -98,6 +101,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 			} else {
+				deleteTaskState(tasksDir, snap.Filename)
 				moved = true
 			}
 		}
@@ -162,6 +166,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 		} else {
+			deleteTaskState(tasksDir, snap.Filename)
 			moved = true
 		}
 	}
@@ -204,6 +209,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 				// check in step 1 prevents duplicate records on the next pass.
 				fmt.Fprintf(os.Stderr, "warning: could not move cycle member %s to failed/: %v\n", snap.Filename, err)
 			} else {
+				deleteTaskState(tasksDir, snap.Filename)
 				moved = true
 			}
 		}
@@ -237,6 +243,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 			} else {
+				deleteTaskState(tasksDir, snap.Filename)
 				moved = true
 			}
 			continue
@@ -250,6 +257,10 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	}
 
 	return moved
+}
+
+func deleteTaskState(tasksDir, filename string) {
+	runtimecleanup.DeleteAll(tasksDir, filename)
 }
 
 // CountPromotableWaitingTasks is a read-only variant of ReconcileReadyQueue.

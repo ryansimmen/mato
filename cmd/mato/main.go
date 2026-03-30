@@ -184,6 +184,24 @@ func resolveStringOption(flagVal, envKey string, configVal *string) string {
 	return ""
 }
 
+func resolveBoolOption(envKey string, configVal *bool, defaultVal bool) (bool, error) {
+	raw, ok := os.LookupEnv(envKey)
+	if ok && strings.TrimSpace(raw) != "" {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "1", "true", "yes", "on":
+			return true, nil
+		case "0", "false", "no", "off":
+			return false, nil
+		default:
+			return defaultVal, fmt.Errorf("parse %s %q: must be true or false", envKey, raw)
+		}
+	}
+	if configVal != nil {
+		return *configVal, nil
+	}
+	return defaultVal, nil
+}
+
 func validateReasoningEffort(value, flagName string) error {
 	if !validReasoningEfforts[value] {
 		return fmt.Errorf("invalid %s %q: must be one of low, medium, high, xhigh", flagName, value)
@@ -208,6 +226,11 @@ func resolveRunOptions(flags runFlags, cfg config.Config) (runner.RunOptions, er
 	if opts.ReviewModel == "" {
 		opts.ReviewModel = runner.DefaultReviewModel
 	}
+	resumeEnabled, err := resolveBoolOption("MATO_REVIEW_SESSION_RESUME_ENABLED", cfg.ReviewSessionResume, true)
+	if err != nil {
+		return opts, err
+	}
+	opts.ReviewSessionResumeEnabled = resumeEnabled
 	opts.TaskReasoningEffort = resolveStringOption(flags.TaskReasoningEffort, "MATO_TASK_REASONING_EFFORT", cfg.TaskReasoningEffort)
 	if opts.TaskReasoningEffort == "" {
 		opts.TaskReasoningEffort = runner.DefaultReasoningEffort
