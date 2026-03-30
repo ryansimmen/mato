@@ -30,7 +30,7 @@ func TestParseBranchComment(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := ParseBranchComment([]byte(tt.data))
+			got, ok := parseBranchComment([]byte(tt.data))
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
@@ -38,6 +38,92 @@ func TestParseBranchComment(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseBranchMarkerLine(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		want   string
+		wantOK bool
+	}{
+		{"standalone", "<!-- branch: task/foo -->\n# Task\n", "task/foo", true},
+		{"ignores embedded prose", "Branch is <!-- branch: task/foo --> inline.\n", "", false},
+		{"ignores fenced code", "```\n<!-- branch: task/foo -->\n```\n<!-- branch: task/bar -->\n", "task/bar", true},
+		{"first standalone wins", "<!-- branch: task/first -->\n<!-- branch: task/second -->\n", "task/first", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseBranchMarkerLine([]byte(tt.data))
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReplaceBranchMarkerLine(t *testing.T) {
+	tests := []struct {
+		name         string
+		data         string
+		newBranch    string
+		want         string
+		wantFound    bool
+		wantReplaced bool
+	}{
+		{
+			name:         "missing marker",
+			data:         "# Task\n",
+			newBranch:    "task/new",
+			want:         "# Task\n",
+			wantFound:    false,
+			wantReplaced: false,
+		},
+		{
+			name:         "matching marker unchanged",
+			data:         "<!-- branch: task/same -->\n# Task\n",
+			newBranch:    "task/same",
+			want:         "<!-- branch: task/same -->\n# Task\n",
+			wantFound:    true,
+			wantReplaced: false,
+		},
+		{
+			name:         "replace first standalone marker",
+			data:         "<!-- branch: task/old -->\n```\n<!-- branch: task/fenced -->\n```\n<!-- branch: task/second -->\n",
+			newBranch:    "task/new",
+			want:         "<!-- branch: task/new -->\n```\n<!-- branch: task/fenced -->\n```\n<!-- branch: task/second -->\n",
+			wantFound:    true,
+			wantReplaced: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found, replaced := ReplaceBranchMarkerLine([]byte(tt.data), tt.newBranch)
+			if found != tt.wantFound {
+				t.Fatalf("found = %v, want %v", found, tt.wantFound)
+			}
+			if replaced != tt.wantReplaced {
+				t.Fatalf("replaced = %v, want %v", replaced, tt.wantReplaced)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("got %q, want %q", string(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestRemoveBranchMarkerLine(t *testing.T) {
+	data := "<!-- branch: task/remove -->\n# Task\n"
+	got, found, removed := RemoveBranchMarkerLine([]byte(data))
+	if !found || !removed {
+		t.Fatalf("found=%v removed=%v, want true true", found, removed)
+	}
+	if string(got) != "# Task\n" {
+		t.Fatalf("got %q, want %q", string(got), "# Task\n")
 	}
 }
 

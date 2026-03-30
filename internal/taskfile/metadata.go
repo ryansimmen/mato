@@ -60,14 +60,83 @@ var (
 	cancelledMarkerStr = "<!-- cancelled:"
 )
 
-// ParseBranchComment extracts the branch name from a <!-- branch: ... -->
+func parseBranchCommentLine(trimmed string) (string, bool) {
+	m := branchCommentRe.FindStringSubmatch(trimmed)
+	if len(m) < 2 || m[0] != trimmed {
+		return "", false
+	}
+	return m[1], true
+}
+
+// parseBranchComment extracts the branch name from a <!-- branch: ... -->
 // comment in the given data. Returns the branch name and true if found.
-func ParseBranchComment(data []byte) (string, bool) {
+func parseBranchComment(data []byte) (string, bool) {
 	m := branchCommentRe.FindSubmatch(data)
 	if len(m) < 2 {
 		return "", false
 	}
 	return string(m[1]), true
+}
+
+// ParseBranchMarkerLine extracts the first branch marker that appears as a
+// standalone line outside code fences. Marker-like text embedded in prose or
+// code blocks is ignored.
+func ParseBranchMarkerLine(data []byte) (string, bool) {
+	var branch string
+	var ok bool
+	forEachMarkerLine(data, func(trimmed string) bool {
+		branch, ok = parseBranchCommentLine(trimmed)
+		return ok
+	})
+	return branch, ok
+}
+
+// ReplaceBranchMarkerLine replaces the first standalone branch marker line
+// outside code fences. It preserves leading and trailing horizontal whitespace
+// on the replaced line.
+func ReplaceBranchMarkerLine(data []byte, newBranch string) (result []byte, found bool, replaced bool) {
+	comment := "<!-- branch: " + newBranch + " -->"
+	var lines []string
+	forEachTaskLine(string(data), func(line, trimmed string, inFence bool) bool {
+		if !found && !inFence && !isFenceLine(trimmed) {
+			branch, ok := parseBranchCommentLine(trimmed)
+			if ok {
+				found = true
+				if branch != newBranch {
+					replaced = true
+					leadingLen := len(line) - len(strings.TrimLeft(line, " \t"))
+					trailingLen := len(line) - len(strings.TrimRight(line, " \t"))
+					prefix := line[:leadingLen]
+					suffix := ""
+					if trailingLen > 0 {
+						suffix = line[len(line)-trailingLen:]
+					}
+					line = prefix + comment + suffix
+				}
+			}
+		}
+		lines = append(lines, line)
+		return false
+	})
+	return []byte(strings.Join(lines, "\n")), found, replaced
+}
+
+// RemoveBranchMarkerLine removes the first standalone branch marker line
+// outside code fences. It preserves all other file content.
+func RemoveBranchMarkerLine(data []byte) (result []byte, found bool, removed bool) {
+	var lines []string
+	forEachTaskLine(string(data), func(line, trimmed string, inFence bool) bool {
+		if !found && !inFence && !isFenceLine(trimmed) {
+			if _, ok := parseBranchCommentLine(trimmed); ok {
+				found = true
+				removed = true
+				return false
+			}
+		}
+		lines = append(lines, line)
+		return false
+	})
+	return []byte(strings.Join(lines, "\n")), found, removed
 }
 
 // ParseClaimedBy extracts the agent ID from a <!-- claimed-by: ... -->

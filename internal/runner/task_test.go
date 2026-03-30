@@ -15,6 +15,9 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/sessionmeta"
+	"mato/internal/taskfile"
+	"mato/internal/taskstate"
 	"mato/internal/testutil"
 )
 
@@ -118,9 +121,9 @@ func TestMoveTaskToReviewWithMarker_AppendFailsRollback(t *testing.T) {
 		TaskPath: inProgressPath,
 	}
 
-	origAppend := appendToFileFn
-	t.Cleanup(func() { appendToFileFn = origAppend })
-	appendToFileFn = func(path, text string) error {
+	origWriteBranchMarker := writeBranchMarkerFn
+	t.Cleanup(func() { writeBranchMarkerFn = origWriteBranchMarker })
+	writeBranchMarkerFn = func(path, branch string) error {
 		return fmt.Errorf("simulated write error")
 	}
 
@@ -143,6 +146,38 @@ func TestMoveTaskToReviewWithMarker_AppendFailsRollback(t *testing.T) {
 	}
 }
 
+func TestMoveTaskToReviewWithMarker_ReplacesDuplicateMarkers(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "duplicate-markers.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent -->\n<!-- branch: task/old -->\n<!-- branch: task/legacy -->\n# Task\n"), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/new",
+		Title:    "Task",
+		TaskPath: inProgressPath,
+	}
+
+	if err := moveTaskToReviewWithMarker(tasksDir, claimed, claimed.Branch); err != nil {
+		t.Fatalf("moveTaskToReviewWithMarker: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyReview, taskFile))
+	if err != nil {
+		t.Fatalf("read ready task: %v", err)
+	}
+	if branch := taskfile.ParseBranch(filepath.Join(tasksDir, queue.DirReadyReview, taskFile)); branch != "task/new" {
+		t.Fatalf("ParseBranch = %q, want %q", branch, "task/new")
+	}
+	if strings.Contains(string(data), "<!-- branch: task/old -->") {
+		t.Fatalf("old primary branch marker should be replaced:\n%s", string(data))
+	}
+}
+
 func TestPostAgentPush_TaskAlreadyGone(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
@@ -161,7 +196,7 @@ func TestPostAgentPush_TaskAlreadyGone(t *testing.T) {
 		targetBranch: "main",
 	}
 
-	err := postAgentPush(env, "agent1", claimed, t.TempDir())
+	err := postAgentPush(env, "agent1", claimed, t.TempDir(), "deadbeef")
 	if err != nil {
 		t.Fatalf("expected nil when task is already gone, got: %v", err)
 	}
@@ -206,7 +241,11 @@ func TestPostAgentPush_NoCommits(t *testing.T) {
 		targetBranch: "main",
 	}
 
-	err := postAgentPush(env, "agent1", claimed, cloneDir)
+	startingTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	err = postAgentPush(env, "agent1", claimed, cloneDir, strings.TrimSpace(startingTip))
 	if err != nil {
 		t.Fatalf("expected nil when no commits exist, got: %v", err)
 	}
@@ -214,6 +253,182 @@ func TestPostAgentPush_NoCommits(t *testing.T) {
 	// Task should still be in in-progress/ (not moved).
 	if _, statErr := os.Stat(inProgressPath); statErr != nil {
 		t.Fatal("task should remain in in-progress/ when no commits made")
+	}
+}
+
+func TestPostAgentPush_RecordsWorkSessionHead(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	defer git.RemoveClone(cloneDir)
+
+	taskFile := "session-work.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("# Session Work\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/session-work",
+		Title:    "Session Work",
+		TaskPath: inProgressPath,
+	}
+	if _, err := git.Output(cloneDir, "checkout", "-b", claimed.Branch); err != nil {
+		t.Fatalf("checkout branch: %v", err)
+	}
+	startingTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse starting tip: %v", err)
+	}
+	startingTip = strings.TrimSpace(startingTip)
+	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, taskFile, func(session *sessionmeta.Session) {
+		session.TaskBranch = claimed.Branch
+	}); err != nil {
+		t.Fatalf("seed work session: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, "work.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile clone change: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "add", "work.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "commit", "-m", "work session update"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, targetBranch: "mato"}
+	if err := postAgentPush(env, "agent1", claimed, cloneDir, startingTip); err != nil {
+		t.Fatalf("postAgentPush: %v", err)
+	}
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindWork, taskFile)
+	if err != nil {
+		t.Fatalf("Load work session: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected work session to exist")
+	}
+	currentTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse current tip: %v", err)
+	}
+	if session.LastHeadSHA != strings.TrimSpace(currentTip) {
+		t.Fatalf("LastHeadSHA = %q, want %q", session.LastHeadSHA, strings.TrimSpace(currentTip))
+	}
+}
+
+func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	origCreateClone := createCloneFn
+	origRemoveClone := removeCloneFn
+	origEnsureBranch := ensureBranchFn
+	t.Cleanup(func() {
+		execCommandContext = origExecCommandContext
+		createCloneFn = origCreateClone
+		removeCloneFn = origRemoveClone
+		ensureBranchFn = origEnsureBranch
+	})
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	createCloneFn = func(string) (string, error) { return cloneDir, nil }
+	removeCloneFn = func(string) {}
+	ensureBranchFn = func(cloneDir, branch string) (git.EnsureBranchResult, error) {
+		if _, err := git.Output(cloneDir, "checkout", "-b", branch); err != nil {
+			return git.EnsureBranchResult{}, err
+		}
+		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceLocal}, nil
+	}
+	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, "task.md", func(session *sessionmeta.Session) {
+		session.CopilotSessionID = "work-session-123"
+		session.TaskBranch = "task/task"
+	}); err != nil {
+		t.Fatalf("seed work session: %v", err)
+	}
+
+	var capturedArgs []string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		return cmd
+	}
+
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	env := envConfig{
+		repoRoot:           repoRoot,
+		tasksDir:           tasksDir,
+		workdir:            "/workspace",
+		copilotPath:        "/bin/true",
+		gitPath:            "/usr/bin/git",
+		gitUploadPackPath:  "/usr/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/bin/git-receive-pack",
+		ghPath:             "/bin/true",
+		homeDir:            "/home/test",
+		copilotConfigDir:   t.TempDir(),
+		copilotCacheDir:    t.TempDir(),
+		image:              "ubuntu:24.04",
+		targetBranch:       "mato",
+	}
+	run := runContext{agentID: "agent1", prompt: "test prompt", model: "claude-opus-4.6", reasoningEffort: "high", timeout: time.Second}
+	claimed := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
+
+	if err := runOnce(context.Background(), env, run, claimed); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "--resume=work-session-123") {
+		t.Fatalf("expected work session resume in docker args, got %s", joined)
+	}
+}
+
+func TestRunOnce_BranchSetupFailureDoesNotCreateWorkSession(t *testing.T) {
+	origCreateClone := createCloneFn
+	origRemoveClone := removeCloneFn
+	origEnsureBranch := ensureBranchFn
+	t.Cleanup(func() {
+		createCloneFn = origCreateClone
+		removeCloneFn = origRemoveClone
+		ensureBranchFn = origEnsureBranch
+	})
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	createCloneFn = func(string) (string, error) { return cloneDir, nil }
+	removeCloneFn = func(string) {}
+	ensureBranchFn = func(string, string) (git.EnsureBranchResult, error) {
+		return git.EnsureBranchResult{}, fmt.Errorf("simulated branch setup failure")
+	}
+
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, targetBranch: "mato"}
+	run := runContext{agentID: "agent1", timeout: time.Second}
+	claimed := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
+
+	err = runOnce(context.Background(), env, run, claimed)
+	if err == nil {
+		t.Fatal("expected runOnce error")
+	}
+	session, loadErr := sessionmeta.Load(tasksDir, sessionmeta.KindWork, "task.md")
+	if loadErr != nil {
+		t.Fatalf("Load work session: %v", loadErr)
+	}
+	if session != nil {
+		t.Fatalf("work session should not exist after pre-launch failure, got %+v", session)
 	}
 }
 
@@ -238,11 +453,11 @@ func TestPostAgentPush_LogProbeFailureReturnsError(t *testing.T) {
 		targetBranch: "main",
 	}
 
-	err := postAgentPush(env, "agent1", claimed, t.TempDir())
+	err := postAgentPush(env, "agent1", claimed, t.TempDir(), "deadbeef")
 	if err == nil {
 		t.Fatal("expected error when git log probe fails")
 	}
-	if !strings.Contains(err.Error(), "determine whether agent committed work") {
+	if !strings.Contains(err.Error(), "determine current task branch tip") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -260,9 +475,13 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 
 	origCreate := createCloneFn
 	origRemove := removeCloneFn
+	origWriteBranchMarker := writeBranchMarkerFn
+	origExecCommandContext := execCommandContext
 	t.Cleanup(func() {
 		createCloneFn = origCreate
 		removeCloneFn = origRemove
+		writeBranchMarkerFn = origWriteBranchMarker
+		execCommandContext = origExecCommandContext
 	})
 
 	var createdClone string
@@ -285,6 +504,16 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 		removeCalled = true
 		os.RemoveAll(dir)
 	}
+	writeBranchMarkerFn = func(path, branch string) error {
+		return fmt.Errorf("simulated branch marker failure")
+	}
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "sh", "-c", "printf 'agent work\n' > repo-change.txt && git add repo-change.txt && git commit -m 'agent work' >/dev/null 2>&1")
+		cmd.Dir = createdClone
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		return cmd
+	}
 
 	taskFile := "preserve-clone.md"
 	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
@@ -297,38 +526,6 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 		Title:    "Preserve Clone",
 		TaskPath: taskPath,
 	}
-
-	dockerDir := t.TempDir()
-	dockerLog := filepath.Join(dockerDir, "docker.log")
-	dockerScript := filepath.Join(dockerDir, "docker")
-	script := "#!/bin/sh\n" +
-		"printf 'docker %s\\n' \"$*\" >> \"$DOCKER_LOG\"\n" +
-		"exit 0\n"
-
-	if err := os.WriteFile(dockerScript, []byte(script), 0o755); err != nil {
-		t.Fatalf("os.WriteFile docker stub: %v", err)
-	}
-	origPath, pathOk := os.LookupEnv("PATH")
-	origDockerLog, dockerLogOk := os.LookupEnv("DOCKER_LOG")
-	if err := os.Setenv("PATH", dockerDir+string(os.PathListSeparator)+origPath); err != nil {
-		t.Fatalf("os.Setenv PATH: %v", err)
-	}
-	if err := os.Setenv("DOCKER_LOG", dockerLog); err != nil {
-		t.Fatalf("os.Setenv DOCKER_LOG: %v", err)
-	}
-	t.Cleanup(func() {
-		if pathOk {
-			os.Setenv("PATH", origPath)
-		} else {
-			os.Unsetenv("PATH")
-		}
-		if dockerLogOk {
-			os.Setenv("DOCKER_LOG", origDockerLog)
-		} else {
-			os.Unsetenv("DOCKER_LOG")
-		}
-	})
-
 	env := envConfig{
 		repoRoot:           repoRoot,
 		tasksDir:           tasksDir,
@@ -351,13 +548,13 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 
 	err := runOnce(context.Background(), env, run, claimed)
 	if err == nil {
-		t.Fatal("expected runOnce error when postAgentPush probe fails")
+		t.Fatal("expected runOnce error when postAgentPush push fails")
 	}
 	if !strings.Contains(err.Error(), "post-agent push failed; preserving clone at") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "determine whether agent committed work") {
-		t.Fatalf("error should include log probe failure, got: %v", err)
+	if !strings.Contains(err.Error(), "simulated branch marker failure") {
+		t.Fatalf("error should include branch marker failure, got: %v", err)
 	}
 	if removeCalled {
 		t.Fatal("clone should be preserved when postAgentPush fails")
@@ -732,7 +929,7 @@ func TestPostAgentPush_HappyPath(t *testing.T) {
 	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		err := postAgentPush(env, "agent1", claimed, cloneDir)
+		err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -844,7 +1041,7 @@ func TestPostAgentPush_PushFailure(t *testing.T) {
 		targetBranch: "main",
 	}
 
-	err := postAgentPush(env, "agent1", claimed, cloneDir)
+	err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
 
 	// Should return a push error.
 	if err == nil {
@@ -924,7 +1121,7 @@ func TestPostAgentPush_MessagesContainChangedFiles(t *testing.T) {
 	}
 
 	captureStdoutStderr(t, func() {
-		if err := postAgentPush(env, "agent1", claimed, cloneDir); err != nil {
+		if err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -981,7 +1178,7 @@ func TestPostAgentPush_DestinationCollisionPreventsPush(t *testing.T) {
 	}
 
 	_, stderr := captureStdoutStderr(t, func() {
-		err := postAgentPush(env, "agent1", claimed, cloneDir)
+		err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
 		if err == nil {
 			t.Fatal("expected error when destination already exists")
 		}
@@ -1004,6 +1201,155 @@ func TestPostAgentPush_DestinationCollisionPreventsPush(t *testing.T) {
 	// Task should still be in in-progress/.
 	if _, statErr := os.Stat(inProgressPath); statErr != nil {
 		t.Fatalf("task should remain in in-progress/: %v", statErr)
+	}
+}
+
+func TestPostAgentPush_NoOpResumedBranchSkipsPush(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "resume-noop.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-noop -->\n# Resume Noop\n"), 0o644)
+
+	cloneDir := setupGitCloneWithCommits(t, "main", "task/resume-noop")
+	startingTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/resume-noop",
+		Title:    "Resume Noop",
+		TaskPath: inProgressPath,
+	}
+	env := envConfig{tasksDir: tasksDir, targetBranch: "main"}
+
+	if err := postAgentPush(env, "agent1", claimed, cloneDir, strings.TrimSpace(startingTip)); err != nil {
+		t.Fatalf("postAgentPush: %v", err)
+	}
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("task should remain in in-progress/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, taskFile)); !os.IsNotExist(err) {
+		t.Fatal("task should not move to ready-for-review/ when branch tip is unchanged")
+	}
+}
+
+func TestPostAgentPush_RecordsWorkTaskState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "taskstate.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Taskstate\n"), 0o644)
+
+	cloneDir := setupGitCloneWithCommits(t, "main", "task/taskstate")
+	currentTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	currentTip = strings.TrimSpace(currentTip)
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/taskstate", Title: "Taskstate", TaskPath: inProgressPath}
+	env := envConfig{tasksDir: tasksDir, targetBranch: "main"}
+	if err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef"); err != nil {
+		t.Fatalf("postAgentPush: %v", err)
+	}
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to be written")
+	}
+	if state.TaskBranch != claimed.Branch {
+		t.Fatalf("TaskBranch = %q, want %q", state.TaskBranch, claimed.Branch)
+	}
+	if state.TargetBranch != "main" {
+		t.Fatalf("TargetBranch = %q, want %q", state.TargetBranch, "main")
+	}
+	if state.LastHeadSHA != currentTip {
+		t.Fatalf("LastHeadSHA = %q, want %q", state.LastHeadSHA, currentTip)
+	}
+	if state.LastOutcome != "work-pushed" {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "work-pushed")
+	}
+}
+
+func TestRunOnce_RecordedBranchResumeRequiresLocalOrRemoteSource(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskFile := "resume-guard.md"
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-guard -->\n# Resume Guard\n"), 0o644)
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/resume-guard", Title: "Resume Guard", TaskPath: taskPath, HadRecordedBranchMark: true}
+
+	origEnsure := ensureBranchFn
+	t.Cleanup(func() { ensureBranchFn = origEnsure })
+	ensureBranchFn = func(repoRoot, branch string) (git.EnsureBranchResult, error) {
+		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceHeadRemoteMissing}, nil
+	}
+
+	dockerDir := t.TempDir()
+	dockerScript := filepath.Join(dockerDir, "docker")
+	if err := os.WriteFile(dockerScript, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write docker stub: %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, workdir: repoRoot, copilotPath: "/bin/true", gitPath: "/usr/bin/git", gitUploadPackPath: "/usr/bin/git-upload-pack", gitReceivePackPath: "/usr/bin/git-receive-pack", ghPath: "/bin/true", goRoot: "/usr", homeDir: t.TempDir(), targetBranch: "mato", image: "test-image"}
+	run := runContext{agentID: "agent1", prompt: "test", timeout: time.Second}
+
+	err := runOnce(context.Background(), env, run, claimed)
+	if err == nil {
+		t.Fatal("expected runOnce to fail closed for recorded branch fallback")
+	}
+	if !strings.Contains(err.Error(), "unsupported branch source") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunOnce_UsesEnsureBranchForRecordedResume(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskFile := "resume-ok.md"
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-ok -->\n# Resume OK\n"), 0o644)
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/resume-ok", Title: "Resume OK", TaskPath: taskPath, HadRecordedBranchMark: true}
+
+	origEnsure := ensureBranchFn
+	t.Cleanup(func() { ensureBranchFn = origEnsure })
+	called := false
+	ensureBranchFn = func(repoRoot, branch string) (git.EnsureBranchResult, error) {
+		called = true
+		if _, err := git.Output(repoRoot, "checkout", "-b", branch); err != nil {
+			return git.EnsureBranchResult{}, err
+		}
+		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceRemote}, nil
+	}
+
+	dockerDir := t.TempDir()
+	dockerLog := filepath.Join(dockerDir, "docker.log")
+	dockerScript := filepath.Join(dockerDir, "docker")
+	script := "#!/bin/sh\nprintf 'docker %s\\n' \"$*\" >> \"$DOCKER_LOG\"\nexit 0\n"
+	if err := os.WriteFile(dockerScript, []byte(script), 0o755); err != nil {
+		t.Fatalf("write docker stub: %v", err)
+	}
+	t.Setenv("PATH", dockerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("DOCKER_LOG", dockerLog)
+
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, workdir: repoRoot, copilotPath: "/bin/true", gitPath: "/usr/bin/git", gitUploadPackPath: "/usr/bin/git-upload-pack", gitReceivePackPath: "/usr/bin/git-receive-pack", ghPath: "/bin/true", goRoot: "/usr", homeDir: t.TempDir(), targetBranch: "mato", image: "test-image"}
+	run := runContext{agentID: "agent1", prompt: "test", timeout: time.Second}
+
+	if err := runOnce(context.Background(), env, run, claimed); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if !called {
+		t.Fatal("expected ensureBranchFn to be called")
 	}
 }
 
