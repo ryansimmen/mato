@@ -2,53 +2,125 @@
 
 ## 1. Goal
 
-Deliver two tightly sequenced improvements to the mato task orchestrator:
+Deliver two sequenced improvements to the mato task orchestrator:
 
-1. **State Machine Formalization** — Centralize validation and execution of task queue state transitions so the queue state diagram is explicit, testable, and reusable instead of being enforced by scattered `AtomicMove` call sites.
-2. **`mato log` Command** — Add a history-oriented CLI command that answers "what happened recently?" across the queue by gathering merged, failed, and rejected events from durable on-disk sources.
+1. **State Machine Formalization** — make queue transitions explicit and
+   validated instead of relying on scattered `AtomicMove` call sites.
+2. **`mato log` Command** — add a history-oriented command that answers
+   "what happened recently?" from durable on-disk sources.
 
-**Sequencing:** Phase A (state machine) first, Phase B (`mato log`) second. The state machine reduces transition-logic duplication and creates a hook for a future journal. `mato log` phase 1 reads existing durable artifacts.
+The recommended order remains the same: land the transition core first, migrate
+real call sites second, then build `mato log` on top of the settled queue
+semantics.
 
-## 2. Scope
+## 2. Current Code State
+
+As of the current codebase:
+
+- There is **no** `internal/queue/transition.go` yet.
+- There is **no** `internal/history/` package and **no** `mato log` command.
+- Canonical queue transitions still use raw `AtomicMove` across
+  `internal/queue/`, `internal/runner/`, and `internal/merge/`.
+- The host now maintains runtime metadata in `internal/taskstate/` and cleans it
+  up through `internal/runtimecleanup/`; any transition refactor must preserve
+  those side effects and boundaries.
+- Review flow now uses ephemeral verdict files in
+  `.mato/messages/verdict-<task>.json`; those are coordination artifacts, not a
+  durable history source.
+- Merge flow already writes durable completion-detail records in
+  `.mato/messages/completions/*.json`.
+- `messaging.ReadAllCompletionDetails()` is not sufficient for `mato log`
+  because it still fails fast on non-`IsNotExist` per-file read errors.
+
+## 3. Scope
 
 ### In scope
 
-**Phase A — State Machine Formalization:**
-- `State` type, legal-edge validation, `ValidateTransition`, `TransitionTask`, `StateFromDir`, `DirFromState` in `internal/queue/`
-- Incremental migration of all canonical `AtomicMove`-based queue transitions
-- Exhaustive unit tests
+**Phase A — State Machine Formalization**
 
-**Phase B — `mato log` Command:**
-- `log` subcommand with `--limit N`, `--format text|json`
-- Event types: MERGED, FAILED, REJECTED
-- Per-file warn-and-skip with aggregate failure rule
-- Every durable marker instance as a separate event
-- Both failure marker formats (`step=... error=...` and `— reason`)
-- Two-tier `CurrentState` resolution (history-local ID + filename indexes)
-- Stable sorting, function-variable hooks, renderers, tests, docs
+- Add `State`, `StateFromDir`, `DirFromState`, `ValidateTransition`,
+  `TransitionTask`, and exhaustive tests in `internal/queue/`
+- Migrate real queue transitions incrementally
+- Use `TransitionTask` for same-filename moves and `ValidateTransition` for
+  paths that keep bespoke move helpers or change destination filenames
+- Preserve existing side effects and ordering, including marker writes,
+  `taskstate` updates, session metadata, runtime cleanup, messages, and
+  rollback behavior
 
-**Phase C — Transition Journal (Follow-up):**
-- Append-only journal at wrapper level, future `mato log` enrichment
+**Phase B — `mato log` Command**
+
+- Add `log` subcommand with `--limit` and `--format text|json`
+- Gather `MERGED`, `FAILED`, and `REJECTED` events from durable on-disk sources
+- Reuse existing marker-scanning rules in `internal/taskfile/`
+- Add resilient collection, sorting, renderers, CLI tests, integration tests,
+  and docs
+
+**Phase C — Transition Journal (follow-up)**
+
+- Add wrapper-level append-only journaling after Phases A and B are stable
 
 ### Out of scope
 
-- New queue directories, frontmatter fields, or queue model changes
-- Database replacement, workflow DSL, scheduler logging
-- Phase-1 `terminal-failure`, `cycle-failure`, `cancelled` events
-- `--since`, `--until`, `--task` filters
-- Dependency/overlap/retry-budget logic in state machine
+- New queue directories, frontmatter fields, or scheduler semantics
+- Modeling `mato retry` as a normal queue move; retry still rewrites content and
+  strips failure markers
+- Moving business logic (dependency checks, retry budgets, overlap checks,
+  branch cleanup, taskstate writes) into `TransitionTask`
+- Using `runtime/taskstate/*.json`, verdict files, or `.queue` as phase-1 log
+  sources
+- Phase-1 `CANCELLED`, `REVIEW_FAILURE`, `TERMINAL_FAILURE`, or
+  `CYCLE_FAILURE` event types in `mato log`
+- `--since`, `--until`, `--task`, or other advanced history filters
 
-## 3. Design
+## 4. Design
 
-### 3.1 State Machine Core (`internal/queue/`)
+### 4.1 State Machine Core (`internal/queue/`)
 
-**Why in `internal/queue/`?** The validated core needs `AtomicMove` (queue.go:208-259). `runner` and `merge` already import `queue`. No import cycles.
+**Why in `internal/queue/`?** The validated core wraps the existing
+`AtomicMove` primitive, and `runner` plus `merge` already depend on `queue`.
 
-**New files:** `transition.go`, `transition_test.go`
+**New file:** `internal/queue/transition.go`
 
-**Types:** `State` string type. Constants: `StateWaiting`, `StateBacklog`, `StateInProgress`, `StateReadyReview`, `StateReadyMerge`, `StateCompleted`, `StateFailed`.
+**New tests:** `internal/queue/transition_test.go`
 
-**Legal edges (14):**
+**Types and functions**
+
+```go
+type State string
+
+const (
+    StateWaiting     State = State(DirWaiting)
+    StateBacklog     State = State(DirBacklog)
+    StateInProgress  State = State(DirInProgress)
+    StateReadyReview State = State(DirReadyReview)
+    StateReadyMerge  State = State(DirReadyMerge)
+    StateCompleted   State = State(DirCompleted)
+    StateFailed      State = State(DirFailed)
+)
+
+func StateFromDir(dir string) (State, error)
+func DirFromState(state State) string
+func ValidateTransition(from, to State) error
+func TransitionTask(tasksDir, filename string, from, to State) error
+func IsIllegalTransition(err error) bool
+```
+
+**Behavioral rules**
+
+- `StateFromDir` returns an error for unknown directory names.
+- `DirFromState` is a small validated-state helper and may panic on unknown
+  input to keep misuse obvious.
+- `ValidateTransition` checks unknown states, same-state transitions, and edges
+  outside the legal table.
+- `TransitionTask` validates then moves from
+  `filepath.Join(tasksDir, string(from), filename)` to
+  `filepath.Join(tasksDir, string(to), filename)`.
+- `TransitionTask` is for **same-filename** queue moves only.
+- When a caller changes the destination filename, keeps an existing path-based
+  helper, or performs a rollback move, it should call `ValidateTransition`
+  separately and keep the bespoke move logic.
+
+**Legal edges (14)**
 
 | From | To |
 |---|---|
@@ -67,48 +139,101 @@ Deliver two tightly sequenced improvements to the mato task orchestrator:
 | ready-to-merge | completed |
 | ready-to-merge | failed |
 
-**Illegal:** `completed` and `failed` have no outgoing edges. Operator retry is outside the model.
+`completed` and `failed` remain terminal from the state-machine perspective.
 
-**Functions:** `ValidateTransition(from, to) error`, `TransitionTask(tasksDir, filename, from, to) error` (validate+`AtomicMove`), `StateFromDir(dir) (State, error)`, `DirFromState(s) string` (panics on unknown input — only called with validated constants).
+**Important non-goals**
 
-**Rollback moves** are operational recovery inside wrappers, not validated transitions.
+- Do not write markers from `TransitionTask`.
+- Do not update `taskstate`, session metadata, or runtime cleanup from
+  `TransitionTask`.
+- Do not hide wrapper-level rollback behavior inside the state machine.
 
-**Usage pattern:**
-- **Plain moves**: `TransitionTask` directly.
-- **Side-effect ordering**: `ValidateTransition` first, then bespoke sequence.
+### 4.2 Canonical Transition Inventory
 
-### 3.2 Canonical Transition Inventory
+The inventory below matches the current code, including rename-path and
+path-helper exceptions.
 
-| # | From → To | Package/File | Class | Side-effect ordering |
+| # | From -> To | Current location | Current sequence | Migration target |
 |---|---|---|---|---|
-| 1 | waiting → backlog | queue/reconcile.go | Plain move | `TransitionTask` |
-| 2a-d | waiting → failed | queue/reconcile.go | Write-then-move | Append marker → `AtomicMove` (unparseable, duplicate ID, cycle, invalid glob) |
-| 3a-b | backlog → failed | queue/reconcile.go | Write-then-move | Append marker → `AtomicMove` (unparseable, invalid glob) |
-| 4 | backlog → waiting | queue/reconcile.go | Plain move | `TransitionTask` (dep-blocked demotion) |
-| 5 | backlog → waiting | queue/claim.go | Plain move | `TransitionTask` (claim dep safety net) |
-| 6 | backlog → in-progress | queue/claim.go | Move-then-post-write-with-rollback | `AtomicMove` → prepend claimed-by → rollback |
-| 7 | in-progress → failed | queue/claim.go | Move-with-rollback | `AtomicMove` → rollback to backlog → `FailedDirUnavailableError` |
-| 8 | in-progress → backlog | queue/queue.go | Move-then-post-write | `AtomicMove` → append failure (best-effort, orphan recovery) |
-| 9 | any-except-failed → failed | queue/cancel.go | Move-then-post-write-with-rollback | `AtomicMove` → append cancelled → rollback |
-| 10 | in-progress → ready-for-review | runner/task.go | Move-then-post-write-with-rollback | `AtomicMove` → append branch → rollback |
-| 11 | in-progress → backlog | runner/task.go | Move-then-conditional-post-write | `AtomicMove` → conditional append failure |
-| 12 | ready-for-review → ready-to-merge | runner/review.go | Write-then-move | Append reviewed → `AtomicMove` |
-| 13 | ready-for-review → backlog | runner/review.go | Write-then-move | Append rejection → `AtomicMove` |
-| 14 | ready-for-review → failed | runner/review.go | Write-then-move | Append terminal-failure → `AtomicMove` |
-| 15 | ready-to-merge → completed | merge/merge.go + taskops.go | Multi-step-then-move-with-retry | Write completion detail → append merged → moveWithRetry |
-| 16 | ready-to-merge → backlog/failed | merge/taskops.go + merge.go | Compute-dest-then-append-then-move | shouldFailTask → failMergeTask (append → move) |
+| 1 | waiting -> failed | `internal/queue/reconcile.go` waiting parse failures | append terminal-failure -> move | `ValidateTransition` + existing sequence |
+| 2 | backlog -> failed | `internal/queue/reconcile.go` backlog parse failures | append terminal-failure -> move | `ValidateTransition` + existing sequence |
+| 3 | backlog -> failed | `internal/queue/reconcile.go` invalid backlog glob | append terminal-failure -> move | `ValidateTransition` + existing sequence |
+| 4 | backlog -> waiting | `internal/queue/reconcile.go` dep-blocked demotion | plain move | `TransitionTask` |
+| 5 | waiting -> failed | `internal/queue/reconcile.go` duplicate waiting ID | append terminal-failure -> move | `ValidateTransition` + existing sequence |
+| 6 | waiting -> failed | `internal/queue/reconcile.go` cycle quarantine | append cycle-failure -> move | `ValidateTransition` + existing sequence |
+| 7 | waiting -> failed | `internal/queue/reconcile.go` invalid waiting glob | append terminal-failure -> move | `ValidateTransition` + existing sequence |
+| 8 | waiting -> backlog | `internal/queue/reconcile.go` promotion | plain move | `TransitionTask` |
+| 9 | backlog -> waiting | `internal/queue/claim.go` dependency safety net | plain move | `TransitionTask` |
+| 10 | backlog -> in-progress | `internal/queue/claim.go` claim path | move -> claimed-by/branch writes -> rollback on failure | `TransitionTask` for forward move; keep rollback |
+| 11 | in-progress -> failed | `internal/queue/claim.go` retry exhausted | path helper + rollback to backlog on failure | `ValidateTransition` before existing helper path |
+| 12 | in-progress -> backlog | `internal/queue/queue.go` orphan recovery | move -> append failure | `TransitionTask` |
+| 13 | in-progress -> backlog | `internal/queue/queue.go` orphan collision rename | move to `*-recovered-<timestamp>` -> append failure later | `ValidateTransition` + raw `AtomicMove` |
+| 14 | any non-completed, non-failed state -> failed | `internal/queue/cancel.go` cancel path | move -> append cancelled -> rollback on failure | `ValidateTransition` + existing sequence |
+| 15 | in-progress -> ready-for-review | `internal/runner/task.go` review handoff | move -> write branch marker -> rollback on failure | `TransitionTask` for forward move; keep rollback |
+| 16 | in-progress -> backlog | `internal/runner/task.go` stuck-task recovery | move -> maybe append failure | `TransitionTask` |
+| 17 | ready-for-review -> failed | `internal/runner/review.go` malformed/review-exhausted quarantine | append terminal-failure -> move | `ValidateTransition` + existing sequence |
+| 18 | ready-for-review -> ready-to-merge | `internal/runner/review.go` approval | append reviewed -> move -> taskstate/message | `ValidateTransition` + existing sequence |
+| 19 | ready-for-review -> backlog | `internal/runner/review.go` rejection | append rejection -> move -> taskstate/message | `ValidateTransition` + existing sequence |
+| 20 | ready-to-merge -> completed | `internal/merge/merge.go` success path | write completion detail -> append merged -> moveWithRetry -> cleanup | `ValidateTransition` before existing helper path |
+| 21 | ready-to-merge -> backlog/failed | `internal/merge/taskops.go` failure path | choose destination -> append failure -> move | `ValidateTransition` before existing helper path |
 
-**Excluded:** duplicate deletion, message writes, git ops, same-state renames, retry requeue, cancel marker-only (already-failed), rollback moves.
+**Excluded from the transition layer**
 
-### 3.3 `mato log` Command
+- Rollback moves used for operational recovery
+- Same-state cleanup/removal paths
+- Already-failed cancel marker-only path
+- Retry requeue (`failed -> backlog`) because it rewrites content instead of
+  performing a plain move
 
-**Package:** `internal/history/`
+### 4.3 `mato log` Command
 
-**CLI:** `newLogCmd(repoFlag *string)` in `cmd/mato/main.go`. Repo resolved via `requireTasksDir` (reuses `internal/dirs/`). Format validation (`text|json`), `--limit >= 0` validation (negative rejected). `logShowFn` function variable.
+**Command shape**
 
-**Entry points:** `Show(repo, limit, format) error` (stdout), `ShowTo(w, repo, limit, format) error` (testable).
+- Add `newLogCmd(repoFlag *string)` in `cmd/mato/main.go`
+- Reuse the existing read-only command pattern used by `status`, `inspect`, and
+  `graph`: the CLI resolves the optional `--repo` input, and the history
+  package resolves the git top-level plus `.mato/` path internally
+- Follow the existing CLI testing pattern with a `logShowFn` function variable
 
-**Event model:**
+**Package boundary**
+
+- `cmd/mato/main.go` validates flags, resolves the optional repo input, and
+  delegates to `internal/history/`
+- `internal/history/` resolves the git top-level, derives `tasksDir`, and
+  validates that `.mato/` exists before collecting history
+- `internal/taskfile/` grows typed marker-parsing helpers that reuse existing
+  marker scanning behavior
+
+**Public entry points**
+
+To match the existing read-only command packages, `internal/history/` should
+export repo-oriented entry points rather than a `tasksDir`-oriented public API:
+
+```go
+func Show(repo string, limit int, format string) error
+func ShowTo(w io.Writer, repo string, limit int, format string) error
+```
+
+Here `repo` follows the same convention as `status.Show`, `inspect.Show`, and
+`graph.Show`: it is the CLI-resolved repo argument or current working
+directory, and the package itself resolves the canonical git top-level.
+
+Any lower-level collector helpers may still accept `tasksDir` internally, but
+that should not be the exported command-facing API.
+
+**Durable sources for phase 1**
+
+- `MERGED` from `.mato/messages/completions/*.json`
+- `FAILED` from `<!-- failure: ... -->` task markers
+- `REJECTED` from `<!-- review-rejection: ... -->` task markers
+
+**Explicit non-sources for phase 1**
+
+- `.mato/runtime/taskstate/*.json` (latest runtime snapshot, not append-only)
+- `.mato/messages/verdict-*.json` (ephemeral coordination files)
+- `.mato/.queue` or other derived snapshots
+
+**Event model**
 
 ```go
 type Event struct {
@@ -117,228 +242,214 @@ type Event struct {
     TaskFile     string    `json:"task_file"`
     Title        string    `json:"title,omitempty"`
     CurrentState string    `json:"current_state,omitempty"`
-    CommitSHA    string    `json:"commit_sha,omitempty"`
     Branch       string    `json:"branch,omitempty"`
+    CommitSHA    string    `json:"commit_sha,omitempty"`
     FilesChanged []string  `json:"files_changed,omitempty"`
     Reason       string    `json:"reason,omitempty"`
     AgentID      string    `json:"agent_id,omitempty"`
 }
 ```
 
-**Function hooks:** `readFileFn = os.ReadFile`, `readDirFn = os.ReadDir`. Tests must not use `t.Parallel()` when overriding these package-level variables.
-
-**Data collection algorithm:**
-
-1. Resolve `tasksDir` from repo path using `internal/dirs/`.
-
-2. **File discovery + content cache:**
-   - Track source accessibility: `queueSourceOK` and `completionsSourceOK` booleans.
-   - For each dir in `queue.AllDirs`, call `readDirFn`.
-     - Not exists (`os.IsNotExist`): treat as empty (confirmed empty counts as accessible).
-     - Other error: warn to stderr, skip. Does NOT count as accessible.
-   - For each `.md` entry, store `discoveredFile{dir, filename, fullPath}`. NOT deduplicated.
-   - Read each file via `readFileFn`, cache contents in `fullPath → []byte` map. If read fails: warn, mark as unreadable.
-   - A queue source counts as accessible if: (a) at least one queue directory was confirmed empty, OR (b) at least one task file from any queue directory was successfully read.
-
-3. **Build state-resolution indexes:**
-   - **Filename index** (`map[string][]string`): group by filename → directories. Unique → known. Multiple → indeterminate, warn once.
-   - **ID index** (`map[string][]string`): from cached file contents, parse `frontmatter.ParseTaskData`. If `id` is non-empty, map `taskID → append directory`. Unique → known. Multiple → indeterminate. Unparseable frontmatter: no ID entry, but file still contributes markers.
-
-4. **Merged-event `CurrentState` two-tier resolution:**
-   - For each `CompletionDetail`: first ID-based lookup (if `TaskID` non-empty and unique in ID index → that directory). Then filename fallback (if `TaskFile` unique in filename index → that directory). If both resolve to different directories → empty (conflicting). If neither resolves → empty.
-
-5. **Collect MERGED events:**
-   - `readDirFn` on `messages/completions/`. Not exists: zero events (confirmed empty, accessible). Other error: warn, NOT accessible.
-   - Per `.json`: `readFileFn` + `json.Unmarshal`. Fail: warn, skip.
-   - MERGED event with `Timestamp` from `MergedAt`, `CurrentState` from step 4.
-   - Completions source counts as accessible if: (a) directory listing confirmed empty, OR (b) at least one completion JSON was successfully read.
-
-6. **Collect FAILED and REJECTED events:**
-   - Iterate every `discoveredFile`. Use cached content. Skip unreadable.
-   - Parse title via `frontmatter.ParseTaskData`. Fail: `Title` empty. **Markers still extracted** — extraction operates on raw bytes.
-   - `ExtractFailureEvents(data)` → FAILED. `ExtractReviewRejectionEvents(data)` → REJECTED.
-   - Each marker → separate event. `CurrentState` from filename index (indeterminate for duplicates).
-
-7. **Aggregate failure check:**
-   - If `!queueSourceOK && !completionsSourceOK`: return error `"could not access any history sources"`.
-   - If at least one source was accessible (even if empty), proceed with results.
-
-8. Assign insertion-order index.
-
-9. Merge all events.
-
-10. Sort: timestamp desc, task_file asc, type asc, insertion-order asc.
-
-11. Apply limit.
-
-12. Render.
-
-**Marker extraction helpers** (new in `internal/taskfile/metadata.go`):
+**Marker parser shape**
 
 ```go
-type MarkerEvent struct {
+type MarkerRecord struct {
     Timestamp time.Time
     AgentID   string
     Reason    string
-    RawLine   string
 }
 
-func ExtractFailureEvents(data []byte) []MarkerEvent
-func ExtractReviewRejectionEvents(data []byte) []MarkerEvent
+func ParseFailureMarkers(data []byte) []MarkerRecord
+func ParseReviewRejectionMarkers(data []byte) []MarkerRecord
 ```
 
-Both `step=... error=...` and `— reason` formats. `forEachMarkerLine`. Silent skip for unparseable.
+These helpers should build on `forEachMarkerLine` and the existing
+`failureReasonFromLine` rules so the command matches the repo's current marker
+semantics, including both `error=` and em-dash reason formats.
 
-**Text output:**
+**Collection strategy**
+
+1. `newLogCmd` resolves `repo` and calls `history.Show(repo, limit, format)` or
+   `history.ShowTo(...)`.
+2. `history.Show`/`ShowTo` resolve `repoRoot`, derive `tasksDir`, validate
+   `.mato/`, then delegate to collector helpers.
+3. The collector scans `messages/completions/` with per-file warn-and-skip
+   behavior rather than `ReadAllCompletionDetails()`.
+4. The collector scans every queue directory in `queue.AllDirs`, reads task
+   files, extracts title best-effort, and emits one event per durable marker.
+5. For merged events, `CurrentState` uses two-tier resolution: first a unique
+   `TaskID` match from frontmatter-derived IDs, then a unique filename match.
+   Ambiguous or conflicting matches leave `CurrentState` empty.
+6. Sort newest first, then `task_file`, then `type`; apply `--limit` after
+   sorting.
+
+**Source-status model**
+
+Each primary source should report one of:
+
+- `absent`: directory missing
+- `read`: directory successfully scanned, even if empty
+- `failed`: non-`IsNotExist` access error
+
+Return a fatal error only when **no** source reached `read` and **at least one**
+source reached `failed`.
+
+**Testing hooks**
+
+`internal/history/` may use package-level `readDirFn`/`readFileFn` hooks for
+error-injection tests. Tests that override them should avoid `t.Parallel()`.
+
+### 4.4 Transition Journal (Phase C)
+
+The journal is still a follow-up. If added later, it should:
+
+- emit at wrapper success boundaries, not from `TransitionTask`
+- live in a host-owned durable location alongside other durable queue metadata
+- complement or eventually replace marker-derived history for `mato log`
+
+The exact file layout is intentionally deferred until Phases A and B are done.
+
+## 5. Recommended Delivery Sequence
+
+### Phase A — State Machine Formalization
+
+**A1. Transition core**
+
+- Add `internal/queue/transition.go`
+- Add exhaustive tests in `internal/queue/transition_test.go`
+- No call-site migration yet
+
+**A2. Queue package migration**
+
+- Migrate `internal/queue/reconcile.go`, `internal/queue/claim.go`,
+  `internal/queue/cancel.go`, and `internal/queue/queue.go`
+- Use `TransitionTask` for same-filename moves
+- Use `ValidateTransition` for helper-based or renamed-destination paths
+
+**A3. Cross-package migration**
+
+- Migrate `internal/runner/task.go`, `internal/runner/review.go`,
+  `internal/merge/merge.go`, and `internal/merge/taskops.go`
+- Preserve `taskstate`, session metadata, messaging, runtime cleanup, and git
+  side effects in their current wrappers
+- Update `docs/architecture.md` and `AGENTS.md`
+
+**A4. Verification**
+
+```bash
+go build ./... && go vet ./... && go test -count=1 ./...
 ```
-2026-03-23 10:15:00  MERGED    add-retry-logic   abc1234  (2 files changed)
-2026-03-23 10:10:00  FAILED    broken-task       agent interrupted
-2026-03-23 10:05:00  REJECTED  fix-login-bug     missing test coverage
-```
 
-**Error handling summary:**
-- Missing `messages/completions/` → empty (accessible)
-- Unreadable/malformed completion JSON → warn, skip
-- Missing queue subdirectory (`os.IsNotExist`) → empty (accessible)
-- Queue subdirectory read error (non-ENOENT) → warn, skip (NOT accessible for that dir)
-- Unreadable task file → warn, skip
-- Malformed markers → silently skipped
-- Malformed frontmatter → `Title` empty, markers still extracted
-- Missing repo → fail
-- All sources empty but accessible → empty result (not an error)
-- ALL primary sources inaccessible (no queue source AND no completions source accessible) → fail with descriptive error
-- Duplicate filename → `CurrentState` indeterminate, warn, all copies scanned
-- `--limit < 0` → rejected
+### Phase B — `mato log` Command
 
-**Durability caveat:** Failure history only durable until `mato retry` strips markers.
+**B1. History core**
 
-### 3.4 Transition Journal (Phase C)
+- Add typed marker parsing in `internal/taskfile/`
+- Add `internal/history/` collector and renderers
+- Add unit tests for mixed histories, resilience, sorting, and empty queues
 
-Wrapper-level journaling after full success. `.mato/orchestration-log/transitions.jsonl`. Best-effort, append-only.
+**B2. CLI wiring and docs**
 
-## 4. Steps
+- Add `newLogCmd()` and `logShowFn`
+- Add command-level tests in `cmd/mato/main_test.go`
+- Add end-to-end integration coverage in `internal/integration/`
+- Update `README.md`
 
-### Phase A: State Machine Formalization
+### Phase C — Transition Journal (follow-up)
 
-**A1:** Create `internal/queue/transition.go` + `transition_test.go`. State type, constants, legal edges, `ValidateTransition`, `TransitionTask`, `StateFromDir`, `DirFromState`. Tests: all 14 legal edges, illegal edges, file-move, round-trips.
+- Define append-only journal format
+- Emit journal entries from wrapper success points
+- Teach `mato log` to read journal data
 
-**A2:** Migrate reconcile (#1, #2a-d, #3a-b, #4). Plain moves → `TransitionTask`. Write-then-move → `ValidateTransition` before existing sequence.
-
-**A3:** Migrate orphan recovery (#8). `ValidateTransition` before existing move → append.
-
-**A4:** Migrate claim (#5, #6, #7). Plain moves → `TransitionTask`. Others → `ValidateTransition` before existing sequence.
-
-**A5:** Migrate cancel (#9). `ValidateTransition` for non-failed. Already-failed marker-only unchanged.
-
-**A6:** Migrate task runner (#10, #11). `ValidateTransition` before existing sequences.
-
-**A7:** Migrate review (#12, #13, #14). `ValidateTransition` before existing sequences.
-
-**A8:** Migrate merge (#15, #16). `ValidateTransition` before existing sequences.
-
-**A9:** Full verification: `go build ./... && go vet ./... && go test -count=1 ./...`
-
-### Phase B: `mato log` Command
-
-**B1:** `MarkerEvent`, `ExtractFailureEvents`, `ExtractReviewRejectionEvents` in `taskfile/metadata.go`. Tests.
-
-**B2:** `internal/history/` package: `Event`, `discoveredFile`, function hooks, file discovery with content cache, state indexes (filename + ID), two-tier resolution, `CollectMergedEvents`, `CollectMarkerEvents`, `CollectAll` (with aggregate failure check), `Show`, `ShowTo`. Tests: sort, limits, missing dirs, unreadable files via hooks, `CurrentState` accuracy, duplicates, aggregate failure, malformed-frontmatter marker extraction.
-
-**B3:** `render.go`: `RenderText`, `RenderJSON`. Tests.
-
-**B4:** CLI: `logShowFn`, `newLogCmd`, validation tests (`--format`, `--limit < 0`, `logShowFn` delegation).
-
-**B5:** Integration tests in `internal/integration/`.
-
-**B6:** Docs: `README.md`, `docs/architecture.md`, `AGENTS.md` (single sentence: update `transition.go` when adding edges), move proposals to `implemented/` with supersession header.
-
-### Phase C: Transition Journal (Follow-up)
-
-C1: Journal writer. C2: Wrapper calls. C3: Log enrichment.
-
-## 5. File Changes
+## 6. File Changes
 
 ### New files
 
 | File | Purpose |
 |---|---|
-| `internal/queue/transition.go` | State, edges, validation, TransitionTask |
-| `internal/queue/transition_test.go` | Tests |
-| `internal/history/history.go` | Event, discovery, indexes, collectors, Show |
-| `internal/history/history_test.go` | Tests |
-| `internal/history/render.go` | Renderers |
-| `internal/history/render_test.go` | Tests |
-| `docs/proposals/state-machine-and-log-command.md` | Combined plan |
+| `internal/queue/transition.go` | State type, edge table, validation, same-filename move helper |
+| `internal/queue/transition_test.go` | Exhaustive transition tests |
+| `internal/history/` | History collector, rendering, and tests for `mato log` |
 
 ### Modified files
 
 | File | Changes |
 |---|---|
-| `cmd/mato/main.go` | `logShowFn`, `newLogCmd`, register |
-| `internal/taskfile/metadata.go` | `MarkerEvent`, extraction functions |
-| `internal/taskfile/metadata_test.go` | Tests |
-| `internal/queue/reconcile.go` | Validation calls |
-| `internal/queue/claim.go` | Validation calls |
-| `internal/queue/cancel.go` | Validation call |
-| `internal/queue/queue.go` | Validation call |
-| `internal/runner/task.go` | Validation calls |
-| `internal/runner/review.go` | Validation calls |
-| `internal/merge/taskops.go` | Validation calls |
-| `internal/merge/merge.go` | Validation call |
-| `README.md` | Command reference |
-| `docs/architecture.md` | Transition layer |
-| `AGENTS.md` | Edge-update convention |
+| `internal/queue/reconcile.go` | Transition validation and/or move helper usage |
+| `internal/queue/claim.go` | Transition validation and/or move helper usage |
+| `internal/queue/cancel.go` | Transition validation around cancel path |
+| `internal/queue/queue.go` | Transition validation for orphan recovery, including rename exception |
+| `internal/runner/task.go` | Transition validation for review handoff and stuck-task recovery |
+| `internal/runner/review.go` | Transition validation for approval/rejection/quarantine paths |
+| `internal/merge/merge.go` | Transition validation for merge success path |
+| `internal/merge/taskops.go` | Transition validation for merge failure path |
+| `internal/taskfile/metadata.go` | Typed marker parsing helpers for history collection |
+| `internal/taskfile/metadata_test.go` | Marker parser tests |
+| `cmd/mato/main.go` | `newLogCmd`, `logShowFn`, command registration |
+| `cmd/mato/main_test.go` | CLI validation/delegation tests for `mato log` |
+| `README.md` | User-facing command docs |
+| `docs/architecture.md` | Transition layer and, once shipped, history/log behavior |
+| `AGENTS.md` | Small convention update pointing future edge changes at `transition.go` |
 
-### Moved files
-
-| From | To |
-|---|---|
-| `docs/proposals/ideas/add-log-command.md` | `docs/proposals/implemented/add-log-command.md` |
-| `docs/proposals/ideas/state-machine-formalization.md` | `docs/proposals/implemented/state-machine-formalization.md` |
-
-## 6. Error Handling
+## 7. Error Handling
 
 ### State Machine
-- Illegal transition: descriptive error
-- AtomicMove failure: wrapped with context
-- Rollback: wrappers preserve current behavior
-- Invalid state: `StateFromDir` returns error; `DirFromState` panics on unknown (only called with validated constants)
+
+- Illegal transitions return an error that callers can test with
+  `IsIllegalTransition`
+- `TransitionTask` propagates `AtomicMove` errors, including destination
+  collisions
+- Existing rollback flows stay in wrapper code
+- Validation-only paths keep their existing path-based helpers and warnings
 
 ### `mato log`
-- Per-file failures: warn and skip
-- Aggregate failure: if no primary source accessible (neither confirmed-empty nor file-read-success), fail
-- Missing-but-not-errored directories: empty, not error
-- Full enumeration in section 3.3
 
-## 7. Testing
+- Missing `.mato/` is rejected by `internal/history.Show`/`ShowTo` before
+  collection begins
+- Missing queue subdirectories or missing `messages/completions/` are treated as
+  `absent`, not fatal
+- Per-file completion or task-file read failures warn and skip
+- Malformed markers are skipped silently at the marker-parser level
+- Fatal only when no source is readable and at least one source fails
 
-### State Machine
-- 14 legal edges, illegal edges, `TransitionTask` moves, `StateFromDir`/`DirFromState` round-trips
-- Migration: existing tests must pass
+## 8. Testing
 
-### `mato log`
-- Marker extraction: both formats, code fences, multiple, empty
-- Collection: sort stability, insertion-order tie-break
-- `CurrentState`: ID match, filename fallback, both disagree → empty, absent → empty, duplicate → empty
-- Duplicate files: both copies' markers emitted
-- Error paths: hook-injected read/readdir failures (no `t.Parallel()`)
-- Aggregate failure: all sources errored → command fails; empty-but-accessible → empty result
-- Malformed frontmatter: title empty, markers still extracted
-- Limit, rendering, CLI validation
-- Integration: end-to-end
+### Phase A
 
-## 8. Risks & Mitigations
+- Exhaustive legal/illegal transition coverage
+- Filesystem move tests for `TransitionTask`
+- Existing queue/runner/merge tests remain the behavioral safety net
+
+### Phase B
+
+- Typed marker parser tests for both failure formats and rejection markers
+- Collection tests for mixed events, ordering, limits, empty queues, malformed
+  completion JSON, malformed frontmatter with readable markers, and aggregate
+  source failure
+- CLI tests for flag validation and delegation
+- Integration tests for merged, failed, rejected, and empty-history scenarios
+
+## 9. Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Migration breaks behavior | Incremental, existing tests |
-| Wrappers bypass validation | Code review |
-| Marker parsing fragility | Reuse prefixes/scanner, both formats, tests |
-| State constants diverge | Round-trip tests |
-| Future edge not added | AGENTS.md convention |
-| Content cache memory | Acceptable: task files are small markdown |
-| Duplicate files | All copies scanned, state indeterminate |
+| Wrong edge table or validation behavior | Exhaustive unit tests before migration |
+| Call-site migration breaks current side effects | Keep side effects in wrappers; use existing test suite as safety net |
+| `RecoverOrphanedTasks` rename path is force-fit into `TransitionTask` | Document it as `ValidateTransition` + raw move only |
+| `mato log` accidentally reads ephemeral runtime data | Restrict phase-1 sources to completions and task markers |
+| Completion-detail scan aborts on one bad file | Use a custom per-file collector instead of `ReadAllCompletionDetails()` |
+| Future queue edge added without state table update | Document `transition.go` as the canonical edge list |
 
-## 9. Open Questions
+## 10. Resolved Decisions
 
-1. **`failed → backlog` retry:** Should operator retry eventually be modeled as a validated transition, or permanently remain a specialized requeue helper? Currently excluded because it strips markers and rewrites content rather than performing a simple move. User input welcome.
+1. **Retry stays outside the state machine for now.** `RetryTask` is currently a
+   write-cleaned-copy-to-`backlog/` operation followed by best-effort removal of
+   the `failed/` source, not a same-file queue move. It should remain outside
+   `ValidateTransition`/`TransitionTask` unless retry semantics are later
+   redesigned around a real move-based transition.
+2. **Phase C journal should live under `.mato/messages/history/`.** That keeps
+   durable history adjacent to other durable history inputs such as
+   `messages/completions/`, avoids conflating append-only history with runtime
+   snapshots under `runtime/`, and gives `mato log` a single history-oriented
+   subtree to read from. The exact file granularity (single JSONL file vs.
+   sharded files) can still be decided when Phase C is implemented.
