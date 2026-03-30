@@ -1,5 +1,5 @@
 # Mato Architecture
-This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `inspect/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
+This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `history/`, `inspect/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, runs an AI review pass for completed work, and squash-merges approved task branches back into a target branch. An optional `.mato/.paused` sentinel can temporarily stop new claims and review launches without stopping the host process. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, work in an isolated clone on the host-selected task branch, commit its changes, and exit. The host then pushes the task branch, moves the task to `ready-for-review/`, processes the review verdict, and later merges approved work.
 ```text
@@ -30,7 +30,7 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 +------------------+     ready-to-merge -> completed
 ```
 High-level flow:
-1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)` via `mato run`, bootstraps a repository via `setup.InitRepo(...)`, or routes to read-only subcommands such as `status.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
+1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)` via `mato run`, bootstraps a repository via `setup.InitRepo(...)`, or routes to read-only subcommands such as `status.Show(...)`, `history.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
 2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs.
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, chooses a stable task branch (reusing any recorded branch marker when safe, otherwise deriving a sanitized/disambiguated branch), then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim, works on the preselected branch, and commits locally.
 4. After the agent exits, the host pushes the task branch and moves the task file to `ready-for-review/`.
@@ -350,7 +350,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `cmd/mato/main.go`
 - CLI entrypoint.
-- `main()` builds the Cobra command tree for `run`, `status`, `doctor`, `graph`, `init`, `inspect`, `cancel`, `retry`, `pause`, `resume`, and `version`.
+- `main()` builds the Cobra command tree for `run`, `status`, `log`, `doctor`, `graph`, `init`, `inspect`, `cancel`, `retry`, `pause`, `resume`, and `version`.
 - The root command shows help/version and registers repo-aware subcommands.
 - `mato run` resolves config and starts `runner.Run(...)` with fully resolved task/review model and reasoning-effort settings.
 
@@ -430,6 +430,11 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `mato status` dashboard — `Show`, `ShowTo`, `Watch` (`status.go`).
 - Data gathering layer — `gatherStatus` collects queue counts, active agents, presence, task lists, completions, messages, merge-lock state (`status_gather.go`).
 - Rendering layer — individual `render*` functions for each dashboard section, terminal colors (`status_render.go`).
+
+### `internal/history/`
+- `mato log` durable outcome timeline — `Show`, `ShowTo` (`history.go`).
+- Reads only durable history sources in phase 1: `.mato/messages/completions/*.json`, `<!-- failure: ... -->` task markers, and `<!-- review-rejection: ... -->` task markers.
+- Sorts events newest first and renders either compact text or JSON for scripting.
 
 ### `internal/inspect/`
 - `mato inspect` single-task troubleshooting command — `Show`, `ShowTo` (`inspect.go`).

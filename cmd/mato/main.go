@@ -17,6 +17,7 @@ import (
 	"mato/internal/doctor"
 	"mato/internal/git"
 	"mato/internal/graph"
+	"mato/internal/history"
 	"mato/internal/inspect"
 	"mato/internal/pause"
 	"mato/internal/queue"
@@ -385,6 +386,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(newRunCmd(&repoFlag))
 	root.AddCommand(newStatusCmd(&repoFlag))
+	root.AddCommand(newLogCmd(&repoFlag))
 	root.AddCommand(newDoctorCmd(&repoFlag))
 	root.AddCommand(newGraphCmd(&repoFlag))
 	root.AddCommand(newInitCmd(&repoFlag))
@@ -590,6 +592,10 @@ var doctorRunFn = doctor.Run
 // Tests replace it to verify CLI flag parsing and delegation.
 var inspectShowFn = inspect.Show
 
+// logShowFn is the function used to render durable task history.
+// Tests replace it to verify CLI flag parsing and delegation.
+var logShowFn = history.Show
+
 func doctorNeedsDockerConfig(only []string) bool {
 	if len(only) == 0 {
 		return true
@@ -674,6 +680,36 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs, Docker image pulls, stale events, temp files)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, hygiene, deps)")
+
+	return cmd
+}
+
+func newLogCmd(repoFlag *string) *cobra.Command {
+	var limit int
+	var format string
+
+	cmd := &cobra.Command{
+		Use:   "log",
+		Short: "Show recent durable task outcomes",
+		Args:  usageNoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if format != "text" && format != "json" {
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+			}
+			if limit < 0 {
+				return newUsageError(cmd, fmt.Errorf("--limit must be >= 0, got %d", limit))
+			}
+			repo, err := resolveRepo(*repoFlag)
+			if err != nil {
+				return err
+			}
+			return logShowFn(repo, limit, format)
+		},
+	}
+	configureCommand(cmd)
+
+	cmd.Flags().IntVar(&limit, "limit", 20, "Maximum number of events to show (0 means unlimited)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd
 }

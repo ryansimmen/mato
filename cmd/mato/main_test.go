@@ -1190,6 +1190,72 @@ func TestInspectCmd_SubcommandRegistered(t *testing.T) {
 	t.Fatal("inspect subcommand not registered")
 }
 
+func TestLogCmd_InvalidFormat(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"log", "--format", "yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid log format, got nil")
+	}
+	if err.Error() != "--format must be text or json, got yaml" {
+		t.Fatalf("error = %q, want %q", err.Error(), "--format must be text or json, got yaml")
+	}
+}
+
+func TestLogCmd_NegativeLimitRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"log", "--limit", "-1"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for negative limit, got nil")
+	}
+	if err.Error() != "--limit must be >= 0, got -1" {
+		t.Fatalf("error = %q, want %q", err.Error(), "--limit must be >= 0, got -1")
+	}
+}
+
+func TestLogCmd_DelegatesToLogShow(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	var gotRepo, gotFormat string
+	var gotLimit int
+
+	orig := logShowFn
+	defer func() { logShowFn = orig }()
+
+	logShowFn = func(repo string, limit int, format string) error {
+		gotRepo = repo
+		gotLimit = limit
+		gotFormat = format
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"log", "--repo", repoRoot, "--limit", "7", "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotRepo != repoRoot {
+		t.Fatalf("repo = %q, want %q", gotRepo, repoRoot)
+	}
+	if gotLimit != 7 {
+		t.Fatalf("limit = %d, want 7", gotLimit)
+	}
+	if gotFormat != "json" {
+		t.Fatalf("format = %q, want json", gotFormat)
+	}
+}
+
+func TestLogCmd_SubcommandRegistered(t *testing.T) {
+	cmd := newRootCmd()
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "log" {
+			return
+		}
+	}
+	t.Fatal("log subcommand not registered")
+}
+
 // --- Branch validation tests ---
 
 func TestValidateBranch_Valid(t *testing.T) {
