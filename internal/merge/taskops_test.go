@@ -256,6 +256,53 @@ func TestHandleMergeFailure_ConflictInFailedKeepsBranchMarker(t *testing.T) {
 	}
 }
 
+func TestHandleMergeFailure_FailedTaskCleansBranch(t *testing.T) {
+	repoRoot := t.TempDir()
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyMerge, queue.DirFailed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	// Task with max_retries=1 and one prior failure → next failure routes to failed/
+	taskPath := filepath.Join(tasksDir, queue.DirReadyMerge, "exhaust.md")
+	content := strings.Join([]string{
+		"<!-- branch: task/exhaust -->",
+		"---",
+		"max_retries: 1",
+		"---",
+		"<!-- failure: prior-agent at 2026-01-01T00:00:00Z step=WORK error=prior -->",
+		"# Exhaust retries",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var cleanedBranch string
+	orig := cleanupTaskBranchFn
+	cleanupTaskBranchFn = func(root, branch string) {
+		cleanedBranch = branch
+	}
+	t.Cleanup(func() { cleanupTaskBranchFn = orig })
+
+	task := mergeQueueTask{name: "exhaust.md", path: taskPath, branch: "task/exhaust"}
+	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
+		t.Fatalf("handleMergeFailure: %v", err)
+	}
+
+	if cleanedBranch != "task/exhaust" {
+		t.Fatalf("expected branch cleanup for %q, got %q", "task/exhaust", cleanedBranch)
+	}
+
+	// Verify task moved to failed/
+	failedPath := filepath.Join(tasksDir, queue.DirFailed, "exhaust.md")
+	if _, err := os.Stat(failedPath); err != nil {
+		t.Fatalf("task should be in failed/: %v", err)
+	}
+}
+
 func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 	repoRoot := t.TempDir()
 	tasksDir := t.TempDir()
