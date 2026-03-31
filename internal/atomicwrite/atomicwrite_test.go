@@ -228,8 +228,12 @@ func TestWriteFunc_EXDEVFallback(t *testing.T) {
 	data := []byte("cross-device content")
 
 	origRenameFn := renameFn
+	var exdevReturned atomic.Bool
 	renameFn = func(oldpath, newpath string) error {
-		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		if !exdevReturned.Swap(true) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return origRenameFn(oldpath, newpath)
 	}
 	t.Cleanup(func() { renameFn = origRenameFn })
 
@@ -275,8 +279,12 @@ func TestWriteFunc_EXDEVFallbackOverwrite(t *testing.T) {
 	}
 
 	origRenameFn := renameFn
+	var exdevReturned atomic.Bool
 	renameFn = func(oldpath, newpath string) error {
-		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		if !exdevReturned.Swap(true) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return origRenameFn(oldpath, newpath)
 	}
 	t.Cleanup(func() { renameFn = origRenameFn })
 
@@ -330,8 +338,12 @@ func TestWriteFile_EXDEVFallback(t *testing.T) {
 	path := filepath.Join(dir, "writefile-exdev.txt")
 
 	origRenameFn := renameFn
+	var exdevReturned atomic.Bool
 	renameFn = func(oldpath, newpath string) error {
-		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		if !exdevReturned.Swap(true) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return origRenameFn(oldpath, newpath)
 	}
 	t.Cleanup(func() { renameFn = origRenameFn })
 
@@ -546,8 +558,12 @@ func TestWriteFunc_EXDEVFallbackSyncOrder(t *testing.T) {
 	}
 
 	origRenameFn := renameFn
+	var exdevReturned atomic.Bool
 	renameFn = func(oldpath, newpath string) error {
-		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		if !exdevReturned.Swap(true) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return origRenameFn(oldpath, newpath)
 	}
 	t.Cleanup(func() { renameFn = origRenameFn })
 
@@ -577,6 +593,42 @@ func TestWriteFunc_EXDEVFallbackSyncOrder(t *testing.T) {
 	}
 	if string(got) != "exdev durable" {
 		t.Errorf("content = %q, want %q", got, "exdev durable")
+	}
+}
+
+func TestWriteFunc_EXDEVFallbackRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exdev-rename-fail.txt")
+
+	renameErr := errors.New("simulated fallback rename failure")
+
+	origRenameFn := renameFn
+	var exdevReturned atomic.Bool
+	renameFn = func(oldpath, newpath string) error {
+		if !exdevReturned.Swap(true) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return renameErr
+	}
+	t.Cleanup(func() { renameFn = origRenameFn })
+
+	err := WriteFile(path, []byte("test data"))
+	if err == nil {
+		t.Fatal("expected error from fallback rename, got nil")
+	}
+	if !errors.Is(err, renameErr) {
+		t.Errorf("error = %v, want wrapping %v", err, renameErr)
+	}
+
+	// Target file should not exist.
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Error("target file should not exist after fallback rename error")
+	}
+
+	// No leftover temp files.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		t.Errorf("leftover temp file: %s", e.Name())
 	}
 }
 
