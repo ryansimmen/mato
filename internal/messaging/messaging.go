@@ -212,6 +212,141 @@ func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
 	return messages, nil
 }
 
+// filenameTimestampPrefix is the length of the timestamp prefix in message
+// filenames (format "20060102T150405.000000000Z", 26 characters).
+const filenameTimestampPrefix = len("20060102T150405.000000000Z")
+
+// ReadLatestProgressForAgents scans event messages older than the newest
+// skip entries to find the latest progress message for each of the given
+// agent IDs. It walks backwards through entries, avoiding a full scan when
+// possible. Filenames that do not contain "-progress-" are skipped without
+// parsing.
+//
+// The tie-break rule for equal timestamps matches latestProgressByAgent:
+// the message with the lexically smallest ID wins. This ensures consistent
+// progress display regardless of whether the message falls inside or outside
+// the recent-message window.
+//
+// Pending agents (found but potentially awaiting same-timestamp tie-break)
+// are finalized as soon as the filename timestamp prefix drops below their
+// match timestamp, so the scan stops early even when an agent has no older
+// entries.
+func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (map[string]Message, error) {
+	if len(agentIDs) == 0 {
+		return nil, nil
+	}
+
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read messages dir: %w", err)
+	}
+
+	// Filter to JSON files only.
+	jsonEntries := make([]os.DirEntry, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			jsonEntries = append(jsonEntries, e)
+		}
+	}
+
+	// Only look at entries older than the skip window.
+	end := len(jsonEntries) - skip
+	if end <= 0 {
+		return nil, nil
+	}
+	jsonEntries = jsonEntries[:end]
+
+	wantedSet := make(map[string]struct{}, len(agentIDs))
+	for _, id := range agentIDs {
+		wantedSet[id] = struct{}{}
+	}
+
+	result := make(map[string]Message, len(agentIDs))
+	// pending tracks agents whose latest timestamp has been found but
+	// which may still have equal-timestamp entries with a smaller ID.
+	// The value is the formatted timestamp string for fast comparison
+	// against filename prefixes.
+	pending := make(map[string]string, len(agentIDs))
+
+	// finalizePastTimestamp removes any pending agents whose match
+	// timestamp is strictly after the given filename timestamp prefix,
+	// meaning no more equal-timestamp entries can appear.
+	finalizePastTimestamp := func(fnamePrefix string) {
+		for agent, tsPrefix := range pending {
+			if fnamePrefix < tsPrefix {
+				delete(pending, agent)
+			}
+		}
+	}
+
+	// Walk backwards (newest-first among the older entries).
+	for i := len(jsonEntries) - 1; i >= 0; i-- {
+		if len(wantedSet) == 0 && len(pending) == 0 {
+			break
+		}
+
+		entry := jsonEntries[i]
+		name := entry.Name()
+
+		// Use the filename timestamp prefix to finalize pending agents
+		// whose match timestamp the scan has moved past.
+		if len(pending) > 0 && len(name) >= filenameTimestampPrefix {
+			fnameTS := name[:filenameTimestampPrefix]
+			finalizePastTimestamp(fnameTS)
+			if len(wantedSet) == 0 && len(pending) == 0 {
+				break
+			}
+		}
+
+		// Quick filename filter: skip entries that are not progress messages.
+		if !strings.Contains(name, "-progress-") {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(eventsDir, name))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read message %s: %w", name, err)
+		}
+
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
+
+		if msg.Type != "progress" {
+			continue
+		}
+
+		// First match for this agent — store it and move to pending.
+		if _, isWanted := wantedSet[msg.From]; isWanted {
+			result[msg.From] = msg
+			pending[msg.From] = msg.SentAt.UTC().Format("20060102T150405.000000000Z")
+			delete(wantedSet, msg.From)
+			continue
+		}
+
+		// Check pending agents for same-timestamp tie-break.
+		if _, isPending := pending[msg.From]; isPending {
+			// Same timestamp — keep the smaller ID.
+			if msg.ID < result[msg.From].ID {
+				result[msg.From] = msg
+			}
+			// Note: if timestamp differs, finalizePastTimestamp already
+			// removed this agent before we got here; if it didn't, the
+			// filename and message share the same timestamp prefix.
+		}
+	}
+
+	return result, nil
+}
+
 func WritePresence(tasksDir, agentID, taskFile, branch string) error {
 	info := PresenceInfo{
 		AgentID:   agentID,

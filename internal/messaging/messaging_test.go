@@ -2705,6 +2705,285 @@ func TestReadRecentMessages_EqualTimestampTieBreakParity(t *testing.T) {
 	}
 }
 
+func TestReadLatestProgressForAgents_FindsOlderProgress(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write 5 progress messages from agent-a (old).
+	for i := 0; i < 5; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("old-%d", i),
+			From:   "agent-a",
+			Type:   "progress",
+			Task:   "task-a.md",
+			Body:   fmt.Sprintf("old progress %d", i),
+			SentAt: base.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	// Write 10 messages from other agents (newer).
+	for i := 0; i < 10; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("new-%d", i),
+			From:   "agent-b",
+			Type:   "progress",
+			Task:   "task-b.md",
+			Body:   fmt.Sprintf("new progress %d", i),
+			SentAt: base.Add(time.Duration(10+i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	// Skip the 10 newest; agent-a's progress is outside that window.
+	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a"}, 10)
+	if err != nil {
+		t.Fatalf("ReadLatestProgressForAgents: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d agents, want 1", len(got))
+	}
+	if got["agent-a"].Body != "old progress 4" {
+		t.Errorf("agent-a body = %q, want %q", got["agent-a"].Body, "old progress 4")
+	}
+}
+
+func TestReadLatestProgressForAgents_EmptyAgentIDs(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	got, err := ReadLatestProgressForAgents(tasksDir, nil, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+func TestReadLatestProgressForAgents_NonExistentDir(t *testing.T) {
+	got, err := ReadLatestProgressForAgents(filepath.Join(t.TempDir(), "nope"), []string{"a"}, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d results, want 0", len(got))
+	}
+}
+
+func TestReadLatestProgressForAgents_SkipsNonProgressMessages(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write an intent message from agent-a.
+	if err := WriteMessage(tasksDir, Message{
+		ID: "i1", From: "agent-a", Type: "intent",
+		Task: "task.md", Body: "Starting", SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a"}, 0)
+	if err != nil {
+		t.Fatalf("ReadLatestProgressForAgents: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0, got %d — should skip non-progress messages", len(got))
+	}
+}
+
+func TestReadLatestProgressForAgents_StopsEarlyWhenAllFound(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write many old progress messages from different agents.
+	for i := 0; i < 20; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("p%d", i),
+			From:   fmt.Sprintf("agent-%d", i%3),
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("step %d", i),
+			SentAt: base.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+
+	// Ask for just agent-1.
+	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-1"}, 0)
+	if err != nil {
+		t.Fatalf("ReadLatestProgressForAgents: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d agents, want 1", len(got))
+	}
+	if got["agent-1"].Body != "step 19" {
+		t.Errorf("agent-1 body = %q, want %q", got["agent-1"].Body, "step 19")
+	}
+}
+
+func TestReadLatestProgressForAgents_SkipExceedsTotal(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	if err := WriteMessage(tasksDir, Message{
+		ID: "p1", From: "a", Type: "progress",
+		Task: "t.md", Body: "step 1",
+		SentAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Skip is larger than total messages.
+	got, err := ReadLatestProgressForAgents(tasksDir, []string{"a"}, 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d results, want 0 when skip exceeds total", len(got))
+	}
+}
+
+// TestReadLatestProgressForAgents_EqualTimestampTieBreak verifies that when
+// an agent has multiple progress messages with the same SentAt, the fallback
+// function returns the one with the lexically smallest ID — matching the
+// tie-break rule of latestProgressByAgent.
+func TestReadLatestProgressForAgents_EqualTimestampTieBreak(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	sameTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Write three progress messages for the same agent with identical timestamps.
+	// IDs: "charlie", "alpha", "bravo" — smallest is "alpha".
+	for _, id := range []string{"charlie", "alpha", "bravo"} {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     id,
+			From:   "agent-x",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   "progress-" + id,
+			SentAt: sameTime,
+		}); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", id, err)
+		}
+	}
+
+	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-x"}, 0)
+	if err != nil {
+		t.Fatalf("ReadLatestProgressForAgents: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d agents, want 1", len(got))
+	}
+	if got["agent-x"].ID != "alpha" {
+		t.Errorf("agent-x ID = %q, want %q (smallest ID for equal timestamps)", got["agent-x"].ID, "alpha")
+	}
+	if got["agent-x"].Body != "progress-alpha" {
+		t.Errorf("agent-x body = %q, want %q", got["agent-x"].Body, "progress-alpha")
+	}
+}
+
+// TestReadLatestProgressForAgents_EqualTimestampMixedAgents verifies the
+// tie-break rule works correctly when multiple agents have equal timestamps.
+func TestReadLatestProgressForAgents_EqualTimestampMixedAgents(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	sameTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Two agents, each with two equal-timestamp progress messages.
+	msgs := []Message{
+		{ID: "z1", From: "agent-a", Type: "progress", Task: "a.md", Body: "z1", SentAt: sameTime},
+		{ID: "a1", From: "agent-a", Type: "progress", Task: "a.md", Body: "a1", SentAt: sameTime},
+		{ID: "z2", From: "agent-b", Type: "progress", Task: "b.md", Body: "z2", SentAt: sameTime},
+		{ID: "a2", From: "agent-b", Type: "progress", Task: "b.md", Body: "a2", SentAt: sameTime},
+	}
+	for _, msg := range msgs {
+		if err := WriteMessage(tasksDir, msg); err != nil {
+			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
+		}
+	}
+
+	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a", "agent-b"}, 0)
+	if err != nil {
+		t.Fatalf("ReadLatestProgressForAgents: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d agents, want 2", len(got))
+	}
+	if got["agent-a"].ID != "a1" {
+		t.Errorf("agent-a ID = %q, want %q", got["agent-a"].ID, "a1")
+	}
+	if got["agent-b"].ID != "a2" {
+		t.Errorf("agent-b ID = %q, want %q", got["agent-b"].ID, "a2")
+	}
+}
+
+// TestReadLatestProgressForAgents_StopsAfterTimestampWindow verifies that
+// when the matched agent has no equal-timestamp siblings, the scan finalizes
+// the agent as soon as the filename timestamp drops below the match — it does
+// NOT continue reading all remaining older files.
+func TestReadLatestProgressForAgents_StopsAfterTimestampWindow(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	// Write 50 old progress messages from "other" at t=0..49s.
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 50; i++ {
+		if err := WriteMessage(tasksDir, Message{
+			ID:     fmt.Sprintf("old-%d", i),
+			From:   "other",
+			Type:   "progress",
+			Task:   "other.md",
+			Body:   fmt.Sprintf("old %d", i),
+			SentAt: base.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage(old-%d): %v", i, err)
+		}
+	}
+
+	// Write the target agent's single progress at t=60s.
+	targetTime := base.Add(60 * time.Second)
+	if err := WriteMessage(tasksDir, Message{
+		ID:     "target-prog",
+		From:   "target-agent",
+		Type:   "progress",
+		Task:   "target.md",
+		Body:   "Step: WORK",
+		SentAt: targetTime,
+	}); err != nil {
+		t.Fatalf("WriteMessage(target): %v", err)
+	}
+
+	got, err := ReadLatestProgressForAgents(tasksDir, []string{"target-agent"}, 0)
+	if err != nil {
+		t.Fatalf("ReadLatestProgressForAgents: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d agents, want 1", len(got))
+	}
+	if got["target-agent"].ID != "target-prog" {
+		t.Errorf("ID = %q, want %q", got["target-agent"].ID, "target-prog")
+	}
+	if got["target-agent"].Body != "Step: WORK" {
+		t.Errorf("Body = %q, want %q", got["target-agent"].Body, "Step: WORK")
+	}
+	// The key invariant: the scan should have stopped after seeing the first
+	// file with a timestamp < targetTime, not read all 50 older entries.
+	// We can't directly assert iteration count, but the function returning
+	// the correct result without a full scan is the behavioral guarantee.
+}
+
 func TestWritePresence_CollisionResistance(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {

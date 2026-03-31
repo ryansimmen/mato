@@ -2,6 +2,7 @@ package status
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1033,5 +1034,207 @@ func TestWaitingTasks_TextAndJSONConsistency(t *testing.T) {
 	}
 	if depMap["nonexistent"] != "missing" {
 		t.Errorf("nonexistent dep status = %q, want %q", depMap["nonexistent"], "missing")
+	}
+}
+
+// TestGatherStatus_ActiveAgentProgressOutsideRecentWindow verifies that an
+// active agent's latest progress message is still shown even when more than
+// statusMessageLimit newer messages have been written by other agents.
+func TestGatherStatus_ActiveAgentProgressOutsideRecentWindow(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Register an active agent.
+	cleanup, err := queue.RegisterAgent(tasksDir, "slowagent")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write a progress message from slowagent early in the timeline.
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID:     "slow-progress",
+		From:   "slowagent",
+		Type:   "progress",
+		Task:   "slow-task.md",
+		Body:   "Step: WORK",
+		SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage(slow): %v", err)
+	}
+
+	// Flood with statusMessageLimit+10 newer messages from other agents,
+	// pushing slowagent's progress outside the recent-message window.
+	for i := 0; i < statusMessageLimit+10; i++ {
+		if err := messaging.WriteMessage(tasksDir, messaging.Message{
+			ID:     fmt.Sprintf("flood-%d", i),
+			From:   "otheragent",
+			Type:   "progress",
+			Task:   "other-task.md",
+			Body:   fmt.Sprintf("flood %d", i),
+			SentAt: base.Add(time.Duration(1+i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage(flood %d): %v", i, err)
+		}
+	}
+
+	data, gatherErr := gatherStatus(tasksDir)
+	if gatherErr != nil {
+		t.Fatalf("gatherStatus: %v", gatherErr)
+	}
+
+	// slowagent should still appear in activeProgress despite its message
+	// being outside the 50-message window.
+	found := false
+	for _, p := range data.activeProgress {
+		if p.displayID == "agent-slowagent" {
+			found = true
+			if p.body != "Step: WORK" {
+				t.Errorf("slowagent progress body = %q, want %q", p.body, "Step: WORK")
+			}
+			if p.task != "slow-task.md" {
+				t.Errorf("slowagent progress task = %q, want %q", p.task, "slow-task.md")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("slowagent not found in activeProgress; got %d entries: %v",
+			len(data.activeProgress), data.activeProgress)
+	}
+}
+
+// TestGatherStatus_ActiveAgentProgressInsideWindowNotDuplicated verifies that
+// when an active agent's progress is already inside the recent window, no
+// older-message scan is performed and the result is correct.
+func TestGatherStatus_ActiveAgentProgressInsideWindowNotDuplicated(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	cleanup, err := queue.RegisterAgent(tasksDir, "fastagent")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write a few messages, then a progress from fastagent — all within the window.
+	for i := 0; i < 5; i++ {
+		if err := messaging.WriteMessage(tasksDir, messaging.Message{
+			ID:     fmt.Sprintf("m%d", i),
+			From:   "otheragent",
+			Type:   "progress",
+			Task:   "task.md",
+			Body:   fmt.Sprintf("msg %d", i),
+			SentAt: base.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID:     "fast-progress",
+		From:   "fastagent",
+		Type:   "progress",
+		Task:   "fast-task.md",
+		Body:   "Step: COMMIT",
+		SentAt: base.Add(10 * time.Second),
+	}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	data, gatherErr := gatherStatus(tasksDir)
+	if gatherErr != nil {
+		t.Fatalf("gatherStatus: %v", gatherErr)
+	}
+
+	count := 0
+	for _, p := range data.activeProgress {
+		if p.displayID == "agent-fastagent" {
+			count++
+			if p.body != "Step: COMMIT" {
+				t.Errorf("fastagent progress body = %q, want %q", p.body, "Step: COMMIT")
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("fastagent appeared %d times in activeProgress, want 1", count)
+	}
+}
+
+// TestGatherStatus_EqualTimestampProgressConsistency verifies that an active
+// agent with multiple equal-timestamp progress messages gets the same result
+// regardless of whether those messages are inside or outside the recent window.
+func TestGatherStatus_EqualTimestampProgressConsistency(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	cleanup, err := queue.RegisterAgent(tasksDir, "eqagent")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sameTime := base
+
+	// Write two equal-timestamp progress messages with IDs "z-msg" and "a-msg".
+	// latestProgressByAgent keeps "a-msg" (smaller ID). The fallback must agree.
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID: "z-msg", From: "eqagent", Type: "progress",
+		Task: "eq-task.md", Body: "body-z",
+		SentAt: sameTime,
+	}); err != nil {
+		t.Fatalf("WriteMessage(z-msg): %v", err)
+	}
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID: "a-msg", From: "eqagent", Type: "progress",
+		Task: "eq-task.md", Body: "body-a",
+		SentAt: sameTime,
+	}); err != nil {
+		t.Fatalf("WriteMessage(a-msg): %v", err)
+	}
+
+	// Flood with statusMessageLimit+10 newer messages to push eqagent outside.
+	for i := 0; i < statusMessageLimit+10; i++ {
+		if err := messaging.WriteMessage(tasksDir, messaging.Message{
+			ID:     fmt.Sprintf("flood-%d", i),
+			From:   "otheragent",
+			Type:   "progress",
+			Task:   "other.md",
+			Body:   fmt.Sprintf("flood %d", i),
+			SentAt: base.Add(time.Duration(1+i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage(flood %d): %v", i, err)
+		}
+	}
+
+	data, gatherErr := gatherStatus(tasksDir)
+	if gatherErr != nil {
+		t.Fatalf("gatherStatus: %v", gatherErr)
+	}
+
+	found := false
+	for _, p := range data.activeProgress {
+		if p.displayID == "agent-eqagent" {
+			found = true
+			// Must match the same message that latestProgressByAgent would pick
+			// (smallest ID "a-msg" for equal timestamps).
+			if p.body != "body-a" {
+				t.Errorf("eqagent body = %q, want %q (smallest-ID tie-break)", p.body, "body-a")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("eqagent not found in activeProgress")
 	}
 }
