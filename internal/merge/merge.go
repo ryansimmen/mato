@@ -12,6 +12,7 @@ import (
 	"slices"
 
 	"mato/internal/frontmatter"
+	"mato/internal/git"
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/queue"
@@ -133,6 +134,7 @@ func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask
 	for _, task := range tasks {
 		completedPath := filepath.Join(tasksDir, queue.DirCompleted, task.name)
 		if taskHasMergeSuccessRecord(task.path) {
+			recoverCompletionDetailForMergedTask(repoRoot, tasksDir, branch, task)
 			if err := moveTaskWithRetry(task.path, completedPath); err != nil {
 				// If the destination already exists, the task was already
 				// moved to completed/ by a prior cycle. Remove the
@@ -216,6 +218,46 @@ func HasReadyTasks(tasksDir string) bool {
 		return false
 	}
 	return len(names) > 0
+}
+
+// recoverCompletionDetailForMergedTask attempts to write a CompletionDetail
+// for a task that already has a merged marker but may be missing its
+// completion detail (e.g., a prior cycle merged successfully but crashed
+// before writing the detail). If the detail already exists or the task has
+// no ID, this is a no-op. Clone and metadata recovery failures are logged
+// as warnings but never block the merge queue.
+func recoverCompletionDetailForMergedTask(repoRoot, tasksDir, branch string, task mergeQueueTask) {
+	if task.id == "" {
+		return
+	}
+	if _, err := messaging.ReadCompletionDetail(tasksDir, task.id); err == nil {
+		return
+	}
+
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not clone for completion detail recovery of %s: %v\n", task.name, err)
+		return
+	}
+	defer git.RemoveClone(cloneDir)
+
+	if _, err := gitOutput(cloneDir, "fetch", "origin"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not fetch for completion detail recovery of %s: %v\n", task.name, err)
+		return
+	}
+
+	sha, filesChanged := recoverMergedTaskMetadata(cloneDir, branch, task)
+	detail := messaging.CompletionDetail{
+		TaskID:       task.id,
+		TaskFile:     task.name,
+		Branch:       taskBranchName(task),
+		CommitSHA:    sha,
+		FilesChanged: filesChanged,
+		Title:        task.title,
+	}
+	if err := messaging.WriteCompletionDetail(tasksDir, detail); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write completion detail for recovered task %s: %v\n", task.name, err)
+	}
 }
 
 // AcquireLock attempts to acquire an exclusive merge lock.
