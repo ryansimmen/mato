@@ -4596,6 +4596,24 @@ func TestResumeRejected(t *testing.T) {
 	}
 }
 
+func TestResumeDetectionBuffer_MatchesAcrossLargeOutput(t *testing.T) {
+	var buf resumeDetectionBuffer
+	chunkA := strings.Repeat("x", resumeDetectionBufferLimit)
+	chunkB := strings.Repeat("y", resumeDetectionBufferLimit) + "\nerror: failed to resume session 123\n"
+	if _, err := buf.Write([]byte(chunkA)); err != nil {
+		t.Fatalf("Write chunkA: %v", err)
+	}
+	if buf.Matched() {
+		t.Fatal("buffer should not match before resume rejection text appears")
+	}
+	if _, err := buf.Write([]byte(chunkB)); err != nil {
+		t.Fatalf("Write chunkB: %v", err)
+	}
+	if !buf.Matched() {
+		t.Fatal("buffer should detect resume rejection after large output")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // pollLoop integration-level tests
 // ---------------------------------------------------------------------------

@@ -15,6 +15,8 @@ import (
 	"golang.org/x/term"
 )
 
+var statPathFn = os.Stat
+
 // checkDocker verifies that Docker is installed and the daemon is running
 // by executing "docker info". This runs before any queue setup so that a
 // missing or stopped Docker installation fails fast with a clear message
@@ -158,9 +160,9 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"-e", fmt.Sprintf("GOPATH=%s/go", containerHome),
 		"-e", fmt.Sprintf("GOMODCACHE=%s/go/pkg/mod", containerHome),
 		"-e", fmt.Sprintf("GOCACHE=%s/.cache/go-build", containerHome),
-		"-v", fmt.Sprintf("%s:%s/go/pkg/mod", goModCache, containerHome),
-		"-v", fmt.Sprintf("%s:%s/.cache/go-build", goBuildCache, containerHome),
 	)
+	args = appendCacheMount(args, goModCache, fmt.Sprintf("%s/go/pkg/mod", containerHome), "GOMODCACHE")
+	args = appendCacheMount(args, goBuildCache, fmt.Sprintf("%s/.cache/go-build", containerHome), "GOCACHE")
 	if env.hasGhConfig {
 		args = append(args, "-v", fmt.Sprintf("%s:%s/.config/gh:ro", env.ghConfigDir, containerHome))
 	}
@@ -187,6 +189,18 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"--reasoning-effort", run.reasoningEffort,
 	)
 	return args
+}
+
+func appendCacheMount(args []string, hostPath, containerPath, label string) []string {
+	if _, err := statPathFn(hostPath); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: skipping %s cache mount; host path %s does not exist\n", label, hostPath)
+			return args
+		}
+		fmt.Fprintf(os.Stderr, "warning: skipping %s cache mount; stat %s: %v\n", label, hostPath, err)
+		return args
+	}
+	return append(args, "-v", fmt.Sprintf("%s:%s", hostPath, containerPath))
 }
 
 // configureReceiveDeny sets receive.denyCurrentBranch=updateInstead on the
