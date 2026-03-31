@@ -1230,6 +1230,95 @@ func TestProcessQueue_DuplicateInCompletedIsRemoved(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_RecoveryPathWritesCompletionDetail(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	// Create a task branch with a change.
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/recover-detail", "mato"); err != nil {
+		t.Fatalf("git checkout task/recover-detail: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "recover.txt"), []byte("recover\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile recover.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "recover.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "recover work\n\nTask-ID: recover-detail"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	// Squash-merge the task branch into mato manually to simulate a prior
+	// successful merge that completed but lost its CompletionDetail.
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "merge", "--squash", "task/recover-detail"); err != nil {
+		t.Fatalf("git merge --squash: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "recover work\n\nTask-ID: recover-detail"); err != nil {
+		t.Fatalf("git commit squash: %v", err)
+	}
+
+	// Place a task in ready-to-merge with a merged marker but no completion detail.
+	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "recover-detail.md")
+	taskContent := "---\nid: recover-detail\npriority: 5\n---\n# Recover detail\nMerge this.\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task: %v", err)
+	}
+
+	// Verify no completion detail exists yet.
+	if _, err := messaging.ReadCompletionDetail(tasksDir, "recover-detail"); err == nil {
+		t.Fatal("completion detail should not exist before ProcessQueue")
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+
+	// Verify the task was moved to completed.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "recover-detail.md")); err != nil {
+		t.Fatalf("completed task missing: %v", err)
+	}
+
+	// Verify a completion detail was written during recovery.
+	detail, err := messaging.ReadCompletionDetail(tasksDir, "recover-detail")
+	if err != nil {
+		t.Fatalf("completion detail missing after recovery: %v", err)
+	}
+	if detail.TaskID != "recover-detail" {
+		t.Errorf("TaskID = %q, want %q", detail.TaskID, "recover-detail")
+	}
+	if detail.TaskFile != "recover-detail.md" {
+		t.Errorf("TaskFile = %q, want %q", detail.TaskFile, "recover-detail.md")
+	}
+	if detail.Branch != "task/recover-detail" {
+		t.Errorf("Branch = %q, want %q", detail.Branch, "task/recover-detail")
+	}
+	if detail.CommitSHA == "" {
+		t.Error("CommitSHA should not be empty")
+	}
+	if detail.Title != "Recover detail" {
+		t.Errorf("Title = %q, want %q", detail.Title, "Recover detail")
+	}
+	foundRecover := false
+	for _, f := range detail.FilesChanged {
+		if f == "recover.txt" {
+			foundRecover = true
+			break
+		}
+	}
+	if !foundRecover {
+		t.Errorf("FilesChanged = %v, want to contain recover.txt", detail.FilesChanged)
+	}
+}
+
 func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
