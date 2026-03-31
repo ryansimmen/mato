@@ -390,6 +390,102 @@ func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
 	}
 }
 
+func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	origCreateClone := createCloneFn
+	origRemoveClone := removeCloneFn
+	origEnsureBranch := ensureBranchFn
+	t.Cleanup(func() {
+		execCommandContext = origExecCommandContext
+		createCloneFn = origCreateClone
+		removeCloneFn = origRemoveClone
+		ensureBranchFn = origEnsureBranch
+	})
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	createCloneFn = func(string) (string, error) { return cloneDir, nil }
+	removeCloneFn = func(string) {}
+	ensureBranchFn = func(cloneDir, branch string) (git.EnsureBranchResult, error) {
+		if _, err := git.Output(cloneDir, "checkout", "-b", branch); err != nil {
+			return git.EnsureBranchResult{}, err
+		}
+		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceLocal}, nil
+	}
+
+	// Seed a work session on the OLD branch with a known session ID.
+	oldSessionID := "stale-session-from-old-branch"
+	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, "task.md", func(session *sessionmeta.Session) {
+		session.CopilotSessionID = oldSessionID
+		session.TaskBranch = "task/task-old"
+	}); err != nil {
+		t.Fatalf("seed work session: %v", err)
+	}
+
+	var capturedArgs []string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		return cmd
+	}
+
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	env := envConfig{
+		repoRoot:           repoRoot,
+		tasksDir:           tasksDir,
+		workdir:            "/workspace",
+		copilotPath:        "/bin/true",
+		gitPath:            "/usr/bin/git",
+		gitUploadPackPath:  "/usr/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/bin/git-receive-pack",
+		ghPath:             "/bin/true",
+		homeDir:            "/home/test",
+		copilotConfigDir:   t.TempDir(),
+		copilotCacheDir:    t.TempDir(),
+		image:              "ubuntu:24.04",
+		targetBranch:       "mato",
+	}
+	run := runContext{agentID: "agent1", prompt: "test prompt", model: "claude-opus-4.6", reasoningEffort: "high", timeout: time.Second}
+	// The claimed task uses a DIFFERENT branch than the seeded session.
+	claimed := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task-new", Title: "Task", TaskPath: taskPath}
+
+	if err := runOnce(context.Background(), env, run, claimed); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+
+	joined := strings.Join(capturedArgs, " ")
+	// The resume session ID should NOT be the stale one from the old branch.
+	if strings.Contains(joined, "--resume="+oldSessionID) {
+		t.Fatalf("expected rotated session ID after branch change, but got stale ID %q in docker args: %s", oldSessionID, joined)
+	}
+	// It should still have a --resume arg (with the new rotated ID).
+	if !strings.Contains(joined, "--resume=") {
+		t.Fatalf("expected --resume with rotated session ID in docker args, got: %s", joined)
+	}
+	// Verify the persisted session metadata has the new branch and a new session ID.
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindWork, "task.md")
+	if err != nil {
+		t.Fatalf("Load work session: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected work session to exist after branch change")
+	}
+	if session.CopilotSessionID == oldSessionID {
+		t.Fatal("persisted session ID should be rotated, not the stale one")
+	}
+	if session.TaskBranch != "task/task-new" {
+		t.Fatalf("TaskBranch = %q, want %q", session.TaskBranch, "task/task-new")
+	}
+}
+
 func TestRunOnce_BranchSetupFailureDoesNotCreateWorkSession(t *testing.T) {
 	origCreateClone := createCloneFn
 	origRemoveClone := removeCloneFn
