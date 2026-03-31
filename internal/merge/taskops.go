@@ -17,6 +17,7 @@ import (
 )
 
 var removeBranchMarkerFn = removeBranchMarker
+var cleanupTaskBranchFn = cleanupTaskBranch
 
 func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr error) error {
 	dst := mergeFailureDestination(tasksDir, task.path, task.name)
@@ -25,9 +26,10 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 	}
 	if filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirFailed) {
 		runtimecleanup.DeleteAll(tasksDir, task.name)
+		cleanupTaskBranchFn(repoRoot, taskBranchName(task))
 	}
 	if errors.Is(mergeErr, errSquashMergeConflict) && filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirBacklog) {
-		cleanupTaskBranch(repoRoot, taskBranchName(task))
+		cleanupTaskBranchFn(repoRoot, taskBranchName(task))
 		if err := removeBranchMarkerFn(dst); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not clear branch marker after merge-conflict cleanup for %s: %v\n", task.name, err)
 		}
