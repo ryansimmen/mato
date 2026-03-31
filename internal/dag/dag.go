@@ -88,6 +88,12 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 		waitingSet[n.ID] = struct{}{}
 	}
 
+	// Deduplicate each node's DependsOn slice to avoid inflated in-degree
+	// counts and duplicate BlockDetail entries.
+	for i := range waiting {
+		waiting[i].DependsOn = dedup(waiting[i].DependsOn)
+	}
+
 	// Build adjacency list and in-degree map for Kahn's algorithm.
 	// Only edges to other waiting tasks are graph edges.
 	adj := make(map[string][]string, len(waiting))      // from -> [to] (dependency direction: "to" depends on "from")
@@ -297,6 +303,27 @@ func sortBlockDetails(details []BlockDetail) {
 	sort.Slice(details, func(i, j int) bool {
 		return details[i].DependencyID < details[j].DependencyID
 	})
+}
+
+// dedup returns a new slice with duplicate and empty strings removed,
+// preserving the original order of first occurrences.
+func dedup(ss []string) []string {
+	if len(ss) <= 1 {
+		return ss
+	}
+	seen := make(map[string]struct{}, len(ss))
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // tarjan implements Tarjan's strongly connected components algorithm.
