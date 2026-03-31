@@ -933,11 +933,36 @@ func TestDoctorCmd_MalformedConfigReturnsError(t *testing.T) {
 	}
 }
 
-func TestDoctorCmd_EnvImageBypassesMalformedConfig(t *testing.T) {
+func TestDoctorCmd_EnvImageStillValidatesConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	writeRepoConfig(t, repoRoot, ":\n  bad yaml: [unbalanced\n")
 
 	t.Setenv("MATO_DOCKER_IMAGE", "env-override:3.0")
+
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		t.Fatal("doctorRunFn should not be called when config is malformed")
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for malformed .mato.yaml even with MATO_DOCKER_IMAGE set, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse config file") {
+		t.Errorf("error = %q, want config parse error", err.Error())
+	}
+}
+
+func TestDoctorCmd_EnvImageWithValidConfigSucceeds(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: from-config:1.0\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "from-env:2.0")
 
 	var capturedOpts doctor.Options
 	orig := doctorRunFn
@@ -951,11 +976,36 @@ func TestDoctorCmd_EnvImageBypassesMalformedConfig(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("expected success when env var set, got: %v", err)
+		t.Fatalf("expected success with env var and valid config, got: %v", err)
 	}
 
-	if capturedOpts.DockerImage != "env-override:3.0" {
-		t.Errorf("DockerImage = %q, want %q", capturedOpts.DockerImage, "env-override:3.0")
+	if capturedOpts.DockerImage != "from-env:2.0" {
+		t.Errorf("DockerImage = %q, want %q", capturedOpts.DockerImage, "from-env:2.0")
+	}
+}
+
+func TestDoctorCmd_EnvImageWithMultiDocConfigFails(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: img:1\n---\ndocker_image: img:2\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "from-env:3.0")
+
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
+		t.Fatal("doctorRunFn should not be called when config has multiple YAML documents")
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for multi-document .mato.yaml even with MATO_DOCKER_IMAGE set")
+	}
+	if !strings.Contains(err.Error(), "multiple YAML documents") {
+		t.Errorf("error = %q, want multiple YAML documents error", err.Error())
 	}
 }
 
