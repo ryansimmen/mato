@@ -152,6 +152,154 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 	}
 }
 
+// TestSessionIDRotation_BranchDisambiguationRotatesSessionID exercises the
+// full task lifecycle through claim → work-session → push → review-session →
+// reject → branch-collision → reclaim-with-disambiguation, verifying that both
+// work and review Copilot session IDs are rotated when the queue produces a
+// disambiguated branch name. This complements the runner-level tests
+// TestRunOnce_BranchChangeRotatesWorkSessionID and
+// TestRunReview_BranchChangeRotatesReviewSessionID which verify the --resume
+// docker arg directly.
+func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskFile := "branch-rotate.md"
+
+	writeTask(t, tasksDir, queue.DirBacklog, taskFile, strings.Join([]string{
+		"# Branch Rotate",
+		"Test session ID rotation on branch disambiguation.",
+		"",
+	}, "\n"))
+
+	// --- First work cycle: claim produces branch A ---
+	firstClaim, err := queue.SelectAndClaimTask(tasksDir, "agent-1", []string{taskFile}, 0, nil)
+	if err != nil {
+		t.Fatalf("first SelectAndClaimTask: %v", err)
+	}
+	if firstClaim == nil {
+		t.Fatal("expected first claimed task, got nil")
+	}
+	branchA := firstClaim.Branch // branch produced by the actual claim flow
+
+	// Runner creates a work session on branch A (as loadOrCreateSession does
+	// inside runOnce).
+	workA, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, branchA)
+	if err != nil {
+		t.Fatalf("LoadOrCreate work branchA: %v", err)
+	}
+	// Runner records head SHA after the agent commits (as recordSessionUpdate does).
+	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, taskFile, func(s *sessionmeta.Session) {
+		s.TaskBranch = branchA
+		s.LastHeadSHA = "abc123"
+	}); err != nil {
+		t.Fatalf("Update work session: %v", err)
+	}
+
+	// Agent pushes work on branch A; host moves task to ready-for-review.
+	createTaskBranch(t, repoRoot, branchA, map[string]string{"rotate.txt": "v1\n"}, "first attempt")
+	if err := queue.WriteBranchMarker(firstClaim.TaskPath, branchA); err != nil {
+		t.Fatalf("WriteBranchMarker: %v", err)
+	}
+	readyReviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	mustRename(t, firstClaim.TaskPath, readyReviewPath)
+
+	// --- Review cycle on branch A ---
+	// Runner creates a review session on branch A (as loadOrCreateSession does
+	// inside runReview with reviewSessionResumeEnabled).
+	reviewA, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindReview, taskFile, branchA)
+	if err != nil {
+		t.Fatalf("LoadOrCreate review branchA: %v", err)
+	}
+	if reviewA.CopilotSessionID == workA.CopilotSessionID {
+		t.Fatal("work and review sessions should have independent IDs")
+	}
+
+	// Reviewer rejects; PostReviewAction moves the task back to backlog.
+	writeVerdict(t, tasksDir, taskFile, map[string]string{
+		"verdict": "reject",
+		"reason":  "needs more tests",
+	})
+	runner.PostReviewAction(tasksDir, "review-host", &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   branchA,
+		Title:    "Branch Rotate",
+		TaskPath: readyReviewPath,
+	})
+	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+
+	// --- Force a branch collision ---
+	// Place a different task in in-progress/ that occupies branch A. When
+	// branch-rotate.md is reclaimed, chooseClaimBranch sees the recorded
+	// branch marker (branch A) is taken and falls through to a disambiguated
+	// branch name.
+	collidingTask := "collider.md"
+	writeTask(t, tasksDir, queue.DirInProgress, collidingTask, strings.Join([]string{
+		"<!-- branch: " + branchA + " -->",
+		"<!-- claimed-by: agent-collider  claimed-at: 2026-01-01T00:00:00Z -->",
+		"# Collider",
+		"This task occupies branch A to force disambiguation.",
+		"",
+	}, "\n"))
+
+	// --- Second work cycle: claim triggers disambiguation ---
+	secondClaim, err := queue.SelectAndClaimTask(tasksDir, "agent-2", []string{taskFile}, time.Second, nil)
+	if err != nil {
+		t.Fatalf("second SelectAndClaimTask: %v", err)
+	}
+	if secondClaim == nil {
+		t.Fatal("expected second claimed task, got nil")
+	}
+
+	// The queue must have produced a different branch due to disambiguation.
+	if secondClaim.Branch == branchA {
+		t.Fatalf("expected disambiguated branch, got same branch %q", branchA)
+	}
+	if !strings.HasPrefix(secondClaim.Branch, "task/branch-rotate") {
+		t.Fatalf("disambiguated branch should have task/branch-rotate prefix, got %q", secondClaim.Branch)
+	}
+
+	// Runner calls LoadOrCreate with the disambiguated branch (as
+	// loadOrCreateSession does inside runOnce). The returned
+	// CopilotSessionID is what the runner would pass via --resume.
+	workB, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, secondClaim.Branch)
+	if err != nil {
+		t.Fatalf("LoadOrCreate work disambiguated branch: %v", err)
+	}
+
+	// Work session ID must have been rotated — a stale ID here would cause
+	// --resume to resume the wrong conversation context on the new branch.
+	if workB.CopilotSessionID == workA.CopilotSessionID {
+		t.Fatalf("work session ID should rotate after branch disambiguation, got same ID %q", workA.CopilotSessionID)
+	}
+	if workB.TaskBranch != secondClaim.Branch {
+		t.Fatalf("TaskBranch = %q, want %q", workB.TaskBranch, secondClaim.Branch)
+	}
+	// Durable metadata should survive the branch change.
+	if workB.LastHeadSHA != "abc123" {
+		t.Fatalf("LastHeadSHA = %q, want preserved %q", workB.LastHeadSHA, "abc123")
+	}
+
+	// Same-branch reload must reuse the rotated session ID (no spurious rotation).
+	workB2, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, secondClaim.Branch)
+	if err != nil {
+		t.Fatalf("LoadOrCreate work disambiguated branch again: %v", err)
+	}
+	if workB2.CopilotSessionID != workB.CopilotSessionID {
+		t.Fatalf("same-branch session ID changed: %q → %q", workB.CopilotSessionID, workB2.CopilotSessionID)
+	}
+
+	// Review session ID must also rotate when loaded for the disambiguated branch.
+	reviewB, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindReview, taskFile, secondClaim.Branch)
+	if err != nil {
+		t.Fatalf("LoadOrCreate review disambiguated branch: %v", err)
+	}
+	if reviewB.CopilotSessionID == reviewA.CopilotSessionID {
+		t.Fatalf("review session ID should rotate after branch disambiguation, got same ID %q", reviewA.CopilotSessionID)
+	}
+	if reviewB.TaskBranch != secondClaim.Branch {
+		t.Fatalf("review TaskBranch = %q, want %q", reviewB.TaskBranch, secondClaim.Branch)
+	}
+}
+
 func TestTerminalCleanup_RemovesSessionMetadata(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "cleanup-sessionmeta.md"

@@ -73,6 +73,38 @@ func TestLoadOrCreate_ReusesExistingSessionID(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreate_RotatesSessionIDOnBranchChange(t *testing.T) {
+	tasksDir := t.TempDir()
+	first, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task")
+	if err != nil {
+		t.Fatalf("first LoadOrCreate: %v", err)
+	}
+	if err := Update(tasksDir, KindWork, "task.md", func(session *Session) {
+		session.LastHeadSHA = "abc123"
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	second, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task-v2")
+	if err != nil {
+		t.Fatalf("second LoadOrCreate: %v", err)
+	}
+	if second.CopilotSessionID == first.CopilotSessionID {
+		t.Fatal("expected rotated session ID after branch change")
+	}
+	if second.TaskBranch != "task/task-v2" {
+		t.Fatalf("TaskBranch = %q, want %q", second.TaskBranch, "task/task-v2")
+	}
+	if second.LastHeadSHA != "abc123" {
+		t.Fatalf("LastHeadSHA = %q, want preserved %q", second.LastHeadSHA, "abc123")
+	}
+	if second.TaskFile != "task.md" {
+		t.Fatalf("TaskFile = %q, want %q", second.TaskFile, "task.md")
+	}
+	if second.Kind != KindWork {
+		t.Fatalf("Kind = %q, want %q", second.Kind, KindWork)
+	}
+}
+
 func TestLoadOrCreate_DoesNotRewriteWhenUnchanged(t *testing.T) {
 	tasksDir := t.TempDir()
 	if _, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task"); err != nil {
