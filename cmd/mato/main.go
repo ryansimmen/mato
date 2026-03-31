@@ -637,6 +637,14 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 				// the wrong image when .mato.yaml is malformed.
 				if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
 					dockerImage = v
+					// Still validate repo config so a malformed committed
+					// .mato.yaml is not hidden during a full doctor run
+					// just because an env override supplies the image.
+					if root, err := resolveRepoRoot(repoInput); err == nil {
+						if _, err := config.Load(root); err != nil {
+							return err
+						}
+					}
 				} else if root, err := resolveRepoRoot(repoInput); err == nil {
 					fileCfg, err := config.Load(root)
 					if err != nil {
