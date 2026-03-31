@@ -160,7 +160,7 @@ func crossDeviceFallback(tmpName, path string) error {
 		os.Remove(tmpDstName)
 		return fmt.Errorf("atomic write %s: close fallback temp: %w", path, err)
 	}
-	if err := os.Rename(tmpDstName, path); err != nil {
+	if err := renameFn(tmpDstName, path); err != nil {
 		os.Remove(tmpDstName)
 		return fmt.Errorf("atomic write %s: rename fallback temp: %w", path, err)
 	}
