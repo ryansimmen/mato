@@ -831,16 +831,18 @@ func TestDoctorCmd_FlagParsing(t *testing.T) {
 		return doctor.Report{}, nil
 	}
 
+	repoRoot := testutil.SetupRepo(t)
+
 	tests := []struct {
 		name string
 		args []string
 	}{
 		{"doctor help", []string{"doctor", "--help"}},
-		{"doctor with repo", []string{"doctor", "--repo=/tmp/repo"}},
+		{"doctor with repo", []string{"doctor", "--repo=" + repoRoot}},
 		{"doctor with fix", []string{"doctor", "--fix"}},
 		{"doctor with json format", []string{"doctor", "--format=json"}},
 		{"doctor with text format", []string{"doctor", "--format=text"}},
-		{"doctor with all flags", []string{"doctor", "--repo=/tmp/repo", "--fix", "--format=json", "--only=git"}},
+		{"doctor with all flags", []string{"doctor", "--repo=" + repoRoot, "--fix", "--format=json", "--only=git"}},
 	}
 
 	for _, tt := range tests {
@@ -2048,6 +2050,70 @@ func TestCancelCmd_UsesRepoRootFromSubdir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
 		t.Fatalf("task should be cancelled into repo-root failed/: %v", err)
+	}
+}
+
+func TestStatusCmd_InvalidRepoPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		repo    string
+		wantErr string
+	}{
+		{
+			name:    "nonexistent path",
+			repo:    "/nonexistent/path/that/does/not/exist",
+			wantErr: "does not exist",
+		},
+		{
+			name:    "not a git repo",
+			repo:    t.TempDir(),
+			wantErr: "not a git repository",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{"status", "--repo", tt.repo})
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected error for invalid repo path, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestCancelCmd_InvalidRepoPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		repo    string
+		wantErr string
+	}{
+		{
+			name:    "nonexistent path",
+			repo:    "/nonexistent/path/that/does/not/exist",
+			wantErr: "does not exist",
+		},
+		{
+			name:    "not a git repo",
+			repo:    t.TempDir(),
+			wantErr: "not a git repository",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{"cancel", "--repo", tt.repo, "some-task"})
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected error for invalid repo path, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
 	}
 }
 
