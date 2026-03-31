@@ -6,8 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+func withOpenRetryDestinationFn(t *testing.T, fn func(string) (*os.File, error)) {
+	t.Helper()
+	orig := openRetryDestinationFn
+	openRetryDestinationFn = fn
+	t.Cleanup(func() { openRetryDestinationFn = orig })
+}
 
 func TestRetryTask_Success(t *testing.T) {
 	tmp := t.TempDir()
@@ -147,6 +155,77 @@ func TestRetryTask_DestinationCollision(t *testing.T) {
 	}
 	if string(data) != originalContent {
 		t.Errorf("failed/ file was mutated during collision\ngot:  %q\nwant: %q", string(data), originalContent)
+	}
+}
+
+func TestRetryTask_ConcurrentReservationAllowsSingleWinner(t *testing.T) {
+	tmp := t.TempDir()
+	for _, dir := range []string{DirFailed, DirBacklog} {
+		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	content := "---\nid: task\n---\n# Task\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "task.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- RetryTask(tmp, "task")
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var successCount, collisionCount int
+	for err := range results {
+		if err == nil {
+			successCount++
+			continue
+		}
+		if strings.Contains(err.Error(), "already exists in backlog/") || strings.Contains(err.Error(), "not found in failed/") {
+			collisionCount++
+			continue
+		}
+		t.Fatalf("unexpected RetryTask error: %v", err)
+	}
+	if successCount != 1 {
+		t.Fatalf("successCount = %d, want 1", successCount)
+	}
+	if collisionCount != 1 {
+		t.Fatalf("collisionCount = %d, want 1", collisionCount)
+	}
+}
+
+func TestRetryTask_ReservationFailureLeavesNoPlaceholder(t *testing.T) {
+	tmp := t.TempDir()
+	for _, dir := range []string{DirFailed, DirBacklog} {
+		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "task.md"), []byte("# Task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backlogPath := filepath.Join(tmp, DirBacklog, "task.md")
+	withOpenRetryDestinationFn(t, func(path string) (*os.File, error) {
+		return nil, io.ErrUnexpectedEOF
+	})
+
+	err := RetryTask(tmp, "task")
+	if err == nil || !strings.Contains(err.Error(), "reserve task path in backlog") {
+		t.Fatalf("err = %v, want reserve task path in backlog error", err)
+	}
+	if _, err := os.Stat(backlogPath); !os.IsNotExist(err) {
+		t.Fatalf("backlog placeholder should not exist after reservation failure, stat err = %v", err)
 	}
 }
 

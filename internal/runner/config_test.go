@@ -3,9 +3,17 @@ package runner
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func withStatPathFn(t *testing.T, fn func(string) (os.FileInfo, error)) {
+	t.Helper()
+	orig := statPathFn
+	statPathFn = fn
+	t.Cleanup(func() { statPathFn = orig })
+}
 
 func TestBuildDockerArgs_GhConfigMount(t *testing.T) {
 	env := envConfig{
@@ -132,6 +140,64 @@ func TestBuildDockerArgs_CopilotCacheMount(t *testing.T) {
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "/home/test/.cache/copilot:/home/test/.cache/copilot") {
 		t.Fatal("copilot cache directory should be bind-mounted")
+	}
+}
+
+func TestBuildDockerArgs_SkipsMissingGoCacheMounts(t *testing.T) {
+	withStatPathFn(t, func(path string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	})
+	env := envConfig{
+		homeDir:          "/home/test",
+		image:            "ubuntu:24.04",
+		workdir:          "/workspace",
+		copilotConfigDir: "/home/test/.copilot",
+		copilotCacheDir:  "/home/test/.cache/copilot",
+	}
+	run := runContext{prompt: "test"}
+
+	_, stderr := captureStdoutStderr(t, func() {
+		args := buildDockerArgs(env, run, nil, nil)
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "/home/test/go/pkg/mod:/home/test/go/pkg/mod") {
+			t.Fatal("GOMODCACHE mount should be omitted when host cache path is missing")
+		}
+		if strings.Contains(joined, "/home/test/.cache/go-build:/home/test/.cache/go-build") {
+			t.Fatal("GOCACHE mount should be omitted when host cache path is missing")
+		}
+	})
+	if !strings.Contains(stderr, "skipping GOMODCACHE cache mount") {
+		t.Fatalf("expected GOMODCACHE warning, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "skipping GOCACHE cache mount") {
+		t.Fatalf("expected GOCACHE warning, got %q", stderr)
+	}
+}
+
+func TestBuildDockerArgs_IncludesExistingGoCacheMounts(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, "go", "pkg", "mod"), 0o755); err != nil {
+		t.Fatalf("MkdirAll GOMODCACHE: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(homeDir, ".cache", "go-build"), 0o755); err != nil {
+		t.Fatalf("MkdirAll GOCACHE: %v", err)
+	}
+	env := envConfig{
+		homeDir:          homeDir,
+		image:            "ubuntu:24.04",
+		workdir:          "/workspace",
+		copilotConfigDir: filepath.Join(homeDir, ".copilot"),
+		copilotCacheDir:  filepath.Join(homeDir, ".cache", "copilot"),
+	}
+	run := runContext{prompt: "test"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, filepath.Join(homeDir, "go", "pkg", "mod")+":"+homeDir+"/go/pkg/mod") {
+		t.Fatal("expected GOMODCACHE mount when host cache path exists")
+	}
+	if !strings.Contains(joined, filepath.Join(homeDir, ".cache", "go-build")+":"+homeDir+"/.cache/go-build") {
+		t.Fatal("expected GOCACHE mount when host cache path exists")
 	}
 }
 
