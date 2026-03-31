@@ -84,24 +84,22 @@ func TestAcquireLockSucceedsWhenHeldByDeadProcess(t *testing.T) {
 	cleanup()
 }
 
-func TestAcquireLockFailsWhenLockFileEmpty(t *testing.T) {
+func TestAcquireLockReclaimsEmptyLockFile(t *testing.T) {
 	tasksDir := t.TempDir()
 	locksDir := filepath.Join(tasksDir, ".locks")
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("os.MkdirAll: %v", err)
 	}
-	// Simulate the race window: lock file exists but is empty (writer hasn't written identity yet)
+	// Simulate crash: lock file exists but is empty (writer crashed before writing identity).
 	if err := os.WriteFile(filepath.Join(locksDir, "merge.lock"), []byte(""), 0o644); err != nil {
 		t.Fatalf("os.WriteFile merge.lock: %v", err)
 	}
 
 	cleanup, ok := AcquireLock(tasksDir)
-	if ok || cleanup != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		t.Fatal("expected merge lock acquisition to fail when lock file is empty (conservatively assume holder is alive)")
+	if !ok {
+		t.Fatal("expected merge lock acquisition to succeed by reclaiming empty (stale) lock file")
 	}
+	defer cleanup()
 }
 
 func TestAcquireLockCleanupRemovesLockFile(t *testing.T) {

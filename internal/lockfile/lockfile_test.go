@@ -229,20 +229,47 @@ func TestDifferentNamesAreIndependent(t *testing.T) {
 	defer release2()
 }
 
-func TestEmptyLockFileBlocksAcquire(t *testing.T) {
+func TestEmptyLockFileIsTreatedAsStale(t *testing.T) {
 	dir := t.TempDir()
 	lockPath := filepath.Join(dir, "empty.lock")
 
-	// An empty lock file (no identity) is treated as held (not stale)
-	// because the code checks content == "" and returns false.
+	// An empty lock file (e.g. from a crash between create and write)
+	// should be treated as stale — removed and reacquired on the first call.
 	if err := os.WriteFile(lockPath, []byte(""), 0o644); err != nil {
 		t.Fatalf("writing empty lock: %v", err)
 	}
 
-	_, ok := Acquire(dir, "empty")
-	if ok {
-		t.Fatal("Acquire should fail when lock file is empty (treated as held)")
+	release, ok := Acquire(dir, "empty")
+	if !ok {
+		t.Fatal("Acquire should succeed by reclaiming an empty (stale) lock file")
 	}
+	defer release()
+
+	// Verify the lock file now contains our identity.
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("reading reclaimed lock: %v", err)
+	}
+	expected := process.LockIdentity(os.Getpid())
+	if string(data) != expected {
+		t.Errorf("lock identity = %q, want %q", string(data), expected)
+	}
+}
+
+func TestWhitespaceOnlyLockFileIsTreatedAsStale(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "ws.lock")
+
+	// A lock file containing only whitespace should also be treated as stale.
+	if err := os.WriteFile(lockPath, []byte("  \n\t"), 0o644); err != nil {
+		t.Fatalf("writing whitespace lock: %v", err)
+	}
+
+	release, ok := Acquire(dir, "ws")
+	if !ok {
+		t.Fatal("Acquire should succeed by reclaiming a whitespace-only (stale) lock file")
+	}
+	defer release()
 }
 
 // --- IsHeld tests ---
