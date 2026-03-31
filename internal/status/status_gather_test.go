@@ -411,6 +411,55 @@ func TestLatestProgressByAgent_Empty(t *testing.T) {
 	}
 }
 
+func TestLatestProgressByAgent_EqualTimestampTieBreak(t *testing.T) {
+	now := time.Now().UTC()
+	// Two progress messages from the same agent with the same timestamp.
+	// The canonical rule says the lexically smallest ID wins.
+	messages := []messaging.Message{
+		{ID: "z-msg", From: "a1", Type: "progress", Body: "body-z", SentAt: now},
+		{ID: "a-msg", From: "a1", Type: "progress", Body: "body-a", SentAt: now},
+	}
+
+	result := latestProgressByAgent(messages)
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(result))
+	}
+	if result["a1"].ID != "a-msg" {
+		t.Errorf("a1 ID = %q, want %q (smallest ID for equal timestamps)", result["a1"].ID, "a-msg")
+	}
+
+	// Reverse input order — result must be the same.
+	reversed := []messaging.Message{messages[1], messages[0]}
+	resultRev := latestProgressByAgent(reversed)
+
+	if resultRev["a1"].ID != "a-msg" {
+		t.Errorf("reversed: a1 ID = %q, want %q (order-independent tie-break)", resultRev["a1"].ID, "a-msg")
+	}
+}
+
+func TestLatestProgressByAgent_EqualTimestampMultipleAgents(t *testing.T) {
+	now := time.Now().UTC()
+	messages := []messaging.Message{
+		{ID: "z1", From: "a1", Type: "progress", Body: "z1-body", SentAt: now},
+		{ID: "a1", From: "a1", Type: "progress", Body: "a1-body", SentAt: now},
+		{ID: "z2", From: "a2", Type: "progress", Body: "z2-body", SentAt: now},
+		{ID: "a2", From: "a2", Type: "progress", Body: "a2-body", SentAt: now},
+	}
+
+	result := latestProgressByAgent(messages)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(result))
+	}
+	if result["a1"].ID != "a1" {
+		t.Errorf("a1 ID = %q, want %q", result["a1"].ID, "a1")
+	}
+	if result["a2"].ID != "a2" {
+		t.Errorf("a2 ID = %q, want %q", result["a2"].ID, "a2")
+	}
+}
+
 func TestFormatDuration(t *testing.T) {
 	tests := []struct {
 		name string

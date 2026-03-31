@@ -222,10 +222,11 @@ const filenameTimestampPrefix = len("20060102T150405.000000000Z")
 // possible. Filenames that do not contain "-progress-" are skipped without
 // parsing.
 //
-// The tie-break rule for equal timestamps matches latestProgressByAgent:
-// the message with the lexically smallest ID wins. This ensures consistent
-// progress display regardless of whether the message falls inside or outside
-// the recent-message window.
+// The tie-break rule for equal timestamps is the canonical contract shared
+// with latestProgressByAgent: when two progress messages from the same agent
+// share the same timestamp, the one with the lexically smallest ID wins.
+// Both implementations encode this rule explicitly so that in-window and
+// fallback progress selection always return the same message.
 //
 // Pending agents (found but potentially awaiting same-timestamp tie-break)
 // are finalized as soon as the filename timestamp prefix drops below their
