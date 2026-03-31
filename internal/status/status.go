@@ -284,13 +284,19 @@ func reverseDepsFromIndex(idx *queue.PollIndex) map[string][]string {
 }
 
 // latestProgressByAgent returns the most recent progress message per agent.
+// When two messages share the same timestamp, the one with the lexically
+// smallest ID wins. This tie-break rule is the canonical contract shared
+// with ReadLatestProgressForAgents so that in-window and fallback progress
+// selection always agree.
 func latestProgressByAgent(messages []messaging.Message) map[string]messaging.Message {
 	result := make(map[string]messaging.Message)
 	for _, msg := range messages {
 		if msg.Type != "progress" {
 			continue
 		}
-		if existing, ok := result[msg.From]; !ok || msg.SentAt.After(existing.SentAt) {
+		existing, ok := result[msg.From]
+		if !ok || msg.SentAt.After(existing.SentAt) ||
+			(msg.SentAt.Equal(existing.SentAt) && msg.ID < existing.ID) {
 			result[msg.From] = msg
 		}
 	}
