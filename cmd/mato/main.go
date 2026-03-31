@@ -549,6 +549,9 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			if format == "json" {
 				if watch {
 					return newUsageError(cmd, fmt.Errorf("--format json and --watch cannot be used together"))
@@ -624,6 +627,9 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 
 			repoInput, err := resolveRepo(*repoFlag)
 			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repoInput); err != nil {
 				return err
 			}
 
@@ -711,6 +717,9 @@ func newLogCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			return logShowFn(repo, limit, format)
 		},
 	}
@@ -736,6 +745,9 @@ func newGraphCmd(repoFlag *string) *cobra.Command {
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
 			return graph.Show(repo, format, showAll)
@@ -764,6 +776,9 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			return inspectShowFn(repo, args[0], format)
 		},
 	}
@@ -783,6 +798,9 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
 			repoRoot, err := resolveRepoRoot(repo)
@@ -828,6 +846,9 @@ func newPauseCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			repoRoot, err := resolveRepoRoot(repo)
 			if err != nil {
 				return err
@@ -867,6 +888,9 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			repoRoot, err := resolveRepoRoot(repo)
 			if err != nil {
 				return err
@@ -902,6 +926,9 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
 			repoRoot, err := resolveRepoRoot(repo)
