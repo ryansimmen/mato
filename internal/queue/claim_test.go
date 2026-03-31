@@ -1508,6 +1508,36 @@ func TestLastFailureTime(t *testing.T) {
 			data:   "# Task\n<!-- review-failure: agent-1 at 2026-03-01T10:00:00Z step=WORK error=oops -->\n",
 			wantOK: false,
 		},
+		{
+			name: "failure marker in fenced code block ignored",
+			data: strings.Join([]string{
+				"# Task",
+				"```",
+				"<!-- failure: agent-1 at 2026-03-01T10:00:00Z step=WORK error=build_failed -->",
+				"```",
+			}, "\n"),
+			wantOK: false,
+		},
+		{
+			name: "failure marker in prose ignored",
+			data: strings.Join([]string{
+				"# Task",
+				"The marker format is <!-- failure: agent-1 at 2026-03-01T10:00:00Z step=WORK error=example -->.",
+			}, "\n"),
+			wantOK: false,
+		},
+		{
+			name: "real marker outside fence with fake marker inside fence",
+			data: strings.Join([]string{
+				"# Task",
+				"```",
+				"<!-- failure: agent-1 at 2026-03-01T10:00:00Z step=WORK error=fake -->",
+				"```",
+				"<!-- failure: agent-2 at 2026-03-01T14:00:00Z step=WORK error=real -->",
+			}, "\n"),
+			wantOK: true,
+			wantTS: "2026-03-01T14:00:00Z",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1662,5 +1692,55 @@ func TestSelectAndClaimTask_RecentFailure_SkipsToNext(t *testing.T) {
 	// Hot task should still be in backlog.
 	if _, err := os.Stat(filepath.Join(dir, DirBacklog, "aaa-hot.md")); err != nil {
 		t.Fatalf("hot task should still be in backlog: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_FencedCodeFailure_NoCooldown(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Task with a recent failure marker inside a fenced code block should
+	// NOT trigger retry cooldown — the marker is not standalone.
+	recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "fenced.md"), strings.Join([]string{
+		"# Fenced task",
+		"```",
+		fmt.Sprintf("<!-- failure: agent-1 at %s step=WORK error=crash -->", recentTS),
+		"```",
+		"",
+	}, "\n"))
+
+	task, err := SelectAndClaimTask(dir, "agent-6", candidates("fenced.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task (fenced code failure should not trigger cooldown), got nil")
+	}
+	if task.Filename != "fenced.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "fenced.md")
+	}
+}
+
+func TestSelectAndClaimTask_ProseFailure_NoCooldown(t *testing.T) {
+	dir := setupClaimTestDir(t)
+
+	// Task with a failure marker embedded in prose (not on its own line)
+	// should NOT trigger retry cooldown.
+	recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "prose.md"), strings.Join([]string{
+		"# Prose task",
+		fmt.Sprintf("The marker format is <!-- failure: agent-1 at %s step=WORK error=crash -->.", recentTS),
+		"",
+	}, "\n"))
+
+	task, err := SelectAndClaimTask(dir, "agent-7", candidates("prose.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a claimed task (prose failure should not trigger cooldown), got nil")
+	}
+	if task.Filename != "prose.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "prose.md")
 	}
 }

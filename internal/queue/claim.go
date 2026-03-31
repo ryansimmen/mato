@@ -430,35 +430,20 @@ func retryCooldown(cooldown time.Duration) time.Duration {
 	return defaultRetryCooldown
 }
 
-// lastFailureTime extracts the timestamp from the most recent
-// <!-- failure: ... --> comment in the given data. Returns the zero time
-// and false if no failure comment with a valid timestamp is found.
-// Lines starting with <!-- review-failure: are excluded.
+// lastFailureTime extracts the timestamp from the most recent standalone
+// <!-- failure: ... --> marker in the given data. Marker-like text inside
+// prose or fenced code blocks is ignored. Returns the zero time and false
+// if no well-formed failure marker with a valid timestamp is found.
 func lastFailureTime(data []byte) (time.Time, bool) {
-	var last time.Time
-	found := false
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "<!-- failure:") || strings.HasPrefix(trimmed, "<!-- review-failure:") {
-			continue
-		}
-		// Format: <!-- failure: AGENTID at 2026-01-01T00:00:00Z step=... -->
-		idx := strings.Index(trimmed, " at ")
-		if idx < 0 {
-			continue
-		}
-		rest := trimmed[idx+4:]
-		spaceIdx := strings.Index(rest, " ")
-		if spaceIdx < 0 {
-			continue
-		}
-		ts := rest[:spaceIdx]
-		t, err := time.Parse(time.RFC3339, ts)
-		if err != nil {
-			continue
-		}
-		last = t
-		found = true
+	records := taskfile.ParseFailureMarkers(data)
+	if len(records) == 0 {
+		return time.Time{}, false
 	}
-	return last, found
+	last := records[0].Timestamp
+	for _, r := range records[1:] {
+		if r.Timestamp.After(last) {
+			last = r.Timestamp
+		}
+	}
+	return last, true
 }
