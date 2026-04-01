@@ -109,6 +109,14 @@ func collectEvents(tasksDir string) ([]Event, error) {
 		}
 	}
 
+	// Surface partial failures: one source failed but the other succeeded.
+	if completionStatus == sourceFailed && taskStatus == sourceRead && completionErr != nil {
+		warnf("warning: %v\n", completionErr)
+	}
+	if taskStatus == sourceFailed && completionStatus == sourceRead && taskErr != nil {
+		warnf("warning: %v\n", taskErr)
+	}
+
 	return events, nil
 }
 
