@@ -402,6 +402,8 @@ func newRootCmd() *cobra.Command {
 func newRunCmd(repoFlag *string) *cobra.Command {
 	var branch string
 	var dryRun bool
+	var once bool
+	var untilIdle bool
 	var flags runFlags
 
 	cmd := &cobra.Command{
@@ -409,6 +411,16 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 		Short: "Start the orchestrator loop",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun && once {
+				return newUsageError(cmd, fmt.Errorf("--dry-run and --once are mutually exclusive"))
+			}
+			if dryRun && untilIdle {
+				return newUsageError(cmd, fmt.Errorf("--dry-run and --until-idle are mutually exclusive"))
+			}
+			if once && untilIdle {
+				return newUsageError(cmd, fmt.Errorf("--once and --until-idle are mutually exclusive"))
+			}
+
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
 				return err
@@ -435,6 +447,14 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			switch {
+			case once:
+				opts.Mode = runner.RunModeOnce
+			case untilIdle:
+				opts.Mode = runner.RunModeUntilIdle
+			default:
+				opts.Mode = runner.RunModeDaemon
+			}
 			if dryRun {
 				return dryRunFn(repoRoot, resolvedBranch, opts)
 			}
@@ -444,6 +464,8 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 	configureCommand(cmd)
 	cmd.Flags().StringVar(&branch, "branch", "", "Target branch for merging (default: mato)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate queue setup without launching Docker containers")
+	cmd.Flags().BoolVar(&once, "once", false, "Run exactly one poll iteration, then exit")
+	cmd.Flags().BoolVar(&untilIdle, "until-idle", false, "Keep polling until no actionable work remains, then exit")
 	cmd.Flags().StringVar(&flags.TaskModel, "task-model", "", "Copilot model for task agents")
 	cmd.Flags().StringVar(&flags.ReviewModel, "review-model", "", "Copilot model for review agents")
 	cmd.Flags().StringVar(&flags.TaskReasoningEffort, "task-reasoning-effort", "", "Reasoning effort for task agents")

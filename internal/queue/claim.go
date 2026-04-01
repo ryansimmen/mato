@@ -54,6 +54,37 @@ func normalizeClaimCandidate(name string) (string, bool) {
 	return name, true
 }
 
+func retryClaimability(path string, failures, maxRetries int, cooldown time.Duration) (retryExhausted bool, cooledDown bool) {
+	retryExhausted = failures >= maxRetries
+	if failures == 0 || retryExhausted {
+		return retryExhausted, true
+	}
+	rawData, err := os.ReadFile(path)
+	if err != nil {
+		return false, true
+	}
+	if lastFail, ok := lastFailureTime(rawData); ok {
+		return false, timeNowFn().Sub(lastFail) >= retryCooldown(cooldown)
+	}
+	return false, true
+}
+
+func immediatelyClaimableTask(path string, depLookup dependencyLookup, cooldown time.Duration) bool {
+	meta, _, parseErr := frontmatter.ParseTaskFile(path)
+	if parseErr != nil {
+		return false
+	}
+	if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
+		return false
+	}
+	failures, failErr := CountFailureLines(path)
+	if failErr != nil {
+		return false
+	}
+	retryExhausted, cooledDown := retryClaimability(path, failures, meta.MaxRetries, cooldown)
+	return retryExhausted || cooledDown
+}
+
 // defaultRetryCooldown is the default time to wait after a task failure before
 // the task becomes eligible for claiming again.
 const defaultRetryCooldown = 2 * time.Minute
@@ -255,24 +286,17 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		// Always re-read the candidate file before claiming so manual edits made
 		// after index construction cannot bypass dependency enforcement.
-		var meta frontmatter.TaskMeta
-		var body string
-		var maxRetries int
-		var failures int
-
-		var parseErr error
-		meta, body, parseErr = frontmatter.ParseTaskFile(src)
+		meta, body, parseErr := frontmatter.ParseTaskFile(src)
 		if parseErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, parseErr)
 			continue
 		}
-		maxRetries = meta.MaxRetries
-		var failErr error
-		failures, failErr = CountFailureLines(src)
+		failures, failErr := CountFailureLines(src)
 		if failErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not count failures for %s, skipping: %v\n", name, failErr)
 			continue
 		}
+		retryExhausted, cooledDown := retryClaimability(src, failures, meta.MaxRetries, cooldown)
 
 		if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
 			waitingPath := filepath.Join(tasksDir, DirWaiting, name)
@@ -288,15 +312,8 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		// prevent rapid retry churn after immediate agent crashes. Tasks that
 		// already exhausted their retry budget should still move straight to
 		// failed/ without waiting for cooldown.
-		if failures > 0 && failures < maxRetries {
-			rawData, readErr := os.ReadFile(src)
-			if readErr == nil {
-				if lastFail, ok := lastFailureTime(rawData); ok {
-					if timeNowFn().Sub(lastFail) < retryCooldown(cooldown) {
-						continue
-					}
-				}
-			}
+		if failures > 0 && !retryExhausted && !cooledDown {
+			continue
 		}
 
 		if err := AtomicMove(src, dst); err != nil {
@@ -305,7 +322,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			continue
 		}
 
-		if failures >= maxRetries {
+		if retryExhausted {
 			if err := handleRetryExhaustedTask(name, dst, src, failedDir); err != nil {
 				return nil, err
 			}

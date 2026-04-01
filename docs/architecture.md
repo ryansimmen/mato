@@ -31,7 +31,7 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 ```
 High-level flow:
 1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, resolves precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)` via `mato run`, bootstraps a repository via `setup.InitRepo(...)`, or routes to read-only subcommands such as `status.Show(...)`, `history.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
-2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs.
+2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs. `RunOptions.Mode` selects between the default daemon loop, one-iteration bounded execution (`--once`), and drain-until-idle bounded execution (`--until-idle`).
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, chooses a stable task branch (reusing any recorded branch marker when safe, otherwise deriving a sanitized/disambiguated branch), then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim, works on the preselected branch, and commits locally.
 4. After the agent exits, the host pushes the task branch and moves the task file to `ready-for-review/`.
 5. A review agent evaluates the pushed branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with recorded feedback.
@@ -64,7 +64,7 @@ High-level flow:
 
 Integration coverage verifies that running `mato init` followed by `runner.DryRun(...)` produces a fully valid queue layout.
 ### Polling loop
-The loop in `Run()` polls every 10 seconds. The exact order is:
+The default daemon loop in `Run()` polls every 10 seconds. The exact order of a poll iteration is:
 ```text
 queue.RecoverOrphanedTasks(tasksDir)
 queue.CleanStaleLocks(tasksDir)
@@ -111,6 +111,9 @@ Important details from the implementation:
 - Pause mode is controlled by `.mato/.paused`, which stores the UTC RFC3339 time
   when the repo was paused. While present, the host skips new claims and review
   launches but continues merge processing.
+- Bounded run modes reuse the same startup, iteration order, and deferred cleanup. `RunModeOnce` exits after one full `pollIterate(...)` completes. `RunModeUntilIdle` performs an additional post-iteration filesystem check using the same reconcile and claimability rules as normal scheduling, then exits only when there is no immediately claimable backlog work, no remaining review candidates, and no tasks left in `ready-to-merge/`.
+- `RunModeUntilIdle` intentionally treats retry-cooldowned backlog tasks as non-actionable, so cooldown alone does not keep the process alive. Retry-exhausted backlog tasks still count as actionable because the next claim pass will move them to `failed/`.
+- Pause interacts with bounded idle narrowly: paused queues still are not idle if actionable review or merge work remains, but a paused queue with no actionable backlog, review, or merge work is allowed to exit.
 ### Orphan recovery and lock cleanup
 The `queue` package provides the host-side recovery primitives:
 - `queue.RegisterAgent(...)` (in `queue.go`) writes `.mato/.locks/<agentID>.pid` and returns a cleanup function.

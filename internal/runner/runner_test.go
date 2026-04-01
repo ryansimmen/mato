@@ -4418,7 +4418,7 @@ func TestPollLoop_CancelDuringIterationExits(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
 	run := runContext{agentID: "test-agent"}
 
-	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0)
+	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0, RunModeDaemon)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -4714,6 +4714,11 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 			opts: RunOptions{TaskModel: "   ", ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
 			want: "task model must not be empty",
 		},
+		{
+			name: "invalid run mode",
+			opts: RunOptions{Mode: RunMode(99), TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			want: "invalid run mode",
+		},
 	}
 
 	for _, tt := range tests {
@@ -4897,9 +4902,178 @@ func TestPollLoop_ExitsOnCancelledContext(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
 	run := runContext{agentID: "test-agent"}
 
-	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0)
+	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0, RunModeDaemon)
 	if err != nil {
 		t.Fatalf("expected nil error from cancelled pollLoop, got: %v", err)
+	}
+}
+
+func TestPollLoop_RunModeOnceExitsAfterSingleIteration(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	iterations := 0
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		iterations++
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
+
+	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
+	run := runContext{agentID: "test-agent"}
+	err := pollLoop(context.Background(), env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0, RunModeOnce)
+	if err != nil {
+		t.Fatalf("pollLoop returned error: %v", err)
+	}
+	if iterations != 1 {
+		t.Fatalf("iterations = %d, want 1", iterations)
+	}
+}
+
+func TestPollLoop_RunModeUntilIdleExitsWhenQueueBecomesIdle(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
+
+	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
+	run := runContext{agentID: "test-agent"}
+	err := pollLoop(context.Background(), env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0, RunModeUntilIdle)
+	if err != nil {
+		t.Fatalf("pollLoop returned error: %v", err)
+	}
+}
+
+func TestPollLoop_RunModeUntilIdlePausedWithPendingMergeDoesNotExit(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "pending.md"), []byte("# Pending\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile pending merge task: %v", err)
+	}
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{Active: true}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
+	run := runContext{agentID: "test-agent"}
+	done := make(chan error, 1)
+	go func() {
+		done <- pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0, RunModeUntilIdle)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("pollLoop exited early despite paused ready-to-merge work: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("pollLoop returned error after cancellation: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pollLoop did not return after cancellation")
+	}
+}
+
+func TestPollLoop_BoundedModeReturnsErrorOnPollFailure(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, true
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
+
+	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
+	run := runContext{agentID: "test-agent"}
+	err := pollLoop(context.Background(), env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0, RunModeOnce)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "bounded run encountered 1 poll cycle error") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

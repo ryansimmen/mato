@@ -2,8 +2,10 @@ package queue
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"mato/internal/frontmatter"
 )
@@ -94,6 +96,23 @@ func OrderedRunnableFilenames(view RunnableBacklogView, exclude map[string]struc
 		names = append(names, snap.Filename)
 	}
 	return names
+}
+
+// HasClaimableBacklogTask reports whether backlog currently contains at least
+// one immediately claimable task after dependency and affects filtering,
+// caller-provided exclusions, retry exhaustion, and retry cooldown.
+func HasClaimableBacklogTask(tasksDir string, exclude map[string]struct{}, cooldown time.Duration, idx *PollIndex) bool {
+	idx = ensureIndex(tasksDir, idx)
+	view := ComputeRunnableBacklogView(tasksDir, idx)
+	depLookup := newDependencyLookup(idx)
+	backlogDir := filepath.Join(tasksDir, DirBacklog)
+	for _, name := range OrderedRunnableFilenames(view, exclude) {
+		path := filepath.Join(backlogDir, name)
+		if immediatelyClaimableTask(path, depLookup, cooldown) {
+			return true
+		}
+	}
+	return false
 }
 
 func newDependencyLookup(idx *PollIndex) dependencyLookup {
