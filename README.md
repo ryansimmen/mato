@@ -53,10 +53,14 @@ Useful flags:
 - `mato run --dry-run`: validate queue setup without launching Docker containers
 - `mato run --once`: run one full poll iteration, then exit
 - `mato run --until-idle`: keep polling until no claimable backlog, review, or merge work remains, then exit
-- `mato run --task-model`, `--review-model`: override task and review agent models
-- `mato run --task-reasoning-effort`, `--review-reasoning-effort`: override task and review reasoning effort
+- `mato run --task-model`: override the task agent model (defaults to `claude-opus-4.6`)
+- `mato run --review-model`: override the review agent model (defaults to `gpt-5.4`)
+- `mato run --task-reasoning-effort`: override the task agent reasoning effort (defaults to `high`)
+- `mato run --review-reasoning-effort`: override the review agent reasoning effort (defaults to `high`)
 
 You can also set `MATO_BRANCH` for a host-side branch default that overrides `.mato.yaml` but is still overridden by `--branch`.
+
+Use `mato --help` and `mato run --help` as the canonical source for current CLI defaults.
 
 Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe. When the branch is missing locally, `mato init` tells you whether it reused a local branch, created from live `origin/<branch>`, created from current `HEAD` because the remote branch was missing, or fell back to a cached remote-tracking ref because `origin` was unavailable.
 
