@@ -1,5 +1,5 @@
 # Mato Architecture
-This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `history/`, `inspect/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, and `taskfile/`.
+This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `history/`, `inspect/`, `doctor/`, `graph/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, `taskfile/`, `config/`, `dirs/`, `pause/`, `sessionmeta/`, `taskstate/`, and `runtimecleanup/`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, runs an AI review pass for completed work, and squash-merges approved task branches back into a target branch. An optional `.mato/.paused` sentinel can temporarily stop new claims and review launches without stopping the host process. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, work in an isolated clone on the host-selected task branch, commit its changes, and exit. The host then pushes the task branch, moves the task to `ready-for-review/`, processes the review verdict, and later merges approved work.
 ```text
@@ -219,7 +219,7 @@ State meanings:
 | `ready-to-merge/` | reviewed and approved, waiting for host merge | host `postReviewAction` | `merge.ProcessQueue(...)` moves it to `completed/` on success, to `backlog/` on squash conflict or missing task branch (if retries remain), to `failed/` if the task branch is missing and `max_retries` is exhausted, or leaves it in place if the squash commit cannot be pushed |
 | `completed/` | merged terminal state | host merge success | no normal exit |
 | `failed/` | failure record budget exhausted, operator-cancelled, circular dependency, or duplicate waiting task ID | host `SelectAndClaimTask` moves already-claimed task from `in-progress/` to `failed/` when the number of `<!-- failure: ... -->` records reaches `max_retries` (default 3), `mato cancel` moves queued tasks here with `<!-- cancelled: ... -->` markers, merge-queue failure handling (squash conflict or missing branch with retries exhausted), `ReconcileReadyQueue` moves cycle members from `waiting/` to `failed/` with `<!-- cycle-failure: ... -->` markers, or `ReconcileReadyQueue` moves duplicate waiting task ID copies to `failed/` with `<!-- terminal-failure: ... -->` markers | no normal exit |
-Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
+Retry counting is comment-based, not directory-based. Task agent failures use `<!-- failure: ... -->` records, counted by `CountFailureLines()` in `SelectAndClaimTask` and by `shouldFailTaskAfterNextFailure()` in the merge queue. Review infrastructure failures use `<!-- review-failure: ... -->` records, counted separately by `CountReviewFailureLines()` in `reviewCandidates()`. This separation ensures that transient review issues (network blips, diff timeouts) do not consume a task's failure record budget, and vice versa.
 ## 5. Dependency Resolution
 `queue.ReconcileReadyQueue(tasksDir, idx)` in `queue/reconcile.go` demotes dependency-blocked backlog tasks to `waiting/`, promotes waiting tasks whose dependencies are satisfied, moves cyclic tasks to `failed/`, and moves duplicate waiting task ID copies to `failed/`.
 ### DAG Analysis
@@ -369,7 +369,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `internal/queue/`
 - Poll index — `BuildIndex`, `PollIndex`, `TaskSnapshot` (`index.go`).
 - Task claiming and failure-record counting (`claim.go`).
-- Queue directory constants (`dirs.go`).
+- Queue directory constants — re-exports from `internal/dirs` (`dirs.go`).
 - Agent registration — `RegisterAgent` (`queue.go`).
 - Lock file management — `CleanStaleLocks`, `AcquireReviewLock` (`locks.go`).
 - Queue manifest writing (`manifest.go`).
@@ -379,6 +379,10 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Orphan recovery — `RecoverOrphanedTasks` (`queue.go`).
 - Task file enumeration — `ListTaskFiles` (`taskfiles.go`).
 - Atomic file moves — `AtomicMove` (`queue.go`).
+- Runnable backlog computation — `ComputeRunnableBacklogView` (`runnable_backlog.go`).
+- Task reference resolution — `ResolveTask` by filename, stem, or explicit ID (`resolve.go`).
+- Task cancellation — `CancelTask` (`cancel.go`).
+- Task retry — `RetryTask` (`retry.go`).
 
 ### `internal/dag/`
 - Shared dependency graph analysis — `Analyze` builds a DAG from waiting tasks, classifies nodes as deps-satisfied, blocked (with reason), or cyclic (`dag.go`).
@@ -436,6 +440,8 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Data gathering layer — `gatherStatus` collects queue counts, active agents, presence, task lists, completions, messages, merge-lock state (`status_gather.go`).
 - Rendering layer — compact and verbose text renderers plus shared section
   helpers and terminal colors (`status_render.go`).
+- JSON output layer — structured `StatusJSON` types and `ShowJSON`/`ShowJSONTo`
+  entry points for machine-readable `--json` output (`status_json.go`).
 
 ### `internal/history/`
 - `mato log` durable outcome timeline — `Show`, `ShowTo` (`history.go`).
@@ -460,8 +466,49 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Alias resolution via both filename stems and `meta.ID`, with cycle key mapping scoped to waiting tasks.
 - `--all` flag controls whether completed and failed tasks appear in the output.
 
+### `internal/config/`
+- Repository-local `.mato.yaml` loading — `Load`, `LoadFile` (`config.go`).
+- Strict unknown-key rejection via `yaml.Decoder.KnownFields(true)`.
+- Multi-document YAML rejection.
+- Whitespace-only string normalization (treated as unset).
+
+### `internal/dirs/`
+- Canonical queue directory name constants shared across packages — `Root`, `Waiting`, `Backlog`, `InProgress`, `ReadyReview`, `ReadyMerge`, `Completed`, `Failed`, `Locks` (`dirs.go`).
+- `All` ordered slice of all queue directories (excludes `Locks`).
+
+### `internal/lockfile/`
+- Generic exclusive file-lock mechanism — `Acquire`, `Register`, `IsHeld`, `CheckHeld` (`lockfile.go`).
+- Locks use `"PID:starttime"` identity strings via `process.LockIdentity` for stale-lock detection.
+- `Register` is non-exclusive (overwrites); `Acquire` is exclusive (hard-link + retry).
+
+### `internal/pause/`
+- Durable `.paused` sentinel management — `Read`, `Pause`, `Resume` (`pause.go`).
+- `Pause` writes the current UTC RFC3339 timestamp; repairs malformed sentinels.
+- `Resume` removes the sentinel file.
+
+### `internal/runtimecleanup/`
+- Best-effort cleanup of both `taskstate` and `sessionmeta` for terminal task transitions — `DeleteAll` (`runtimecleanup.go`).
+
+### `internal/sessionmeta/`
+- Durable Copilot session metadata under `.mato/runtime/sessionmeta/` — `LoadOrCreate`, `Save`, `DeleteAll`, `Sweep` (`sessionmeta.go`).
+- Separate records for work and review phases (`work-<task>.json`, `review-<task>.json`).
+- `Sweep` removes stale records whose task is no longer active in any non-terminal queue directory.
+
+### `internal/setup/`
+- `mato init` bootstrap flow — `InitRepo` (`setup.go`).
+- Composes `git.EnsureBranch`, `git.EnsureIdentity`, `git.EnsureGitignoreContains`, and `messaging.Init` to create the queue layout, target branch, and git identity without requiring Docker.
+
+### `internal/taskstate/`
+- Lightweight per-task runtime state tracking under `.mato/runtime/taskstate/` — `Update`, `Load`, `Delete`, `Sweep` (`taskstate.go`).
+- Records pushed branch tips, review outcomes, and agent progress for follow-up review continuity.
+- `Sweep` removes stale records whose task is no longer active.
+
+### `internal/testutil/`
+- Shared test helpers — `SetupRepo`, `SetupRepoWithTasks` (`testutil.go`).
+- Used by integration tests and package-level tests to create temporary git repos with pre-populated task queues.
+
 ### Test files
-Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignoreContains` and `CommitGitignore`) and its helpers are also exercised through the integration tests. Repository tests run with `go test ./...`.
+Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignoreContains` and `CommitGitignore`) and its helpers are also exercised through the integration tests. Integration tests live in `internal/integration/` using `package integration_test`. Repository tests run with `go test ./...`.
 ## 10. Host-Curated Knowledge Flow
 The host acts as a knowledge broker between agents, following an agent → host → agent pattern. Individual agents produce information as side effects of their work (conflict warnings with changed-file lists, failure records in task metadata), and the host aggregates this information and injects curated context into new agents before they start.
 

@@ -466,10 +466,10 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate queue setup without launching Docker containers")
 	cmd.Flags().BoolVar(&once, "once", false, "Run exactly one poll iteration, then exit")
 	cmd.Flags().BoolVar(&untilIdle, "until-idle", false, "Keep polling until no actionable work remains, then exit")
-	cmd.Flags().StringVar(&flags.TaskModel, "task-model", "", "Copilot model for task agents")
-	cmd.Flags().StringVar(&flags.ReviewModel, "review-model", "", "Copilot model for review agents")
-	cmd.Flags().StringVar(&flags.TaskReasoningEffort, "task-reasoning-effort", "", "Reasoning effort for task agents")
-	cmd.Flags().StringVar(&flags.ReviewReasoningEffort, "review-reasoning-effort", "", "Reasoning effort for review agents")
+	cmd.Flags().StringVar(&flags.TaskModel, "task-model", "", "Copilot model for task agents (default: "+runner.DefaultTaskModel+")")
+	cmd.Flags().StringVar(&flags.ReviewModel, "review-model", "", "Copilot model for review agents (default: "+runner.DefaultReviewModel+")")
+	cmd.Flags().StringVar(&flags.TaskReasoningEffort, "task-reasoning-effort", "", "Reasoning effort for task agents (default: "+runner.DefaultReasoningEffort+")")
+	cmd.Flags().StringVar(&flags.ReviewReasoningEffort, "review-reasoning-effort", "", "Reasoning effort for review agents (default: "+runner.DefaultReasoningEffort+")")
 	return cmd
 }
 
