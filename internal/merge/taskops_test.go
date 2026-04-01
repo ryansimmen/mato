@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"mato/internal/queue"
 	"mato/internal/taskstate"
@@ -166,7 +168,7 @@ func TestMoveTaskWithRetry(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		if err := moveTaskWithRetry(src, dst); err != nil {
+		if err := moveTaskWithRetry(context.Background(), src, dst); err != nil {
 			t.Fatalf("moveTaskWithRetry: %v", err)
 		}
 
@@ -191,7 +193,7 @@ func TestMoveTaskWithRetry(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		if err := moveTaskWithRetry(src, dst); err != nil {
+		if err := moveTaskWithRetry(context.Background(), src, dst); err != nil {
 			t.Fatalf("moveTaskWithRetry: %v", err)
 		}
 
@@ -205,7 +207,7 @@ func TestMoveTaskWithRetry(t *testing.T) {
 		src := filepath.Join(dir, "nonexistent.md")
 		dst := filepath.Join(dir, "dst", "task.md")
 
-		err := moveTaskWithRetry(src, dst)
+		err := moveTaskWithRetry(context.Background(), src, dst)
 		if err == nil {
 			t.Error("expected error when source does not exist")
 		}
@@ -584,7 +586,7 @@ func TestMoveTaskWithRetry_PermanentErrorNoRetry(t *testing.T) {
 	}
 	t.Cleanup(func() { atomicMoveFn = orig })
 
-	err := moveTaskWithRetry(src, dst)
+	err := moveTaskWithRetry(context.Background(), src, dst)
 	if err == nil {
 		t.Fatal("expected error from moveTaskWithRetry")
 	}
@@ -614,7 +616,7 @@ func TestMoveTaskWithRetry_TransientErrorRetries(t *testing.T) {
 	}
 	t.Cleanup(func() { atomicMoveFn = orig })
 
-	err := moveTaskWithRetry(src, dst)
+	err := moveTaskWithRetry(context.Background(), src, dst)
 	if err == nil {
 		t.Fatal("expected error from moveTaskWithRetry")
 	}
@@ -643,7 +645,7 @@ func TestMoveTaskWithRetry_TransientThenSuccess(t *testing.T) {
 	}
 	t.Cleanup(func() { atomicMoveFn = orig })
 
-	if err := moveTaskWithRetry(src, dst); err != nil {
+	if err := moveTaskWithRetry(context.Background(), src, dst); err != nil {
 		t.Fatalf("moveTaskWithRetry: %v", err)
 	}
 	if got := attempts.Load(); got != 3 {
@@ -651,5 +653,46 @@ func TestMoveTaskWithRetry_TransientThenSuccess(t *testing.T) {
 	}
 	if _, err := os.Stat(dst); err != nil {
 		t.Fatalf("destination should exist: %v", err)
+	}
+}
+
+func TestMoveTaskWithRetry_ContextCancellation(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "task.md")
+	dst := filepath.Join(dir, "dst", "task.md")
+	if err := os.WriteFile(src, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var attempts atomic.Int32
+
+	orig := atomicMoveFn
+	atomicMoveFn = func(s, d string) error {
+		attempts.Add(1)
+		return errors.New("temporary glitch")
+	}
+	t.Cleanup(func() { atomicMoveFn = orig })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so the first backoff select picks up ctx.Done().
+	cancel()
+
+	start := time.Now()
+	err := moveTaskWithRetry(ctx, src, dst)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from moveTaskWithRetry with cancelled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+	// With a 100ms backoff, a non-cancelled run would take ≥200ms for 3 attempts.
+	// Cancellation should return well under that.
+	if elapsed > 50*time.Millisecond {
+		t.Errorf("expected prompt return after cancellation, took %v", elapsed)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("expected 1 attempt before cancellation, got %d", got)
 	}
 }
