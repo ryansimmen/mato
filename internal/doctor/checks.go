@@ -620,8 +620,18 @@ func scanStalePIDLocks(locksDir string, fix bool, tasksDir string) []Finding {
 	}
 
 	if fix && len(findings) > 0 {
-		queue.CleanStaleLocks(tasksDir)
 		for i := range findings {
+			if findings[i].Code != "locks.stale_pid" {
+				continue
+			}
+			if err := os.Remove(findings[i].Path); err != nil && !os.IsNotExist(err) {
+				findings[i].Message += fmt.Sprintf(" (fix failed: %v)", err)
+				continue
+			} else if os.IsNotExist(err) {
+				findings[i].Fixed = true
+				findings[i].Fixable = false
+				continue
+			}
 			if _, statErr := os.Stat(findings[i].Path); os.IsNotExist(statErr) {
 				findings[i].Fixed = true
 				findings[i].Fixable = false

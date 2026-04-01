@@ -444,6 +444,46 @@ func TestDoctor_StaleReviewLock_Fix_RemoveError(t *testing.T) {
 	}
 }
 
+func TestDoctor_StalePIDLock_Fix_RemoveError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root to trigger permission error")
+	}
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	locksDir := filepath.Join(tasksDir, ".locks")
+	lockFile := filepath.Join(locksDir, "deadbeef.pid")
+	testutil.WriteFile(t, lockFile, "999999:0")
+
+	if err := os.Chmod(locksDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.stale_pid" && strings.Contains(f.Path, "deadbeef.pid") {
+				found = true
+				if f.Fixed {
+					t.Error("expected Fixed=false when removal fails")
+				}
+				if !strings.Contains(f.Message, "fix failed:") {
+					t.Errorf("expected 'fix failed:' in message, got: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected locks.stale_pid finding")
+	}
+}
+
 // ---------- Leftover Temp Files ----------
 
 func TestDoctor_LeftoverTempFiles_Clean(t *testing.T) {

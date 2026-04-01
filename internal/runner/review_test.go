@@ -197,6 +197,54 @@ func TestPostReviewAction_TaskAlreadyMovedLogsWarning(t *testing.T) {
 	}
 }
 
+func TestPostReviewAction_TaskStatErrorDoesNotClaimMoved(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	blockedPath := filepath.Join(reviewDir, "blocked.md")
+	if err := os.RemoveAll(reviewDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reviewDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	task := &queue.ClaimedTask{
+		Filename: "blocked.md",
+		Branch:   "task/blocked",
+		Title:    "Blocked",
+		TaskPath: blockedPath,
+	}
+
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	w.Close()
+	os.Stderr = oldStderr
+
+	buf, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(buf)
+
+	if !strings.Contains(output, "warning: could not verify review task file blocked.md") {
+		t.Fatalf("expected verification warning, got: %q", output)
+	}
+	if strings.Contains(output, "task file moved") {
+		t.Fatalf("unexpected moved-task warning for stat error: %q", output)
+	}
+}
+
 func TestPostReviewAction_ApprovedCaseInsensitive(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
