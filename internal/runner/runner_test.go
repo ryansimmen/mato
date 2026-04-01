@@ -4011,7 +4011,7 @@ func TestPollMerge_EmptyQueue(t *testing.T) {
 
 	var count int
 	captureStdoutStderr(t, func() {
-		count = pollMerge("/nonexistent", tasksDir, "mato")
+		count = pollMerge(context.Background(), "/nonexistent", tasksDir, "mato")
 	})
 
 	if count != 0 {
@@ -4025,7 +4025,7 @@ func TestPollMerge_LockAcquiredAndReleased(t *testing.T) {
 	// First call should acquire the lock and return 0 (no tasks).
 	var count int
 	captureStdoutStderr(t, func() {
-		count = pollMerge("/nonexistent", tasksDir, "mato")
+		count = pollMerge(context.Background(), "/nonexistent", tasksDir, "mato")
 	})
 	if count != 0 {
 		t.Fatalf("expected 0, got %d", count)
@@ -4033,7 +4033,7 @@ func TestPollMerge_LockAcquiredAndReleased(t *testing.T) {
 
 	// Second call should also succeed (lock was released by first call).
 	captureStdoutStderr(t, func() {
-		count = pollMerge("/nonexistent", tasksDir, "mato")
+		count = pollMerge(context.Background(), "/nonexistent", tasksDir, "mato")
 	})
 	if count != 0 {
 		t.Fatalf("expected 0 on second call, got %d", count)
@@ -4076,7 +4076,7 @@ func TestPollIterate_PausedSkipsClaimAndReviewButMerges(t *testing.T) {
 		reviewCalled = true
 		return false
 	}
-	pollMergeFn = func(string, string, string) int { return 1 }
+	pollMergeFn = func(context.Context, string, string, string) int { return 1 }
 	nowFn = func() time.Time { return time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC) }
 
 	hb := newIdleHeartbeat(nowFn())
@@ -4133,7 +4133,7 @@ func TestPollIterate_PauseWarningThrottled(t *testing.T) {
 	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
 		return false
 	}
-	pollMergeFn = func(string, string, string) int { return 0 }
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
 
 	hb := newIdleHeartbeat(time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC))
 	nowFn = func() time.Time { return time.Date(2026, 3, 23, 10, 0, 10, 0, time.UTC) }
@@ -4182,7 +4182,7 @@ func TestPollIterate_PausedMergeDoesNotResetHeartbeatThrottle(t *testing.T) {
 	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
 		return false
 	}
-	pollMergeFn = func(string, string, string) int { return 1 }
+	pollMergeFn = func(context.Context, string, string, string) int { return 1 }
 
 	hb := newIdleHeartbeat(time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC))
 	nowFn = func() time.Time { return time.Date(2026, 3, 23, 10, 0, 10, 0, time.UTC) }
@@ -4230,7 +4230,7 @@ func TestPollIterate_ClaimedCancelledSkipsReviewAndMerge(t *testing.T) {
 		return false
 	}
 	mergeCalled := false
-	pollMergeFn = func(string, string, string) int {
+	pollMergeFn = func(context.Context, string, string, string) int {
 		mergeCalled = true
 		return 0
 	}
@@ -4240,6 +4240,56 @@ func TestPollIterate_ClaimedCancelledSkipsReviewAndMerge(t *testing.T) {
 	result := pollIterate(ctx, envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
 	if !result.claimedTask {
 		t.Fatal("claimedTask = false, want true")
+	}
+	if reviewCalled {
+		t.Fatal("review phase should be skipped")
+	}
+	if mergeCalled {
+		t.Fatal("merge phase should be skipped")
+	}
+}
+
+func TestPollIterate_CancelledWithoutClaimSkipsReviewAndMerge(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex, view queue.RunnableBacklogView) (bool, bool) {
+		if ctx.Err() == nil {
+			t.Fatal("expected cancelled context in claim stub")
+		}
+		return false, false
+	}
+	reviewCalled := false
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		reviewCalled = true
+		return false
+	}
+	mergeCalled := false
+	pollMergeFn = func(context.Context, string, string, string) int {
+		mergeCalled = true
+		return 0
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := pollIterate(ctx, envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	if result.claimedTask {
+		t.Fatal("claimedTask = true, want false")
 	}
 	if reviewCalled {
 		t.Fatal("review phase should be skipped")
@@ -4274,7 +4324,7 @@ func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
 	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
 		return false
 	}
-	pollMergeFn = func(string, string, string) int {
+	pollMergeFn = func(context.Context, string, string, string) int {
 		path := filepath.Join(tasksDir, queue.DirReadyReview, "new-review.md")
 		if err := os.WriteFile(path, []byte("---\nid: new-review\nbranch: task/new-review\n---\n# Review\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile: %v", err)
@@ -4285,6 +4335,50 @@ func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
 	result := pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
 	if !result.hasReviewTasks {
 		t.Fatal("hasReviewTasks = false, want true after merge-side review creation")
+	}
+}
+
+func TestPollIterate_IdleReviewProbeDoesNotQuarantineMalformedTasks(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	malformedPath := filepath.Join(tasksDir, queue.DirReadyReview, "malformed.md")
+	if err := os.WriteFile(malformedPath, []byte("---\npriority: [\n# broken\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile malformed review task: %v", err)
+	}
+
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
+
+	result := pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	if result.hasReviewTasks {
+		t.Fatal("hasReviewTasks = true, want false with only malformed review task")
+	}
+	if _, err := os.Stat(malformedPath); err != nil {
+		t.Fatalf("malformed review task should remain in ready-for-review/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "malformed.md")); !os.IsNotExist(err) {
+		t.Fatalf("malformed review task should not be moved to failed/, got err: %v", err)
 	}
 }
 

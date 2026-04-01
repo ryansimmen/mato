@@ -5,6 +5,7 @@ package merge
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -43,6 +44,13 @@ type mergeResult struct {
 const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 
 // ProcessQueue merges completed task branches into the target branch.
+// It uses a background context for callers that do not participate in
+// cancellation.
+func ProcessQueue(repoRoot, tasksDir, branch string) int {
+	return ProcessQueueContext(context.Background(), repoRoot, tasksDir, branch)
+}
+
+// ProcessQueueContext merges completed task branches into the target branch.
 // It scans ready-to-merge/ for task files, prefers branch metadata recorded in
 // each task file, falls back to the filename-derived branch name for backward
 // compatibility, and performs a squash merge.
@@ -50,7 +58,11 @@ const mergedTaskRecordPrefix = "<!-- merged: merge-queue at "
 // filesystem scan (passing nil to CollectActiveBranches) to avoid stale data
 // from a PollIndex snapshot that was built earlier in the poll cycle.
 // Returns the number of tasks successfully merged.
-func ProcessQueue(repoRoot, tasksDir, branch string) int {
+func ProcessQueueContext(ctx context.Context, repoRoot, tasksDir, branch string) int {
+	if ctx.Err() != nil {
+		return 0
+	}
+
 	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
 
 	// Pass nil to force a fresh filesystem scan rather than relying on a
@@ -66,7 +78,7 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 		return 0
 	}
 
-	return executeMergeRound(repoRoot, tasksDir, branch, candidates)
+	return executeMergeRound(ctx, repoRoot, tasksDir, branch, candidates)
 }
 
 // loadMergeCandidates reads task files from dir, parses frontmatter for each
@@ -129,9 +141,13 @@ func loadMergeCandidates(dir, tasksDir string, activeBranches map[string]struct{
 // executeMergeRound iterates sorted candidates, performing squash merges into
 // the target branch. It handles already-merged tasks, conflict requeue, retry
 // budgets, and completion bookkeeping. Returns the number of tasks merged.
-func executeMergeRound(repoRoot, tasksDir, branch string, tasks []mergeQueueTask) int {
+func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, tasks []mergeQueueTask) int {
 	merged := 0
 	for _, task := range tasks {
+		if ctx.Err() != nil {
+			return merged
+		}
+
 		completedPath := filepath.Join(tasksDir, queue.DirCompleted, task.name)
 		if taskHasMergeSuccessRecord(task.path) {
 			recoverCompletionDetailForMergedTask(repoRoot, tasksDir, branch, task)
