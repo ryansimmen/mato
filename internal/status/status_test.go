@@ -74,14 +74,14 @@ func TestShowWithPopulatedTasksDir(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = originalStdout }()
 
-	callErr := Show(repoRoot)
+	callErr := ShowVerbose(repoRoot)
 	w.Close()
 	out, readErr := io.ReadAll(r)
 	if readErr != nil {
 		t.Fatalf("io.ReadAll: %v", readErr)
 	}
 	if callErr != nil {
-		t.Fatalf("Show: %v", callErr)
+		t.Fatalf("ShowVerbose: %v", callErr)
 	}
 
 	output := string(out)
@@ -252,11 +252,8 @@ func TestShowIncludesPresenceInfo(t *testing.T) {
 	if !contains(output, wantBranch) {
 		t.Errorf("output should contain branch %q", wantBranch)
 	}
-
-	// Verify the line has the expected format.
-	expectedLine := "agent-abc12345 (PID"
-	if !contains(output, expectedLine) {
-		t.Errorf("output should contain %q, got:\n%s", expectedLine, output)
+	if contains(output, "(PID") {
+		t.Errorf("compact output should not contain PID details, got:\n%s", output)
 	}
 }
 
@@ -331,17 +328,12 @@ func TestShowIncludesProgressSection(t *testing.T) {
 
 	output := string(out)
 
-	// Check section header appears.
-	if !contains(output, "Current Agent Progress") {
-		t.Errorf("output should contain 'Current Agent Progress' section header, got:\n%s", output)
-	}
-
 	// Check first agent progress line.
 	if !contains(output, "agent-7da2c4fa") {
 		t.Errorf("output should contain 'agent-7da2c4fa', got:\n%s", output)
 	}
-	if !contains(output, "Step: WORK") {
-		t.Errorf("output should contain 'Step: WORK', got:\n%s", output)
+	if !contains(output, "WORK") {
+		t.Errorf("output should contain normalized stage 'WORK', got:\n%s", output)
 	}
 	if !contains(output, "fix-race.md") {
 		t.Errorf("output should contain 'fix-race.md', got:\n%s", output)
@@ -351,8 +343,8 @@ func TestShowIncludesProgressSection(t *testing.T) {
 	if !contains(output, "agent-a1b2c3d4") {
 		t.Errorf("output should contain 'agent-a1b2c3d4', got:\n%s", output)
 	}
-	if !contains(output, "Step: PUSH_BRANCH") {
-		t.Errorf("output should contain 'Step: PUSH_BRANCH', got:\n%s", output)
+	if !contains(output, "PUSH_BRANCH") {
+		t.Errorf("output should contain normalized stage 'PUSH_BRANCH', got:\n%s", output)
 	}
 }
 
@@ -375,7 +367,7 @@ func TestTimeInState(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	// Should show time in state (~120 min).
 	if !contains(output, "min") {
@@ -404,7 +396,7 @@ func TestRetryBudgetInProgress(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	if !contains(output, "1/3 retries used") {
 		t.Errorf("output should contain '1/3 retries used', got:\n%s", output)
@@ -437,7 +429,7 @@ func TestReverseDependencies(t *testing.T) {
 		}
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	if !contains(output, "2 tasks waiting") {
 		t.Errorf("output should contain '2 tasks waiting', got:\n%s", output)
@@ -470,7 +462,7 @@ func TestRecentCompletions(t *testing.T) {
 		t.Fatalf("WriteCompletionDetail: %v", err)
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	if !contains(output, "Recent Completions") {
 		t.Errorf("output should contain 'Recent Completions' section, got:\n%s", output)
@@ -504,7 +496,7 @@ func TestMergeLockActive(t *testing.T) {
 		t.Fatalf("WriteFile merge.lock: %v", err)
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	if !contains(output, "merge queue:    active") {
 		t.Errorf("output should contain 'merge queue:    active', got:\n%s", output)
@@ -609,6 +601,28 @@ func captureShow(t *testing.T, repoRoot string) string {
 	return string(out)
 }
 
+func captureShowVerbose(t *testing.T, repoRoot string) string {
+	t.Helper()
+	originalStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = originalStdout }()
+
+	callErr := ShowVerbose(repoRoot)
+	w.Close()
+	out, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("io.ReadAll: %v", readErr)
+	}
+	if callErr != nil {
+		t.Fatalf("ShowVerbose: %v", callErr)
+	}
+	return string(out)
+}
+
 func TestProgressFilteredToActiveAgents(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
@@ -638,25 +652,24 @@ func TestProgressFilteredToActiveAgents(t *testing.T) {
 		}
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
-	// Active agent's progress should appear in Current Agent Progress.
+	// Active agent should appear in the verbose Active Agents section.
 	if !contains(output, "agent-active01") {
 		t.Errorf("output should contain active agent progress, got:\n%s", output)
 	}
-	// Dead agent should NOT appear in Current Agent Progress section.
-	// Extract just the Current Agent Progress section for verification.
-	progressStart := strings.Index(output, "Current Agent Progress")
+	// Dead agent should NOT appear in the verbose Active Agents section.
+	progressStart := strings.Index(output, "Active Agents")
 	progressEnd := strings.Index(output[progressStart:], "\n\n")
 	if progressStart < 0 || progressEnd < 0 {
-		t.Fatalf("could not find Current Agent Progress section in output:\n%s", output)
+		t.Fatalf("could not find Active Agents section in output:\n%s", output)
 	}
 	progressSection := output[progressStart : progressStart+progressEnd]
 	if contains(progressSection, "dead0000") {
-		t.Errorf("Current Agent Progress should NOT contain dead agent, got:\n%s", progressSection)
+		t.Errorf("Active Agents section should NOT contain dead agent, got:\n%s", progressSection)
 	}
 	if contains(progressSection, "ghost.md") {
-		t.Errorf("Current Agent Progress should NOT contain dead agent's task, got:\n%s", progressSection)
+		t.Errorf("Active Agents section should NOT contain dead agent's task, got:\n%s", progressSection)
 	}
 }
 
@@ -684,7 +697,7 @@ func TestRecentMessagesAgentPrefix(t *testing.T) {
 		t.Fatalf("WriteMessage: %v", err)
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	// Recent Messages should show "agent-abc12345", not bare "abc12345".
 	if !contains(output, "agent-abc12345") {
@@ -730,14 +743,14 @@ func TestReadyForReviewSection(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = originalStdout }()
 
-	callErr := Show(repoRoot)
+	callErr := ShowVerbose(repoRoot)
 	w.Close()
 	out, readErr := io.ReadAll(r)
 	if readErr != nil {
 		t.Fatalf("io.ReadAll: %v", readErr)
 	}
 	if callErr != nil {
-		t.Fatalf("Show: %v", callErr)
+		t.Fatalf("ShowVerbose: %v", callErr)
 	}
 	output := string(out)
 
@@ -810,14 +823,14 @@ func TestShowToBuffer(t *testing.T) {
 	}
 
 	output := buf.String()
-	if !contains(output, "Queue Overview") {
-		t.Errorf("ShowTo output should contain 'Queue Overview', got:\n%s", output)
+	if !contains(output, "Queue:") {
+		t.Errorf("ShowTo output should contain compact queue summary, got:\n%s", output)
 	}
-	if !contains(output, "runnable:") {
-		t.Errorf("ShowTo output should contain 'runnable:', got:\n%s", output)
+	if !contains(output, "Next Up") {
+		t.Errorf("ShowTo output should contain compact next-up section, got:\n%s", output)
 	}
-	if !contains(output, "Recent Messages") {
-		t.Errorf("ShowTo output should contain 'Recent Messages', got:\n%s", output)
+	if contains(output, "Recent Messages") {
+		t.Errorf("compact ShowTo output should not contain 'Recent Messages', got:\n%s", output)
 	}
 }
 
@@ -991,7 +1004,7 @@ func TestFailedTaskRendering_CycleFailure(t *testing.T) {
 	content := "---\nid: cyclic-task\nmax_retries: 3\n---\n# Cyclic task\n\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "cyclic-task.md"), []byte(content), 0o644)
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	// Should show "circular dependency" instead of "0/3 retries exhausted".
 	if !contains(output, "circular dependency") {
@@ -1018,7 +1031,7 @@ func TestFailedTaskRendering_MixedFailures(t *testing.T) {
 	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n<!-- cycle-failure: mato at 2026-01-02T00:00:00Z — circular dependency -->\n---\nid: mixed-task\nmax_retries: 3\n---\n# Mixed task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "mixed-task.md"), []byte(content), 0o644)
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	// With both markers present, it should display the cycle reason.
 	if !contains(output, "circular dependency") {
@@ -1049,7 +1062,7 @@ func TestFailedTaskRendering_TerminalFailure(t *testing.T) {
 	content := "---\nid: terminal-task\nmax_retries: 3\n---\n# Terminal task\n\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "terminal-task.md"), []byte(content), 0o644)
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	// Should show "structural failure: unparseable frontmatter".
 	if !contains(output, "structural failure") {
@@ -1079,7 +1092,7 @@ func TestFailedTaskRendering_TerminalWithRetries(t *testing.T) {
 	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — build failed -->\n<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — invalid glob syntax -->\n---\nid: mixed-terminal\nmax_retries: 3\n---\n# Mixed terminal task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "mixed-terminal.md"), []byte(content), 0o644)
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 
 	// Should show terminal failure as structural.
 	if !contains(output, "structural failure") {
@@ -1271,8 +1284,8 @@ func TestRunnableBacklogSection(t *testing.T) {
 
 	output := captureShow(t, repoRoot)
 
-	if !contains(output, "Runnable Backlog (execution order)") {
-		t.Errorf("output should contain runnable backlog header, got:\n%s", output)
+	if !contains(output, "Next Up") {
+		t.Errorf("output should contain compact next-up header, got:\n%s", output)
 	}
 
 	// Tasks should appear in priority order: beta (10), gamma (20), alpha (30).
@@ -1325,8 +1338,8 @@ func TestRunnableBacklogExcludesDeferred(t *testing.T) {
 
 	output := captureShow(t, repoRoot)
 
-	// Runnable backlog should NOT contain the deferred (conflicting) task.
-	runnableSection := extractSection(output, "Runnable Backlog", "Active Agents")
+	// Next Up should NOT contain the deferred (conflicting) task.
+	runnableSection := extractSection(output, "Next Up", "")
 	if strings.Contains(runnableSection, "conflict-task.md") {
 		t.Errorf("runnable backlog should NOT contain deferred task, got:\n%s", runnableSection)
 	}
@@ -1334,9 +1347,8 @@ func TestRunnableBacklogExcludesDeferred(t *testing.T) {
 		t.Errorf("runnable backlog should contain runnable task, got:\n%s", runnableSection)
 	}
 
-	// The deferred section should contain the conflicting task.
-	if !contains(output, "Conflict-Deferred") {
-		t.Errorf("output should show conflict-deferred section, got:\n%s", output)
+	if !contains(output, "1 conflict-deferred") {
+		t.Errorf("compact output should summarize deferred work in Attention, got:\n%s", output)
 	}
 }
 
@@ -1354,10 +1366,10 @@ func TestRunnableBacklogEmpty(t *testing.T) {
 
 	output := captureShow(t, repoRoot)
 
-	if !contains(output, "Runnable Backlog (execution order)") {
-		t.Errorf("output should contain runnable backlog header even when empty, got:\n%s", output)
+	if !contains(output, "Next Up") {
+		t.Errorf("output should contain compact next-up header even when empty, got:\n%s", output)
 	}
-	runnableSection := extractSection(output, "Runnable Backlog", "Active Agents")
+	runnableSection := extractSection(output, "Next Up", "")
 	if !strings.Contains(runnableSection, "(none)") {
 		t.Errorf("empty runnable backlog should show (none), got:\n%s", runnableSection)
 	}
@@ -1421,6 +1433,9 @@ func extractSection(output, startHeader, endHeader string) string {
 		return ""
 	}
 	rest := output[startIdx:]
+	if endHeader == "" {
+		return rest
+	}
 	endIdx := strings.Index(rest, endHeader)
 	if endIdx < 0 {
 		return rest
@@ -1830,7 +1845,7 @@ func TestShow_ParseFailedInProgressTaskPreservesClaimMetadata(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 	if !contains(output, "broken-active.md") {
 		t.Errorf("output should contain parse-failed task name, got:\n%s", output)
 	}
@@ -1986,7 +2001,7 @@ func TestShow_CancelledParseFailure(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	output := captureShow(t, repoRoot)
+	output := captureShowVerbose(t, repoRoot)
 	if !contains(output, "broken-cancelled.md") || !contains(output, "(cancelled)") {
 		t.Fatalf("expected cancelled parse failure in output, got:\n%s", output)
 	}

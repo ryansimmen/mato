@@ -120,14 +120,27 @@ type idleHeartbeat struct {
 	startTime            time.Time
 }
 
+// RunMode controls how long runner.Run keeps polling before exiting.
+type RunMode int
+
+const (
+	// RunModeDaemon is the default long-running polling loop.
+	RunModeDaemon RunMode = iota
+	// RunModeOnce runs exactly one poll iteration, then exits.
+	RunModeOnce
+	// RunModeUntilIdle keeps polling until no actionable queue work remains.
+	RunModeUntilIdle
+)
+
 // RunOptions holds configuration values for a mato run.
 //
 // TaskModel, ReviewModel, TaskReasoningEffort, and ReviewReasoningEffort
 // must already be resolved to non-empty values before calling Run or DryRun.
-// DockerImage, AgentTimeout, and RetryCooldown may be left zero to use
+// DockerImage, AgentTimeout, RetryCooldown, and Mode may be left zero to use
 // downstream defaults.
 type RunOptions struct {
 	DockerImage                string
+	Mode                       RunMode
 	TaskModel                  string
 	ReviewModel                string
 	ReviewSessionResumeEnabled bool
@@ -142,6 +155,12 @@ func normalizeAndValidateRunOptions(opts RunOptions) (RunOptions, error) {
 	opts.ReviewModel = strings.TrimSpace(opts.ReviewModel)
 	opts.TaskReasoningEffort = strings.TrimSpace(opts.TaskReasoningEffort)
 	opts.ReviewReasoningEffort = strings.TrimSpace(opts.ReviewReasoningEffort)
+
+	switch opts.Mode {
+	case RunModeDaemon, RunModeOnce, RunModeUntilIdle:
+	default:
+		return opts, fmt.Errorf("invalid run mode %d", opts.Mode)
+	}
 
 	if opts.TaskModel == "" {
 		return opts, fmt.Errorf("task model must not be empty")
@@ -572,7 +591,7 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 		return err
 	}
 
-	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown)
+	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown, opts.Mode)
 }
 
 func reportBranchResolution(result git.EnsureBranchResult) {
@@ -854,9 +873,10 @@ func pollMerge(ctx context.Context, repoRoot, tasksDir, branch string) int {
 }
 
 // pollLoop is the main orchestration loop that claims tasks, runs agents,
-// handles reviews, and processes merges. It runs until the context is
-// cancelled (via signal). The loop delegates to focused helpers for each
-// concern and manages idle/backoff state locally.
+// handles reviews, and processes merges. Depending on mode it either runs
+// forever, runs exactly once, or exits after the queue becomes idle. The loop
+// delegates to focused helpers for each concern and manages idle/backoff state
+// locally.
 type iterationResult struct {
 	claimedTask     bool
 	reviewProcessed bool
@@ -865,6 +885,17 @@ type iterationResult struct {
 	pauseActive     bool
 	hasReviewTasks  bool
 	hasReadyMerge   bool
+}
+
+type boundedRunState struct {
+	hasClaimableBacklog bool
+	hasReviewTasks      bool
+	hasReadyMerge       bool
+	pollHadError        bool
+}
+
+func (s boundedRunState) isIdle() bool {
+	return !s.hasClaimableBacklog && !s.hasReviewTasks && !s.hasReadyMerge
 }
 
 func pollIterate(
@@ -956,10 +987,35 @@ func readPauseState(tasksDir string) pause.State {
 	return state
 }
 
-func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, tasksDir, branch, agentID string, cooldown time.Duration) error {
+func collectBoundedRunState(tasksDir string, failedDirExcluded map[string]struct{}, cooldown time.Duration) boundedRunState {
+	var state boundedRunState
+
+	idx, reconcileHadError := pollReconcile(tasksDir)
+	if reconcileHadError {
+		state.pollHadError = true
+	}
+	if _, manifestHadError := pollWriteManifestFn(tasksDir, failedDirExcluded, idx); manifestHadError {
+		state.pollHadError = true
+	}
+
+	state.hasClaimableBacklog = queue.HasClaimableBacklogTask(tasksDir, failedDirExcluded, cooldown, idx)
+	state.hasReviewTasks = hasReviewCandidates(tasksDir)
+	state.hasReadyMerge = merge.HasReadyTasks(tasksDir)
+	return state
+}
+
+func boundedRunExit(boundedErrorCount int) error {
+	if boundedErrorCount == 0 {
+		return nil
+	}
+	return fmt.Errorf("bounded run encountered %d poll cycle error(s)", boundedErrorCount)
+}
+
+func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, tasksDir, branch, agentID string, cooldown time.Duration, mode RunMode) error {
 	heartbeat := newIdleHeartbeat(nowFn().UTC())
 	failedDirExcluded := make(map[string]struct{})
 	consecutiveErrors := 0
+	boundedErrorCount := 0
 	priorPaused := false
 	for {
 		if ctx.Err() != nil {
@@ -977,19 +1033,20 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			return nil
 		}
 
-		didWork := result.claimedTask || result.reviewProcessed || result.mergeCount > 0
-		isIdle := !result.pauseActive && !result.claimedTask && !result.hasReviewTasks && !result.hasReadyMerge
-		if isIdle {
-			nextPoll := pollBackoff(consecutiveErrors)
-			if msg := heartbeat.idleMessage(nowFn().UTC(), nextPoll); msg != "" {
-				fmt.Println(msg)
+		cycleHadError := result.pollHadError
+		boundedState := boundedRunState{}
+		if mode == RunModeUntilIdle {
+			boundedState = collectBoundedRunState(tasksDir, failedDirExcluded, cooldown)
+			if boundedState.pollHadError {
+				cycleHadError = true
 			}
-		} else if !result.pauseActive && !didWork {
-			heartbeat.recordActivity(nowFn().UTC())
 		}
 
-		if result.pollHadError {
+		if cycleHadError {
 			consecutiveErrors++
+			if mode != RunModeDaemon {
+				boundedErrorCount++
+			}
 			if consecutiveErrors == errBackoffThreshold {
 				fmt.Fprintf(os.Stderr, "warning: entering backoff mode after %d consecutive poll errors\n", consecutiveErrors)
 			}
@@ -1000,11 +1057,33 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 			consecutiveErrors = 0
 		}
 
+		switch mode {
+		case RunModeOnce:
+			return boundedRunExit(boundedErrorCount)
+		case RunModeUntilIdle:
+			if boundedState.isIdle() {
+				return boundedRunExit(boundedErrorCount)
+			}
+		default:
+			didWork := result.claimedTask || result.reviewProcessed || result.mergeCount > 0
+			isIdle := !result.pauseActive && !result.claimedTask && !result.hasReviewTasks && !result.hasReadyMerge
+			if isIdle {
+				nextPoll := pollBackoff(consecutiveErrors)
+				if msg := heartbeat.idleMessage(nowFn().UTC(), nextPoll); msg != "" {
+					fmt.Println(msg)
+				}
+			} else if !result.pauseActive && !didWork {
+				heartbeat.recordActivity(nowFn().UTC())
+			}
+		}
+
 		select {
 		case <-ctx.Done():
 			fmt.Println("\nInterrupted. Exiting.")
 			return nil
 		case <-time.After(pollBackoff(consecutiveErrors)):
+			// Even in bounded modes, keep the normal poll cadence between
+			// iterations so queue draining does not devolve into a tight loop.
 		}
 	}
 }

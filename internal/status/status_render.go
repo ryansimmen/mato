@@ -35,6 +35,234 @@ func newColorSet() colorSet {
 	}
 }
 
+const compactListLimit = 5
+
+func renderVerboseDashboard(w io.Writer, c colorSet, data statusData) {
+	renderQueueOverview(w, c, data)
+	renderRunnableBacklog(w, c, data)
+	renderActiveAgents(w, c, data)
+	renderAgentProgress(w, c, data)
+	renderInProgressTasks(w, c, data)
+	renderReadyForReview(w, c, data)
+	renderReadyToMerge(w, c, data)
+	renderDependencyBlocked(w, c, data)
+	renderConflictDeferred(w, c, data)
+	renderFailedTasks(w, c, data)
+	renderRecentCompletions(w, c, data)
+	renderRecentMessages(w, c, data)
+	renderWarnings(w, c, data)
+}
+
+func renderCompactDashboard(w io.Writer, c colorSet, data statusData) {
+	renderCompactQueueSummary(w, c, data)
+	renderCompactAgents(w, c, data)
+	renderCompactAttention(w, c, data)
+	renderCompactNextUp(w, c, data)
+}
+
+func renderCompactQueueSummary(w io.Writer, c colorSet, data statusData) {
+	mergeState := c.dim("idle")
+	if data.mergeLockActive {
+		mergeState = c.yellow("active")
+	}
+
+	fmt.Fprintf(w, "%s %s backlog | %s runnable | %s running | %s review | %s merge | %s failed\n",
+		c.bold("Queue:"),
+		c.green(data.queueCounts[queue.DirBacklog]),
+		c.green(data.runnable),
+		c.yellow(data.queueCounts[queue.DirInProgress]),
+		c.cyan(data.queueCounts[queue.DirReadyReview]),
+		c.cyan(data.queueCounts[queue.DirReadyMerge]),
+		c.red(data.queueCounts[queue.DirFailed]),
+	)
+	fmt.Fprintf(w, "%s %s   %s %s\n",
+		c.bold("Pause:"), renderPauseState(c, data.pauseState),
+		c.bold("Merge queue:"), mergeState,
+	)
+}
+
+type compactAgentRow struct {
+	agentID string
+	task    string
+	branch  string
+	stage   string
+	age     string
+}
+
+func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%s (%d)\n", c.bold("Agents"), len(data.agents))
+	if len(data.agents) == 0 {
+		fmt.Fprintln(w, c.dim("  (none)"))
+		return
+	}
+
+	rows := compactAgentRows(data)
+	show := rows
+	if len(show) > compactListLimit {
+		show = show[:compactListLimit]
+	}
+	for _, row := range show {
+		parts := []string{c.yellow(row.agentID)}
+		if row.task != "" {
+			parts = append(parts, row.task)
+		}
+		if row.branch != "" {
+			parts = append(parts, c.dim(row.branch))
+		}
+		if row.stage != "" {
+			parts = append(parts, c.cyan(row.stage))
+		}
+		if row.age != "" {
+			parts = append(parts, c.dim(row.age))
+		}
+		fmt.Fprintf(w, "  %s\n", strings.Join(parts, "  "))
+	}
+	if len(rows) > compactListLimit {
+		fmt.Fprintf(w, "  %s\n", c.dim(fmt.Sprintf("... +%d more", len(rows)-compactListLimit)))
+	}
+}
+
+func compactAgentRows(data statusData) []compactAgentRow {
+	progressByID := make(map[string]progressEntry, len(data.activeProgress))
+	for _, progress := range data.activeProgress {
+		id := strings.TrimPrefix(progress.displayID, "agent-")
+		progressByID[id] = progress
+		progressByID[progress.displayID] = progress
+	}
+
+	taskByAgent := make(map[string]taskEntry, len(data.inProgressTasks))
+	for _, task := range data.inProgressTasks {
+		if task.claimedBy == "" {
+			continue
+		}
+		taskByAgent[task.claimedBy] = task
+	}
+
+	rows := make([]compactAgentRow, 0, len(data.agents))
+	for _, agent := range data.agents {
+		row := compactAgentRow{agentID: agent.displayName()}
+		if presence, ok := data.presenceMap[agent.ID]; ok && presence.Task != "" {
+			row.task = presence.Task
+			row.branch = presence.Branch
+		}
+		if row.task == "" {
+			if progress, ok := progressByID[agent.ID]; ok && progress.task != "" {
+				row.task = progress.task
+			}
+		}
+		if row.task == "" {
+			if task, ok := taskByAgent[agent.ID]; ok {
+				row.task = task.name
+			}
+		}
+
+		if progress, ok := progressByID[agent.ID]; ok {
+			row.stage = compactProgressLabel(progress.body)
+			row.age = progress.ago
+		} else if task, ok := taskByAgent[agent.ID]; ok && !task.claimedAt.IsZero() {
+			row.age = formatDuration(time.Now().UTC().Sub(task.claimedAt))
+		}
+		rows = append(rows, row)
+	}
+
+	return rows
+}
+
+func compactProgressLabel(body string) string {
+	line := strings.TrimSpace(strings.ReplaceAll(body, "\n", " "))
+	if strings.HasPrefix(line, "Step:") {
+		stage := strings.TrimSpace(strings.TrimPrefix(line, "Step:"))
+		if stage != "" {
+			return stage
+		}
+	}
+	if line == "" {
+		return ""
+	}
+	if len(line) > 24 {
+		return line[:21] + "..."
+	}
+	return line
+}
+
+func renderCompactAttention(w io.Writer, c colorSet, data statusData) {
+	orphaned := compactOrphanedInProgressTasks(data)
+	hasAttention := len(data.warnings) > 0 || len(data.failedTasks) > 0 || len(data.waitingTasks) > 0 || len(data.deferredDetail) > 0 || len(orphaned) > 0
+	if !hasAttention {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, c.bold("Attention"))
+
+	if len(data.warnings) > 0 {
+		if len(data.warnings) <= 3 {
+			for _, warn := range data.warnings {
+				fmt.Fprintf(w, "  %s %s\n", c.yellow("warning:"), warn)
+			}
+		} else {
+			fmt.Fprintf(w, "  %s warnings\n", c.yellow(len(data.warnings)))
+		}
+	}
+	if len(data.failedTasks) > 0 {
+		fmt.Fprintf(w, "  %s failed\n", c.red(len(data.failedTasks)))
+	}
+	if len(data.waitingTasks) > 0 {
+		fmt.Fprintf(w, "  %s blocked by dependencies\n", c.yellow(len(data.waitingTasks)))
+	}
+	if len(data.deferredDetail) > 0 {
+		fmt.Fprintf(w, "  %s conflict-deferred\n", c.yellow(len(data.deferredDetail)))
+	}
+	for _, task := range orphaned {
+		fmt.Fprintf(w, "  %s running without active agent\n", c.yellow(task.name))
+	}
+}
+
+func compactOrphanedInProgressTasks(data statusData) []taskEntry {
+	activeAgents := make(map[string]struct{}, len(data.agents))
+	for _, agent := range data.agents {
+		activeAgents[agent.ID] = struct{}{}
+		activeAgents[agent.displayName()] = struct{}{}
+	}
+
+	orphaned := make([]taskEntry, 0)
+	for _, task := range data.inProgressTasks {
+		if task.claimedBy == "" {
+			orphaned = append(orphaned, task)
+			continue
+		}
+		if _, ok := activeAgents[task.claimedBy]; !ok {
+			orphaned = append(orphaned, task)
+		}
+	}
+	return orphaned
+}
+
+func renderCompactNextUp(w io.Writer, c colorSet, data statusData) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, c.bold("Next Up"))
+	if len(data.runnableBacklog) == 0 {
+		fmt.Fprintln(w, c.dim("  (none)"))
+		return
+	}
+
+	show := data.runnableBacklog
+	if len(show) > compactListLimit {
+		show = show[:compactListLimit]
+	}
+	for i, task := range show {
+		label := task.name
+		if task.title != "" {
+			label = fmt.Sprintf("%s — %s", task.name, task.title)
+		}
+		fmt.Fprintf(w, "  %d. %s\n", i+1, label)
+	}
+	if len(data.runnableBacklog) > compactListLimit {
+		fmt.Fprintf(w, "  %s\n", c.dim(fmt.Sprintf("... +%d more", len(data.runnableBacklog)-compactListLimit)))
+	}
+}
+
 func renderQueueOverview(w io.Writer, c colorSet, data statusData) {
 	fmt.Fprintln(w, c.bold("Queue Overview"))
 	fmt.Fprintln(w, c.bold("──────────────"))
