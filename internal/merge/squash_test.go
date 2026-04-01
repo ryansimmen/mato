@@ -247,6 +247,97 @@ func TestTaskBranchName(t *testing.T) {
 	}
 }
 
+func TestConfigureMergeCloneIdentity_UsesGitOutputSeam(t *testing.T) {
+	originalGitOutput := gitOutput
+	originalResolveIdentity := resolveIdentity
+	defer func() {
+		gitOutput = originalGitOutput
+		resolveIdentity = originalResolveIdentity
+	}()
+
+	resolveIdentity = func(repoRoot string) (string, string) {
+		return "Test User", "test@example.com"
+	}
+
+	var calls [][]string
+	gitOutput = func(dir string, args ...string) (string, error) {
+		calls = append(calls, append([]string{dir}, args...))
+		return "", nil
+	}
+
+	err := configureMergeCloneIdentity("/repo", "/clone")
+	if err != nil {
+		t.Fatalf("configureMergeCloneIdentity() error = %v", err)
+	}
+
+	// Expect exactly two calls: user.name and user.email config in the clone dir.
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 gitOutput calls, got %d: %v", len(calls), calls)
+	}
+	if calls[0][0] != "/clone" || calls[0][1] != "config" || calls[0][2] != "user.name" || calls[0][3] != "Test User" {
+		t.Errorf("first call = %v, want [/clone config user.name Test User]", calls[0])
+	}
+	if calls[1][0] != "/clone" || calls[1][1] != "config" || calls[1][2] != "user.email" || calls[1][3] != "test@example.com" {
+		t.Errorf("second call = %v, want [/clone config user.email test@example.com]", calls[1])
+	}
+}
+
+func TestConfigureMergeCloneIdentity_NameError(t *testing.T) {
+	originalGitOutput := gitOutput
+	originalResolveIdentity := resolveIdentity
+	defer func() {
+		gitOutput = originalGitOutput
+		resolveIdentity = originalResolveIdentity
+	}()
+
+	resolveIdentity = func(repoRoot string) (string, string) {
+		return "Test User", "test@example.com"
+	}
+
+	gitOutput = func(dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[1] == "user.name" {
+			return "", fmt.Errorf("config write failed")
+		}
+		return "", nil
+	}
+
+	err := configureMergeCloneIdentity("/repo", "/clone")
+	if err == nil {
+		t.Fatal("expected error when user.name config fails")
+	}
+	if !strings.Contains(err.Error(), "configure merge user.name") {
+		t.Errorf("error = %q, want to contain 'configure merge user.name'", err)
+	}
+}
+
+func TestConfigureMergeCloneIdentity_EmailError(t *testing.T) {
+	originalGitOutput := gitOutput
+	originalResolveIdentity := resolveIdentity
+	defer func() {
+		gitOutput = originalGitOutput
+		resolveIdentity = originalResolveIdentity
+	}()
+
+	resolveIdentity = func(repoRoot string) (string, string) {
+		return "Test User", "test@example.com"
+	}
+
+	gitOutput = func(dir string, args ...string) (string, error) {
+		if len(args) >= 3 && args[1] == "user.email" {
+			return "", fmt.Errorf("config write failed")
+		}
+		return "", nil
+	}
+
+	err := configureMergeCloneIdentity("/repo", "/clone")
+	if err == nil {
+		t.Fatal("expected error when user.email config fails")
+	}
+	if !strings.Contains(err.Error(), "configure merge user.email") {
+		t.Errorf("error = %q, want to contain 'configure merge user.email'", err)
+	}
+}
+
 func TestCleanupTaskBranch_IgnoresMissingRemoteBranch(t *testing.T) {
 	originalGitOutput := gitOutput
 	defer func() {

@@ -10,6 +10,7 @@ import (
 )
 
 var gitOutput = git.Output
+var resolveIdentity = git.ResolveIdentity
 
 func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult, error) {
 	cloneDir, err := git.CreateClone(repoRoot)
@@ -223,12 +224,12 @@ func parseAgentCommitLog(log string) (subject, body string) {
 }
 
 func configureMergeCloneIdentity(repoRoot, cloneDir string) error {
-	name, email := git.ResolveIdentity(repoRoot)
+	name, email := resolveIdentity(repoRoot)
 
-	if _, err := git.Output(cloneDir, "config", "user.name", name); err != nil {
+	if _, err := gitOutput(cloneDir, "config", "user.name", name); err != nil {
 		return fmt.Errorf("configure merge user.name: %w", err)
 	}
-	if _, err := git.Output(cloneDir, "config", "user.email", email); err != nil {
+	if _, err := gitOutput(cloneDir, "config", "user.email", email); err != nil {
 		return fmt.Errorf("configure merge user.email: %w", err)
 	}
 	return nil
