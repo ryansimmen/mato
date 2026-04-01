@@ -61,6 +61,9 @@ const (
 	BranchSourceHeadRemoteUnavailable BranchSource = "head_remote_unavailable"
 )
 
+const defaultGitName = "mato"
+const defaultGitEmail = "mato@local.invalid"
+
 // EnsureBranchResult describes how EnsureBranch resolved the target branch.
 type EnsureBranchResult struct {
 	Branch string
@@ -241,7 +244,7 @@ func EnsureGitignoreContains(repoRoot, pattern string) (bool, error) {
 
 // ResolveIdentity reads git user.name and user.email from the local repo
 // config in repoRoot, falling back to global config, and applying defaults
-// ("mato" / "mato@local.invalid") when neither is set. Returns the resolved
+// (defaultGitName / defaultGitEmail) when neither is set. Returns the resolved
 // name and email.
 func ResolveIdentity(repoRoot string) (name, email string) {
 	name, _ = Output(repoRoot, "config", "user.name")
@@ -250,7 +253,7 @@ func ResolveIdentity(repoRoot string) (name, email string) {
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = "mato"
+		name = defaultGitName
 	}
 
 	email, _ = Output(repoRoot, "config", "user.email")
@@ -259,7 +262,7 @@ func ResolveIdentity(repoRoot string) (name, email string) {
 	}
 	email = strings.TrimSpace(email)
 	if email == "" {
-		email = "mato@local.invalid"
+		email = defaultGitEmail
 	}
 
 	return name, email
