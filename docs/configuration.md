@@ -16,7 +16,7 @@ the host and bind-mounts those executables into agent containers.
 ## CLI Usage
 ```text
 mato [--version] [--repo <path>]
-mato run [--repo <path>] [--branch <name>] [--dry-run] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
+mato run [--repo <path>] [--branch <name>] [--dry-run | --once | --until-idle] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
 mato init [--repo <path>] [--branch <name>]
 mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
@@ -40,6 +40,11 @@ from `waiting/` to `backlog/`, diagnoses misplaced dependency-blocked backlog ta
 detects `affects` conflicts, computes the effective `.queue` manifest, and prints a
 summary of the queue state. Useful for verifying setup in CI or before a real run. No
 files are modified.
+Bounded run modes keep the normal startup and cleanup behavior but change the exit
+contract. `--once` runs one full host poll iteration and exits even if more work remains.
+`--until-idle` keeps polling until there is no immediately claimable backlog work, no
+pending review work, and no tasks in `ready-to-merge/`. `--dry-run`, `--once`, and
+`--until-idle` are mutually exclusive.
 Status mode prints queue counts, active agents, waiting-task dependency summaries, and
 recent messages. `mato status` rejects both extra positional arguments and
 unrecognized flags such as `--branch`.
@@ -110,6 +115,8 @@ Long flags support both `--flag value` and `--flag=value` forms.
 | `--repo <path>` | root persistent flag and all repo-aware subcommands | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
 | `--branch <name>` | `mato run`, `mato init` | `mato` | Target branch used for merge processing. |
 | `--dry-run` | `mato run` | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
+| `--once` | `mato run` | `false` | Run exactly one host poll iteration, then exit. This can claim a task, process one existing review from the iteration snapshot, and merge ready tasks, but it does not keep polling to drain follow-on review or merge work. |
+| `--until-idle` | `mato run` | `false` | Keep polling until no immediately claimable backlog tasks remain, no review candidates remain, and no tasks remain in `ready-to-merge/`, then exit. A paused but otherwise empty queue is considered idle. |
 | `--task-model <model>` | `mato run` | `claude-opus-4.6` | Copilot model used for task agents. |
 | `--review-model <model>` | `mato run` | `gpt-5.4` | Copilot model used for review agents. |
 | `--task-reasoning-effort <level>` | `mato run` | `high` | Reasoning effort for task agents. Valid values: `low`, `medium`, `high`, `xhigh`. |
