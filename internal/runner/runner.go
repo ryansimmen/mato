@@ -564,13 +564,13 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 
 	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, repoRoot, tasksDir, opts)
 
-	if err := ensureDockerImage(cfg.image); err != nil {
-		return err
-	}
-
 	ctx, cancel := setupSignalContext()
 	defer cancel()
 	defer signal.Stop(signalChan(ctx))
+
+	if err := ensureDockerImage(ctx, cfg.image); err != nil {
+		return err
+	}
 
 	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown)
 }
