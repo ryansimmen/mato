@@ -1236,6 +1236,36 @@ func TestGraphCmd_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestGraphCmd_MissingMatoDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	// Do NOT create .mato/ — the repo is uninitialized.
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"graph", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing .mato directory, got nil")
+	}
+	want := ".mato/ directory not found - run 'mato init' first"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want containing %q", err.Error(), want)
+	}
+}
+
+func TestInspectCmd_MissingMatoDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	// Do NOT create .mato/ — the repo is uninitialized.
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inspect", "some-task", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing .mato directory, got nil")
+	}
+	want := ".mato/ directory not found - run 'mato init' first"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want containing %q", err.Error(), want)
+	}
+}
+
 func TestInspectCmd_InvalidFormat(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"inspect", "sample", "--format", "yaml"})

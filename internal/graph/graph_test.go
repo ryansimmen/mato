@@ -826,3 +826,23 @@ func edgesTo(data GraphData, toKey string) []Edge {
 	}
 	return result
 }
+
+func TestShowTo_MissingMatoDir(t *testing.T) {
+	repoDir := testutil.SetupRepo(t)
+	// Do NOT create .mato/ — the repo is uninitialized.
+
+	formats := []string{"text", "dot", "json"}
+	for _, format := range formats {
+		t.Run(format, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := ShowTo(&buf, repoDir, format, false)
+			if err == nil {
+				t.Fatal("expected error for missing .mato directory, got nil")
+			}
+			want := ".mato/ directory not found - run 'mato init' first"
+			if err.Error() != want {
+				t.Errorf("error = %q, want %q", err.Error(), want)
+			}
+		})
+	}
+}
