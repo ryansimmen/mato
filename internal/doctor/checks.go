@@ -32,6 +32,8 @@ type checkContext struct {
 	idx       *queue.PollIndex // lazily built, shared across checks
 }
 
+var osStatFn = os.Stat
+
 // hasRepo returns true if the git check resolved a valid repo root.
 func (c *checkContext) hasRepo() bool {
 	return c.repoRoot != ""
@@ -189,7 +191,7 @@ func SetDockerImagePullFn(fn func(context.Context, string) error) {
 // resolveDockerImage returns the configured Docker image name from the
 // environment, falling back to the default ubuntu:24.04.
 func resolveDockerImage() string {
-	if img := os.Getenv("MATO_DOCKER_IMAGE"); img != "" {
+	if img := strings.TrimSpace(os.Getenv("MATO_DOCKER_IMAGE")); img != "" {
 		return img
 	}
 	return "ubuntu:24.04"
@@ -359,7 +361,7 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 	cr := CheckReport{Name: "queue", Status: CheckRan, Findings: []Finding{}}
 
 	// Check if tasksDir itself exists.
-	if info, err := os.Stat(cc.tasksDir); err != nil {
+	if info, err := osStatFn(cc.tasksDir); err != nil {
 		if os.IsNotExist(err) {
 			// Missing root .mato is fixable — create it along with
 			// all expected subdirectories below.
@@ -409,7 +411,7 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 
 	for _, dir := range expectedDirs {
 		dirPath := filepath.Join(cc.tasksDir, dir)
-		info, err := os.Stat(dirPath)
+		info, err := osStatFn(dirPath)
 		if os.IsNotExist(err) {
 			f := Finding{
 				Code:     "queue.missing_dir",
@@ -422,7 +424,7 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 			if cc.opts.Fix {
 				if mkErr := os.MkdirAll(dirPath, 0o755); mkErr == nil {
 					// Re-scan to verify.
-					if _, statErr := os.Stat(dirPath); statErr == nil {
+					if _, statErr := osStatFn(dirPath); statErr == nil {
 						f.Fixed = true
 						f.Fixable = false
 					}
@@ -430,6 +432,13 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 			}
 
 			cr.Findings = append(cr.Findings, f)
+		} else if err != nil {
+			cr.Findings = append(cr.Findings, Finding{
+				Code:     "queue.unreadable_dir",
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("could not stat expected directory %s: %v", dir, err),
+				Path:     dirPath,
+			})
 		} else if err == nil && !info.IsDir() {
 			cr.Findings = append(cr.Findings, Finding{
 				Code:     "queue.not_a_directory",

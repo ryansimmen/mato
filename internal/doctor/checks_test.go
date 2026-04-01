@@ -988,6 +988,42 @@ func TestDoctor_DockerImage_FromOptions(t *testing.T) {
 	}
 }
 
+func TestDoctor_DockerImage_WhitespaceOnlyEnvFallsBackToDefault(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	t.Setenv("MATO_DOCKER_IMAGE", "  \t  ")
+
+	var inspectedImage string
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		inspectedImage = image
+		return nil
+	})
+
+	report, err := Run(context.Background(), repoRoot, Options{
+		Format: "text",
+		Only:   []string{"docker"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if inspectedImage != "ubuntu:24.04" {
+		t.Fatalf("inspected image = %q, want %q", inspectedImage, "ubuntu:24.04")
+	}
+
+	foundDefault := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "docker.image_available" && strings.Contains(f.Message, "ubuntu:24.04") {
+				foundDefault = true
+			}
+		}
+	}
+	if !foundDefault {
+		t.Fatal("expected docker.image_available finding mentioning default image")
+	}
+}
+
 func TestDoctor_Dependencies_FlagsDependencyBlockedBacklogTask(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	allOK(t)
@@ -1087,5 +1123,42 @@ func TestDoctor_QueueLayout_DirIsFile_MessagingDir(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected queue.not_a_directory finding for messages/events path that is a file")
+	}
+}
+
+func TestDoctor_QueueLayout_UnreadableDirStatError(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	origStat := osStatFn
+	osStatFn = func(name string) (os.FileInfo, error) {
+		if name == filepath.Join(tasksDir, queue.DirBacklog) {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return origStat(name)
+	}
+	defer func() { osStatFn = origStat }()
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"queue"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "queue.unreadable_dir" && strings.Contains(f.Message, queue.DirBacklog) {
+				found = true
+				if f.Severity != SeverityError {
+					t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)
+				}
+				if !strings.Contains(f.Message, "permission denied") {
+					t.Errorf("Message = %q, want permission denied detail", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected queue.unreadable_dir finding for stat failure")
 	}
 }
