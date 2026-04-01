@@ -1,3 +1,7 @@
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for
+> the current implementation.
+
 # Proposal: Bounded Execution Mode (`--once` / `--until-idle`)
 
 ## 1. Goal
