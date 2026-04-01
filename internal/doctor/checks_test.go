@@ -1021,3 +1021,71 @@ func TestDoctor_Dependencies_FlagsDependencyBlockedBacklogTask(t *testing.T) {
 		t.Fatal("expected deps.backlog_blocked finding")
 	}
 }
+
+func TestDoctor_QueueLayout_DirIsFile_CoreQueue(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Replace the backlog directory with a regular file.
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog)
+	if err := os.RemoveAll(backlogPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backlogPath, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"queue"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "queue.not_a_directory" && strings.Contains(f.Message, queue.DirBacklog) {
+				found = true
+				if f.Severity != SeverityError {
+					t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected queue.not_a_directory finding for backlog path that is a file")
+	}
+}
+
+func TestDoctor_QueueLayout_DirIsFile_MessagingDir(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Replace the messages/events directory with a regular file.
+	eventsPath := filepath.Join(tasksDir, "messages", "events")
+	if err := os.RemoveAll(eventsPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eventsPath, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"queue"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "queue.not_a_directory" && strings.Contains(f.Message, "messages/events") {
+				found = true
+				if f.Severity != SeverityError {
+					t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected queue.not_a_directory finding for messages/events path that is a file")
+	}
+}
