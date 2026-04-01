@@ -926,11 +926,27 @@ func scanStaleMergeLock(tasksDir string, fix bool) []Finding {
 	return findings
 }
 
-// tempFilePattern matches leftover atomic-write temp files: .*.tmp-*
-var tempFilePattern = ".tmp-"
+// tempFilePatterns matches leftover atomic-write temp files produced by
+// both the primary path (.*.tmp-*) and the EXDEV cross-device fallback
+// (.*.xdev-*) in internal/atomicwrite.
+var tempFilePatterns = []string{".tmp-", ".xdev-"}
+
+// isTempFile reports whether name matches one of the atomic-write temp
+// file patterns: it must start with "." and contain ".tmp-" or ".xdev-".
+func isTempFile(name string) bool {
+	if !strings.HasPrefix(name, ".") {
+		return false
+	}
+	for _, p := range tempFilePatterns {
+		if strings.Contains(name, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // scanLeftoverTempFiles scans queue and message directories for leftover
-// atomic-write temp files matching the .*.tmp-* pattern.
+// atomic-write temp files matching both .*.tmp-* and .*.xdev-* patterns.
 func scanLeftoverTempFiles(tasksDir string, fix bool) []Finding {
 	var findings []Finding
 
@@ -960,8 +976,7 @@ func scanLeftoverTempFiles(tasksDir string, fix bool) []Finding {
 				continue
 			}
 			name := entry.Name()
-			// Match the atomicwrite pattern: starts with "." and contains ".tmp-"
-			if !strings.HasPrefix(name, ".") || !strings.Contains(name, tempFilePattern) {
+			if !isTempFile(name) {
 				continue
 			}
 			info, err := entry.Info()

@@ -489,6 +489,152 @@ func TestDoctor_LeftoverTempFiles_NormalFilesIgnored(t *testing.T) {
 	}
 }
 
+// ---------- Cross-Device (xdev) Leftover Temp Files ----------
+
+func TestDoctor_LeftoverXdevFiles_Detected(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create a leftover cross-device temp file in a queue directory.
+	xdevFile := filepath.Join(tasksDir, "backlog", ".fix-bug.md.xdev-789012")
+	testutil.WriteFile(t, xdevFile, "partial xdev write")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if !f.Fixable {
+					t.Error("expected leftover_temp_files to be fixable")
+				}
+				if !strings.Contains(f.Message, "1 leftover") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding for xdev file")
+	}
+}
+
+func TestDoctor_LeftoverXdevFiles_MixedWithTmp(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create both .tmp- and .xdev- leftover files.
+	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", ".task.md.tmp-111"), "tmp data")
+	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", ".task.md.xdev-222"), "xdev data")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if !strings.Contains(f.Message, "2 leftover") {
+					t.Errorf("expected 2 temp files (tmp + xdev), got: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding")
+	}
+}
+
+func TestDoctor_LeftoverXdevFiles_Fix_OldFiles(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	xdevFile := filepath.Join(tasksDir, "backlog", ".task.md.xdev-999")
+	testutil.WriteFile(t, xdevFile, "partial xdev write")
+	// Backdate beyond the 1-hour threshold.
+	old := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(xdevFile, old, old)
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, statErr := os.Stat(xdevFile); !os.IsNotExist(statErr) {
+		t.Error("expected old xdev temp file to be removed by --fix")
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" && f.Fixed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("expected leftover_temp_files to be marked fixed for xdev files")
+	}
+}
+
+func TestDoctor_LeftoverXdevFiles_InMessageDir(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create xdev temp file in a messaging directory.
+	testutil.WriteFile(t, filepath.Join(tasksDir, "messages", "events", ".msg.json.xdev-333"), "xdev data")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if !strings.Contains(f.Message, "1 leftover") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding for xdev file in message dir")
+	}
+}
+
+func TestIsTempFile(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{".task.md.tmp-123456", true},
+		{".task.md.xdev-789012", true},
+		{".msg.json.tmp-222", true},
+		{".msg.json.xdev-333", true},
+		{"real-task.md", false},
+		{".hidden-file", false},
+		{"tmp-not-dotted", false},
+		{"xdev-not-dotted", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTempFile(tt.name); got != tt.want {
+				t.Errorf("isTempFile(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
 // ---------- Hygiene check with --only filter ----------
 
 func TestDoctor_HygieneOnlyFilter(t *testing.T) {
