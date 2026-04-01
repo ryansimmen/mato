@@ -927,12 +927,14 @@ func scanStaleMergeLock(tasksDir string, fix bool) []Finding {
 }
 
 // tempFilePatterns matches leftover atomic-write temp files produced by
-// both the primary path (.*.tmp-*) and the EXDEV cross-device fallback
-// (.*.xdev-*) in internal/atomicwrite.
-var tempFilePatterns = []string{".tmp-", ".xdev-"}
+// the primary path (.*.tmp-*), the EXDEV cross-device fallback (.*.xdev-*)
+// in internal/atomicwrite, and retry temp files (.*.retry-*) from
+// queue.RetryTask.
+var tempFilePatterns = []string{".tmp-", ".xdev-", queue.RetryTempInfix}
 
-// isTempFile reports whether name matches one of the atomic-write temp
-// file patterns: it must start with "." and contain ".tmp-" or ".xdev-".
+// isTempFile reports whether name matches one of the known temp file
+// patterns: it must start with "." and contain ".tmp-", ".xdev-", or
+// ".retry-".
 func isTempFile(name string) bool {
 	if !strings.HasPrefix(name, ".") {
 		return false
@@ -946,7 +948,7 @@ func isTempFile(name string) bool {
 }
 
 // scanLeftoverTempFiles scans queue and message directories for leftover
-// atomic-write temp files matching both .*.tmp-* and .*.xdev-* patterns.
+// temp files matching .*.tmp-*, .*.xdev-*, and .*.retry-* patterns.
 func scanLeftoverTempFiles(tasksDir string, fix bool) []Finding {
 	var findings []Finding
 
@@ -997,7 +999,7 @@ func scanLeftoverTempFiles(tasksDir string, fix bool) []Finding {
 	f := Finding{
 		Code:     "hygiene.leftover_temp_files",
 		Severity: SeverityWarning,
-		Message:  fmt.Sprintf("%d leftover atomic-write temp file(s) found", len(tempFiles)),
+		Message:  fmt.Sprintf("%d leftover temp file(s) found", len(tempFiles)),
 		Fixable:  true,
 	}
 
@@ -1014,7 +1016,7 @@ func scanLeftoverTempFiles(tasksDir string, fix bool) []Finding {
 			f.Fixed = true
 			f.Fixable = false
 		} else if removed > 0 {
-			f.Message = fmt.Sprintf("%d leftover atomic-write temp file(s) found, %d removed (remaining are less than 1h old)", len(tempFiles), removed)
+			f.Message = fmt.Sprintf("%d leftover temp file(s) found, %d removed (remaining are less than 1h old)", len(tempFiles), removed)
 		}
 	}
 
