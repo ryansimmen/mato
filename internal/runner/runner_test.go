@@ -477,6 +477,14 @@ func TestConfigureReceiveDeny_Failure(t *testing.T) {
 	}
 }
 
+// checkIdleTransition returns true when the system transitions from active to
+// idle, so the caller should print the idle message exactly once per idle period.
+func checkIdleTransition(isIdle bool, wasIdle *bool) bool {
+	shouldPrint := isIdle && !*wasIdle
+	*wasIdle = isIdle
+	return shouldPrint
+}
+
 func TestCheckIdleTransition(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -1031,14 +1031,6 @@ func surfaceBuildWarnings(idx *queue.PollIndex) bool {
 	return hasDirReadFailure
 }
 
-// checkIdleTransition returns true when the system transitions from active to
-// idle, so the caller should print the idle message exactly once per idle period.
-func checkIdleTransition(isIdle bool, wasIdle *bool) bool {
-	shouldPrint := isIdle && !*wasIdle
-	*wasIdle = isIdle
-	return shouldPrint
-}
-
 // appendToFileFn is the function used to append text to files in post-agent
 // and review flows. It is a variable so tests can inject failures.
 var appendToFileFn = atomicwrite.AppendToFile
