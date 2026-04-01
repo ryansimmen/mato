@@ -364,6 +364,10 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 	repoRoot = strings.TrimSpace(resolvedRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
+	if err := requireTasksDir(tasksDir); err != nil {
+		return err
+	}
+
 	idx := queue.BuildIndex(tasksDir)
 
 	// Fail on directory-level read errors only; skip glob warnings.
@@ -385,6 +389,20 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 		RenderText(w, data)
 		return nil
 	}
+}
+
+func requireTasksDir(tasksDir string) error {
+	info, err := os.Stat(tasksDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
+		}
+		return fmt.Errorf("stat %s: %w", tasksDir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists but is not a directory", tasksDir)
+	}
+	return nil
 }
 
 // isGlobWarning returns true if the build warning is a glob/affects
