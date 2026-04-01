@@ -199,6 +199,145 @@ func TestParseTaskFile_PreservesNonManagedHTMLComments(t *testing.T) {
 	}
 }
 
+func TestParseTaskFile_PreservesManagedMarkersInFencedCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "backtick fence preserves failure marker",
+			content: "# Title\n```\n<!-- failure: agent at T step=WORK error=e -->\n```\nBody\n",
+			want:    "# Title\n```\n<!-- failure: agent at T step=WORK error=e -->\n```\nBody\n",
+		},
+		{
+			name:    "backtick fence preserves branch marker",
+			content: "# Title\n```text\n<!-- branch: task/foo -->\n```\nBody\n",
+			want:    "# Title\n```text\n<!-- branch: task/foo -->\n```\nBody\n",
+		},
+		{
+			name:    "tilde fence preserves claimed-by marker",
+			content: "# Title\n~~~\n<!-- claimed-by: abc -->\n~~~\nBody\n",
+			want:    "# Title\n~~~\n<!-- claimed-by: abc -->\n~~~\nBody\n",
+		},
+		{
+			name:    "multiple managed markers in fence preserved",
+			content: "# Title\n```\n<!-- branch: task/x -->\n<!-- failure: a at T step=WORK error=e -->\n<!-- reviewed: a at T — approved -->\n```\nBody\n",
+			want:    "# Title\n```\n<!-- branch: task/x -->\n<!-- failure: a at T step=WORK error=e -->\n<!-- reviewed: a at T — approved -->\n```\nBody\n",
+		},
+		{
+			name:    "markers outside fence still stripped",
+			content: "<!-- branch: task/x -->\n# Title\n```\n<!-- failure: example -->\n```\n<!-- failure: real at T step=WORK error=e -->\nBody\n",
+			want:    "# Title\n```\n<!-- failure: example -->\n```\nBody\n",
+		},
+		{
+			name:    "four-backtick opener with three-backtick closer toggles out",
+			content: "# Title\n````\n<!-- failure: agent at T step=WORK error=e -->\n```\n<!-- branch: task/x -->\nBody\n",
+			want:    "# Title\n````\n<!-- failure: agent at T step=WORK error=e -->\n```\nBody\n",
+		},
+		{
+			name:    "unclosed fence preserves rest of body",
+			content: "# Title\n```\n<!-- failure: agent at T step=WORK error=e -->\nBody\n",
+			want:    "# Title\n```\n<!-- failure: agent at T step=WORK error=e -->\nBody\n",
+		},
+		{
+			name:    "indented fence opener preserves content",
+			content: "# Title\n  ```\n<!-- branch: task/x -->\n  ```\nBody\n",
+			want:    "# Title\n  ```\n<!-- branch: task/x -->\n  ```\nBody\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fence-task.md")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("os.WriteFile: %v", err)
+			}
+			_, body, err := ParseTaskFile(path)
+			if err != nil {
+				t.Fatalf("ParseTaskFile: %v", err)
+			}
+			if body != tt.want {
+				t.Fatalf("body = %q, want %q", body, tt.want)
+			}
+		})
+	}
+}
+
+// TestFenceEdgeCaseConsistencyWithTaskfile verifies that frontmatter's fence
+// handling agrees with taskfile.forEachMarkerLine on the same edge cases.
+// Both packages use a simple toggle on lines starting with ``` or ~~~,
+// so a four-backtick opener followed by a three-backtick line closes the fence.
+func TestFenceEdgeCaseConsistencyWithTaskfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "four-backtick opener three-backtick closer",
+			content: "````\n<!-- failure: fenced at T step=WORK error=e -->\n```\n<!-- failure: real at T step=WORK error=e -->\n",
+		},
+		{
+			name:    "tilde fence",
+			content: "~~~\n<!-- failure: fenced at T step=WORK error=e -->\n~~~\n<!-- failure: real at T step=WORK error=e -->\n",
+		},
+		{
+			name:    "nested fence appearance",
+			content: "```\n````\n<!-- failure: still-fenced at T step=WORK error=e -->\n```\n<!-- failure: outside at T step=WORK error=e -->\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Parse via frontmatter: wrap content in a file with no frontmatter.
+			path := filepath.Join(t.TempDir(), "consistency.md")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			_, body, err := ParseTaskFile(path)
+			if err != nil {
+				t.Fatalf("ParseTaskFile: %v", err)
+			}
+
+			// The same markers that survive stripHTMLCommentLines should also
+			// be the ones inside fences per isFenceLine toggle logic.
+			// Count failure markers remaining in body.
+			fmFailures := countSubstring(body, "<!-- failure:")
+
+			// Now count using the same toggle logic taskfile uses.
+			inFence := false
+			taskfileOutside := 0
+			for _, line := range strings.Split(tt.content, "\n") {
+				trimmed := strings.TrimSpace(line)
+				fence := len(trimmed) >= 3 && (strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~"))
+				if !inFence && !fence && strings.HasPrefix(trimmed, "<!-- failure:") && strings.HasSuffix(trimmed, "-->") {
+					taskfileOutside++
+				}
+				if fence {
+					inFence = !inFence
+				}
+			}
+
+			// frontmatter should strip exactly the markers taskfile considers outside fences.
+			fmStripped := countSubstring(tt.content, "<!-- failure:") - fmFailures
+			if fmStripped != taskfileOutside {
+				t.Errorf("stripped %d markers but taskfile sees %d outside fences", fmStripped, taskfileOutside)
+			}
+		})
+	}
+}
+
+func countSubstring(s, sub string) int {
+	count := 0
+	for i := 0; ; {
+		idx := strings.Index(s[i:], sub)
+		if idx < 0 {
+			break
+		}
+		count++
+		i += idx + len(sub)
+	}
+	return count
+}
+
 func TestParseTaskFile_BackwardCompatibleMarkdown(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-task.md")
 	content := "# Title\nBody text\n"

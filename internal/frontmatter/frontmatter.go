@@ -180,13 +180,33 @@ func isManagedComment(trimmed string) bool {
 func stripHTMLCommentLines(body string) string {
 	lines := strings.Split(body, "\n")
 	filtered := make([]string, 0, len(lines))
+	inFence := false
 	for _, line := range lines {
-		if isManagedComment(strings.TrimSpace(line)) {
+		trimmed := strings.TrimSpace(line)
+		if !inFence && !isFenceLine(trimmed) && isManagedComment(trimmed) {
 			continue
 		}
 		filtered = append(filtered, line)
+		if isFenceLine(trimmed) {
+			inFence = !inFence
+		}
 	}
 	return strings.Join(filtered, "\n")
+}
+
+// isFenceLine uses the same toggle logic as taskfile.isFenceLine so fence
+// handling stays consistent across packages.
+func isFenceLine(trimmed string) bool {
+	if len(trimmed) < 3 {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "~~~") {
+		return true
+	}
+	return false
 }
 
 // ExtractTitle returns the first non-empty, non-HTML-comment line from the
