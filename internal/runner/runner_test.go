@@ -4382,6 +4382,54 @@ func TestPollIterate_IdleReviewProbeDoesNotQuarantineMalformedTasks(t *testing.T
 	}
 }
 
+func TestPollIterate_IdleReviewProbeDoesNotMoveExhaustedTasks(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	exhaustedContent := "---\npriority: 10\nmax_retries: 2\n---\n# Exhausted\n" +
+		"<!-- review-failure: a1 at 2026-01-01T00:00:00Z — f1 -->\n" +
+		"<!-- review-failure: a2 at 2026-01-02T00:00:00Z — f2 -->\n"
+	exhaustedPath := filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md")
+	if err := os.WriteFile(exhaustedPath, []byte(exhaustedContent), 0o644); err != nil {
+		t.Fatalf("WriteFile exhausted review task: %v", err)
+	}
+
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
+
+	result := pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	if result.hasReviewTasks {
+		t.Fatal("hasReviewTasks = true, want false with only exhausted review task")
+	}
+	// The exhausted task must remain in ready-for-review/ — not moved by the idle probe.
+	if _, err := os.Stat(exhaustedPath); err != nil {
+		t.Fatalf("exhausted review task should remain in ready-for-review/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); !os.IsNotExist(err) {
+		t.Fatalf("exhausted review task should not be moved to failed/ by idle probe, got err: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // resolveGitIdentity tests
 // ---------------------------------------------------------------------------
