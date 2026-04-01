@@ -569,6 +569,19 @@ func TestStatusCmd_FormatJSONWithWatchRejected(t *testing.T) {
 	}
 }
 
+func TestStatusCmd_FormatJSONWithVerboseRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "--format=json", "--verbose"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format json with --verbose, got nil")
+	}
+	want := "--verbose can only be used with text output"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestStatusCmd_InvalidFormatRejected(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"status", "--format=yaml"})
@@ -627,6 +640,7 @@ func TestStatusCmd_FlagParsing(t *testing.T) {
 		{"status help", []string{"status", "--help"}},
 		{"status with repo", []string{"status", "--repo=/tmp/repo"}},
 		{"status with text format", []string{"status", "--format=text"}},
+		{"status with verbose", []string{"status", "--verbose"}},
 	}
 
 	for _, tt := range tests {
@@ -2561,6 +2575,86 @@ func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
 	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--dry-run"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestRunCmd_OnceSetsRunMode(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
+		if opts.Mode != runner.RunModeOnce {
+			t.Fatalf("Mode = %v, want %v", opts.Mode, runner.RunModeOnce)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--once"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestRunCmd_UntilIdleSetsRunMode(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
+		if opts.Mode != runner.RunModeUntilIdle {
+			t.Fatalf("Mode = %v, want %v", opts.Mode, runner.RunModeUntilIdle)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--until-idle"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestRunCmd_BoundedFlagsMutuallyExclusive(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "dry-run and once",
+			args: []string{"run", "--repo", repoRoot, "--dry-run", "--once"},
+			want: "--dry-run and --once are mutually exclusive",
+		},
+		{
+			name: "dry-run and until-idle",
+			args: []string{"run", "--repo", repoRoot, "--dry-run", "--until-idle"},
+			want: "--dry-run and --until-idle are mutually exclusive",
+		},
+		{
+			name: "once and until-idle",
+			args: []string{"run", "--repo", repoRoot, "--once", "--until-idle"},
+			want: "--once and --until-idle are mutually exclusive",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
 	}
 }
 

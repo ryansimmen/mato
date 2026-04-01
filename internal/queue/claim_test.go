@@ -1744,3 +1744,84 @@ func TestSelectAndClaimTask_ProseFailure_NoCooldown(t *testing.T) {
 		t.Fatalf("Filename = %q, want %q", task.Filename, "prose.md")
 	}
 }
+
+func TestHasClaimableBacklogTask(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, dir string)
+		cooldown time.Duration
+		want     bool
+	}{
+		{
+			name: "fresh backlog task is claimable",
+			setup: func(t *testing.T, dir string) {
+				testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "fresh.md"), "# Fresh\n")
+			},
+			want: true,
+		},
+		{
+			name: "recent failure in cooldown is not claimable",
+			setup: func(t *testing.T, dir string) {
+				recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+				testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "hot.md"), strings.Join([]string{
+					"# Hot",
+					fmt.Sprintf("<!-- failure: agent-1 at %s step=WORK error=crash -->", recentTS),
+					"",
+				}, "\n"))
+			},
+			want: false,
+		},
+		{
+			name: "retry exhausted task remains actionable for failure handling",
+			setup: func(t *testing.T, dir string) {
+				ts1 := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339)
+				ts2 := time.Now().UTC().Add(-9 * time.Minute).Format(time.RFC3339)
+				testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "exhausted.md"), strings.Join([]string{
+					"---",
+					"max_retries: 2",
+					"---",
+					"# Exhausted",
+					fmt.Sprintf("<!-- failure: agent-1 at %s step=WORK error=crash -->", ts1),
+					fmt.Sprintf("<!-- failure: agent-2 at %s step=WORK error=crash -->", ts2),
+					"",
+				}, "\n"))
+			},
+			want: true,
+		},
+		{
+			name: "dependency blocked backlog task is not claimable",
+			setup: func(t *testing.T, dir string) {
+				testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "blocked.md"), strings.Join([]string{
+					"---",
+					"depends_on: [missing-task]",
+					"---",
+					"# Blocked",
+					"",
+				}, "\n"))
+			},
+			want: false,
+		},
+		{
+			name: "excluded runnable task is not claimable",
+			setup: func(t *testing.T, dir string) {
+				testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "skip.md"), "# Skip\n")
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := setupClaimTestDir(t)
+			tt.setup(t, dir)
+			exclude := map[string]struct{}(nil)
+			if tt.name == "excluded runnable task is not claimable" {
+				exclude = map[string]struct{}{"skip.md": {}}
+			}
+			got := HasClaimableBacklogTask(dir, exclude, tt.cooldown, nil)
+			if got != tt.want {
+				t.Fatalf("HasClaimableBacklogTask() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

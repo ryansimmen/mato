@@ -51,6 +51,8 @@ Useful flags:
 - `--repo <path>`: target repository (defaults to the current directory)
 - `mato run --branch <name>`: merge target branch (defaults to `mato`)
 - `mato run --dry-run`: validate queue setup without launching Docker containers
+- `mato run --once`: run one full poll iteration, then exit
+- `mato run --until-idle`: keep polling until no claimable backlog, review, or merge work remains, then exit
 - `mato run --task-model`, `--review-model`: override task and review agent models
 - `mato run --task-reasoning-effort`, `--review-reasoning-effort`: override task and review reasoning effort
 
@@ -116,10 +118,11 @@ Operators can also move queued tasks to `failed/` deliberately with `mato cancel
 6. The host merge queue processes `ready-to-merge/` and squash-merges finished task branches into the target branch.
 7. Tasks move to `completed/` on success. Missing branches move to `failed/`, merge conflicts requeue to `backlog/` for a fresh attempt, and push failures are retried in `ready-to-merge/`.
 
-If the queue is empty, mato keeps polling until new work appears. The loop exits cleanly on `Ctrl+C`.
+If the queue is empty, `mato run` keeps polling until new work appears. The loop exits cleanly on `Ctrl+C`.
+For bounded automation, `mato run --once` performs exactly one host poll iteration and exits, while `mato run --until-idle` keeps iterating until there is no immediately actionable backlog work, no pending reviews, and no ready-to-merge work left.
 If `.mato/.paused` exists, the loop skips new claims and review launches, keeps
 refreshing `.queue`, and continues draining `ready-to-merge/` until the repo is
-resumed.
+resumed. In `--until-idle` mode, a paused but otherwise empty queue is treated as idle and exits cleanly.
 
 ## Running Multiple Agents
 
@@ -129,16 +132,18 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 
 `mato status` prints a terminal-friendly snapshot of the queue:
 
-- counts for `backlog/`, dependency-blocked work, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`
-- runnable backlog in execution order (priority-sorted, dependency-blocked and conflict-deferred tasks excluded)
-- active agents from `.locks/`
-- waiting tasks with dependency progress
-- conflict-deferred tasks with blocking details
-- the last 5 coordination messages from `.mato/messages/events/`
+- compact queue headline counts and pause / merge-queue state
+- active agents with current task and latest progress when available
+- an `Attention` section for warnings, failed work, dependency blockers, and conflict-deferred work
+- the next runnable tasks in claim order
 
 The runnable backlog shows what the host will claim next. `.mato/.queue` exports
 that same derived order for inspection and lightweight tooling. Use `--format
 json` to get the same ordered list as `runnable_backlog` in the JSON output.
+
+Use `--verbose` to show the fuller text dashboard with detailed sections such as
+dependency-blocked tasks, conflict-deferred tasks, recent completions, and
+recent messages.
 
 Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag
 sets the refresh period (default `2s`). The interval must be a positive duration;
