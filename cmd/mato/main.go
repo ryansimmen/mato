@@ -213,7 +213,7 @@ func validateReasoningEffort(value, flagName string) error {
 func resolveRunOptions(flags runFlags, cfg config.Config) (runner.RunOptions, error) {
 	var opts runner.RunOptions
 
-	if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MATO_DOCKER_IMAGE")); v != "" {
 		opts.DockerImage = v
 	} else if cfg.DockerImage != nil {
 		opts.DockerImage = *cfg.DockerImage
@@ -674,7 +674,7 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 				// check report the problem. Config load errors are fatal
 				// so doctor does not silently produce results based on
 				// the wrong image when .mato.yaml is malformed.
-				if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
+				if v := strings.TrimSpace(os.Getenv("MATO_DOCKER_IMAGE")); v != "" {
 					dockerImage = v
 					// Still validate repo config so a malformed committed
 					// .mato.yaml is not hidden during a full doctor run
