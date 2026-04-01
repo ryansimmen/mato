@@ -245,6 +245,33 @@ func TestRootCmd_HelpListsCompletionCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "run") {
 		t.Fatalf("expected help to mention run subcommand, got:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "Path to the git repository (default: current directory)") {
+		t.Fatalf("expected help to mention repo default, got:\n%s", out.String())
+	}
+}
+
+func TestRunCmd_HelpDocumentsResolvedDefaults(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"run", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	help := out.String()
+	for _, want := range []string{
+		"Target branch for merging (default: mato)",
+		"Copilot model for task agents (default: " + runner.DefaultTaskModel + ")",
+		"Copilot model for review agents (default: " + runner.DefaultReviewModel + ")",
+		"Reasoning effort for task agents (default: " + runner.DefaultReasoningEffort + ")",
+		"Reasoning effort for review agents (default: " + runner.DefaultReasoningEffort + ")",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("expected run help to contain %q, got:\n%s", want, help)
+		}
+	}
 }
 
 func TestVersionCmd_Output(t *testing.T) {

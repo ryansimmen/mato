@@ -53,14 +53,18 @@ Useful flags:
 - `mato run --dry-run`: validate queue setup without launching Docker containers
 - `mato run --once`: run one full poll iteration, then exit
 - `mato run --until-idle`: keep polling until no claimable backlog, review, or merge work remains, then exit
-- `mato run --task-model`, `--review-model`: override task and review agent models
-- `mato run --task-reasoning-effort`, `--review-reasoning-effort`: override task and review reasoning effort
+- `mato run --task-model`: override the task agent model (defaults to `claude-opus-4.6`)
+- `mato run --review-model`: override the review agent model (defaults to `gpt-5.4`)
+- `mato run --task-reasoning-effort`: override the task agent reasoning effort (defaults to `high`)
+- `mato run --review-reasoning-effort`: override the review agent reasoning effort (defaults to `high`)
 
 You can also set `MATO_BRANCH` for a host-side branch default that overrides `.mato.yaml` but is still overridden by `--branch`.
 
+Use `mato --help` and `mato run --help` as the canonical source for current CLI defaults.
+
 Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe. When the branch is missing locally, `mato init` tells you whether it reused a local branch, created from live `origin/<branch>`, created from current `HEAD` because the remote branch was missing, or fell back to a cached remote-tracking ref because `origin` was unavailable.
 
-You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `task_model`, `review_model`, `review_session_resume_enabled`, `task_reasoning_effort`, `review_reasoning_effort`, `agent_timeout`, and `retry_cooldown`. CLI flags still win over config, and host env vars still win over both.
+You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `task_model`, `review_model`, `review_session_resume_enabled`, `task_reasoning_effort`, `review_reasoning_effort`, `agent_timeout`, and `retry_cooldown`. CLI flags win over host env vars, and host env vars win over config.
 
 ## Task Files
 
@@ -116,7 +120,7 @@ Operators can also move queued tasks to `failed/` deliberately with `mato cancel
 4. Agents communicate through `.mato/messages/` so concurrent runs can share intent and completion events.
 5. A review agent automatically evaluates each completed task branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with feedback for the next attempt. Work retries resume the task branch, and review follow-ups can also resume their own Copilot session when `review_session_resume_enabled` is left at its default `true`.
 6. The host merge queue processes `ready-to-merge/` and squash-merges finished task branches into the target branch.
-7. Tasks move to `completed/` on success. Missing branches move to `failed/`, merge conflicts requeue to `backlog/` for a fresh attempt, and push failures are retried in `ready-to-merge/`.
+7. Tasks move to `completed/` on success. Missing branches and merge conflicts append failure records, then either requeue to `backlog/` or move to `failed/` depending on the remaining retry budget. Push failures are retried in `ready-to-merge/`.
 
 If the queue is empty, `mato run` keeps polling until new work appears. The loop exits cleanly on `Ctrl+C`.
 For bounded automation, `mato run --once` performs exactly one host poll iteration and exits, while `mato run --until-idle` keeps iterating until there is no immediately actionable backlog work, no pending reviews, and no ready-to-merge work left.
