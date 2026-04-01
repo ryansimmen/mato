@@ -203,7 +203,7 @@ func ReadRecentMessages(tasksDir string, limit int) ([]Message, []string, error)
 	var warnings []string
 	messages := make([]Message, 0, len(jsonEntries))
 	for _, entry := range jsonEntries {
-		data, err := os.ReadFile(filepath.Join(eventsDir, entry.Name()))
+		data, err := osReadFile(filepath.Join(eventsDir, entry.Name()))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
