@@ -189,12 +189,12 @@ func SetDockerImagePullFn(fn func(context.Context, string) error) {
 }
 
 // resolveDockerImage returns the configured Docker image name from the
-// environment, falling back to the default ubuntu:24.04.
+// environment, falling back to runner.DefaultDockerImage.
 func resolveDockerImage() string {
 	if img := strings.TrimSpace(os.Getenv("MATO_DOCKER_IMAGE")); img != "" {
 		return img
 	}
-	return "ubuntu:24.04"
+	return runner.DefaultDockerImage
 }
 
 // ---------- A. Git Repository ----------
