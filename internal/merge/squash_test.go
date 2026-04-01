@@ -703,3 +703,61 @@ func TestMergeReadyTask_MultipleFilesChanged(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeReadyTask_EmptyCommitSHA(t *testing.T) {
+	repoRoot := setupMergeRepo(t)
+	createTaskBranch(t, repoRoot, "task/empty-sha", "emptysha.txt", "content\n", "feat: empty sha test")
+
+	originalGitOutput := gitOutput
+	defer func() { gitOutput = originalGitOutput }()
+
+	pushDone := false
+	gitOutput = func(dir string, args ...string) (string, error) {
+		if pushDone && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+			return "", fmt.Errorf("rev-parse failed")
+		}
+		out, err := originalGitOutput(dir, args...)
+		if len(args) >= 2 && args[0] == "push" && err == nil {
+			pushDone = true
+		}
+		return out, err
+	}
+
+	// Capture stderr to verify the warning.
+	originalStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = originalStderr }()
+
+	task := mergeQueueTask{
+		name:   "empty-sha.md",
+		branch: "task/empty-sha",
+		title:  "Empty SHA task",
+	}
+
+	result, mergeErr := mergeReadyTask(repoRoot, "mato", task)
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stderr writer: %v", err)
+	}
+	var stderr bytes.Buffer
+	if _, err := stderr.ReadFrom(r); err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+
+	if mergeErr != nil {
+		t.Fatalf("mergeReadyTask() error = %v, want nil (push already succeeded)", mergeErr)
+	}
+	if result == nil {
+		t.Fatal("mergeReadyTask() returned nil result")
+	}
+	if result.commitSHA != "unknown" {
+		t.Errorf("commitSHA = %q, want %q", result.commitSHA, "unknown")
+	}
+	if !strings.Contains(stderr.String(), "warning: could not determine commit SHA after push") {
+		t.Errorf("stderr = %q, want warning about commit SHA", stderr.String())
+	}
+}
