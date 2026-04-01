@@ -205,6 +205,39 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 	return result
 }
 
+// hasReviewCandidates reports whether ready-for-review/ currently contains at
+// least one parseable task that has not exhausted its review retry budget.
+//
+// This helper is intentionally read-only. It is used by idle reporting after
+// merge processing, where we need a fresh filesystem view of ready-for-review/
+// without the side effects of quarantining malformed files or failing exhausted
+// tasks.
+func hasReviewCandidates(tasksDir string) bool {
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	names, err := queue.ListTaskFiles(reviewDir)
+	if err != nil {
+		return false
+	}
+
+	for _, name := range names {
+		path := filepath.Join(reviewDir, name)
+		meta, _, err := frontmatter.ParseTaskFile(path)
+		if err != nil {
+			continue
+		}
+		failures, failErr := queue.CountReviewFailureLines(path)
+		if failErr != nil {
+			continue
+		}
+		if failures >= meta.MaxRetries {
+			continue
+		}
+		return true
+	}
+
+	return false
+}
+
 // selectTaskForReview scans ready-for-review/ and returns the highest-priority
 // task that needs review. Returns nil if no tasks need review.
 // This does not acquire a lock; use selectAndLockReview for mutual exclusion.

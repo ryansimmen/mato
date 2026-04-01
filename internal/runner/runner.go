@@ -831,14 +831,18 @@ func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, br
 
 // pollMerge acquires the merge lock and processes the squash-merge queue.
 // It returns the number of tasks successfully merged.
-func pollMerge(repoRoot, tasksDir, branch string) int {
+func pollMerge(ctx context.Context, repoRoot, tasksDir, branch string) int {
+	if ctx.Err() != nil {
+		return 0
+	}
+
 	cleanup, ok := merge.AcquireLock(tasksDir)
 	if !ok {
 		return 0
 	}
 	defer cleanup()
 
-	count := merge.ProcessQueue(repoRoot, tasksDir, branch)
+	count := merge.ProcessQueueContext(ctx, repoRoot, tasksDir, branch)
 	if count > 0 {
 		fmt.Printf("Merged %d task(s) into %s\n", count, branch)
 	}
@@ -896,13 +900,19 @@ func pollIterate(
 		result.pauseActive = ps1.Active
 		return result
 	}
+	if ctx.Err() != nil {
+		result.pauseActive = ps1.Active
+		return result
+	}
 
 	ps2 := readPauseState(tasksDir)
 	if !ps2.Active {
 		result.reviewProcessed = pollReviewFn(ctx, env, run, tasksDir, branch, agentID, idx)
 	}
 
-	result.mergeCount = pollMergeFn(repoRoot, tasksDir, branch)
+	if ctx.Err() == nil {
+		result.mergeCount = pollMergeFn(ctx, repoRoot, tasksDir, branch)
+	}
 	result.pauseActive = ps2.Active
 
 	now := nowFn().UTC()
@@ -929,7 +939,7 @@ func pollIterate(
 		hb.recordActivity(now)
 	}
 
-	result.hasReviewTasks = selectTaskForReview(tasksDir, nil) != nil
+	result.hasReviewTasks = hasReviewCandidates(tasksDir)
 	result.hasReadyMerge = merge.HasReadyTasks(tasksDir)
 	return result
 }
@@ -962,7 +972,7 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		// If a shutdown signal was received during the task run, exit
 		// now that the task has been properly recovered. This avoids
 		// starting review or merge work with a cancelled context.
-		if result.claimedTask && ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return nil
 		}
 

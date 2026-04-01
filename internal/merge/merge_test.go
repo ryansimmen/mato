@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,16 @@ func TestAcquireLockSucceedsWithoutExistingLock(t *testing.T) {
 		t.Fatal("expected merge lock acquisition to succeed")
 	}
 	cleanup()
+}
+
+func TestProcessQueueContext_CancelledReturnsWithoutWork(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if got := ProcessQueueContext(ctx, t.TempDir(), tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueueContext() = %d, want 0 for cancelled context", got)
+	}
 }
 
 func TestAcquireLockFailsWhenHeldByActiveProcess(t *testing.T) {
