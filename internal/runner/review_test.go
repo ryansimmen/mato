@@ -1511,3 +1511,96 @@ func TestLoadTaskStateForReview_CorruptFallsBackToNil(t *testing.T) {
 		t.Fatalf("expected corrupt taskstate warning, got:\n%s", stderr)
 	}
 }
+
+func TestReviewCandidates_FilesystemFallback_DedupsSynthesizedBranches(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirFailed} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Two filenames that sanitize to the same branch name: "add_feature" and "add-feature".
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Underscore\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Dash\n"), 0o644)
+
+	candidates := reviewCandidates(tasksDir, nil)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	// Both should have the same sanitized base ("add-feature") but the
+	// second one in filename order must be disambiguated.
+	if candidates[0].Branch == candidates[1].Branch {
+		t.Fatalf("two candidates share the same synthesized branch %q; batch dedup should have prevented this", candidates[0].Branch)
+	}
+
+	// Verify both start with the expected prefix.
+	for i, c := range candidates {
+		if !strings.HasPrefix(c.Branch, "task/add-feature") {
+			t.Fatalf("candidate[%d] branch %q does not start with expected prefix", i, c.Branch)
+		}
+	}
+}
+
+func TestReviewCandidates_Indexed_DedupsSynthesizedBranches(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Two filenames that sanitize to the same branch name.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Underscore\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Dash\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	if candidates[0].Branch == candidates[1].Branch {
+		t.Fatalf("two candidates share the same synthesized branch %q; batch dedup should have prevented this", candidates[0].Branch)
+	}
+
+	for i, c := range candidates {
+		if !strings.HasPrefix(c.Branch, "task/add-feature") {
+			t.Fatalf("candidate[%d] branch %q does not start with expected prefix", i, c.Branch)
+		}
+	}
+}
+
+func TestReviewCandidates_ExplicitBranchUnchanged(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// One task with an explicit branch, one without (same sanitized base).
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
+		[]byte("<!-- branch: task/add-feature -->\n---\npriority: 10\nmax_retries: 3\n---\n# Explicit\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Synthesized\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	// The explicit branch must remain exactly as written.
+	var explicit *queue.ClaimedTask
+	for _, c := range candidates {
+		if c.Filename == "add-feature.md" {
+			explicit = c
+		}
+	}
+	if explicit == nil {
+		t.Fatal("could not find add-feature.md candidate")
+	}
+	if explicit.Branch != "task/add-feature" {
+		t.Fatalf("explicit branch changed to %q, want %q", explicit.Branch, "task/add-feature")
+	}
+}

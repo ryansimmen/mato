@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"mato/internal/queue"
+	"mato/internal/runner"
 	"mato/internal/testutil"
 )
 
@@ -315,5 +316,50 @@ func TestReviewLockAcquireReleaseCycle(t *testing.T) {
 
 		cleanup()
 		mustNotExist(t, lockPath)
+	}
+}
+
+// TestConcurrentReviewSelection_CollidingBranches verifies that when two
+// markerless review tasks sanitize to the same branch name, the candidate
+// batch assigns distinct synthesized branches. The unit tests in
+// review_test.go validate the full candidate list; this integration test
+// verifies the end-to-end indexed path via the exported API.
+func TestConcurrentReviewSelection_CollidingBranches(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Two filenames that sanitize to the same branch name: "add_feature" and
+	// "add-feature" both produce "task/add-feature".
+	writeTask(t, tasksDir, queue.DirReadyReview, "add_feature.md",
+		"---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Underscore\n")
+	writeTask(t, tasksDir, queue.DirReadyReview, "add-feature.md",
+		"---\npriority: 20\nmax_retries: 3\n---\n# Add Feature Dash\n")
+
+	// Build the index and select the first candidate.
+	idx := queue.BuildIndex(tasksDir)
+	first := runner.SelectTaskForReview(tasksDir, idx)
+	if first == nil {
+		t.Fatal("expected a review candidate, got nil")
+	}
+	if !strings.HasPrefix(first.Branch, "task/add-feature") {
+		t.Fatalf("candidate branch %q does not start with expected prefix", first.Branch)
+	}
+
+	// Remove the first candidate so the next selection returns the other.
+	src := filepath.Join(tasksDir, queue.DirReadyReview, first.Filename)
+	dst := filepath.Join(tasksDir, queue.DirInProgress, first.Filename)
+	if err := os.Rename(src, dst); err != nil {
+		t.Fatalf("move first task: %v", err)
+	}
+
+	idx2 := queue.BuildIndex(tasksDir)
+	second := runner.SelectTaskForReview(tasksDir, idx2)
+	if second == nil {
+		t.Fatal("expected a second review candidate, got nil")
+	}
+	if !strings.HasPrefix(second.Branch, "task/add-feature") {
+		t.Fatalf("second candidate branch %q does not start with expected prefix", second.Branch)
+	}
+	if first.Filename == second.Filename {
+		t.Fatal("expected two different tasks")
 	}
 }
