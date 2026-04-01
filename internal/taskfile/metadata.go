@@ -61,6 +61,7 @@ var (
 	branchCommentRe    = regexp.MustCompile(`<!-- branch:\s*(\S+)\s*-->`)
 	claimedByRe        = regexp.MustCompile(`<!-- claimed-by:\s*(\S+).*-->`)
 	claimedAtRe        = regexp.MustCompile(`<!-- claimed-by:\s*\S+\s+claimed-at:\s*(\S+)\s*-->`)
+	mergedMarkerRe     = regexp.MustCompile(`<!-- merged:\s*merge-queue at\s+(\S+)\s*-->`)
 	reviewRejectionStr = "<!-- review-rejection:"
 	failurePrefix      = "<!-- failure:"
 	reviewFailureStr   = "<!-- review-failure:"
@@ -96,6 +97,21 @@ func ParseBranchMarkerLine(data []byte) (string, bool) {
 		return ok
 	})
 	return branch, ok
+}
+
+// HasMergedMarker reports whether the task contains a standalone
+// <!-- merged: merge-queue at ... --> marker outside code fences.
+func HasMergedMarker(data []byte) bool {
+	found := false
+	forEachMarkerLine(data, func(trimmed string) bool {
+		m := mergedMarkerRe.FindStringSubmatch(trimmed)
+		if len(m) >= 2 && m[0] == trimmed {
+			found = true
+			return true
+		}
+		return false
+	})
+	return found
 }
 
 // ReplaceBranchMarkerLine replaces the first standalone branch marker line
