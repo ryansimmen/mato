@@ -417,6 +417,61 @@ func TestAtomicMove_CrossDeviceWriteFailCleansUp(t *testing.T) {
 	}
 }
 
+func TestAtomicMove_CrossDeviceCleanupFailureWarns(t *testing.T) {
+	// When writeFileFn fails and the subsequent removeFn(dst) also fails,
+	// the warning should be printed to stderr.
+	withLinkFn(t, func(_, _ string) error {
+		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+	withWriteFileFn(t, func(f *os.File, data []byte) error {
+		return fmt.Errorf("injected write error")
+	})
+	withRemoveFn(t, func(name string) error {
+		return fmt.Errorf("injected remove error")
+	})
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+
+	if err := os.WriteFile(src, []byte("content\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	// Capture stderr output.
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	os.Stderr = w
+
+	moveErr := AtomicMove(src, dst)
+
+	w.Close()
+	os.Stderr = oldStderr
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	r.Close()
+
+	if moveErr == nil {
+		t.Fatal("AtomicMove should fail when write fails")
+	}
+	if !strings.Contains(moveErr.Error(), "write destination") {
+		t.Fatalf("unexpected error: %v", moveErr)
+	}
+	stderr := buf.String()
+	if !strings.Contains(stderr, "warning: cross-device move cleanup failed") {
+		t.Fatalf("expected cleanup warning on stderr, got: %q", stderr)
+	}
+	if !strings.Contains(stderr, "injected remove error") {
+		t.Fatalf("expected injected remove error in warning, got: %q", stderr)
+	}
+}
+
 func TestAtomicMove_RemoveSourceFailureRollsBackDestination(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.md")

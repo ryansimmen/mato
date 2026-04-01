@@ -332,11 +332,15 @@ func crossDeviceMove(src, dst string) error {
 	}
 	if err := writeFileFn(f, data); err != nil {
 		f.Close()
-		removeFn(dst)
+		if cleanErr := removeFn(dst); cleanErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: cross-device move cleanup failed for %s: %v\n", dst, cleanErr)
+		}
 		return fmt.Errorf("atomic move %s → %s: write destination: %w", src, dst, err)
 	}
 	if err := f.Close(); err != nil {
-		removeFn(dst)
+		if cleanErr := removeFn(dst); cleanErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: cross-device move cleanup failed for %s: %v\n", dst, cleanErr)
+		}
 		return fmt.Errorf("atomic move %s → %s: close destination: %w", src, dst, err)
 	}
 	return finalizeAtomicMove(src, dst, "copying")
