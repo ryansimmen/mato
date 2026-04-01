@@ -620,7 +620,7 @@ func resolveGitIdentity(repoRoot string) (name, email string) {
 func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail, repoRoot, tasksDir string, opts RunOptions) (envConfig, runContext) {
 	image := opts.DockerImage
 	if image == "" {
-		image = "ubuntu:24.04"
+		image = DefaultDockerImage
 	}
 	timeout := opts.AgentTimeout
 	if timeout <= 0 {
