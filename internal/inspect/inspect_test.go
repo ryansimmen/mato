@@ -515,3 +515,285 @@ func TestShowTo_MissingMatoDir(t *testing.T) {
 		})
 	}
 }
+
+func TestShowTo_RequiresTasksDir(t *testing.T) {
+	repoDir := testutil.SetupRepo(t)
+
+	var buf bytes.Buffer
+	err := ShowTo(&buf, repoDir, "any-task", "text")
+	if err == nil {
+		t.Fatal("expected error for missing .mato directory, got nil")
+	}
+	want := ".mato/ directory not found - run 'mato init' first"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestShowTo_JSONBlockingDependencies(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, tasksDir string)
+		taskRef string
+		assert  func(t *testing.T, deps []any)
+	}{
+		{
+			name: "single blocking dependency in waiting",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "blocker.md", "---\nid: blocker\n---\n# Blocker\n<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=broken -->\n")
+				writeTask(t, tasksDir, queue.DirWaiting, "blocked.md", "---\nid: blocked\ndepends_on: [blocker]\n---\n# Blocked\n")
+			},
+			taskRef: "blocked",
+			assert: func(t *testing.T, deps []any) {
+				t.Helper()
+				if len(deps) != 1 {
+					t.Fatalf("blocking_dependencies length = %d, want 1", len(deps))
+				}
+				dep := deps[0].(map[string]any)
+				if dep["id"] != "blocker" {
+					t.Fatalf("dependency id = %v, want blocker", dep["id"])
+				}
+				if dep["state"] != "failed" {
+					t.Fatalf("dependency state = %v, want failed", dep["state"])
+				}
+			},
+		},
+		{
+			name: "multiple blocking dependencies",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirWaiting, "dep-a.md", "---\nid: dep-a\n---\n# Dep A\n")
+				writeTask(t, tasksDir, queue.DirFailed, "dep-b.md", "---\nid: dep-b\n---\n# Dep B\n")
+				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep-a, dep-b]\n---\n# Consumer\n")
+			},
+			taskRef: "consumer",
+			assert: func(t *testing.T, deps []any) {
+				t.Helper()
+				if len(deps) != 2 {
+					t.Fatalf("blocking_dependencies length = %d, want 2", len(deps))
+				}
+				ids := make(map[string]string)
+				for _, d := range deps {
+					dep := d.(map[string]any)
+					id, _ := dep["id"].(string)
+					state, _ := dep["state"].(string)
+					ids[id] = state
+				}
+				if ids["dep-a"] != "waiting" {
+					t.Fatalf("dep-a state = %v, want waiting", ids["dep-a"])
+				}
+				if ids["dep-b"] != "failed" {
+					t.Fatalf("dep-b state = %v, want failed", ids["dep-b"])
+				}
+			},
+		},
+		{
+			name: "unknown dependency in JSON",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [nonexistent]\n---\n# Consumer\n")
+			},
+			taskRef: "consumer",
+			assert: func(t *testing.T, deps []any) {
+				t.Helper()
+				if len(deps) != 1 {
+					t.Fatalf("blocking_dependencies length = %d, want 1", len(deps))
+				}
+				dep := deps[0].(map[string]any)
+				if dep["id"] != "nonexistent" {
+					t.Fatalf("dependency id = %v, want nonexistent", dep["id"])
+				}
+				if dep["state"] != "unknown" {
+					t.Fatalf("dependency state = %v, want unknown", dep["state"])
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+			tt.setup(t, tasksDir)
+
+			var buf bytes.Buffer
+			if err := ShowTo(&buf, repoRoot, tt.taskRef, "json"); err != nil {
+				t.Fatalf("ShowTo: %v", err)
+			}
+
+			var got map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+				t.Fatalf("json.Unmarshal: %v", err)
+			}
+			deps, ok := got["blocking_dependencies"].([]any)
+			if !ok || len(deps) == 0 {
+				t.Fatalf("blocking_dependencies missing or empty: %v", got["blocking_dependencies"])
+			}
+			tt.assert(t, deps)
+		})
+	}
+}
+
+func TestShowTo_TextConflictingAffects(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirInProgress, "active.md", "---\nid: active\naffects: [pkg/api.go, pkg/handler.go]\n---\n# Active\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "deferred.md", "---\nid: deferred\naffects: [pkg/api.go, pkg/handler.go]\n---\n# Deferred\n")
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, "deferred", "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+	output := buf.String()
+
+	wantParts := []string{
+		"Status: deferred",
+		"Conflicting affects:",
+		"pkg/api.go",
+		"pkg/handler.go",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestShowTo_TextReviewFailureCount(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, tasksDir string)
+		taskRef string
+		want    []string
+	}{
+		{
+			name: "single review failure marker",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirReadyReview, "review-one.md",
+					"<!-- branch: task/review-one -->\n"+
+						"<!-- review-failure: agent at 2026-01-01T00:00:00Z step=REVIEW error=bad_tests -->\n"+
+						"---\nid: review-one\nmax_retries: 3\n---\n# Review One\n")
+			},
+			taskRef: "review-one",
+			want:    []string{"Review failures: 1"},
+		},
+		{
+			name: "multiple review failure markers",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirReadyReview, "review-multi.md",
+					"<!-- branch: task/review-multi -->\n"+
+						"<!-- review-failure: a at 2026-01-01T00:00:00Z step=REVIEW error=first -->\n"+
+						"<!-- review-failure: b at 2026-01-01T00:01:00Z step=REVIEW error=second -->\n"+
+						"<!-- review-failure: c at 2026-01-01T00:02:00Z step=REVIEW error=third -->\n"+
+						"---\nid: review-multi\nmax_retries: 5\n---\n# Review Multi\n")
+			},
+			taskRef: "review-multi",
+			want:    []string{"Review failures: 3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+			tt.setup(t, tasksDir)
+
+			var buf bytes.Buffer
+			if err := ShowTo(&buf, repoRoot, tt.taskRef, "text"); err != nil {
+				t.Fatalf("ShowTo: %v", err)
+			}
+			output := buf.String()
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("output missing %q:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestShowTo_ParseFailureStates(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, tasksDir string)
+		taskRef string
+		want    []string
+	}{
+		{
+			name: "cancelled parse failure in failed",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "pf-cancelled.md",
+					"<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n"+
+						"---\npriority: nope\n---\n# PF Cancelled\n")
+			},
+			taskRef: "pf-cancelled",
+			want: []string{
+				"Status: failed",
+				"Failure: cancelled",
+				"Parse error:",
+				"fix the task frontmatter, then requeue with mato retry",
+			},
+		},
+		{
+			name: "terminal failure parse failure in failed",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "pf-terminal.md",
+					"<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — bad glob syntax -->\n"+
+						"---\npriority: nope\n---\n# PF Terminal\n")
+			},
+			taskRef: "pf-terminal",
+			want: []string{
+				"Status: failed",
+				"Failure: terminal",
+				"Parse error:",
+				"fix the task frontmatter and the structural failure",
+			},
+		},
+		{
+			name: "cycle failure parse failure in failed",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "pf-cycle.md",
+					"<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dep -->\n"+
+						"---\npriority: nope\n---\n# PF Cycle\n")
+			},
+			taskRef: "pf-cycle",
+			want: []string{
+				"Status: failed",
+				"Failure: cycle",
+				"Parse error:",
+				"fix the task frontmatter and dependency cycle",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+			tt.setup(t, tasksDir)
+
+			var buf bytes.Buffer
+			if err := ShowTo(&buf, repoRoot, tt.taskRef, "text"); err != nil {
+				t.Fatalf("ShowTo: %v", err)
+			}
+			output := buf.String()
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("output missing %q:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestShowTo_InvalidFormat(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, queue.DirBacklog, "sample.md", "---\nid: sample\n---\n# Sample\n")
+
+	var buf bytes.Buffer
+	err := ShowTo(&buf, repoRoot, "sample", "yaml")
+	if err == nil {
+		t.Fatal("expected error for unsupported format, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported format") {
+		t.Fatalf("error = %q, want unsupported format", err.Error())
+	}
+	if !strings.Contains(err.Error(), "yaml") {
+		t.Fatalf("error = %q, should mention the invalid format name", err.Error())
+	}
+}
