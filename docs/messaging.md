@@ -117,7 +117,7 @@ This is another reason the channel is advisory: queue transitions and git operat
 
 ## Guardrails
 The protocol is intentionally narrow:
-- **Task agent**: maximum 6 messages per task: 1 `intent` + up to 3 `progress` + 1 `conflict-warning` + 1 `completion`. The agent sends at most 4 messages; the host sends `intent`, `conflict-warning`, and `completion` via `postAgentPush`.
+- **Task agent**: maximum 6 messages per task: 1 `intent` + up to 3 `progress` + 1 `conflict-warning` + 1 `completion`. The agent sends at most 4 messages (up to 3 `progress` + up to 1 `ON_FAILURE`); the host sends `intent` before the agent starts, and `conflict-warning` and `completion` via `postAgentPush`.
 - **Review agent**: maximum 2 messages per review: 1 agent `progress` + 1 host `completion`. The agent sends at most 1 message; the host sends `completion` via `postReviewAction`. No `intent` or `conflict-warning` messages are sent for reviews.
 - message read/write failures must not block task work
 - no ad hoc or extra message types
