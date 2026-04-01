@@ -2100,6 +2100,24 @@ func TestCancelCmd_ReadyToMergeWarning(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_ReadyForReviewWarning(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "reviewing.md"), []byte("---\nid: reviewing\n---\n# Reviewing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "reviewing"})
+	stderr := captureStderr(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel command failed: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "warning: task is in ready-for-review/ — a review agent may be running") {
+		t.Fatalf("missing ready-for-review warning: %q", stderr)
+	}
+}
+
 func TestCancelCmd_DownstreamWarnings(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {

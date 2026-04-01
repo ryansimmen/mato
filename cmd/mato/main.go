@@ -988,6 +988,9 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 				if result.PriorState == queue.DirInProgress {
 					fmt.Fprintf(os.Stderr, "warning: agent container for %s may still be running\n", stem)
 				}
+				if result.PriorState == queue.DirReadyReview {
+					fmt.Fprintf(os.Stderr, "warning: task is in ready-for-review/ — a review agent may be running\n")
+				}
 				if result.PriorState == queue.DirReadyMerge {
 					fmt.Fprintf(os.Stderr, "warning: merge queue may still merge %s's branch\n", stem)
 				}
