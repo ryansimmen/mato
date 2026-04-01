@@ -696,7 +696,12 @@ func scanOrphanedTasks(tasksDir string, fix bool) []Finding {
 		src := filepath.Join(inProgress, name)
 
 		// Check for stale duplicate (already in a later state).
-		if laterDir := laterStateDuplicateDir(tasksDir, name); laterDir != "" {
+		if laterDir, _ := queue.LaterStateDuplicateDir(name,
+			filepath.Join(tasksDir, queue.DirReadyReview),
+			filepath.Join(tasksDir, queue.DirReadyMerge),
+			filepath.Join(tasksDir, queue.DirCompleted),
+			filepath.Join(tasksDir, queue.DirFailed),
+		); laterDir != "" {
 			findings = append(findings, Finding{
 				Code:     "locks.stale_duplicate",
 				Severity: SeverityWarning,
@@ -756,16 +761,6 @@ func scanOrphanedTasks(tasksDir string, fix bool) []Finding {
 		}
 	}
 	return findings
-}
-
-// laterStateDuplicateDir mirrors the check in queue.go.
-func laterStateDuplicateDir(tasksDir, name string) string {
-	for _, laterDir := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed} {
-		if _, err := os.Stat(filepath.Join(tasksDir, laterDir, name)); err == nil {
-			return laterDir
-		}
-	}
-	return ""
 }
 
 // countActiveAgents counts .pid files for live agents.
