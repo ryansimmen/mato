@@ -220,12 +220,19 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 	}
 
 	// Step 5: For each node with depends_on, resolve edges and hidden deps.
+	// Deduplicate refs so repeated depends_on entries produce a single
+	// edge or hidden dependency per unique reference.
 	for i := range data.Nodes {
 		node := &data.Nodes[i]
+		seenRefs := make(map[string]struct{})
 		for _, ref := range node.DependsOn {
 			if ref == "" {
 				continue
 			}
+			if _, dup := seenRefs[ref]; dup {
+				continue
+			}
+			seenRefs[ref] = struct{}{}
 			status := classifyRef(ref, safeCompleted, ambiguousIDs, allIDs)
 			satisfied := status == "satisfied"
 
