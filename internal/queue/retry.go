@@ -13,6 +13,10 @@ import (
 	"mato/internal/taskfile"
 )
 
+// RetryTempInfix is the infix used in temporary file names created by
+// RetryTask. Doctor uses this to detect leftover retry temp files.
+const RetryTempInfix = ".retry-"
+
 var createRetryTempFileFn = func(dir, pattern string) (*os.File, error) {
 	return os.CreateTemp(dir, pattern)
 }
@@ -79,7 +83,7 @@ func RetryTask(tasksDir, taskRef string) error {
 	// move it to the final path. This ensures the backlog path is never
 	// visible as an empty placeholder — scanners always see either
 	// nothing or the complete task file.
-	tmpFile, err := createRetryTempFileFn(backlogDir, "."+match.Filename+".retry-*")
+	tmpFile, err := createRetryTempFileFn(backlogDir, "."+match.Filename+RetryTempInfix+"*")
 	if err != nil {
 		return fmt.Errorf("create temp file in backlog: %w", err)
 	}

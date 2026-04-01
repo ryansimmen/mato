@@ -612,6 +612,104 @@ func TestDoctor_LeftoverXdevFiles_InMessageDir(t *testing.T) {
 	}
 }
 
+// ---------- Retry temp file leftovers ----------
+
+func TestDoctor_LeftoverRetryFiles_Detected(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create a leftover retry temp file in the backlog directory.
+	retryFile := filepath.Join(tasksDir, "backlog", ".fix-bug.md.retry-123456")
+	testutil.WriteFile(t, retryFile, "partial retry write")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if !f.Fixable {
+					t.Error("expected leftover_temp_files to be fixable")
+				}
+				if !strings.Contains(f.Message, "1 leftover") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding for retry temp file")
+	}
+}
+
+func TestDoctor_LeftoverRetryFiles_Fix_OldFiles(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	retryFile := filepath.Join(tasksDir, "backlog", ".task.md.retry-999")
+	testutil.WriteFile(t, retryFile, "partial retry write")
+	// Backdate beyond the 1-hour threshold.
+	old := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(retryFile, old, old)
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, statErr := os.Stat(retryFile); !os.IsNotExist(statErr) {
+		t.Error("expected old retry temp file to be removed by --fix")
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" && f.Fixed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("expected leftover_temp_files to be marked fixed for retry files")
+	}
+}
+
+func TestDoctor_LeftoverRetryFiles_Fix_RecentNotRemoved(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	retryFile := filepath.Join(tasksDir, "backlog", ".task.md.retry-recent")
+	testutil.WriteFile(t, retryFile, "in progress retry")
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, statErr := os.Stat(retryFile); os.IsNotExist(statErr) {
+		t.Error("recent retry temp file should not be removed by --fix")
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if f.Fixed {
+					t.Error("expected leftover_temp_files NOT to be marked fixed (recent retry file kept)")
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding")
+	}
+}
+
 func TestIsTempFile(t *testing.T) {
 	tests := []struct {
 		name string
@@ -619,12 +717,15 @@ func TestIsTempFile(t *testing.T) {
 	}{
 		{".task.md.tmp-123456", true},
 		{".task.md.xdev-789012", true},
+		{".task.md.retry-345678", true},
 		{".msg.json.tmp-222", true},
 		{".msg.json.xdev-333", true},
+		{".msg.json.retry-444", true},
 		{"real-task.md", false},
 		{".hidden-file", false},
 		{"tmp-not-dotted", false},
 		{"xdev-not-dotted", false},
+		{"retry-not-dotted", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
