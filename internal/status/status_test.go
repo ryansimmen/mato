@@ -860,6 +860,48 @@ func TestShowTo_UnreadableLockFileWarning(t *testing.T) {
 	}
 }
 
+func TestActiveAgents_GenuinelyUnreadableLockFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Write a lock file then make it unreadable via permissions.
+	// Before the fix, identity.IsAgentActive would silently return false
+	// (lockfile.IsHeld returns false on read error), causing activeAgents
+	// to skip the agent without generating a warning.
+	lockPath := filepath.Join(locksDir, "unread01.pid")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(lockPath, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(lockPath, 0o644) })
+
+	agents, warnings, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents, got %d", len(agents))
+	}
+	if len(warnings) == 0 {
+		t.Fatal("expected at least one warning for unreadable lock file")
+	}
+	found := false
+	for _, w := range warnings {
+		if contains(w, "unread01.pid") && contains(w, "unreadable lock file") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about unread01.pid, got: %v", warnings)
+	}
+}
+
 func TestWatch(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")

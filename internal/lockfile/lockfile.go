@@ -18,19 +18,31 @@ var (
 	osRemove   = os.Remove
 )
 
-// IsHeld checks whether a lock file at the given path exists and is held by
-// a live process. Returns false if the file does not exist, is empty, or
-// the holder process is no longer running.
-func IsHeld(lockPath string) bool {
+// CheckHeld checks whether a lock file at the given path exists and is held
+// by a live process. Unlike IsHeld, it returns an error when the file exists
+// but cannot be read, allowing callers to distinguish unreadable files from
+// absent or dead locks.
+func CheckHeld(lockPath string) (bool, error) {
 	data, err := os.ReadFile(lockPath)
 	if err != nil {
-		return false
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	content := strings.TrimSpace(string(data))
 	if content == "" {
-		return false
+		return false, nil
 	}
-	return process.IsLockHolderAlive(content)
+	return process.IsLockHolderAlive(content), nil
+}
+
+// IsHeld checks whether a lock file at the given path exists and is held by
+// a live process. Returns false if the file does not exist, is empty, cannot
+// be read, or the holder process is no longer running.
+func IsHeld(lockPath string) bool {
+	held, _ := CheckHeld(lockPath)
+	return held
 }
 
 // Register writes the current process identity ("PID:starttime") to a file

@@ -177,7 +177,12 @@ func activeAgents(tasksDir string) ([]statusAgent, []string, error) {
 			continue
 		}
 		agentID := strings.TrimSuffix(entry.Name(), ".pid")
-		if !identity.IsAgentActive(tasksDir, agentID) {
+		active, checkErr := identity.CheckAgentActive(tasksDir, agentID)
+		if checkErr != nil {
+			warnings = append(warnings, fmt.Sprintf("skipped unreadable lock file %s: %v", entry.Name(), checkErr))
+			continue
+		}
+		if !active {
 			continue
 		}
 		data, err := readLockFileFn(filepath.Join(tasksDir, ".locks", entry.Name()))

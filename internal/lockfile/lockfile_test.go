@@ -316,6 +316,83 @@ func TestIsHeld_EmptyFile(t *testing.T) {
 	}
 }
 
+// --- CheckHeld tests ---
+
+func TestCheckHeld_LiveProcess(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "live.lock")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+	held, err := CheckHeld(lockPath)
+	if err != nil {
+		t.Fatalf("CheckHeld returned unexpected error: %v", err)
+	}
+	if !held {
+		t.Error("CheckHeld should return true for a lock held by the current process")
+	}
+}
+
+func TestCheckHeld_DeadProcess(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "dead.lock")
+	if err := os.WriteFile(lockPath, []byte("4194300:99999999"), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+	held, err := CheckHeld(lockPath)
+	if err != nil {
+		t.Fatalf("CheckHeld returned unexpected error: %v", err)
+	}
+	if held {
+		t.Error("CheckHeld should return false for a lock held by a dead process")
+	}
+}
+
+func TestCheckHeld_MissingFile(t *testing.T) {
+	held, err := CheckHeld("/nonexistent/path/to/lock")
+	if err != nil {
+		t.Fatalf("CheckHeld should return nil error for missing file, got: %v", err)
+	}
+	if held {
+		t.Error("CheckHeld should return false for a missing file")
+	}
+}
+
+func TestCheckHeld_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "empty.lock")
+	if err := os.WriteFile(lockPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+	held, err := CheckHeld(lockPath)
+	if err != nil {
+		t.Fatalf("CheckHeld returned unexpected error: %v", err)
+	}
+	if held {
+		t.Error("CheckHeld should return false for an empty lock file")
+	}
+}
+
+func TestCheckHeld_UnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "unreadable.lock")
+	if err := os.WriteFile(lockPath, []byte("12345:99999"), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+	if err := os.Chmod(lockPath, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(lockPath, 0o644) })
+
+	held, err := CheckHeld(lockPath)
+	if err == nil {
+		t.Fatal("CheckHeld should return an error for an unreadable lock file")
+	}
+	if held {
+		t.Error("CheckHeld should return false when the file is unreadable")
+	}
+}
+
 func TestIsHeld_PIDReuse(t *testing.T) {
 	dir := t.TempDir()
 	lockPath := filepath.Join(dir, "reuse.lock")
