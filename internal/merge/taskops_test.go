@@ -1,9 +1,12 @@
 package merge
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"mato/internal/queue"
@@ -536,4 +539,117 @@ func TestFailMergeTask(t *testing.T) {
 			t.Error("expected default reason in failure record")
 		}
 	})
+}
+
+func TestIsPermanentMoveError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"destination exists", queue.ErrDestinationExists, true},
+		{"wrapped destination exists", fmt.Errorf("move: %w", queue.ErrDestinationExists), true},
+		{"not exist", os.ErrNotExist, true},
+		{"wrapped not exist", fmt.Errorf("open: %w", os.ErrNotExist), true},
+		{"permission denied", os.ErrPermission, true},
+		{"wrapped permission denied", fmt.Errorf("link: %w", os.ErrPermission), true},
+		{"generic error", errors.New("temporary glitch"), false},
+		{"nil error", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isPermanentMoveError(tt.err)
+			if got != tt.want {
+				t.Errorf("isPermanentMoveError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMoveTaskWithRetry_PermanentErrorNoRetry(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "task.md")
+	dst := filepath.Join(dir, "dst", "task.md")
+	if err := os.WriteFile(src, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var attempts atomic.Int32
+	permErr := fmt.Errorf("atomic move: %w", queue.ErrDestinationExists)
+
+	orig := atomicMoveFn
+	atomicMoveFn = func(s, d string) error {
+		attempts.Add(1)
+		return permErr
+	}
+	t.Cleanup(func() { atomicMoveFn = orig })
+
+	err := moveTaskWithRetry(src, dst)
+	if err == nil {
+		t.Fatal("expected error from moveTaskWithRetry")
+	}
+	if !errors.Is(err, queue.ErrDestinationExists) {
+		t.Errorf("expected ErrDestinationExists, got %v", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("permanent error should cause exactly 1 attempt, got %d", got)
+	}
+}
+
+func TestMoveTaskWithRetry_TransientErrorRetries(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "task.md")
+	dst := filepath.Join(dir, "dst", "task.md")
+	if err := os.WriteFile(src, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var attempts atomic.Int32
+	transientErr := errors.New("temporary I/O glitch")
+
+	orig := atomicMoveFn
+	atomicMoveFn = func(s, d string) error {
+		attempts.Add(1)
+		return transientErr
+	}
+	t.Cleanup(func() { atomicMoveFn = orig })
+
+	err := moveTaskWithRetry(src, dst)
+	if err == nil {
+		t.Fatal("expected error from moveTaskWithRetry")
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("transient error should cause 3 attempts, got %d", got)
+	}
+}
+
+func TestMoveTaskWithRetry_TransientThenSuccess(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "task.md")
+	dst := filepath.Join(dir, "dst", "task.md")
+	if err := os.WriteFile(src, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var attempts atomic.Int32
+
+	orig := atomicMoveFn
+	atomicMoveFn = func(s, d string) error {
+		n := attempts.Add(1)
+		if n < 3 {
+			return errors.New("temporary glitch")
+		}
+		return queue.AtomicMove(s, d)
+	}
+	t.Cleanup(func() { atomicMoveFn = orig })
+
+	if err := moveTaskWithRetry(src, dst); err != nil {
+		t.Fatalf("moveTaskWithRetry: %v", err)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("expected 3 attempts (2 transient + 1 success), got %d", got)
+	}
+	if _, err := os.Stat(dst); err != nil {
+		t.Fatalf("destination should exist: %v", err)
+	}
 }
