@@ -4894,3 +4894,55 @@ func TestPollLoop_ExitsOnCancelledContext(t *testing.T) {
 		t.Fatalf("expected nil error from cancelled pollLoop, got: %v", err)
 	}
 }
+
+// TestStartupPullCancelledBySignalContext verifies that the startup path
+// (setupSignalContext → ensureDockerImage) correctly cancels docker pull
+// when the signal context is cancelled, matching the flow in Run().
+func TestStartupPullCancelledBySignalContext(t *testing.T) {
+	origInspect := dockerImageInspectFn
+	origPull := dockerPullFn
+	t.Cleanup(func() {
+		dockerImageInspectFn = origInspect
+		dockerPullFn = origPull
+	})
+
+	dockerImageInspectFn = func(image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	}
+
+	pullStarted := make(chan struct{})
+	dockerPullFn = func(ctx context.Context, image string) error {
+		close(pullStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	// Mirror the startup path in Run: setupSignalContext then ensureDockerImage.
+	ctx, cancel := setupSignalContext()
+	defer signal.Stop(signalChan(ctx))
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, stderr := captureStdoutStderr(t, func() {
+			done <- ensureDockerImage(ctx, "test:latest")
+		})
+		_ = stderr
+	}()
+
+	// Wait for pull to start, then cancel the context (simulating SIGINT).
+	<-pullStarted
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected error when signal context is cancelled during pull")
+		}
+		if !strings.Contains(err.Error(), "cancelled") {
+			t.Errorf("expected cancellation error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ensureDockerImage did not return after context cancellation")
+	}
+}
