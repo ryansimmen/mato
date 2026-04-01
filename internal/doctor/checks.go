@@ -657,7 +657,9 @@ func scanStaleReviewLocks(locksDir string, fix bool) []Finding {
 		}
 
 		if fix {
-			os.Remove(lockPath)
+			if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+				f.Message += fmt.Sprintf(" (fix failed: %v)", err)
+			}
 			// Re-scan to verify.
 			if _, statErr := os.Stat(lockPath); os.IsNotExist(statErr) {
 				f.Fixed = true
@@ -935,7 +937,9 @@ func scanStaleMergeLock(tasksDir string, fix bool) []Finding {
 			Fixable:  true,
 		}
 		if fix {
-			os.Remove(mergeLockPath)
+			if err := os.Remove(mergeLockPath); err != nil && !os.IsNotExist(err) {
+				f.Message += fmt.Sprintf(" (fix failed: %v)", err)
+			}
 			if _, statErr := os.Stat(mergeLockPath); os.IsNotExist(statErr) {
 				f.Fixed = true
 				f.Fixable = false
@@ -954,7 +958,9 @@ func scanStaleMergeLock(tasksDir string, fix bool) []Finding {
 			Fixable:  true,
 		}
 		if fix {
-			os.Remove(mergeLockPath)
+			if err := os.Remove(mergeLockPath); err != nil && !os.IsNotExist(err) {
+				f.Message += fmt.Sprintf(" (fix failed: %v)", err)
+			}
 			if _, statErr := os.Stat(mergeLockPath); os.IsNotExist(statErr) {
 				f.Fixed = true
 				f.Fixable = false
