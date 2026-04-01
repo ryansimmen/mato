@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"mato/internal/atomicwrite"
@@ -18,6 +17,7 @@ import (
 
 var removeBranchMarkerFn = removeBranchMarker
 var cleanupTaskBranchFn = cleanupTaskBranch
+var atomicMoveFn = queue.AtomicMove
 
 func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr error) error {
 	dst := mergeFailureDestination(tasksDir, task.path, task.name)
@@ -103,7 +103,7 @@ func taskHasMergeSuccessRecord(path string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(data), mergedTaskRecordPrefix)
+	return taskfile.HasMergedMarker(data)
 }
 
 func appendTaskRecord(path, format string, args ...any) error {
@@ -136,16 +136,28 @@ func removeBranchMarker(path string) error {
 	return nil
 }
 
+// isPermanentMoveError reports whether err is clearly not transient and
+// retrying the move would be pointless. Destination-already-exists,
+// source-not-found, and permission errors fall into this category.
+func isPermanentMoveError(err error) bool {
+	return errors.Is(err, queue.ErrDestinationExists) ||
+		errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, os.ErrPermission)
+}
+
 func moveTaskWithRetry(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("create task destination dir: %w", err)
 	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		if err := queue.AtomicMove(src, dst); err == nil {
+		if err := atomicMoveFn(src, dst); err == nil {
 			return nil
 		} else {
 			lastErr = err
+			if isPermanentMoveError(err) {
+				return err
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,7 +259,7 @@ func TestStatusAgentDisplayName(t *testing.T) {
 
 func TestActiveAgents_EmptyLocksDir(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -269,7 +270,7 @@ func TestActiveAgents_EmptyLocksDir(t *testing.T) {
 
 func TestActiveAgents_NoLocksDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -283,7 +284,7 @@ func TestActiveAgents_DeadProcess(t *testing.T) {
 	// PID that almost certainly doesn't exist.
 	os.WriteFile(filepath.Join(tasksDir, ".locks", "dead0001.pid"), []byte("2147483647"), 0o644)
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestActiveAgents_LiveProcess(t *testing.T) {
 	}
 	defer cleanup()
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -328,7 +329,7 @@ func TestActiveAgents_SortedByDisplayName(t *testing.T) {
 		_ = pid // registered via RegisterAgent
 	}
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -348,7 +349,7 @@ func TestActiveAgents_SkipsNonPIDFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, ".locks", "notes.txt"), []byte("hello"), 0o644)
 	os.MkdirAll(filepath.Join(tasksDir, ".locks", "subdir"), 0o755)
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -362,12 +363,64 @@ func TestActiveAgents_InvalidPID(t *testing.T) {
 	// Lock file with non-numeric content — should be skipped.
 	os.WriteFile(filepath.Join(tasksDir, ".locks", "badpid01.pid"), []byte("not-a-number"), 0o644)
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
 	if len(agents) != 0 {
 		t.Errorf("expected 0 agents (invalid PID), got %d", len(agents))
+	}
+}
+
+func TestActiveAgents_UnreadableLockFile(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+
+	// Register a real agent so IsAgentActive returns true.
+	cleanup, err := queue.RegisterAgent(tasksDir, "good0001")
+	if err != nil {
+		t.Fatalf("RegisterAgent(good0001): %v", err)
+	}
+	defer cleanup()
+
+	// Register a second agent whose lock file will be "unreadable".
+	cleanup2, err := queue.RegisterAgent(tasksDir, "bad00001")
+	if err != nil {
+		t.Fatalf("RegisterAgent(bad00001): %v", err)
+	}
+	defer cleanup2()
+
+	// Inject a ReadFile hook that fails for the bad agent's lock file.
+	origFn := readLockFileFn
+	readLockFileFn = func(name string) ([]byte, error) {
+		if filepath.Base(name) == "bad00001.pid" {
+			return nil, errors.New("simulated read error")
+		}
+		return origFn(name)
+	}
+	defer func() { readLockFileFn = origFn }()
+
+	agents, warnings, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents returned error: %v", err)
+	}
+
+	// The good agent should still appear.
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if agents[0].ID != "good0001" {
+		t.Errorf("agent ID = %q, want %q", agents[0].ID, "good0001")
+	}
+
+	// A warning should be emitted for the unreadable lock file.
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "bad00001.pid") {
+		t.Errorf("warning should mention bad00001.pid, got %q", warnings[0])
+	}
+	if !strings.Contains(warnings[0], "simulated read error") {
+		t.Errorf("warning should mention error, got %q", warnings[0])
 	}
 }
 
@@ -928,6 +981,95 @@ func TestGatherStatus_CompletionReadError(t *testing.T) {
 	}
 }
 
+func TestGatherStatus_MessageReadError(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Make the events directory unreadable to trigger an error.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	if err := os.Chmod(eventsDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(eventsDir, 0o755) })
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus should not return error for message read failure, got: %v", err)
+	}
+
+	if len(data.warnings) == 0 {
+		t.Fatal("expected at least one warning for message read failure")
+	}
+	found := false
+	for _, w := range data.warnings {
+		if containsSubstring(w, "message") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning 'message', got: %v", data.warnings)
+	}
+	if data.recentMessages != nil {
+		t.Errorf("recentMessages should be nil on error, got: %v", data.recentMessages)
+	}
+}
+
+func TestGatherStatus_PartialMessageReadFailure(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Write a valid message.
+	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID: "good-msg", From: "agent", Type: "intent",
+		Task: "task.md", Branch: "branch", Body: "ok",
+		SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Create a single unreadable message file to trigger a per-file warning.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	unreadable := filepath.Join(eventsDir, base.Add(time.Minute).Format("20060102T150405.000000000Z")+"-unreadable.json")
+	if err := os.WriteFile(unreadable, []byte(`{"id":"bad"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus should not return error for partial message failure, got: %v", err)
+	}
+
+	// The valid message should still be present.
+	if len(data.recentMessages) != 1 {
+		t.Fatalf("expected 1 recent message, got %d", len(data.recentMessages))
+	}
+	if data.recentMessages[0].ID != "good-msg" {
+		t.Errorf("expected message ID 'good-msg', got %q", data.recentMessages[0].ID)
+	}
+
+	// A structured warning about the unreadable file should be surfaced.
+	found := false
+	for _, w := range data.warnings {
+		if containsSubstring(w, "could not read message") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning 'could not read message', got: %v", data.warnings)
+	}
+}
+
 func TestGatherStatus_NoWarningsOnSuccess(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	if err := messaging.Init(tasksDir); err != nil {
@@ -1285,5 +1427,112 @@ func TestGatherStatus_EqualTimestampProgressConsistency(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("eqagent not found in activeProgress")
+	}
+}
+
+// TestGatherStatus_OlderProgressUnreadableWarning verifies that when an older
+// progress file is unreadable, gatherStatus still recovers valid fallback
+// progress for other agents and surfaces the degraded read as a warning.
+func TestGatherStatus_OlderProgressUnreadableWarning(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Register two active agents.
+	cleanupGood, err := queue.RegisterAgent(tasksDir, "goodagent")
+	if err != nil {
+		t.Fatalf("RegisterAgent(good): %v", err)
+	}
+	defer cleanupGood()
+
+	cleanupBad, err := queue.RegisterAgent(tasksDir, "badagent")
+	if err != nil {
+		t.Fatalf("RegisterAgent(bad): %v", err)
+	}
+	defer cleanupBad()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write progress messages for both agents early in the timeline.
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID: "good-prog", From: "goodagent", Type: "progress",
+		Task: "good-task.md", Body: "Step: WORK", SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage(good): %v", err)
+	}
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID: "bad-prog", From: "badagent", Type: "progress",
+		Task: "bad-task.md", Body: "Step: VERIFY", SentAt: base.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("WriteMessage(bad): %v", err)
+	}
+
+	// Make badagent's progress file unreadable via the messaging read hook.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, readErr := os.ReadDir(eventsDir)
+	if readErr != nil {
+		t.Fatalf("ReadDir: %v", readErr)
+	}
+	var unreadablePath string
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "-progress-") && strings.Contains(e.Name(), "bad-prog") {
+			unreadablePath = filepath.Join(eventsDir, e.Name())
+			break
+		}
+	}
+	origReadFile := messaging.TestHookReadFile()
+	messaging.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == unreadablePath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return origReadFile(path)
+	})
+	t.Cleanup(func() { messaging.SetTestHookReadFile(origReadFile) })
+
+	// Flood with newer messages to push both agents outside the recent window.
+	for i := 0; i < statusMessageLimit+10; i++ {
+		if err := messaging.WriteMessage(tasksDir, messaging.Message{
+			ID:     fmt.Sprintf("flood-%d", i),
+			From:   "otheragent",
+			Type:   "progress",
+			Task:   "other.md",
+			Body:   fmt.Sprintf("flood %d", i),
+			SentAt: base.Add(time.Duration(10+i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage(flood %d): %v", i, err)
+		}
+	}
+
+	data, gatherErr := gatherStatus(tasksDir)
+	if gatherErr != nil {
+		t.Fatalf("gatherStatus: %v", gatherErr)
+	}
+
+	// goodagent should still appear in activeProgress.
+	foundGood := false
+	for _, p := range data.activeProgress {
+		if p.displayID == "agent-goodagent" {
+			foundGood = true
+			if p.body != "Step: WORK" {
+				t.Errorf("goodagent body = %q, want %q", p.body, "Step: WORK")
+			}
+			break
+		}
+	}
+	if !foundGood {
+		t.Errorf("goodagent not found in activeProgress despite valid file")
+	}
+
+	// There should be a warning about the unreadable file.
+	foundWarning := false
+	for _, w := range data.warnings {
+		if strings.Contains(w, "could not read older progress message") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected warning about unreadable older progress message, got warnings: %v", data.warnings)
 	}
 }

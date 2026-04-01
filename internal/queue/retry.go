@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -8,13 +9,16 @@ import (
 	"sort"
 	"strings"
 
-	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/taskfile"
 )
 
-var openRetryDestinationFn = func(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+// RetryTempInfix is the infix used in temporary file names created by
+// RetryTask. Doctor uses this to detect leftover retry temp files.
+const RetryTempInfix = ".retry-"
+
+var createRetryTempFileFn = func(dir, pattern string) (*os.File, error) {
+	return os.CreateTemp(dir, pattern)
 }
 
 // stripFailureMarkers delegates to the canonical taskfile.StripFailureMarkers
@@ -72,25 +76,43 @@ func RetryTask(tasksDir, taskRef string) error {
 
 	cleaned := stripFailureMarkers(string(data))
 
-	backlogPath := filepath.Join(tasksDir, DirBacklog, match.Filename)
+	backlogDir := filepath.Join(tasksDir, DirBacklog)
+	backlogPath := filepath.Join(backlogDir, match.Filename)
 
-	reserved, err := openRetryDestinationFn(backlogPath)
+	// Write cleaned content to a temp file in backlog/, then atomically
+	// move it to the final path. This ensures the backlog path is never
+	// visible as an empty placeholder — scanners always see either
+	// nothing or the complete task file.
+	tmpFile, err := createRetryTempFileFn(backlogDir, "."+match.Filename+RetryTempInfix+"*")
 	if err != nil {
-		if os.IsExist(err) {
+		return fmt.Errorf("create temp file in backlog: %w", err)
+	}
+	tmpName := tmpFile.Name()
+
+	if err := tmpFile.Chmod(0o644); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write task to temp file: %w", err)
+	}
+	if _, err := tmpFile.WriteString(cleaned); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write task to temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("write task to temp file: %w", err)
+	}
+
+	// AtomicMove uses os.Link + os.Remove and returns ErrDestinationExists
+	// if the backlog path already exists, providing collision detection
+	// without ever exposing an empty placeholder file.
+	if err := AtomicMove(tmpName, backlogPath); err != nil {
+		os.Remove(tmpName)
+		if errors.Is(err, ErrDestinationExists) {
 			return fmt.Errorf("task %s already exists in backlog/", frontmatter.TaskFileStem(match.Filename))
 		}
-		return fmt.Errorf("reserve task path in backlog: %w", err)
-	}
-	if closeErr := reserved.Close(); closeErr != nil {
-		os.Remove(backlogPath)
-		return fmt.Errorf("close reserved backlog task %s: %w", match.Filename, closeErr)
-	}
-
-	// Write cleaned content directly to backlog/ — the source in failed/
-	// is never modified, so a write error here causes no data loss.
-	if err := atomicwrite.WriteFile(backlogPath, []byte(cleaned)); err != nil {
-		os.Remove(backlogPath)
-		return fmt.Errorf("write task to backlog: %w", err)
+		return fmt.Errorf("move task to backlog: %w", err)
 	}
 
 	// Only remove the failed/ copy after the backlog/ write succeeds.

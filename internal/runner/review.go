@@ -56,6 +56,11 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 
 	var candidates []candidate
 
+	// reservedBranches tracks synthesized branch names across the candidate
+	// batch so that two markerless tasks whose sanitized names collapse to the
+	// same base branch receive distinct synthesized names.
+	reservedBranches := make(map[string]struct{})
+
 	// Use index if available; otherwise fall back to filesystem scan.
 	if idx != nil {
 		// Quarantine malformed review tasks whose frontmatter could not be parsed.
@@ -105,6 +110,10 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				if _, taken := activeBranches[branch]; taken {
 					branch = branch + "-" + frontmatter.BranchDisambiguator(snap.Filename)
 				}
+				if _, taken := reservedBranches[branch]; taken {
+					branch = branch + "-" + frontmatter.BranchDisambiguator(snap.Filename)
+				}
+				reservedBranches[branch] = struct{}{}
 			}
 			title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
 			candidates = append(candidates, candidate{
@@ -177,6 +186,10 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				if _, taken := queue.CollectActiveBranches(tasksDir, nil)[branch]; taken {
 					branch = branch + "-" + frontmatter.BranchDisambiguator(name)
 				}
+				if _, taken := reservedBranches[branch]; taken {
+					branch = branch + "-" + frontmatter.BranchDisambiguator(name)
+				}
+				reservedBranches[branch] = struct{}{}
 			}
 			title := frontmatter.ExtractTitle(name, body)
 			candidates = append(candidates, candidate{
@@ -203,6 +216,39 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 		result[i] = c.task
 	}
 	return result
+}
+
+// hasReviewCandidates reports whether ready-for-review/ currently contains at
+// least one parseable task that has not exhausted its review retry budget.
+//
+// This helper is intentionally read-only. It is used by idle reporting after
+// merge processing, where we need a fresh filesystem view of ready-for-review/
+// without the side effects of quarantining malformed files or failing exhausted
+// tasks.
+func hasReviewCandidates(tasksDir string) bool {
+	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	names, err := queue.ListTaskFiles(reviewDir)
+	if err != nil {
+		return false
+	}
+
+	for _, name := range names {
+		path := filepath.Join(reviewDir, name)
+		meta, _, err := frontmatter.ParseTaskFile(path)
+		if err != nil {
+			continue
+		}
+		failures, failErr := queue.CountReviewFailureLines(path)
+		if failErr != nil {
+			continue
+		}
+		if failures >= meta.MaxRetries {
+			continue
+		}
+		return true
+	}
+
+	return false
 }
 
 // selectTaskForReview scans ready-for-review/ and returns the highest-priority

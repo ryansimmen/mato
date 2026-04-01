@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"mato/internal/lockfile"
 	"mato/internal/process"
 )
 
@@ -214,5 +215,137 @@ func TestIsAgentActive_EPERMTreatedAsAlive(t *testing.T) {
 
 	if !IsAgentActive(tasksDir, "other-user") {
 		t.Fatal("PID 1 should be considered active (EPERM means process exists)")
+	}
+}
+
+// --- CheckAgentActive tests ---
+
+func TestCheckAgentActive_LiveProcess(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locksDir, "liveagent.pid"), []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	active, err := CheckAgentActive(tasksDir, "liveagent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !active {
+		t.Fatal("expected true for live process lock file")
+	}
+}
+
+func TestCheckAgentActive_DeadProcess(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locksDir, "deadagent.pid"), []byte(fmt.Sprintf("%d:99999", 2147483647)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	active, err := CheckAgentActive(tasksDir, "deadagent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if active {
+		t.Fatal("expected false for dead process lock file")
+	}
+}
+
+func TestCheckAgentActive_MissingLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	active, err := CheckAgentActive(tasksDir, "missing")
+	if err != nil {
+		t.Fatalf("unexpected error for missing lock: %v", err)
+	}
+	if active {
+		t.Fatal("expected false for missing lock file")
+	}
+}
+
+func TestCheckAgentActive_UnreadableLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(locksDir, "unreadable.pid")
+	if err := os.WriteFile(lockPath, []byte("12345:99999"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+
+	active, err := CheckAgentActive(tasksDir, "unreadable")
+	if err == nil {
+		t.Fatal("expected error for unreadable lock file")
+	}
+	if active {
+		t.Fatal("expected false for unreadable lock file")
+	}
+}
+
+func TestDescribeAgentActivity_UnreadableLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(locksDir, "unreadable.pid")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+
+	status, err := DescribeAgentActivity(tasksDir, "unreadable")
+	if err == nil {
+		t.Fatal("expected error for unreadable lock")
+	}
+	if status != AgentUnknown {
+		t.Fatalf("status = %v, want AgentUnknown", status)
+	}
+}
+
+func TestCheckAgentActive_EmptyAgentID(t *testing.T) {
+	active, err := CheckAgentActive(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if active {
+		t.Fatal("expected false for empty agent ID")
+	}
+}
+
+func TestCheckAgentActive_PathSeparator(t *testing.T) {
+	active, err := CheckAgentActive(t.TempDir(), "nested/agent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if active {
+		t.Fatal("expected false for agent ID with path separator")
 	}
 }

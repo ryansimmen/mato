@@ -72,11 +72,12 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	}
 
 	// Active agents.
-	agents, err := activeAgents(tasksDir)
+	agents, lockWarnings, err := activeAgents(tasksDir)
 	if err != nil {
 		return data, err
 	}
 	data.agents = agents
+	data.warnings = append(data.warnings, lockWarnings...)
 
 	// Presence info.
 	presenceMap, presenceErr := messaging.ReadAllPresence(tasksDir)
@@ -148,10 +149,11 @@ func gatherStatus(tasksDir string) (statusData, error) {
 
 	// Messages — read only the most recent entries to avoid scanning
 	// thousands of old files in long-running repos.
-	messages, err := messaging.ReadRecentMessages(tasksDir, statusMessageLimit)
+	messages, msgWarnings, err := messaging.ReadRecentMessages(tasksDir, statusMessageLimit)
 	if err != nil {
-		return data, err
+		data.warnings = append(data.warnings, fmt.Sprintf("could not read recent messages: %v", err))
 	}
+	data.warnings = append(data.warnings, msgWarnings...)
 
 	// Recent messages (last 5).
 	data.recentMessages = messages
@@ -175,7 +177,7 @@ func gatherStatus(tasksDir string) (statusData, error) {
 		}
 	}
 	if len(missingIDs) > 0 {
-		olderProgress, olderErr := messaging.ReadLatestProgressForAgents(tasksDir, missingIDs, statusMessageLimit)
+		olderProgress, olderWarnings, olderErr := messaging.ReadLatestProgressForAgents(tasksDir, missingIDs, statusMessageLimit)
 		if olderErr != nil {
 			data.warnings = append(data.warnings, fmt.Sprintf("could not read older progress messages: %v", olderErr))
 		} else {
@@ -183,6 +185,7 @@ func gatherStatus(tasksDir string) (statusData, error) {
 				progressByAgent[id] = msg
 			}
 		}
+		data.warnings = append(data.warnings, olderWarnings...)
 	}
 
 	activeIDs := make([]string, 0)

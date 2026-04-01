@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/process"
@@ -150,7 +151,7 @@ func TestActiveAgentsPIDColonStarttime(t *testing.T) {
 	}
 	defer cleanup()
 
-	agents, agentsErr := activeAgents(tasksDir)
+	agents, _, agentsErr := activeAgents(tasksDir)
 	if agentsErr != nil {
 		t.Fatalf("activeAgents: %v", agentsErr)
 	}
@@ -179,7 +180,7 @@ func TestActiveAgentsLegacyPIDOnly(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -817,6 +818,92 @@ func TestShowToBuffer(t *testing.T) {
 	}
 	if !contains(output, "Recent Messages") {
 		t.Errorf("ShowTo output should contain 'Recent Messages', got:\n%s", output)
+	}
+}
+
+func TestShowTo_UnreadableLockFileWarning(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Register an agent so it appears active.
+	cleanup, err := queue.RegisterAgent(tasksDir, "warn0001")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	// Inject a hook that fails to read the lock file (simulating TOCTOU race).
+	origFn := readLockFileFn
+	readLockFileFn = func(name string) ([]byte, error) {
+		if filepath.Base(name) == "warn0001.pid" {
+			return nil, errors.New("permission denied")
+		}
+		return origFn(name)
+	}
+	defer func() { readLockFileFn = origFn }()
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot); err != nil {
+		t.Fatalf("ShowTo should not error on unreadable lock file: %v", err)
+	}
+
+	output := buf.String()
+	if !contains(output, "skipped unreadable lock file") {
+		t.Errorf("ShowTo output should contain lock file warning, got:\n%s", output)
+	}
+}
+
+func TestActiveAgents_GenuinelyUnreadableLockFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Write a lock file then make it unreadable via permissions.
+	// Before the fix, identity.IsAgentActive would silently return false
+	// (lockfile.IsHeld returns false on read error), causing activeAgents
+	// to skip the agent without generating a warning.
+	lockPath := filepath.Join(locksDir, "unread01.pid")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	origRead := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, errors.New("permission denied")
+		}
+		return origRead(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(origRead) })
+
+	agents, warnings, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents, got %d", len(agents))
+	}
+	if len(warnings) == 0 {
+		t.Fatal("expected at least one warning for unreadable lock file")
+	}
+	found := false
+	for _, w := range warnings {
+		if contains(w, "unread01.pid") && contains(w, "unreadable lock file") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about unread01.pid, got: %v", warnings)
 	}
 }
 

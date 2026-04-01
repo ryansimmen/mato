@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"testing"
 
+	"mato/internal/lockfile"
 	"mato/internal/process"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
@@ -572,6 +573,48 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 	}
 }
 
+func TestRecoverOrphanedTasks_SkipsUnreadableAgentLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirBacklog, DirInProgress, ".locks"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	lockPath := filepath.Join(tasksDir, ".locks", "agent-1.pid")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("WriteFile lock: %v", err)
+	}
+	orphan := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
+	content := strings.Join([]string{
+		"<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->",
+		"# Fix bug",
+	}, "\n")
+	if err := os.WriteFile(orphan, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile orphan: %v", err)
+	}
+
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "could not verify agent agent-1") {
+		t.Fatalf("expected unreadable lock warning, got %q", stderr)
+	}
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatalf("orphan should remain in in-progress when agent lock is unreadable: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "fix-bug.md")); !os.IsNotExist(err) {
+		t.Fatalf("task should not be recovered to backlog when lock unreadable, stat err = %v", err)
+	}
+}
+
 func TestRecoverOrphanedTasks_IgnoresNonMd(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{DirBacklog, DirInProgress} {
@@ -789,20 +832,50 @@ func TestNormalizeOrphanContent(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "removes runtime metadata and trims",
+			name: "removes leading runtime metadata and trims",
 			data: "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/fix-bug -->\n# Fix bug\n\nDo it.\n",
 			want: "# Fix bug\n\nDo it.",
 		},
 		{
 			name: "normalizes windows newlines",
 			data: "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n\r\nBody\r\n",
-			want: "# Fix bug\n\nBody",
+			want: "<!-- branch: task/fix-bug -->\n# Fix bug\n\nBody",
+		},
+		{
+			name: "preserves markers inside fenced code block",
+			data: "# Example task\n\n```markdown\n<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/example -->\n```\n\nEnd.\n",
+			want: "# Example task\n\n```markdown\n<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/example -->\n```\n\nEnd.",
+		},
+		{
+			name: "preserves markers inside tilde fence",
+			data: "# Docs\n\n~~~\n<!-- branch: task/demo -->\n~~~\n",
+			want: "# Docs\n\n~~~\n<!-- branch: task/demo -->\n~~~",
+		},
+		{
+			name: "strips leading markers but preserves fenced ones",
+			data: "<!-- claimed-by: real-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/real -->\n# Task\n\n```\n<!-- branch: task/fenced-example -->\n```\n",
+			want: "<!-- branch: task/real -->\n# Task\n\n```\n<!-- branch: task/fenced-example -->\n```",
+		},
+		{
+			name: "preserves marker-like prose outside fences",
+			data: "# How markers work\n\nThe scheduler prepends:\n<!-- branch: task/example -->\nand\n<!-- claimed-by: agent1  claimed-at: 2026-01-01T00:00:00Z -->\nto each task file.\n",
+			want: "# How markers work\n\nThe scheduler prepends:\n<!-- branch: task/example -->\nand\n<!-- claimed-by: agent1  claimed-at: 2026-01-01T00:00:00Z -->\nto each task file.",
+		},
+		{
+			name: "preserves leading marker-like example lines",
+			data: "<!-- branch: task/example -->\n<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Documented Example\n",
+			want: "<!-- branch: task/example -->\n<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Documented Example",
+		},
+		{
+			name: "skips leading blank lines between markers",
+			data: "<!-- claimed-by: a  claimed-at: 2026-01-01T00:00:00Z -->\n\n<!-- branch: task/b -->\n# Title\n",
+			want: "<!-- branch: task/b -->\n# Title",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := string(normalizeOrphanContent([]byte(tt.data)))
+			got := string(normalizeOrphanContent(filepath.Join(t.TempDir(), "fix-bug.md"), []byte(tt.data)))
 			if got != tt.want {
 				t.Fatalf("normalizeOrphanContent() = %q, want %q", got, tt.want)
 			}
@@ -826,7 +899,7 @@ func TestEquivalentOrphanContent(t *testing.T) {
 		{
 			name: "same task with windows newlines",
 			a:    "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n",
-			b:    "# Fix bug\n",
+			b:    "<!-- branch: task/fix-bug -->\n# Fix bug\n",
 			want: true,
 		},
 		{
@@ -835,15 +908,83 @@ func TestEquivalentOrphanContent(t *testing.T) {
 			b:    "# Different task\n",
 			want: false,
 		},
+		{
+			name: "fenced marker-like text makes bodies different",
+			a:    "# Task A\n\n```\n<!-- branch: task/example -->\n```\n",
+			b:    "# Task A\n",
+			want: false,
+		},
+		{
+			name: "same fenced markers are equivalent",
+			a:    "<!-- claimed-by: x  claimed-at: 2026-01-01T00:00:00Z -->\n# Task\n\n```\n<!-- branch: task/demo -->\n```\n",
+			b:    "# Task\n\n```\n<!-- branch: task/demo -->\n```\n",
+			want: true,
+		},
+		{
+			name: "prose marker-like text outside fence makes bodies different",
+			a:    "# Task\n\nExample:\n<!-- branch: task/demo -->\n",
+			b:    "# Task\n",
+			want: false,
+		},
+		{
+			name: "explicit custom branch markers remain equivalent",
+			a:    "<!-- claimed-by: runtime-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: custom/release-hotfix -->\n# Fix bug\n",
+			b:    "<!-- branch: custom/release-hotfix -->\n# Fix bug\n",
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := equivalentOrphanContent([]byte(tt.a), []byte(tt.b))
+			got := equivalentOrphanContent(filepath.Join(t.TempDir(), "fix-bug.md"), []byte(tt.a), filepath.Join(t.TempDir(), "fix-bug.md"), []byte(tt.b))
 			if got != tt.want {
 				t.Fatalf("equivalentOrphanContent() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveOrphanCollision_PreservesLeadingClaimMarkerLikeBodyLines(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirBacklog, DirInProgress} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	src := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
+	dst := filepath.Join(tasksDir, DirBacklog, "fix-bug.md")
+	srcContent := strings.Join([]string{
+		"<!-- claimed-by: runtime-agent  claimed-at: 2026-01-01T00:00:00Z -->",
+		"<!-- branch: task/fix-bug -->",
+		"<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->",
+		"# Fix bug",
+		"",
+	}, "\n")
+	dstContent := strings.Join([]string{
+		"<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->",
+		"# Fix bug",
+		"",
+	}, "\n")
+	if err := os.WriteFile(src, []byte(srcContent), 0o644); err != nil {
+		t.Fatalf("WriteFile src: %v", err)
+	}
+	if err := os.WriteFile(dst, []byte(dstContent), 0o644); err != nil {
+		t.Fatalf("WriteFile dst: %v", err)
+	}
+
+	recovered, err := resolveOrphanCollision(src, dst)
+	if err != nil {
+		t.Fatalf("resolveOrphanCollision: %v", err)
+	}
+	if recovered == "" {
+		t.Fatal("expected orphan with leading marker-like body lines to be preserved as a renamed recovery")
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("source orphan should be moved away, stat err = %v", err)
+	}
+	if _, err := os.Stat(recovered); err != nil {
+		t.Fatalf("recovered orphan missing: %v", err)
 	}
 }
 

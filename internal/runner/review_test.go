@@ -695,6 +695,120 @@ func TestReviewCandidates_FilesystemFallback_MalformedQuarantined(t *testing.T) 
 	}
 }
 
+// ---------------------------------------------------------------------------
+// hasReviewCandidates tests (read-only idle probe helper)
+// ---------------------------------------------------------------------------
+
+func TestHasReviewCandidates_EmptyDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+
+	if hasReviewCandidates(tasksDir) {
+		t.Fatal("expected false for empty review dir")
+	}
+}
+
+func TestHasReviewCandidates_NonexistentDir(t *testing.T) {
+	if hasReviewCandidates(filepath.Join(t.TempDir(), "nonexistent")) {
+		t.Fatal("expected false for nonexistent tasks dir")
+	}
+}
+
+func TestHasReviewCandidates_ValidTask(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+
+	content := "---\npriority: 10\nmax_retries: 3\n---\n# Valid Task\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "valid.md"), []byte(content), 0o644)
+
+	if !hasReviewCandidates(tasksDir) {
+		t.Fatal("expected true for valid review task")
+	}
+}
+
+func TestHasReviewCandidates_MalformedTask_NoQuarantine(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirFailed), 0o755)
+
+	malformedPath := filepath.Join(tasksDir, queue.DirReadyReview, "malformed.md")
+	os.WriteFile(malformedPath, []byte("---\npriority: [\n# Broken\n"), 0o644)
+
+	if hasReviewCandidates(tasksDir) {
+		t.Fatal("expected false when only malformed tasks exist")
+	}
+
+	// The malformed task must remain in ready-for-review/ (not quarantined).
+	if _, err := os.Stat(malformedPath); err != nil {
+		t.Fatalf("malformed task should remain in ready-for-review/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "malformed.md")); !os.IsNotExist(err) {
+		t.Fatal("malformed task must not be moved to failed/ by read-only probe")
+	}
+}
+
+func TestHasReviewCandidates_ExhaustedBudget_NoMove(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirFailed), 0o755)
+
+	content := "---\npriority: 10\nmax_retries: 3\n---\n# Exhausted Task\n" +
+		"<!-- review-failure: a1 at 2026-01-01T00:00:00Z — fail 1 -->\n" +
+		"<!-- review-failure: a2 at 2026-01-02T00:00:00Z — fail 2 -->\n" +
+		"<!-- review-failure: a3 at 2026-01-03T00:00:00Z — fail 3 -->\n"
+	exhaustedPath := filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md")
+	os.WriteFile(exhaustedPath, []byte(content), 0o644)
+
+	if hasReviewCandidates(tasksDir) {
+		t.Fatal("expected false when only exhausted-budget tasks exist")
+	}
+
+	// The exhausted task must remain in ready-for-review/ (not moved).
+	if _, err := os.Stat(exhaustedPath); err != nil {
+		t.Fatalf("exhausted task should remain in ready-for-review/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); !os.IsNotExist(err) {
+		t.Fatal("exhausted task must not be moved to failed/ by read-only probe")
+	}
+}
+
+func TestHasReviewCandidates_MixedTasks_ReturnsTrueForValid(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirFailed), 0o755)
+
+	// Malformed task.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "bad.md"),
+		[]byte("---\npriority: [\n# Broken\n"), 0o644)
+
+	// Exhausted-budget task.
+	exhaustedContent := "---\npriority: 10\nmax_retries: 2\n---\n# Exhausted\n" +
+		"<!-- review-failure: a1 at 2026-01-01T00:00:00Z — f1 -->\n" +
+		"<!-- review-failure: a2 at 2026-01-02T00:00:00Z — f2 -->\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"),
+		[]byte(exhaustedContent), 0o644)
+
+	// Valid task with remaining budget.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "good.md"),
+		[]byte("---\npriority: 5\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
+
+	if !hasReviewCandidates(tasksDir) {
+		t.Fatal("expected true when at least one valid task exists among malformed/exhausted")
+	}
+
+	// Neither the malformed nor the exhausted task should be moved.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, "bad.md")); err != nil {
+		t.Fatal("malformed task should remain in ready-for-review/")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md")); err != nil {
+		t.Fatal("exhausted task should remain in ready-for-review/")
+	}
+	failedEntries, _ := os.ReadDir(filepath.Join(tasksDir, queue.DirFailed))
+	if len(failedEntries) != 0 {
+		t.Fatalf("nothing should be moved to failed/, found %d entries", len(failedEntries))
+	}
+}
+
 func TestReviewCandidates_Indexed_PrioritySort(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range queue.AllDirs {
@@ -1395,5 +1509,98 @@ func TestLoadTaskStateForReview_CorruptFallsBackToNil(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "could not load taskstate") {
 		t.Fatalf("expected corrupt taskstate warning, got:\n%s", stderr)
+	}
+}
+
+func TestReviewCandidates_FilesystemFallback_DedupsSynthesizedBranches(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirFailed} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Two filenames that sanitize to the same branch name: "add_feature" and "add-feature".
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Underscore\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Dash\n"), 0o644)
+
+	candidates := reviewCandidates(tasksDir, nil)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	// Both should have the same sanitized base ("add-feature") but the
+	// second one in filename order must be disambiguated.
+	if candidates[0].Branch == candidates[1].Branch {
+		t.Fatalf("two candidates share the same synthesized branch %q; batch dedup should have prevented this", candidates[0].Branch)
+	}
+
+	// Verify both start with the expected prefix.
+	for i, c := range candidates {
+		if !strings.HasPrefix(c.Branch, "task/add-feature") {
+			t.Fatalf("candidate[%d] branch %q does not start with expected prefix", i, c.Branch)
+		}
+	}
+}
+
+func TestReviewCandidates_Indexed_DedupsSynthesizedBranches(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Two filenames that sanitize to the same branch name.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Underscore\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Dash\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	if candidates[0].Branch == candidates[1].Branch {
+		t.Fatalf("two candidates share the same synthesized branch %q; batch dedup should have prevented this", candidates[0].Branch)
+	}
+
+	for i, c := range candidates {
+		if !strings.HasPrefix(c.Branch, "task/add-feature") {
+			t.Fatalf("candidate[%d] branch %q does not start with expected prefix", i, c.Branch)
+		}
+	}
+}
+
+func TestReviewCandidates_ExplicitBranchUnchanged(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// One task with an explicit branch, one without (same sanitized base).
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
+		[]byte("<!-- branch: task/add-feature -->\n---\npriority: 10\nmax_retries: 3\n---\n# Explicit\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Synthesized\n"), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	candidates := reviewCandidates(tasksDir, idx)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	// The explicit branch must remain exactly as written.
+	var explicit *queue.ClaimedTask
+	for _, c := range candidates {
+		if c.Filename == "add-feature.md" {
+			explicit = c
+		}
+	}
+	if explicit == nil {
+		t.Fatal("could not find add-feature.md candidate")
+	}
+	if explicit.Branch != "task/add-feature" {
+		t.Fatalf("explicit branch changed to %q, want %q", explicit.Branch, "task/add-feature")
 	}
 }
