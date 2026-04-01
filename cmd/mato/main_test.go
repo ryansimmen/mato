@@ -1052,6 +1052,32 @@ func TestDoctorCmd_EnvImageWithMultiDocConfigFails(t *testing.T) {
 	}
 }
 
+func TestDoctorCmd_WhitespaceOnlyEnvImageFallsBackToConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: from-config:1.0\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "   ")
+
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedOpts.DockerImage != "from-config:1.0" {
+		t.Errorf("DockerImage = %q, want %q (whitespace-only env should fall back to config)", capturedOpts.DockerImage, "from-config:1.0")
+	}
+}
+
 func TestDoctorNeedsDockerConfig(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2209,6 +2235,28 @@ func TestResolveRunOptions(t *testing.T) {
 		}
 	})
 
+	t.Run("whitespace-only docker image env falls back to config", func(t *testing.T) {
+		t.Setenv("MATO_DOCKER_IMAGE", "  \t ")
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("from-config:1.0"), nil, nil, nil, nil, nil, nil, nil))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.DockerImage != "from-config:1.0" {
+			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-config:1.0")
+		}
+	})
+
+	t.Run("real docker image env still overrides config", func(t *testing.T) {
+		t.Setenv("MATO_DOCKER_IMAGE", "from-env:2.0")
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("from-config:1.0"), nil, nil, nil, nil, nil, nil, nil))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.DockerImage != "from-env:2.0" {
+			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-env:2.0")
+		}
+	})
+
 	t.Run("env overrides invalid config", func(t *testing.T) {
 		t.Setenv("MATO_AGENT_TIMEOUT", "1h")
 		t.Setenv("MATO_RETRY_COOLDOWN", "90s")
@@ -2540,6 +2588,29 @@ func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
 	runFn = func(_ string, _ string, opts runner.RunOptions) error {
 		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || !opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "high" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestRunCmd_WhitespaceOnlyDockerImageEnvFallsBackToConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: from-config:1.0\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "   ")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
+		if opts.DockerImage != "from-config:1.0" {
+			t.Fatalf("DockerImage = %q, want %q (whitespace-only env should fall back to config)", opts.DockerImage, "from-config:1.0")
 		}
 		return nil
 	}
