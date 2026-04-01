@@ -102,7 +102,7 @@ func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
 
 	resolvedRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 	repoRoot = strings.TrimSpace(resolvedRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
@@ -113,7 +113,7 @@ func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
 
 	result, err := inspectTask(tasksDir, taskRef)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect task: %w", err)
 	}
 
 	if format == "json" {

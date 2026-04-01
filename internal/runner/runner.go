@@ -254,12 +254,12 @@ func formatDurationShort(d time.Duration) string {
 func DryRun(repoRoot, branch string, opts RunOptions) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
 	opts, err = normalizeAndValidateRunOptions(opts)
 	if err != nil {
-		return err
+		return fmt.Errorf("validate run options: %w", err)
 	}
 
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
@@ -524,17 +524,17 @@ func resolveDepState(depID string, idx *queue.PollIndex) string {
 func Run(repoRoot, branch string, opts RunOptions) error {
 	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 	repoRoot = strings.TrimSpace(repoRoot)
 	opts, err = normalizeAndValidateRunOptions(opts)
 	if err != nil {
-		return err
+		return fmt.Errorf("validate run options: %w", err)
 	}
 
 	branchResult, err := git.EnsureBranch(repoRoot, branch)
 	if err != nil {
-		return err
+		return fmt.Errorf("ensure branch: %w", err)
 	}
 	reportBranchResolution(branchResult)
 
@@ -568,17 +568,17 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 
 	changed, err := git.EnsureGitignoreContains(repoRoot, "/"+dirs.Root+"/")
 	if err != nil {
-		return err
+		return fmt.Errorf("update .gitignore: %w", err)
 	}
 	if changed {
 		if err := git.CommitGitignore(repoRoot, "chore: add /"+dirs.Root+"/ to .gitignore"); err != nil {
-			return err
+			return fmt.Errorf("commit .gitignore: %w", err)
 		}
 	}
 
 	tools, err := discoverHostTools()
 	if err != nil {
-		return err
+		return fmt.Errorf("discover host tools: %w", err)
 	}
 
 	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, repoRoot, tasksDir, opts)
