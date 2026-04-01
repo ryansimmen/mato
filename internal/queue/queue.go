@@ -85,7 +85,11 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 	for _, name := range names {
 		src := filepath.Join(inProgress, name)
 
-		if laterDir := laterStateDuplicateDir(tasksDir, name); laterDir != "" {
+		laterDir, warns := LaterStateDuplicateDir(name, laterStateDirs(tasksDir)...)
+		for _, w := range warns {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", w)
+		}
+		if laterDir != "" {
 			if err := os.Remove(src); err != nil {
 				if !os.IsNotExist(err) {
 					fmt.Fprintf(os.Stderr, "warning: could not remove stale in-progress copy %s: %v\n", name, err)
@@ -266,15 +270,33 @@ func isRuntimeBranchForPath(path, branch string) bool {
 	return branch == expected || branch == expected+"-"+frontmatter.BranchDisambiguator(base)
 }
 
-func laterStateDuplicateDir(tasksDir, name string) string {
-	for _, laterDir := range []string{DirReadyReview, DirReadyMerge, DirCompleted, DirFailed} {
-		if _, err := os.Stat(filepath.Join(tasksDir, laterDir, name)); err == nil {
-			return laterDir
-		} else if !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: could not check %s for duplicate %s: %v\n", laterDir, name, err)
+// LaterStateDuplicateDir checks whether filename exists in any of the given
+// dirs. It returns filepath.Base of the first directory that contains the
+// file, or "" if none do. Non-ENOENT stat errors are collected in the
+// second return value so the caller can decide how to report them.
+func LaterStateDuplicateDir(filename string, dirs ...string) (string, []error) {
+	var warnings []error
+	for _, dir := range dirs {
+		_, err := os.Stat(filepath.Join(dir, filename))
+		if err == nil {
+			return filepath.Base(dir), warnings
+		}
+		if !os.IsNotExist(err) {
+			warnings = append(warnings, fmt.Errorf("could not check %s for duplicate %s: %w", filepath.Base(dir), filename, err))
 		}
 	}
-	return ""
+	return "", warnings
+}
+
+// laterStateDirs returns the default later-state directory paths rooted at
+// tasksDir. Used by callers that need the standard set of directories.
+func laterStateDirs(tasksDir string) []string {
+	return []string{
+		filepath.Join(tasksDir, DirReadyReview),
+		filepath.Join(tasksDir, DirReadyMerge),
+		filepath.Join(tasksDir, DirCompleted),
+		filepath.Join(tasksDir, DirFailed),
+	}
 }
 
 // ErrDestinationExists is returned by AtomicMove when the destination path
