@@ -569,6 +569,19 @@ func TestStatusCmd_FormatJSONWithWatchRejected(t *testing.T) {
 	}
 }
 
+func TestStatusCmd_FormatJSONWithVerboseRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "--format=json", "--verbose"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format json with --verbose, got nil")
+	}
+	want := "--verbose can only be used with text output"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestStatusCmd_InvalidFormatRejected(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"status", "--format=yaml"})
@@ -627,6 +640,7 @@ func TestStatusCmd_FlagParsing(t *testing.T) {
 		{"status help", []string{"status", "--help"}},
 		{"status with repo", []string{"status", "--repo=/tmp/repo"}},
 		{"status with text format", []string{"status", "--format=text"}},
+		{"status with verbose", []string{"status", "--verbose"}},
 	}
 
 	for _, tt := range tests {

@@ -129,16 +129,18 @@ Start multiple `mato` processes in separate terminals to process tasks in parall
 
 `mato status` prints a terminal-friendly snapshot of the queue:
 
-- counts for `backlog/`, dependency-blocked work, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, `completed/`, and `failed/`
-- runnable backlog in execution order (priority-sorted, dependency-blocked and conflict-deferred tasks excluded)
-- active agents from `.locks/`
-- waiting tasks with dependency progress
-- conflict-deferred tasks with blocking details
-- the last 5 coordination messages from `.mato/messages/events/`
+- compact queue headline counts and pause / merge-queue state
+- active agents with current task and latest progress when available
+- an `Attention` section for warnings, failed work, dependency blockers, and conflict-deferred work
+- the next runnable tasks in claim order
 
 The runnable backlog shows what the host will claim next. `.mato/.queue` exports
 that same derived order for inspection and lightweight tooling. Use `--format
 json` to get the same ordered list as `runnable_backlog` in the JSON output.
+
+Use `--verbose` to show the fuller text dashboard with detailed sections such as
+dependency-blocked tasks, conflict-deferred tasks, recent completions, and
+recent messages.
 
 Use `--watch` (`-w`) to continuously refresh the display. The `--interval` flag
 sets the refresh period (default `2s`). The interval must be a positive duration;

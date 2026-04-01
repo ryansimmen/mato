@@ -119,13 +119,10 @@ Long flags support both `--flag value` and `--flag=value` forms.
 ## Subcommands
 ### `mato status`
 `mato status` reads the queue directory and reports:
-- counts for `backlog`, `runnable`, `deferred` (conflict-blocked), `blocked` (dependency-blocked, including misplaced backlog tasks), `in-progress`, `ready-review`, `ready-to-merge`, `completed`, and `failed`
-- runnable backlog in execution order (priority-sorted, dependency-blocked and conflict-deferred tasks excluded), matching the ordering the host uses to claim work
-- active agents discovered from `.mato/.locks/*.pid`
-- pause state from `.mato/.paused`
-- dependency-blocked tasks plus dependency-status summaries
-- conflict-deferred tasks with blocking details
-- the five most recent messages from `.mato/messages`
+- a compact default text dashboard with queue headline counts, active agents,
+  attention summaries, and the next runnable tasks
+- warnings in the compact `Attention` area when queue infrastructure reads fail
+- a fuller diagnostic text view behind `--verbose`
 
 Use `--format json` to get machine-readable output. The `runnable_backlog`
 array in the JSON output lists tasks in the same priority order as the text
@@ -135,7 +132,12 @@ misplaced backlog tasks); the text output only shows `blocked`. The `waiting`
 array in JSON lists dependency-blocked tasks; each entry's `dependencies` field
 is an array of `{id, status}` objects (empty when there are no dependencies).
 
-Supported flags: `--repo`, `--watch`, `--interval`, `--format`, and `--help`/`-h`.
+Use `--verbose` to show the expanded text dashboard, including detailed queue
+sections such as dependency-blocked tasks, conflict-deferred tasks, recent
+messages, and recent completions.
+
+Supported flags: `--repo`, `--watch`, `--interval`, `--format`, `--verbose`,
+and `--help`/`-h`.
 
 ### `mato init`
 `mato init` bootstraps a repository for mato use in one explicit step. It is intended for first-time setup, CI preparation, or dry-run validation flows where users want `.mato/` and the target branch created without running the full orchestrator.

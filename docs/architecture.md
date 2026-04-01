@@ -427,9 +427,12 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `WriteCompletionDetail(...)` and `ReadCompletionDetail(...)` for storing and retrieving per-task merge results used by the dependency context flow.
 
 ### `internal/status/`
-- `mato status` dashboard — `Show`, `ShowTo`, `Watch` (`status.go`).
+- `mato status` dashboard — compact default text view plus expanded
+  `--verbose` text view, via `Show`, `ShowTo`, `ShowVerbose`, `ShowVerboseTo`,
+  `Watch`, and `WatchVerbose` (`status.go`).
 - Data gathering layer — `gatherStatus` collects queue counts, active agents, presence, task lists, completions, messages, merge-lock state (`status_gather.go`).
-- Rendering layer — individual `render*` functions for each dashboard section, terminal colors (`status_render.go`).
+- Rendering layer — compact and verbose text renderers plus shared section
+  helpers and terminal colors (`status_render.go`).
 
 ### `internal/history/`
 - `mato log` durable outcome timeline — `Show`, `ShowTo` (`history.go`).
