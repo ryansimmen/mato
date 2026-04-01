@@ -18,7 +18,8 @@ the host and bind-mounts those executables into agent containers.
 mato [--version] [--repo <path>]
 mato run [--repo <path>] [--branch <name>] [--dry-run | --once | --until-idle] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
 mato init [--repo <path>] [--branch <name>]
-mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json]
+mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json] [--verbose]
+mato log [--repo <path>] [--limit <n>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato inspect [--repo <path>] [--format text|json] <task-ref>
@@ -37,9 +38,9 @@ yet, `mato` creates it.
 Dry-run mode (`--dry-run`) validates the task queue setup without launching Docker
 containers. It parses all task files, reports ready dependencies that would be promoted
 from `waiting/` to `backlog/`, diagnoses misplaced dependency-blocked backlog tasks,
-detects `affects` conflicts, computes the effective `.queue` manifest, and prints a
-summary of the queue state. Useful for verifying setup in CI or before a real run. No
-files are modified.
+detects `affects` conflicts, and prints a summary of the effective runnable backlog and
+queue state. Useful for verifying setup in CI or before a real run. No files are
+modified.
 Bounded run modes keep the normal startup and cleanup behavior but change the exit
 contract. `--once` runs one full host poll iteration and exits even if more work remains.
 `--until-idle` keeps polling until there is no immediately claimable backlog work, no
@@ -119,7 +120,7 @@ Long flags support both `--flag value` and `--flag=value` forms.
 | --- | --- | --- | --- |
 | `--repo <path>` | root persistent flag and all repo-aware subcommands | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
 | `--branch <name>` | `mato run`, `mato init` | `mato` | Target branch used for merge processing and repository bootstrap. |
-| `--dry-run` | `mato run` | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
+| `--dry-run` | `mato run` | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, and prints a summary of the effective runnable backlog and queue state. Exits after one pass. |
 | `--once` | `mato run` | `false` | Run exactly one host poll iteration, then exit. This can claim a task, process one existing review from the iteration snapshot, and merge ready tasks, but it does not keep polling to drain follow-on review or merge work. |
 | `--until-idle` | `mato run` | `false` | Keep polling until no immediately claimable backlog tasks remain, no review candidates remain, and no tasks remain in `ready-to-merge/`, then exit. A paused but otherwise empty queue is considered idle. |
 | `--task-model <model>` | `mato run` | `claude-opus-4.6` | Copilot model used for task agents. |
@@ -162,6 +163,15 @@ When the target branch does not already exist locally, `mato init` checks the li
 | `--branch <name>` | `mato` | Target branch to create or check out. |
 
 `mato init` always creates the queue at `<repo>/.mato` and ensures `/.mato/` is present in `.gitignore`.
+
+### `mato log`
+`mato log` shows recent durable task outcomes so operators can answer "what happened recently?" without manually checking multiple queue directories. It reads host-written completion details from `.mato/messages/completions/` plus durable task markers for failures and review rejections.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--limit <n>` | `20` | Maximum number of events to show. `0` means unlimited. |
+| `--format` | `text` | Output format: `text` or `json`. |
 
 ### `mato graph`
 `mato graph` visualizes the task dependency topology. It reuses `PollIndex` and
@@ -301,7 +311,7 @@ mato --version
 
 ### `mato completion`
 `mato completion <shell>` prints the shell completion script for one of Cobra's
-supported shells: `bash`, `zsh`, `fish`, or `powershell`.
+supported shells.
 
 Example usage:
 ```bash
@@ -336,7 +346,7 @@ inputs.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `MATO_AGENT_ID` | generated per run | Agent identity injected by `mato` so the running agent can identify itself. |
-| `MATO_MAX_RETRIES` | `3` | Passed to container for reference; the host enforces the retry budget in `queue.SelectAndClaimTask(...)` and `shouldFailTask(...)` (in `taskops.go`). Per-task overrides via `max_retries` frontmatter take precedence. |
+| `MATO_MAX_RETRIES` | `3` | Passed to container for reference; the host enforces the retry budget in `queue.SelectAndClaimTask(...)` and `shouldFailTaskAfterNextFailure(...)` (in `internal/merge/taskops.go`). Per-task overrides via `max_retries` frontmatter take precedence. |
 | `MATO_MESSAGING_ENABLED` | `1` | Injected by `mato` for agent-side tooling. The embedded prompt already uses hardcoded `.mato` paths, so this is mainly useful to custom scripts or wrappers. |
 | `MATO_MESSAGES_DIR` | `/workspace/.mato/messages` | Injected path to the shared messages directory for custom tooling. The embedded prompt separately hardcodes the same `/workspace/.mato/messages` path. |
 | `MATO_TASK_FILE` | none | Claimed task filename (e.g. `my-task.md`). Set per-run by the host after claiming a task. |
