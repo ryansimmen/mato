@@ -177,7 +177,7 @@ func gatherStatus(tasksDir string) (statusData, error) {
 		}
 	}
 	if len(missingIDs) > 0 {
-		olderProgress, olderErr := messaging.ReadLatestProgressForAgents(tasksDir, missingIDs, statusMessageLimit)
+		olderProgress, olderWarnings, olderErr := messaging.ReadLatestProgressForAgents(tasksDir, missingIDs, statusMessageLimit)
 		if olderErr != nil {
 			data.warnings = append(data.warnings, fmt.Sprintf("could not read older progress messages: %v", olderErr))
 		} else {
@@ -185,6 +185,7 @@ func gatherStatus(tasksDir string) (statusData, error) {
 				progressByAgent[id] = msg
 			}
 		}
+		data.warnings = append(data.warnings, olderWarnings...)
 	}
 
 	activeIDs := make([]string, 0)
