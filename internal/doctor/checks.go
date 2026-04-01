@@ -409,7 +409,8 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 
 	for _, dir := range expectedDirs {
 		dirPath := filepath.Join(cc.tasksDir, dir)
-		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+		info, err := os.Stat(dirPath)
+		if os.IsNotExist(err) {
 			f := Finding{
 				Code:     "queue.missing_dir",
 				Severity: SeverityError,
@@ -429,6 +430,13 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 			}
 
 			cr.Findings = append(cr.Findings, f)
+		} else if err == nil && !info.IsDir() {
+			cr.Findings = append(cr.Findings, Finding{
+				Code:     "queue.not_a_directory",
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("expected directory but found a file: %s", dir),
+				Path:     dirPath,
+			})
 		}
 	}
 
