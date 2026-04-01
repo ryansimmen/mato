@@ -18,12 +18,22 @@ var (
 	osRemove   = os.Remove
 )
 
+// TestHookReadFile exposes the current read hook for tests.
+func TestHookReadFile() func(string) ([]byte, error) {
+	return osReadFile
+}
+
+// SetTestHookReadFile replaces the read hook for tests.
+func SetTestHookReadFile(fn func(string) ([]byte, error)) {
+	osReadFile = fn
+}
+
 // CheckHeld checks whether a lock file at the given path exists and is held
 // by a live process. Unlike IsHeld, it returns an error when the file exists
 // but cannot be read, allowing callers to distinguish unreadable files from
 // absent or dead locks.
 func CheckHeld(lockPath string) (bool, error) {
-	data, err := os.ReadFile(lockPath)
+	data, err := osReadFile(lockPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil

@@ -18,6 +18,18 @@ import (
 	"mato/internal/taskfile"
 )
 
+var osReadFile = os.ReadFile
+
+// TestHookReadFile exposes the current read hook for tests.
+func TestHookReadFile() func(string) ([]byte, error) {
+	return osReadFile
+}
+
+// SetTestHookReadFile replaces the read hook for tests.
+func SetTestHookReadFile(fn func(string) ([]byte, error)) {
+	osReadFile = fn
+}
+
 type Message struct {
 	ID     string    `json:"id"`
 	From   string    `json:"from"`
@@ -127,7 +139,7 @@ func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(eventsDir, entry.Name()))
+		data, err := osReadFile(filepath.Join(eventsDir, entry.Name()))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -319,7 +331,7 @@ func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(eventsDir, name))
+		data, err := osReadFile(filepath.Join(eventsDir, name))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -444,7 +456,12 @@ func CleanStalePresence(tasksDir string) {
 			agentID = info.AgentID
 		}
 
-		if !identity.IsAgentActive(tasksDir, agentID) {
+		status, err := identity.DescribeAgentActivity(tasksDir, agentID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not verify agent lock for presence file %s: %v\n", entry.Name(), err)
+			continue
+		}
+		if status == identity.AgentInactive {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				fmt.Fprintf(os.Stderr, "warning: could not remove stale presence file %s: %v\n", entry.Name(), err)
 			}

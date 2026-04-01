@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/lockfile"
 	"mato/internal/queue"
 )
 
@@ -658,6 +660,54 @@ func TestCleanStalePresence_NoLockFile(t *testing.T) {
 	presenceFile := filepath.Join(tasksDir, "messages", "presence", "ghost.json")
 	if _, err := os.Stat(presenceFile); !os.IsNotExist(err) {
 		t.Fatal("presence for agent with no lock file should be removed")
+	}
+}
+
+func TestCleanStalePresence_UnreadableAgentLockPreserved(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	lockPath := filepath.Join(tasksDir, ".locks", "live.pid")
+	if err := os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("WriteFile live lock: %v", err)
+	}
+	if err := WritePresence(tasksDir, "live", "live-task.md", "live-branch"); err != nil {
+		t.Fatalf("WritePresence live: %v", err)
+	}
+
+	origRead := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return origRead(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(origRead) })
+
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe: %v", err)
+	}
+	os.Stderr = w
+	CleanStalePresence(tasksDir)
+	w.Close()
+	os.Stderr = oldStderr
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	stderr := string(data)
+	if !strings.Contains(stderr, "could not verify agent lock") {
+		t.Fatalf("expected unreadable lock warning, got %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, "messages", "presence", "live.json")); err != nil {
+		t.Fatalf("presence should remain when agent lock is unreadable: %v", err)
 	}
 }
 
@@ -3029,22 +3079,27 @@ func TestReadLatestProgressForAgents_UnreadableFileWarning(t *testing.T) {
 		t.Fatalf("WriteMessage(bad): %v", err)
 	}
 
-	// Make agent-bad's progress file unreadable.
+	// Make agent-bad's progress file unreadable via the messaging read hook.
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, err := os.ReadDir(eventsDir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
+	var unreadablePath string
 	for _, e := range entries {
 		if strings.Contains(e.Name(), "-progress-") && strings.Contains(e.Name(), "bad-prog") {
-			path := filepath.Join(eventsDir, e.Name())
-			if err := os.Chmod(path, 0o000); err != nil {
-				t.Fatalf("Chmod: %v", err)
-			}
-			t.Cleanup(func() { os.Chmod(path, 0o644) })
+			unreadablePath = filepath.Join(eventsDir, e.Name())
 			break
 		}
 	}
+	origReadFile := osReadFile
+	osReadFile = func(path string) ([]byte, error) {
+		if path == unreadablePath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return origReadFile(path)
+	}
+	t.Cleanup(func() { osReadFile = origReadFile })
 
 	got, warnings, readErr := ReadLatestProgressForAgents(tasksDir, []string{"agent-good", "agent-bad"}, 0)
 	if readErr != nil {

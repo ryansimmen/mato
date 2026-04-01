@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"mato/internal/lockfile"
 	"mato/internal/process"
 )
 
@@ -282,10 +283,14 @@ func TestCheckAgentActive_UnreadableLock(t *testing.T) {
 	if err := os.WriteFile(lockPath, []byte("12345:99999"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(lockPath, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(lockPath, 0o644) })
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
 
 	active, err := CheckAgentActive(tasksDir, "unreadable")
 	if err == nil {
@@ -293,6 +298,35 @@ func TestCheckAgentActive_UnreadableLock(t *testing.T) {
 	}
 	if active {
 		t.Fatal("expected false for unreadable lock file")
+	}
+}
+
+func TestDescribeAgentActivity_UnreadableLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(locksDir, "unreadable.pid")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+
+	status, err := DescribeAgentActivity(tasksDir, "unreadable")
+	if err == nil {
+		t.Fatal("expected error for unreadable lock")
+	}
+	if status != AgentUnknown {
+		t.Fatalf("status = %v, want AgentUnknown", status)
 	}
 }
 

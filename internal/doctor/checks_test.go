@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/lockfile"
 	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
@@ -315,6 +316,46 @@ func TestDoctor_StaleMergeLock_LivePID(t *testing.T) {
 				t.Error("unexpected stale_merge_lock finding for live process")
 			}
 		}
+	}
+}
+
+func TestDoctor_DoesNotTreatUnreadableAgentLockAsStale(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	lockPath := filepath.Join(tasksDir, ".locks", "liveagent.pid")
+	testutil.WriteFile(t, lockPath, process.LockIdentity(os.Getpid()))
+
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.stale_pid" && strings.Contains(f.Path, "liveagent.pid") {
+				t.Fatalf("unreadable live lock must not be reported as stale: %+v", f)
+			}
+		}
+	}
+	foundUnreadable := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.unreadable_pid" && strings.Contains(f.Path, "liveagent.pid") {
+				foundUnreadable = true
+			}
+		}
+	}
+	if !foundUnreadable {
+		t.Fatal("expected locks.unreadable_pid finding for unreadable live lock")
 	}
 }
 

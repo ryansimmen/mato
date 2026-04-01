@@ -95,9 +95,16 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 			continue
 		}
 
-		if agent := ParseClaimedBy(src); agent != "" && identity.IsAgentActive(tasksDir, agent) {
-			fmt.Fprintf(os.Stderr, "Skipping in-progress task %s (agent %s still active)\n", name, agent)
-			continue
+		if agent := ParseClaimedBy(src); agent != "" {
+			status, err := identity.DescribeAgentActivity(tasksDir, agent)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not verify agent %s for in-progress task %s: %v\n", agent, name, err)
+				continue
+			}
+			if status == identity.AgentActive {
+				fmt.Fprintf(os.Stderr, "Skipping in-progress task %s (agent %s still active)\n", name, agent)
+				continue
+			}
 		}
 
 		if recovery, recovered, err := recoverPushedTaskToReadyReview(tasksDir, name, src); recovered {

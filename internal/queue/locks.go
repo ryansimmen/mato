@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"mato/internal/identity"
 	"mato/internal/lockfile"
 
 	"path/filepath"
@@ -18,6 +19,11 @@ func CleanStaleLocks(tasksDir string) {
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pid") {
+			continue
+		}
+		agentID := strings.TrimSuffix(e.Name(), ".pid")
+		status, err := identity.DescribeAgentActivity(tasksDir, agentID)
+		if err != nil || status != identity.AgentInactive {
 			continue
 		}
 		lockPath := filepath.Join(locksDir, e.Name())

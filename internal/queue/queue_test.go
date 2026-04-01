@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"testing"
 
+	"mato/internal/lockfile"
 	"mato/internal/process"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
@@ -569,6 +570,48 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<!-- failure: mato-recovery") {
 		t.Error("recovered task missing failure record")
+	}
+}
+
+func TestRecoverOrphanedTasks_SkipsUnreadableAgentLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirBacklog, DirInProgress, ".locks"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	lockPath := filepath.Join(tasksDir, ".locks", "agent-1.pid")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("WriteFile lock: %v", err)
+	}
+	orphan := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
+	content := strings.Join([]string{
+		"<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->",
+		"# Fix bug",
+	}, "\n")
+	if err := os.WriteFile(orphan, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile orphan: %v", err)
+	}
+
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "could not verify agent agent-1") {
+		t.Fatalf("expected unreadable lock warning, got %q", stderr)
+	}
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatalf("orphan should remain in in-progress when agent lock is unreadable: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "fix-bug.md")); !os.IsNotExist(err) {
+		t.Fatalf("task should not be recovered to backlog when lock unreadable, stat err = %v", err)
 	}
 }
 
