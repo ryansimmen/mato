@@ -71,9 +71,10 @@ type ParseFailure struct {
 // BuildWarning records a non-fatal filesystem warning encountered while
 // scanning a queue directory.
 type BuildWarning struct {
-	State string
-	Path  string
-	Err   error
+	State    string
+	Path     string
+	Err      error
+	DirLevel bool // true when the warning is a directory-level read failure
 }
 
 // PollIndex is an in-memory snapshot of all task files across the queue
@@ -168,7 +169,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 				// Directory may not exist yet (e.g. first run). Skip.
 				continue
 			}
-			idx.buildWarnings = append(idx.buildWarnings, BuildWarning{State: dir, Path: dirPath, Err: err})
+			idx.buildWarnings = append(idx.buildWarnings, BuildWarning{State: dir, Path: dirPath, Err: err, DirLevel: true})
 			continue
 		}
 
