@@ -4,6 +4,7 @@ package identity
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -43,4 +44,29 @@ func CheckAgentActive(tasksDir, agentID string) (bool, error) {
 func IsAgentActive(tasksDir, agentID string) bool {
 	active, _ := CheckAgentActive(tasksDir, agentID)
 	return active
+}
+
+// AgentActivity reports whether an agent lock indicates a live process.
+// Unreadable lock files are reported as unknown so callers can avoid treating
+// them as stale or dead by mistake.
+type AgentActivity int
+
+const (
+	AgentInactive AgentActivity = iota
+	AgentActive
+	AgentUnknown
+)
+
+// DescribeAgentActivity returns the liveness status of an agent lock file.
+// It treats missing or invalid agent IDs as inactive, active locks as active,
+// and unreadable lock files as unknown with context.
+func DescribeAgentActivity(tasksDir, agentID string) (AgentActivity, error) {
+	active, err := CheckAgentActive(tasksDir, agentID)
+	if err != nil {
+		return AgentUnknown, fmt.Errorf("read agent lock %s: %w", agentID, err)
+	}
+	if active {
+		return AgentActive, nil
+	}
+	return AgentInactive, nil
 }

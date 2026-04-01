@@ -577,10 +577,21 @@ func scanStalePIDLocks(locksDir string, fix bool, tasksDir string) []Finding {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pid") {
 			continue
 		}
-		lockPath := filepath.Join(locksDir, e.Name())
-		if lockfile.IsHeld(lockPath) {
+		agentID := strings.TrimSuffix(e.Name(), ".pid")
+		status, err := identity.DescribeAgentActivity(tasksDir, agentID)
+		if err != nil {
+			findings = append(findings, Finding{
+				Code:     "locks.unreadable_pid",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("unreadable agent lock: %s", e.Name()),
+				Path:     filepath.Join(locksDir, e.Name()),
+			})
 			continue
 		}
+		if status == identity.AgentActive {
+			continue
+		}
+		lockPath := filepath.Join(locksDir, e.Name())
 
 		findings = append(findings, Finding{
 			Code:     "locks.stale_pid",
@@ -669,8 +680,20 @@ func scanOrphanedTasks(tasksDir string, fix bool) []Finding {
 
 		// Check claim marker and agent liveness.
 		agent := queue.ParseClaimedBy(src)
-		if agent != "" && identity.IsAgentActive(tasksDir, agent) {
-			continue // agent is alive, skip
+		if agent != "" {
+			status, err := identity.DescribeAgentActivity(tasksDir, agent)
+			if err != nil {
+				findings = append(findings, Finding{
+					Code:     "locks.unreadable_pid",
+					Severity: SeverityWarning,
+					Message:  fmt.Sprintf("could not verify claimed-by lock for %s: %v", name, err),
+					Path:     src,
+				})
+				continue
+			}
+			if status == identity.AgentActive {
+				continue // agent is alive, skip
+			}
 		}
 
 		if agent == "" {

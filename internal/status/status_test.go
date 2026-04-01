@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/process"
@@ -875,10 +876,14 @@ func TestActiveAgents_GenuinelyUnreadableLockFile(t *testing.T) {
 	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := os.Chmod(lockPath, 0o000); err != nil {
-		t.Fatalf("Chmod: %v", err)
-	}
-	t.Cleanup(func() { os.Chmod(lockPath, 0o644) })
+	origRead := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, errors.New("permission denied")
+		}
+		return origRead(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(origRead) })
 
 	agents, warnings, err := activeAgents(tasksDir)
 	if err != nil {

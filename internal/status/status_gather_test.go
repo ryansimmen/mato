@@ -1468,22 +1468,27 @@ func TestGatherStatus_OlderProgressUnreadableWarning(t *testing.T) {
 		t.Fatalf("WriteMessage(bad): %v", err)
 	}
 
-	// Make badagent's progress file unreadable.
+	// Make badagent's progress file unreadable via the messaging read hook.
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, readErr := os.ReadDir(eventsDir)
 	if readErr != nil {
 		t.Fatalf("ReadDir: %v", readErr)
 	}
+	var unreadablePath string
 	for _, e := range entries {
 		if strings.Contains(e.Name(), "-progress-") && strings.Contains(e.Name(), "bad-prog") {
-			path := filepath.Join(eventsDir, e.Name())
-			if err := os.Chmod(path, 0o000); err != nil {
-				t.Fatalf("Chmod: %v", err)
-			}
-			t.Cleanup(func() { os.Chmod(path, 0o644) })
+			unreadablePath = filepath.Join(eventsDir, e.Name())
 			break
 		}
 	}
+	origReadFile := messaging.TestHookReadFile()
+	messaging.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == unreadablePath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return origReadFile(path)
+	})
+	t.Cleanup(func() { messaging.SetTestHookReadFile(origReadFile) })
 
 	// Flood with newer messages to push both agents outside the recent window.
 	for i := 0; i < statusMessageLimit+10; i++ {
