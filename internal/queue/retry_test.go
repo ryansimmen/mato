@@ -431,6 +431,61 @@ Body text.
 	}
 }
 
+func TestRetryTask_CleansRuntimeState(t *testing.T) {
+	tmp := t.TempDir()
+	for _, dir := range []string{DirFailed, DirBacklog} {
+		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	content := "---\nid: cleanup-task\npriority: 10\n---\n# Cleanup task\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "cleanup-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create taskstate and sessionmeta entries to simulate stale runtime state.
+	taskstateDir := filepath.Join(tmp, "runtime", "taskstate")
+	sessionmetaDir := filepath.Join(tmp, "runtime", "sessionmeta")
+	if err := os.MkdirAll(taskstateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sessionmetaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskstateDir, "cleanup-task.md.json"), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionmetaDir, "work-cleanup-task.md.json"), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionmetaDir, "review-cleanup-task.md.json"), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RetryTask(tmp, "cleanup-task"); err != nil {
+		t.Fatalf("RetryTask() error: %v", err)
+	}
+
+	// Verify the task was moved to backlog.
+	if _, err := os.Stat(filepath.Join(tmp, DirBacklog, "cleanup-task.md")); err != nil {
+		t.Fatalf("task not found in backlog: %v", err)
+	}
+
+	// Verify taskstate was cleaned up.
+	if _, err := os.Stat(filepath.Join(taskstateDir, "cleanup-task.md.json")); !os.IsNotExist(err) {
+		t.Errorf("taskstate file should be removed after retry, stat err = %v", err)
+	}
+
+	// Verify sessionmeta (work and review) was cleaned up.
+	if _, err := os.Stat(filepath.Join(sessionmetaDir, "work-cleanup-task.md.json")); !os.IsNotExist(err) {
+		t.Errorf("work sessionmeta file should be removed after retry, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sessionmetaDir, "review-cleanup-task.md.json")); !os.IsNotExist(err) {
+		t.Errorf("review sessionmeta file should be removed after retry, stat err = %v", err)
+	}
+}
+
 func TestRetryTask_NoEmptyPlaceholderDuringWrite(t *testing.T) {
 	tmp := t.TempDir()
 	for _, dir := range []string{DirFailed, DirBacklog} {
