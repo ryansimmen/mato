@@ -149,10 +149,11 @@ func gatherStatus(tasksDir string) (statusData, error) {
 
 	// Messages — read only the most recent entries to avoid scanning
 	// thousands of old files in long-running repos.
-	messages, err := messaging.ReadRecentMessages(tasksDir, statusMessageLimit)
+	messages, msgWarnings, err := messaging.ReadRecentMessages(tasksDir, statusMessageLimit)
 	if err != nil {
-		return data, err
+		data.warnings = append(data.warnings, fmt.Sprintf("could not read recent messages: %v", err))
 	}
+	data.warnings = append(data.warnings, msgWarnings...)
 
 	// Recent messages (last 5).
 	data.recentMessages = messages

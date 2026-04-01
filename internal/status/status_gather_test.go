@@ -981,6 +981,95 @@ func TestGatherStatus_CompletionReadError(t *testing.T) {
 	}
 }
 
+func TestGatherStatus_MessageReadError(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Make the events directory unreadable to trigger an error.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	if err := os.Chmod(eventsDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(eventsDir, 0o755) })
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus should not return error for message read failure, got: %v", err)
+	}
+
+	if len(data.warnings) == 0 {
+		t.Fatal("expected at least one warning for message read failure")
+	}
+	found := false
+	for _, w := range data.warnings {
+		if containsSubstring(w, "message") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning 'message', got: %v", data.warnings)
+	}
+	if data.recentMessages != nil {
+		t.Errorf("recentMessages should be nil on error, got: %v", data.recentMessages)
+	}
+}
+
+func TestGatherStatus_PartialMessageReadFailure(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Write a valid message.
+	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID: "good-msg", From: "agent", Type: "intent",
+		Task: "task.md", Branch: "branch", Body: "ok",
+		SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Create a single unreadable message file to trigger a per-file warning.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	unreadable := filepath.Join(eventsDir, base.Add(time.Minute).Format("20060102T150405.000000000Z")+"-unreadable.json")
+	if err := os.WriteFile(unreadable, []byte(`{"id":"bad"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus should not return error for partial message failure, got: %v", err)
+	}
+
+	// The valid message should still be present.
+	if len(data.recentMessages) != 1 {
+		t.Fatalf("expected 1 recent message, got %d", len(data.recentMessages))
+	}
+	if data.recentMessages[0].ID != "good-msg" {
+		t.Errorf("expected message ID 'good-msg', got %q", data.recentMessages[0].ID)
+	}
+
+	// A structured warning about the unreadable file should be surfaced.
+	found := false
+	for _, w := range data.warnings {
+		if containsSubstring(w, "could not read message") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warning mentioning 'could not read message', got: %v", data.warnings)
+	}
+}
+
 func TestGatherStatus_NoWarningsOnSuccess(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	if err := messaging.Init(tasksDir); err != nil {
