@@ -2,6 +2,7 @@ package status
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -104,14 +105,14 @@ type MessageJSON struct {
 func ShowJSON(w io.Writer, repoRoot string) error {
 	resolvedRepoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 	repoRoot = strings.TrimSpace(resolvedRepoRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("gather status: %w", err)
 	}
 
 	out := statusDataToJSON(data)

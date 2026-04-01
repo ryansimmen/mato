@@ -55,7 +55,7 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 
 	resolvedRoot, err := git.Output(repo, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 	repoRoot := strings.TrimSpace(resolvedRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
@@ -66,7 +66,7 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 
 	events, err := collectEvents(tasksDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("collect history events: %w", err)
 	}
 	sortEvents(events)
 	if limit > 0 && len(events) > limit {

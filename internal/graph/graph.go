@@ -366,7 +366,7 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 
 	resolvedRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 	repoRoot = strings.TrimSpace(resolvedRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
