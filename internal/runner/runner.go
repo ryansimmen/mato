@@ -811,6 +811,10 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 // performs post-review actions (approve or reject). It returns whether a
 // review was processed.
 func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, branch, agentID string, idx *queue.PollIndex) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
 	reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx)
 	if reviewTask == nil {
 		return false
@@ -896,10 +900,6 @@ func pollIterate(
 		}
 	}
 
-	if result.claimedTask && ctx.Err() != nil {
-		result.pauseActive = ps1.Active
-		return result
-	}
 	if ctx.Err() != nil {
 		result.pauseActive = ps1.Active
 		return result
@@ -969,9 +969,10 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		result := pollIterate(ctx, env, run, repoRoot, tasksDir, branch, agentID, cooldown, &heartbeat, failedDirExcluded, priorPaused)
 		priorPaused = result.pauseActive
 
-		// If a shutdown signal was received during the task run, exit
-		// now that the task has been properly recovered. This avoids
-		// starting review or merge work with a cancelled context.
+		// If a shutdown signal was received during the iteration, exit
+		// immediately. This is unconditional — regardless of whether a
+		// task was claimed — to avoid starting new work with a cancelled
+		// context.
 		if ctx.Err() != nil {
 			return nil
 		}

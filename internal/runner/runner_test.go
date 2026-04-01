@@ -4299,6 +4299,126 @@ func TestPollIterate_CancelledWithoutClaimSkipsReviewAndMerge(t *testing.T) {
 	}
 }
 
+func TestPollIterate_CancelDuringClaimSkipsReviewAndMerge(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+
+	// Simulate a context that gets cancelled during the claim phase.
+	ctx, cancel := context.WithCancel(context.Background())
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		cancel() // cancel context during claim
+		return false, false
+	}
+	reviewCalled := false
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		reviewCalled = true
+		return false
+	}
+	mergeCalled := false
+	pollMergeFn = func(context.Context, string, string, string) int {
+		mergeCalled = true
+		return 0
+	}
+
+	result := pollIterate(ctx, envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	if result.claimedTask {
+		t.Fatal("claimedTask = true, want false")
+	}
+	if reviewCalled {
+		t.Fatal("review phase should be skipped after mid-claim cancellation")
+	}
+	if mergeCalled {
+		t.Fatal("merge phase should be skipped after mid-claim cancellation")
+	}
+}
+
+func TestPollReview_CancelledContextReturnsImmediately(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	idx := queue.BuildIndex(tasksDir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
+	run := runContext{agentID: "test-agent"}
+	if pollReview(ctx, env, run, tasksDir, "mato", "test-agent", idx) {
+		t.Fatal("pollReview should return false when context is cancelled")
+	}
+}
+
+func TestPollMerge_CancelledContextReturnsZero(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if got := pollMerge(ctx, t.TempDir(), tasksDir, "mato"); got != 0 {
+		t.Fatalf("pollMerge() = %d, want 0 for cancelled context", got)
+	}
+}
+
+func TestPollLoop_CancelDuringIterationExits(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	iterations := 0
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		iterations++
+		cancel() // cancel during first iteration
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int {
+		return 0
+	}
+
+	env := envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}
+	run := runContext{agentID: "test-agent"}
+
+	err := pollLoop(ctx, env, run, env.repoRoot, tasksDir, "mato", "test-agent", 0)
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	if iterations != 1 {
+		t.Fatalf("expected 1 iteration before exit, got %d", iterations)
+	}
+}
+
 func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
 	origPauseReadFn := pauseReadFn
 	origPollWriteManifestFn := pollWriteManifestFn
