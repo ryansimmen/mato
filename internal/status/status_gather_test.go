@@ -1429,3 +1429,105 @@ func TestGatherStatus_EqualTimestampProgressConsistency(t *testing.T) {
 		t.Errorf("eqagent not found in activeProgress")
 	}
 }
+
+// TestGatherStatus_OlderProgressUnreadableWarning verifies that when an older
+// progress file is unreadable, gatherStatus still recovers valid fallback
+// progress for other agents and surfaces the degraded read as a warning.
+func TestGatherStatus_OlderProgressUnreadableWarning(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Register two active agents.
+	cleanupGood, err := queue.RegisterAgent(tasksDir, "goodagent")
+	if err != nil {
+		t.Fatalf("RegisterAgent(good): %v", err)
+	}
+	defer cleanupGood()
+
+	cleanupBad, err := queue.RegisterAgent(tasksDir, "badagent")
+	if err != nil {
+		t.Fatalf("RegisterAgent(bad): %v", err)
+	}
+	defer cleanupBad()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write progress messages for both agents early in the timeline.
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID: "good-prog", From: "goodagent", Type: "progress",
+		Task: "good-task.md", Body: "Step: WORK", SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage(good): %v", err)
+	}
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
+		ID: "bad-prog", From: "badagent", Type: "progress",
+		Task: "bad-task.md", Body: "Step: VERIFY", SentAt: base.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("WriteMessage(bad): %v", err)
+	}
+
+	// Make badagent's progress file unreadable.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, readErr := os.ReadDir(eventsDir)
+	if readErr != nil {
+		t.Fatalf("ReadDir: %v", readErr)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "-progress-") && strings.Contains(e.Name(), "bad-prog") {
+			path := filepath.Join(eventsDir, e.Name())
+			if err := os.Chmod(path, 0o000); err != nil {
+				t.Fatalf("Chmod: %v", err)
+			}
+			t.Cleanup(func() { os.Chmod(path, 0o644) })
+			break
+		}
+	}
+
+	// Flood with newer messages to push both agents outside the recent window.
+	for i := 0; i < statusMessageLimit+10; i++ {
+		if err := messaging.WriteMessage(tasksDir, messaging.Message{
+			ID:     fmt.Sprintf("flood-%d", i),
+			From:   "otheragent",
+			Type:   "progress",
+			Task:   "other.md",
+			Body:   fmt.Sprintf("flood %d", i),
+			SentAt: base.Add(time.Duration(10+i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage(flood %d): %v", i, err)
+		}
+	}
+
+	data, gatherErr := gatherStatus(tasksDir)
+	if gatherErr != nil {
+		t.Fatalf("gatherStatus: %v", gatherErr)
+	}
+
+	// goodagent should still appear in activeProgress.
+	foundGood := false
+	for _, p := range data.activeProgress {
+		if p.displayID == "agent-goodagent" {
+			foundGood = true
+			if p.body != "Step: WORK" {
+				t.Errorf("goodagent body = %q, want %q", p.body, "Step: WORK")
+			}
+			break
+		}
+	}
+	if !foundGood {
+		t.Errorf("goodagent not found in activeProgress despite valid file")
+	}
+
+	// There should be a warning about the unreadable file.
+	foundWarning := false
+	for _, w := range data.warnings {
+		if strings.Contains(w, "could not read older progress message") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected warning about unreadable older progress message, got warnings: %v", data.warnings)
+	}
+}

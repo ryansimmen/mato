@@ -2743,9 +2743,12 @@ func TestReadLatestProgressForAgents_FindsOlderProgress(t *testing.T) {
 	}
 
 	// Skip the 10 newest; agent-a's progress is outside that window.
-	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a"}, 10)
+	got, warnings, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a"}, 10)
 	if err != nil {
 		t.Fatalf("ReadLatestProgressForAgents: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", warnings)
 	}
 	if len(got) != 1 {
 		t.Fatalf("got %d agents, want 1", len(got))
@@ -2759,22 +2762,28 @@ func TestReadLatestProgressForAgents_EmptyAgentIDs(t *testing.T) {
 	tasksDir := t.TempDir()
 	setupMessagingDirs(t, tasksDir)
 
-	got, err := ReadLatestProgressForAgents(tasksDir, nil, 0)
+	got, warnings, err := ReadLatestProgressForAgents(tasksDir, nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != nil {
 		t.Errorf("expected nil, got %v", got)
 	}
+	if warnings != nil {
+		t.Errorf("expected nil warnings, got %v", warnings)
+	}
 }
 
 func TestReadLatestProgressForAgents_NonExistentDir(t *testing.T) {
-	got, err := ReadLatestProgressForAgents(filepath.Join(t.TempDir(), "nope"), []string{"a"}, 0)
+	got, warnings, err := ReadLatestProgressForAgents(filepath.Join(t.TempDir(), "nope"), []string{"a"}, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != 0 {
 		t.Errorf("got %d results, want 0", len(got))
+	}
+	if len(warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", warnings)
 	}
 }
 
@@ -2792,7 +2801,7 @@ func TestReadLatestProgressForAgents_SkipsNonProgressMessages(t *testing.T) {
 		t.Fatalf("WriteMessage: %v", err)
 	}
 
-	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a"}, 0)
+	got, _, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a"}, 0)
 	if err != nil {
 		t.Fatalf("ReadLatestProgressForAgents: %v", err)
 	}
@@ -2822,7 +2831,7 @@ func TestReadLatestProgressForAgents_StopsEarlyWhenAllFound(t *testing.T) {
 	}
 
 	// Ask for just agent-1.
-	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-1"}, 0)
+	got, _, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-1"}, 0)
 	if err != nil {
 		t.Fatalf("ReadLatestProgressForAgents: %v", err)
 	}
@@ -2847,7 +2856,7 @@ func TestReadLatestProgressForAgents_SkipExceedsTotal(t *testing.T) {
 	}
 
 	// Skip is larger than total messages.
-	got, err := ReadLatestProgressForAgents(tasksDir, []string{"a"}, 100)
+	got, _, err := ReadLatestProgressForAgents(tasksDir, []string{"a"}, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2881,7 +2890,7 @@ func TestReadLatestProgressForAgents_EqualTimestampTieBreak(t *testing.T) {
 		}
 	}
 
-	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-x"}, 0)
+	got, _, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-x"}, 0)
 	if err != nil {
 		t.Fatalf("ReadLatestProgressForAgents: %v", err)
 	}
@@ -2917,7 +2926,7 @@ func TestReadLatestProgressForAgents_EqualTimestampMixedAgents(t *testing.T) {
 		}
 	}
 
-	got, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a", "agent-b"}, 0)
+	got, _, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-a", "agent-b"}, 0)
 	if err != nil {
 		t.Fatalf("ReadLatestProgressForAgents: %v", err)
 	}
@@ -2968,7 +2977,7 @@ func TestReadLatestProgressForAgents_StopsAfterTimestampWindow(t *testing.T) {
 		t.Fatalf("WriteMessage(target): %v", err)
 	}
 
-	got, err := ReadLatestProgressForAgents(tasksDir, []string{"target-agent"}, 0)
+	got, _, err := ReadLatestProgressForAgents(tasksDir, []string{"target-agent"}, 0)
 	if err != nil {
 		t.Fatalf("ReadLatestProgressForAgents: %v", err)
 	}
@@ -2985,6 +2994,139 @@ func TestReadLatestProgressForAgents_StopsAfterTimestampWindow(t *testing.T) {
 	// file with a timestamp < targetTime, not read all 50 older entries.
 	// We can't directly assert iteration count, but the function returning
 	// the correct result without a full scan is the behavioral guarantee.
+}
+
+// TestReadLatestProgressForAgents_UnreadableFileWarning verifies that an
+// unreadable older progress file produces a warning instead of aborting,
+// while valid fallback progress for another agent is still recovered.
+func TestReadLatestProgressForAgents_UnreadableFileWarning(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write a valid progress message from agent-good.
+	if err := WriteMessage(tasksDir, Message{
+		ID:     "good-prog",
+		From:   "agent-good",
+		Type:   "progress",
+		Task:   "task-good.md",
+		Body:   "Step: WORK",
+		SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage(good): %v", err)
+	}
+
+	// Write a valid progress message from agent-bad so the file exists.
+	if err := WriteMessage(tasksDir, Message{
+		ID:     "bad-prog",
+		From:   "agent-bad",
+		Type:   "progress",
+		Task:   "task-bad.md",
+		Body:   "Step: VERIFY",
+		SentAt: base.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("WriteMessage(bad): %v", err)
+	}
+
+	// Make agent-bad's progress file unreadable.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "-progress-") && strings.Contains(e.Name(), "bad-prog") {
+			path := filepath.Join(eventsDir, e.Name())
+			if err := os.Chmod(path, 0o000); err != nil {
+				t.Fatalf("Chmod: %v", err)
+			}
+			t.Cleanup(func() { os.Chmod(path, 0o644) })
+			break
+		}
+	}
+
+	got, warnings, readErr := ReadLatestProgressForAgents(tasksDir, []string{"agent-good", "agent-bad"}, 0)
+	if readErr != nil {
+		t.Fatalf("unexpected error: %v", readErr)
+	}
+
+	// agent-good should still be recovered.
+	if len(got) < 1 {
+		t.Fatalf("got %d agents, want at least 1 (agent-good)", len(got))
+	}
+	if msg, ok := got["agent-good"]; !ok {
+		t.Errorf("agent-good not found in results")
+	} else if msg.Body != "Step: WORK" {
+		t.Errorf("agent-good body = %q, want %q", msg.Body, "Step: WORK")
+	}
+
+	// There should be a warning about the unreadable file.
+	if len(warnings) == 0 {
+		t.Errorf("expected at least one warning for unreadable file, got none")
+	}
+	foundWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w, "could not read older progress message") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected warning about unreadable progress message, got: %v", warnings)
+	}
+}
+
+// TestReadLatestProgressForAgents_MalformedFileWarning verifies that a
+// malformed JSON progress file produces a warning instead of aborting.
+func TestReadLatestProgressForAgents_MalformedFileWarning(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write a valid progress message from agent-ok.
+	if err := WriteMessage(tasksDir, Message{
+		ID:     "ok-prog",
+		From:   "agent-ok",
+		Type:   "progress",
+		Task:   "task-ok.md",
+		Body:   "Step: COMMIT",
+		SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage(ok): %v", err)
+	}
+
+	// Write a malformed JSON file that looks like a progress message by name.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	malformedName := base.Add(2*time.Second).Format("20060102T150405.000000000Z") + "-agent-broken-progress-broken-prog.json"
+	if err := os.WriteFile(filepath.Join(eventsDir, malformedName), []byte("{bad json"), 0o644); err != nil {
+		t.Fatalf("WriteFile(malformed): %v", err)
+	}
+
+	got, warnings, readErr := ReadLatestProgressForAgents(tasksDir, []string{"agent-ok", "agent-broken"}, 0)
+	if readErr != nil {
+		t.Fatalf("unexpected error: %v", readErr)
+	}
+
+	// agent-ok should still be recovered.
+	if msg, ok := got["agent-ok"]; !ok {
+		t.Errorf("agent-ok not found in results")
+	} else if msg.Body != "Step: COMMIT" {
+		t.Errorf("agent-ok body = %q, want %q", msg.Body, "Step: COMMIT")
+	}
+
+	// There should be a warning about the malformed file.
+	foundWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w, "could not parse older progress message") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected warning about malformed progress message, got: %v", warnings)
+	}
 }
 
 func TestWritePresence_CollisionResistance(t *testing.T) {
