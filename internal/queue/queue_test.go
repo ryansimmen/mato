@@ -839,7 +839,7 @@ func TestNormalizeOrphanContent(t *testing.T) {
 		{
 			name: "normalizes windows newlines",
 			data: "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n\r\nBody\r\n",
-			want: "# Fix bug\n\nBody",
+			want: "<!-- branch: task/fix-bug -->\n# Fix bug\n\nBody",
 		},
 		{
 			name: "preserves markers inside fenced code block",
@@ -854,7 +854,7 @@ func TestNormalizeOrphanContent(t *testing.T) {
 		{
 			name: "strips leading markers but preserves fenced ones",
 			data: "<!-- claimed-by: real-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/real -->\n# Task\n\n```\n<!-- branch: task/fenced-example -->\n```\n",
-			want: "# Task\n\n```\n<!-- branch: task/fenced-example -->\n```",
+			want: "<!-- branch: task/real -->\n# Task\n\n```\n<!-- branch: task/fenced-example -->\n```",
 		},
 		{
 			name: "preserves marker-like prose outside fences",
@@ -862,15 +862,20 @@ func TestNormalizeOrphanContent(t *testing.T) {
 			want: "# How markers work\n\nThe scheduler prepends:\n<!-- branch: task/example -->\nand\n<!-- claimed-by: agent1  claimed-at: 2026-01-01T00:00:00Z -->\nto each task file.",
 		},
 		{
+			name: "preserves leading marker-like example lines",
+			data: "<!-- branch: task/example -->\n<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Documented Example\n",
+			want: "<!-- branch: task/example -->\n<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Documented Example",
+		},
+		{
 			name: "skips leading blank lines between markers",
 			data: "<!-- claimed-by: a  claimed-at: 2026-01-01T00:00:00Z -->\n\n<!-- branch: task/b -->\n# Title\n",
-			want: "# Title",
+			want: "<!-- branch: task/b -->\n# Title",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := string(normalizeOrphanContent([]byte(tt.data)))
+			got := string(normalizeOrphanContent(filepath.Join(t.TempDir(), "fix-bug.md"), []byte(tt.data)))
 			if got != tt.want {
 				t.Fatalf("normalizeOrphanContent() = %q, want %q", got, tt.want)
 			}
@@ -894,7 +899,7 @@ func TestEquivalentOrphanContent(t *testing.T) {
 		{
 			name: "same task with windows newlines",
 			a:    "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n",
-			b:    "# Fix bug\n",
+			b:    "<!-- branch: task/fix-bug -->\n# Fix bug\n",
 			want: true,
 		},
 		{
@@ -921,15 +926,65 @@ func TestEquivalentOrphanContent(t *testing.T) {
 			b:    "# Task\n",
 			want: false,
 		},
+		{
+			name: "explicit custom branch markers remain equivalent",
+			a:    "<!-- claimed-by: runtime-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: custom/release-hotfix -->\n# Fix bug\n",
+			b:    "<!-- branch: custom/release-hotfix -->\n# Fix bug\n",
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := equivalentOrphanContent([]byte(tt.a), []byte(tt.b))
+			got := equivalentOrphanContent(filepath.Join(t.TempDir(), "fix-bug.md"), []byte(tt.a), filepath.Join(t.TempDir(), "fix-bug.md"), []byte(tt.b))
 			if got != tt.want {
 				t.Fatalf("equivalentOrphanContent() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveOrphanCollision_PreservesLeadingClaimMarkerLikeBodyLines(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{DirBacklog, DirInProgress} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	src := filepath.Join(tasksDir, DirInProgress, "fix-bug.md")
+	dst := filepath.Join(tasksDir, DirBacklog, "fix-bug.md")
+	srcContent := strings.Join([]string{
+		"<!-- claimed-by: runtime-agent  claimed-at: 2026-01-01T00:00:00Z -->",
+		"<!-- branch: task/fix-bug -->",
+		"<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->",
+		"# Fix bug",
+		"",
+	}, "\n")
+	dstContent := strings.Join([]string{
+		"<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->",
+		"# Fix bug",
+		"",
+	}, "\n")
+	if err := os.WriteFile(src, []byte(srcContent), 0o644); err != nil {
+		t.Fatalf("WriteFile src: %v", err)
+	}
+	if err := os.WriteFile(dst, []byte(dstContent), 0o644); err != nil {
+		t.Fatalf("WriteFile dst: %v", err)
+	}
+
+	recovered, err := resolveOrphanCollision(src, dst)
+	if err != nil {
+		t.Fatalf("resolveOrphanCollision: %v", err)
+	}
+	if recovered == "" {
+		t.Fatal("expected orphan with leading marker-like body lines to be preserved as a renamed recovery")
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("source orphan should be moved away, stat err = %v", err)
+	}
+	if _, err := os.Stat(recovered); err != nil {
+		t.Fatalf("recovered orphan missing: %v", err)
 	}
 }
 

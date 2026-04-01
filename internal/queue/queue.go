@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/frontmatter"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
 	"mato/internal/taskfile"
@@ -199,7 +200,7 @@ func resolveOrphanCollision(src, dst string) (string, error) {
 		return "", fmt.Errorf("read existing backlog %s: %w", dst, err)
 	}
 
-	if equivalentOrphanContent(srcData, dstData) {
+	if equivalentOrphanContent(src, srcData, dst, dstData) {
 		if err := os.Remove(src); err != nil {
 			return "", fmt.Errorf("remove duplicate orphan %s: %w", src, err)
 		}
@@ -222,12 +223,47 @@ func resolveOrphanCollision(src, dst string) (string, error) {
 	return recoveredDst, nil
 }
 
-func equivalentOrphanContent(srcData, dstData []byte) bool {
-	return bytes.Equal(normalizeOrphanContent(srcData), normalizeOrphanContent(dstData))
+func equivalentOrphanContent(srcPath string, srcData []byte, dstPath string, dstData []byte) bool {
+	return bytes.Equal(normalizeOrphanContent(srcPath, srcData), normalizeOrphanContent(dstPath, dstData))
 }
 
-func normalizeOrphanContent(data []byte) []byte {
-	return taskfile.StripRuntimeMarkers(data)
+func normalizeOrphanContent(path string, data []byte) []byte {
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	start := 0
+	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	if start >= len(lines) {
+		return nil
+	}
+
+	if _, ok := taskfile.ParseClaimedBy([]byte(lines[start])); ok {
+		start++
+		for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+			start++
+		}
+		if start < len(lines) {
+			if branch, ok := taskfile.ParseBranchMarkerLine([]byte(lines[start])); ok && isRuntimeBranchForPath(path, branch) {
+				start++
+				for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+					start++
+				}
+			}
+		}
+	}
+
+	normalized := strings.TrimSpace(strings.Join(lines[start:], "\n"))
+	if normalized == "" {
+		return nil
+	}
+	return []byte(normalized)
+}
+
+func isRuntimeBranchForPath(path, branch string) bool {
+	base := filepath.Base(path)
+	expected := "task/" + frontmatter.SanitizeBranchName(base)
+	return branch == expected || branch == expected+"-"+frontmatter.BranchDisambiguator(base)
 }
 
 func laterStateDuplicateDir(tasksDir, name string) string {
