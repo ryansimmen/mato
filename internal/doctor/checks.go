@@ -695,7 +695,7 @@ func scanOrphanedTasks(tasksDir string, fix bool) []Finding {
 	}
 
 	if fix && len(findings) > 0 {
-		queue.RecoverOrphanedTasks(tasksDir)
+		_ = queue.RecoverOrphanedTasks(tasksDir)
 		for i := range findings {
 			if _, statErr := os.Stat(findings[i].Path); os.IsNotExist(statErr) {
 				findings[i].Fixed = true

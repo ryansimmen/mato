@@ -549,6 +549,9 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			if format == "json" {
 				if watch {
 					return newUsageError(cmd, fmt.Errorf("--format json and --watch cannot be used together"))
@@ -626,6 +629,9 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repoInput); err != nil {
+				return err
+			}
 
 			var dockerImage string
 			if doctorNeedsDockerConfig(only) {
@@ -637,6 +643,14 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 				// the wrong image when .mato.yaml is malformed.
 				if v := os.Getenv("MATO_DOCKER_IMAGE"); v != "" {
 					dockerImage = v
+					// Still validate repo config so a malformed committed
+					// .mato.yaml is not hidden during a full doctor run
+					// just because an env override supplies the image.
+					if root, err := resolveRepoRoot(repoInput); err == nil {
+						if _, err := config.Load(root); err != nil {
+							return err
+						}
+					}
 				} else if root, err := resolveRepoRoot(repoInput); err == nil {
 					fileCfg, err := config.Load(root)
 					if err != nil {
@@ -703,6 +717,9 @@ func newLogCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			return logShowFn(repo, limit, format)
 		},
 	}
@@ -728,6 +745,9 @@ func newGraphCmd(repoFlag *string) *cobra.Command {
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
 			return graph.Show(repo, format, showAll)
@@ -756,6 +776,9 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			return inspectShowFn(repo, args[0], format)
 		},
 	}
@@ -775,6 +798,9 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
 			repoRoot, err := resolveRepoRoot(repo)
@@ -820,6 +846,9 @@ func newPauseCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			repoRoot, err := resolveRepoRoot(repo)
 			if err != nil {
 				return err
@@ -859,6 +888,9 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
 			repoRoot, err := resolveRepoRoot(repo)
 			if err != nil {
 				return err
@@ -894,6 +926,9 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
 			repoRoot, err := resolveRepoRoot(repo)

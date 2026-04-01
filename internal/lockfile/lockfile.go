@@ -66,23 +66,30 @@ func Acquire(locksDir, name string) (func(), bool) {
 	identity := process.LockIdentity(os.Getpid())
 
 	for attempts := 0; attempts < 2; attempts++ {
-		f, err := os.OpenFile(lockFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err == nil {
-			if _, writeErr := f.WriteString(identity); writeErr != nil {
-				f.Close()
-				os.Remove(lockFile)
-				fmt.Fprintf(os.Stderr, "warning: write %s lock: %v\n", name, writeErr)
-				return nil, false
-			}
-			if closeErr := f.Close(); closeErr != nil {
-				os.Remove(lockFile)
-				fmt.Fprintf(os.Stderr, "warning: close %s lock: %v\n", name, closeErr)
-				return nil, false
-			}
+		// Write identity to a temporary file, then hard-link it to the
+		// lock path. os.Link fails atomically with EEXIST when the lock
+		// file already exists, and unlike open-then-write the lock file
+		// never appears empty on disk.
+		tmpFile, err := os.CreateTemp(locksDir, name+".lock.tmp.*")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: create %s lock tmp: %v\n", name, err)
+			return nil, false
+		}
+		tmpPath := tmpFile.Name()
+		_, writeErr := tmpFile.WriteString(identity)
+		closeErr := tmpFile.Close()
+		if writeErr != nil || closeErr != nil {
+			os.Remove(tmpPath)
+			fmt.Fprintf(os.Stderr, "warning: write %s lock tmp: write=%v close=%v\n", name, writeErr, closeErr)
+			return nil, false
+		}
+		linkErr := os.Link(tmpPath, lockFile)
+		os.Remove(tmpPath)
+		if linkErr == nil {
 			return func() { os.Remove(lockFile) }, true
 		}
-		if !os.IsExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: create %s lock: %v\n", name, err)
+		if !os.IsExist(linkErr) {
+			fmt.Fprintf(os.Stderr, "warning: create %s lock: %v\n", name, linkErr)
 			return nil, false
 		}
 
@@ -96,9 +103,10 @@ func Acquire(locksDir, name string) (func(), bool) {
 		}
 
 		content := strings.TrimSpace(string(data))
-		if content == "" || process.IsLockHolderAlive(content) {
+		if content != "" && process.IsLockHolderAlive(content) {
 			return nil, false
 		}
+		// Empty content (crash between create and write) or dead PID: reclaim.
 		if removeErr := osRemove(lockFile); removeErr != nil && !os.IsNotExist(removeErr) {
 			fmt.Fprintf(os.Stderr, "warning: remove stale %s lock: %v\n", name, removeErr)
 			return nil, false

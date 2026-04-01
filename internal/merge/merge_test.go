@@ -84,24 +84,22 @@ func TestAcquireLockSucceedsWhenHeldByDeadProcess(t *testing.T) {
 	cleanup()
 }
 
-func TestAcquireLockFailsWhenLockFileEmpty(t *testing.T) {
+func TestAcquireLockReclaimsEmptyLockFile(t *testing.T) {
 	tasksDir := t.TempDir()
 	locksDir := filepath.Join(tasksDir, ".locks")
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("os.MkdirAll: %v", err)
 	}
-	// Simulate the race window: lock file exists but is empty (writer hasn't written identity yet)
+	// Simulate crash: lock file exists but is empty (writer crashed before writing identity).
 	if err := os.WriteFile(filepath.Join(locksDir, "merge.lock"), []byte(""), 0o644); err != nil {
 		t.Fatalf("os.WriteFile merge.lock: %v", err)
 	}
 
 	cleanup, ok := AcquireLock(tasksDir)
-	if ok || cleanup != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		t.Fatal("expected merge lock acquisition to fail when lock file is empty (conservatively assume holder is alive)")
+	if !ok {
+		t.Fatal("expected merge lock acquisition to succeed by reclaiming empty (stale) lock file")
 	}
+	defer cleanup()
 }
 
 func TestAcquireLockCleanupRemovesLockFile(t *testing.T) {
@@ -538,6 +536,75 @@ func TestProcessQueue_BranchCollisionDisambiguation(t *testing.T) {
 	}
 }
 
+func TestProcessQueue_LegacyBranchCollisionReservesDisambiguatedBranchPerPass(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskA := "legacy collide one.md"
+	taskB := "legacy_collide_one.md"
+	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskA)
+	disambiguatedBranch := derivedBranch + "-" + frontmatter.BranchDisambiguator(taskB)
+	if got := "task/" + frontmatter.SanitizeBranchName(taskB); got != derivedBranch {
+		t.Fatalf("test setup: expected both filenames to derive same branch, got %q and %q", derivedBranch, got)
+	}
+
+	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "legacy-a.txt"), []byte("task A\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile legacy-a.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "legacy-a.txt"); err != nil {
+		t.Fatalf("git add legacy-a.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "legacy task A work"); err != nil {
+		t.Fatalf("git commit task A: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	if _, err := git.Output(repoRoot, "checkout", "-b", disambiguatedBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", disambiguatedBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "legacy-b.txt"), []byte("task B\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile legacy-b.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "legacy-b.txt"); err != nil {
+		t.Fatalf("git add legacy-b.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "legacy task B work"); err != nil {
+		t.Fatalf("git commit task B: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	content := "---\npriority: 5\n---\n# Legacy task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskA), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile task A: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskB), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile task B: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 2 {
+		t.Fatalf("ProcessQueue() = %d, want 2", got)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "legacy-a.txt")); err != nil {
+		t.Fatalf("expected derived branch change to merge: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "legacy-b.txt")); err != nil {
+		t.Fatalf("expected disambiguated branch change to merge: %v", err)
+	}
+}
+
 // TestProcessQueue_StalePollIndexDoesNotAffectFallbackBranch verifies that
 // a legacy task (no <!-- branch: --> marker) in ready-to-merge/ resolves the
 // correct disambiguated branch even when a colliding branch appears in
@@ -917,22 +984,25 @@ func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
 
-	backlogFile := filepath.Join(tasksDir, queue.DirBacklog, "missing branch.md")
-	data, err := os.ReadFile(backlogFile)
+	failedFile := filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")
+	data, err := os.ReadFile(failedFile)
 	if err != nil {
-		t.Fatalf("backlog task file missing: %v", err)
+		t.Fatalf("failed task file missing: %v", err)
 	}
 	if !strings.Contains(string(data), "task branch not pushed by agent") {
-		t.Fatalf("backlog task should mention missing branch push, got %q", string(data))
+		t.Fatalf("failed task should mention missing branch push, got %q", string(data))
 	}
 	if got := strings.Count(string(data), "<!-- failure:"); got != 3 {
-		t.Fatalf("backlog task failure count = %d, want 3\ncontents:\n%s", got, string(data))
+		t.Fatalf("failed task failure count = %d, want 3\ncontents:\n%s", got, string(data))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")); !os.IsNotExist(err) {
-		t.Fatalf("missing-branch task should not be moved to failed yet, stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")); err != nil {
+		t.Fatalf("missing-branch task should be moved to failed once the new failure exhausts retries, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "missing branch.md")); !os.IsNotExist(err) {
+		t.Fatalf("missing-branch task should not remain in backlog once retries are exhausted, stat err = %v", err)
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
-		t.Fatalf("ready-to-merge task should be moved to backlog, stat err = %v", err)
+		t.Fatalf("ready-to-merge task should be moved to failed, stat err = %v", err)
 	}
 }
 
@@ -1157,6 +1227,95 @@ func TestProcessQueue_DuplicateInCompletedIsRemoved(t *testing.T) {
 	// The completed copy should still be there.
 	if _, err := os.Stat(completedFile); err != nil {
 		t.Fatalf("completed copy should still exist: %v", err)
+	}
+}
+
+func TestProcessQueue_RecoveryPathWritesCompletionDetail(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	// Create a task branch with a change.
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/recover-detail", "mato"); err != nil {
+		t.Fatalf("git checkout task/recover-detail: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "recover.txt"), []byte("recover\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile recover.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "recover.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "recover work\n\nTask-ID: recover-detail"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	// Squash-merge the task branch into mato manually to simulate a prior
+	// successful merge that completed but lost its CompletionDetail.
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "merge", "--squash", "task/recover-detail"); err != nil {
+		t.Fatalf("git merge --squash: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "recover work\n\nTask-ID: recover-detail"); err != nil {
+		t.Fatalf("git commit squash: %v", err)
+	}
+
+	// Place a task in ready-to-merge with a merged marker but no completion detail.
+	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "recover-detail.md")
+	taskContent := "---\nid: recover-detail\npriority: 5\n---\n# Recover detail\nMerge this.\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task: %v", err)
+	}
+
+	// Verify no completion detail exists yet.
+	if _, err := messaging.ReadCompletionDetail(tasksDir, "recover-detail"); err == nil {
+		t.Fatal("completion detail should not exist before ProcessQueue")
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	}
+
+	// Verify the task was moved to completed.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "recover-detail.md")); err != nil {
+		t.Fatalf("completed task missing: %v", err)
+	}
+
+	// Verify a completion detail was written during recovery.
+	detail, err := messaging.ReadCompletionDetail(tasksDir, "recover-detail")
+	if err != nil {
+		t.Fatalf("completion detail missing after recovery: %v", err)
+	}
+	if detail.TaskID != "recover-detail" {
+		t.Errorf("TaskID = %q, want %q", detail.TaskID, "recover-detail")
+	}
+	if detail.TaskFile != "recover-detail.md" {
+		t.Errorf("TaskFile = %q, want %q", detail.TaskFile, "recover-detail.md")
+	}
+	if detail.Branch != "task/recover-detail" {
+		t.Errorf("Branch = %q, want %q", detail.Branch, "task/recover-detail")
+	}
+	if detail.CommitSHA == "" {
+		t.Error("CommitSHA should not be empty")
+	}
+	if detail.Title != "Recover detail" {
+		t.Errorf("Title = %q, want %q", detail.Title, "Recover detail")
+	}
+	foundRecover := false
+	for _, f := range detail.FilesChanged {
+		if f == "recover.txt" {
+			foundRecover = true
+			break
+		}
+	}
+	if !foundRecover {
+		t.Errorf("FilesChanged = %v, want to contain recover.txt", detail.FilesChanged)
 	}
 }
 

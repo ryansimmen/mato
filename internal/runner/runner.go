@@ -4,7 +4,6 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"errors"
@@ -31,6 +30,29 @@ import (
 	"mato/internal/sessionmeta"
 	"mato/internal/taskstate"
 )
+
+const resumeDetectionBufferLimit = 8192
+
+type resumeDetectionBuffer struct {
+	matched bool
+	carry   string
+}
+
+func (b *resumeDetectionBuffer) Write(p []byte) (int, error) {
+	combined := b.carry + string(p)
+	if !b.matched && resumeRejected(combined) {
+		b.matched = true
+	}
+	if len(combined) > resumeDetectionBufferLimit {
+		combined = combined[len(combined)-resumeDetectionBufferLimit:]
+	}
+	b.carry = combined
+	return len(p), nil
+}
+
+func (b *resumeDetectionBuffer) Matched() bool {
+	return b.matched || resumeRejected(b.carry)
+}
 
 var execCommandContext = exec.CommandContext
 
@@ -671,7 +693,9 @@ func signalChan(ctx context.Context) chan<- os.Signal {
 // removes stale presence files, and purges old messages. These housekeeping
 // operations run at the start of every poll cycle.
 func pollCleanup(tasksDir string) {
-	queue.RecoverOrphanedTasks(tasksDir)
+	for _, recovery := range queue.RecoverOrphanedTasks(tasksDir) {
+		finalizePushedTask(tasksDir, recovery.TargetBranch, "host-recovery", recovery.Filename, recovery.Branch, recovery.LastHeadSHA, recoveredFilesChanged(tasksDir, recovery.Filename), false)
+	}
 	queue.CleanStaleLocks(tasksDir)
 	queue.CleanStaleReviewLocks(tasksDir)
 	messaging.CleanStalePresence(tasksDir)
@@ -1042,7 +1066,7 @@ func resetSession(tasksDir, kind, filename, branch string) string {
 }
 
 func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extraEnvs []string, extraVolumes []string, label string, resetResumeSession func() string) error {
-	runAttempt := func(current runContext) (error, string) {
+	runAttempt := func(current runContext) (error, bool) {
 		args := buildDockerArgs(env, current, extraEnvs, extraVolumes)
 		timeoutCtx, timeoutCancel := context.WithTimeout(ctx, current.timeout)
 		defer timeoutCancel()
@@ -1054,10 +1078,10 @@ func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extra
 		cmd.WaitDelay = gracefulShutdownDelay
 		cmd.Stdin = os.Stdin
 
-		var stdoutBuf bytes.Buffer
-		var stderrBuf bytes.Buffer
-		cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
-		cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+		var stdoutDetect resumeDetectionBuffer
+		var stderrDetect resumeDetectionBuffer
+		cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutDetect)
+		cmd.Stderr = io.MultiWriter(os.Stderr, &stderrDetect)
 
 		err := cmd.Run()
 		if timeoutCtx.Err() == context.DeadlineExceeded {
@@ -1065,11 +1089,11 @@ func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extra
 		} else if ctx.Err() != nil {
 			fmt.Fprintf(os.Stderr, "%s interrupted by signal\n", label)
 		}
-		return err, stdoutBuf.String() + "\n" + stderrBuf.String()
+		return err, stdoutDetect.Matched() || stderrDetect.Matched()
 	}
 
-	err, output := runAttempt(run)
-	if err == nil || strings.TrimSpace(run.resumeSessionID) == "" || resetResumeSession == nil || !resumeRejected(output) {
+	err, rejected := runAttempt(run)
+	if err == nil || strings.TrimSpace(run.resumeSessionID) == "" || resetResumeSession == nil || !rejected {
 		return err
 	}
 

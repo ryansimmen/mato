@@ -390,6 +390,102 @@ func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
 	}
 }
 
+func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	origCreateClone := createCloneFn
+	origRemoveClone := removeCloneFn
+	origEnsureBranch := ensureBranchFn
+	t.Cleanup(func() {
+		execCommandContext = origExecCommandContext
+		createCloneFn = origCreateClone
+		removeCloneFn = origRemoveClone
+		ensureBranchFn = origEnsureBranch
+	})
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	createCloneFn = func(string) (string, error) { return cloneDir, nil }
+	removeCloneFn = func(string) {}
+	ensureBranchFn = func(cloneDir, branch string) (git.EnsureBranchResult, error) {
+		if _, err := git.Output(cloneDir, "checkout", "-b", branch); err != nil {
+			return git.EnsureBranchResult{}, err
+		}
+		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceLocal}, nil
+	}
+
+	// Seed a work session on the OLD branch with a known session ID.
+	oldSessionID := "stale-session-from-old-branch"
+	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, "task.md", func(session *sessionmeta.Session) {
+		session.CopilotSessionID = oldSessionID
+		session.TaskBranch = "task/task-old"
+	}); err != nil {
+		t.Fatalf("seed work session: %v", err)
+	}
+
+	var capturedArgs []string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		return cmd
+	}
+
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	env := envConfig{
+		repoRoot:           repoRoot,
+		tasksDir:           tasksDir,
+		workdir:            "/workspace",
+		copilotPath:        "/bin/true",
+		gitPath:            "/usr/bin/git",
+		gitUploadPackPath:  "/usr/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/bin/git-receive-pack",
+		ghPath:             "/bin/true",
+		homeDir:            "/home/test",
+		copilotConfigDir:   t.TempDir(),
+		copilotCacheDir:    t.TempDir(),
+		image:              "ubuntu:24.04",
+		targetBranch:       "mato",
+	}
+	run := runContext{agentID: "agent1", prompt: "test prompt", model: "claude-opus-4.6", reasoningEffort: "high", timeout: time.Second}
+	// The claimed task uses a DIFFERENT branch than the seeded session.
+	claimed := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task-new", Title: "Task", TaskPath: taskPath}
+
+	if err := runOnce(context.Background(), env, run, claimed); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+
+	joined := strings.Join(capturedArgs, " ")
+	// The resume session ID should NOT be the stale one from the old branch.
+	if strings.Contains(joined, "--resume="+oldSessionID) {
+		t.Fatalf("expected rotated session ID after branch change, but got stale ID %q in docker args: %s", oldSessionID, joined)
+	}
+	// It should still have a --resume arg (with the new rotated ID).
+	if !strings.Contains(joined, "--resume=") {
+		t.Fatalf("expected --resume with rotated session ID in docker args, got: %s", joined)
+	}
+	// Verify the persisted session metadata has the new branch and a new session ID.
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindWork, "task.md")
+	if err != nil {
+		t.Fatalf("Load work session: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected work session to exist after branch change")
+	}
+	if session.CopilotSessionID == oldSessionID {
+		t.Fatal("persisted session ID should be rotated, not the stale one")
+	}
+	if session.TaskBranch != "task/task-new" {
+		t.Fatalf("TaskBranch = %q, want %q", session.TaskBranch, "task/task-new")
+	}
+}
+
 func TestRunOnce_BranchSetupFailureDoesNotCreateWorkSession(t *testing.T) {
 	origCreateClone := createCloneFn
 	origRemoveClone := removeCloneFn
@@ -1279,6 +1375,82 @@ func TestPostAgentPush_RecordsWorkTaskState(t *testing.T) {
 	}
 	if state.LastOutcome != "work-pushed" {
 		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "work-pushed")
+	}
+}
+
+func TestPostAgentPush_BranchMarkerWriteFailureLeavesPushedTaskState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "marker-state.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/marker-state -->\n# Marker State\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+
+	cloneDir := t.TempDir()
+	remoteDir := t.TempDir()
+	gitRun := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	gitRun(remoteDir, "git", "init", "--bare", "-b", "main")
+	gitRun(cloneDir, "git", "init", "-b", "main")
+	gitRun(cloneDir, "git", "config", "user.name", "test")
+	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
+	if err := os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile init: %v", err)
+	}
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "init")
+	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
+	gitRun(cloneDir, "git", "push", "origin", "main")
+	gitRun(cloneDir, "git", "checkout", "-b", "task/marker-state")
+	if err := os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644); err != nil {
+		t.Fatalf("WriteFile branch change: %v", err)
+	}
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "task work")
+	currentTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	currentTip = strings.TrimSpace(currentTip)
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/marker-state", Title: "Marker State", TaskPath: inProgressPath}
+	env := envConfig{tasksDir: tasksDir, targetBranch: "main"}
+	origWriteBranchMarker := writeBranchMarkerFn
+	t.Cleanup(func() { writeBranchMarkerFn = origWriteBranchMarker })
+	writeBranchMarkerFn = func(path, branch string) error {
+		return fmt.Errorf("simulated disk full")
+	}
+
+	err = postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
+	if err == nil {
+		t.Fatal("expected error when branch marker write fails")
+	}
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to be written")
+	}
+	if state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeWorkBranchPushed)
+	}
+	if state.LastHeadSHA != currentTip {
+		t.Fatalf("LastHeadSHA = %q, want %q", state.LastHeadSHA, currentTip)
 	}
 }
 

@@ -1107,8 +1107,8 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state.LastReviewedSHA != currentTip {
-		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, currentTip)
+	if state.LastReviewedSHA != "older-sha" {
+		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "older-sha")
 	}
 	if state.LastOutcome != "review-launched" {
 		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-launched")
@@ -1122,6 +1122,159 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--resume="+session.CopilotSessionID) {
 		t.Fatalf("docker args should contain review resume session, got %s", joined)
+	}
+}
+
+func TestRunReview_BranchChangeRotatesReviewSessionID(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	defer func() { execCommandContext = origExecCommandContext }()
+
+	var capturedArgs []string
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		return cmd
+	}
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskPath := filepath.Join(tasksDir, queue.DirReadyReview, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/task-new"); err != nil {
+		t.Fatalf("create review branch: %v", err)
+	}
+
+	// Seed a review session on the OLD branch with a known session ID.
+	oldSessionID := "stale-review-session-from-old-branch"
+	if err := sessionmeta.Update(tasksDir, sessionmeta.KindReview, "task.md", func(session *sessionmeta.Session) {
+		session.CopilotSessionID = oldSessionID
+		session.TaskBranch = "task/task-old"
+	}); err != nil {
+		t.Fatalf("seed review session: %v", err)
+	}
+
+	env := envConfig{
+		workdir:                    "/workspace",
+		repoRoot:                   repoRoot,
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: true,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
+	}
+	run := runContext{timeout: time.Second}
+	// The claimed task uses a DIFFERENT branch than the seeded session.
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task-new", Title: "Task", TaskPath: taskPath}
+
+	if err := runReview(context.Background(), env, run, task, "main"); err != nil {
+		t.Fatalf("runReview: %v", err)
+	}
+
+	joined := strings.Join(capturedArgs, " ")
+	// The resume session ID should NOT be the stale one from the old branch.
+	if strings.Contains(joined, "--resume="+oldSessionID) {
+		t.Fatalf("expected rotated review session ID after branch change, but got stale ID %q in docker args: %s", oldSessionID, joined)
+	}
+	// It should still have a --resume arg (with the new rotated ID).
+	if !strings.Contains(joined, "--resume=") {
+		t.Fatalf("expected --resume with rotated review session ID in docker args, got: %s", joined)
+	}
+	// Verify the persisted session metadata has the new branch and a new session ID.
+	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	if err != nil {
+		t.Fatalf("Load review session: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected review session to exist after branch change")
+	}
+	if session.CopilotSessionID == oldSessionID {
+		t.Fatal("persisted review session ID should be rotated, not the stale one")
+	}
+	if session.TaskBranch != "task/task-new" {
+		t.Fatalf("TaskBranch = %q, want %q", session.TaskBranch, "task/task-new")
+	}
+}
+
+func TestPostReviewAction_ApprovedUpdatesLastReviewedSHA(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	taskFile := "approved-state.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	if err := os.WriteFile(reviewPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.LastHeadSHA = "current-tip"
+		state.LastReviewedSHA = "older-tip"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json"), []byte(`{"verdict":"approve"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile verdict: %v", err)
+	}
+
+	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/approved-state", Title: "Approved", TaskPath: reviewPath})
+
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to exist")
+	}
+	if state.LastReviewedSHA != "current-tip" {
+		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "current-tip")
+	}
+	if state.LastOutcome != "review-approved" {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-approved")
+	}
+}
+
+func TestPostReviewAction_RejectedUpdatesLastReviewedSHA(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	taskFile := "rejected-state.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	if err := os.WriteFile(reviewPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.LastHeadSHA = "rejected-tip"
+		state.LastReviewedSHA = "older-tip"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json"), []byte(`{"verdict":"reject","reason":"missing tests"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile verdict: %v", err)
+	}
+
+	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/rejected-state", Title: "Rejected", TaskPath: reviewPath})
+
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to exist")
+	}
+	if state.LastReviewedSHA != "rejected-tip" {
+		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "rejected-tip")
+	}
+	if state.LastOutcome != "review-rejected" {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-rejected")
 	}
 }
 

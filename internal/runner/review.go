@@ -270,9 +270,6 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	recordTaskStateUpdate(env.tasksDir, task.Filename, "record review launch taskstate", func(state *taskstate.TaskState) {
 		state.TaskBranch = task.Branch
 		state.TargetBranch = branch
-		if currentTip != "unknown" {
-			state.LastReviewedSHA = currentTip
-		}
 		state.LastOutcome = "review-launched"
 	})
 	if env.reviewSessionResumeEnabled {
@@ -474,6 +471,9 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 		outcome = "review-approved"
 	}
 	recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
+		if strings.TrimSpace(state.LastHeadSHA) != "" {
+			state.LastReviewedSHA = strings.TrimSpace(state.LastHeadSHA)
+		}
 		state.LastOutcome = outcome
 	})
 	messaging.WriteMessage(tasksDir, messaging.Message{

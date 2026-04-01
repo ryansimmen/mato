@@ -55,6 +55,12 @@ func LoadFile(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse config file %s: %w", path, err)
 	}
 
+	// Reject multi-document YAML: a second Decode must return io.EOF.
+	var extra interface{}
+	if err := dec.Decode(&extra); err != io.EOF {
+		return Config{}, fmt.Errorf("parse config file %s: contains multiple YAML documents", path)
+	}
+
 	normalize(&cfg)
 	return cfg, nil
 }

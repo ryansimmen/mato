@@ -165,6 +165,26 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	for _, a := range agents {
 		activeAgentIDs[a.ID] = struct{}{}
 	}
+
+	// If any active agent's latest progress fell outside the recent-message
+	// window, scan older entries to recover it.
+	var missingIDs []string
+	for _, a := range agents {
+		if _, ok := progressByAgent[a.ID]; !ok {
+			missingIDs = append(missingIDs, a.ID)
+		}
+	}
+	if len(missingIDs) > 0 {
+		olderProgress, olderErr := messaging.ReadLatestProgressForAgents(tasksDir, missingIDs, statusMessageLimit)
+		if olderErr != nil {
+			data.warnings = append(data.warnings, fmt.Sprintf("could not read older progress messages: %v", olderErr))
+		} else {
+			for id, msg := range olderProgress {
+				progressByAgent[id] = msg
+			}
+		}
+	}
+
 	activeIDs := make([]string, 0)
 	for id := range progressByAgent {
 		if _, ok := activeAgentIDs[id]; ok {

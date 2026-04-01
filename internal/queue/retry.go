@@ -13,6 +13,10 @@ import (
 	"mato/internal/taskfile"
 )
 
+var openRetryDestinationFn = func(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+}
+
 // stripFailureMarkers delegates to the canonical taskfile.StripFailureMarkers
 // implementation. Kept as a thin wrapper to avoid changing call sites.
 func stripFailureMarkers(content string) string {
@@ -70,14 +74,22 @@ func RetryTask(tasksDir, taskRef string) error {
 
 	backlogPath := filepath.Join(tasksDir, DirBacklog, match.Filename)
 
-	// Check for destination collision before writing.
-	if _, err := os.Stat(backlogPath); err == nil {
-		return fmt.Errorf("task %s already exists in backlog/", frontmatter.TaskFileStem(match.Filename))
+	reserved, err := openRetryDestinationFn(backlogPath)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("task %s already exists in backlog/", frontmatter.TaskFileStem(match.Filename))
+		}
+		return fmt.Errorf("reserve task path in backlog: %w", err)
+	}
+	if closeErr := reserved.Close(); closeErr != nil {
+		os.Remove(backlogPath)
+		return fmt.Errorf("close reserved backlog task %s: %w", match.Filename, closeErr)
 	}
 
 	// Write cleaned content directly to backlog/ — the source in failed/
 	// is never modified, so a write error here causes no data loss.
 	if err := atomicwrite.WriteFile(backlogPath, []byte(cleaned)); err != nil {
+		os.Remove(backlogPath)
 		return fmt.Errorf("write task to backlog: %w", err)
 	}
 

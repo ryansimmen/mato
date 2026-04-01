@@ -222,3 +222,52 @@ func TestLoadFile_InvalidPath(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestLoadFile_MultiDocumentRejected(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			"two documents",
+			"branch: main\n---\nbranch: develop\n",
+		},
+		{
+			"second document empty",
+			"branch: main\n---\n",
+		},
+		{
+			"three documents",
+			"branch: main\n---\nbranch: develop\n---\nbranch: staging\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "multi.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("os.WriteFile: %v", err)
+			}
+			_, err := LoadFile(path)
+			if err == nil {
+				t.Fatal("expected error for multi-document YAML, got nil")
+			}
+			if !strings.Contains(err.Error(), "multiple YAML documents") {
+				t.Errorf("error = %q, want mention of multiple YAML documents", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoadFile_SingleDocumentWithTrailingNewlines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "single.yaml")
+	if err := os.WriteFile(path, []byte("branch: main\n\n\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if cfg.Branch == nil || *cfg.Branch != "main" {
+		t.Fatalf("Branch = %v, want %q", cfg.Branch, "main")
+	}
+}
