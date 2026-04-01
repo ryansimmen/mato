@@ -3451,16 +3451,20 @@ func TestReadRecentMessages_ToleratesUnreadableFiles(t *testing.T) {
 		t.Fatalf("WriteMessage: %v", err)
 	}
 
-	// Create a file with no read permission between the two good files.
+	// Simulate an unreadable file between the two good files via the read hook.
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	unreadable := filepath.Join(eventsDir, base.Add(time.Minute).Format("20060102T150405.000000000Z")+"-unreadable.json")
 	if err := os.WriteFile(unreadable, []byte(`{"id":"bad"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := os.Chmod(unreadable, 0o000); err != nil {
-		t.Fatalf("Chmod: %v", err)
+	origReadFile := osReadFile
+	osReadFile = func(path string) ([]byte, error) {
+		if path == unreadable {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return origReadFile(path)
 	}
-	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+	t.Cleanup(func() { osReadFile = origReadFile })
 
 	got, warnings, err := ReadRecentMessages(tasksDir, 10)
 	if err != nil {

@@ -26,10 +26,7 @@ func CleanStaleLocks(tasksDir string) {
 		if err != nil || status != identity.AgentInactive {
 			continue
 		}
-		lockPath := filepath.Join(locksDir, e.Name())
-		if !lockfile.IsHeld(lockPath) {
-			os.Remove(lockPath)
-		}
+		os.Remove(filepath.Join(locksDir, e.Name()))
 	}
 }
 
