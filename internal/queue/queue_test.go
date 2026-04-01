@@ -1666,7 +1666,7 @@ func TestWriteQueueManifest_WithIndexSkipsMalformedBacklogFiles(t *testing.T) {
 
 func TestWriteQueueManifest_WithIndexFailsWhenBacklogUnreadable(t *testing.T) {
 	tasksDir := t.TempDir()
-	idx := &PollIndex{buildWarnings: []BuildWarning{{State: DirBacklog, Path: filepath.Join(tasksDir, DirBacklog), Err: os.ErrPermission}}}
+	idx := &PollIndex{buildWarnings: []BuildWarning{{State: DirBacklog, Path: filepath.Join(tasksDir, DirBacklog), Err: os.ErrPermission, DirLevel: true}}}
 
 	stderr := captureStderr(t, func() {
 		err := WriteQueueManifest(tasksDir, nil, idx)

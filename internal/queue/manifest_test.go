@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,5 +269,75 @@ func TestComputeQueueManifest_ParseFailureSkipped(t *testing.T) {
 
 	if manifest != "good.md\n" {
 		t.Errorf("manifest = %q, want %q", manifest, "good.md\n")
+	}
+}
+
+func TestComputeQueueManifest_BacklogTaskWarningDoesNotAbort(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "good.md",
+		"---\nid: good\npriority: 50\n---\n# Good\n")
+
+	// Simulate per-task backlog warnings (invalid glob, unsafe affects)
+	// that should NOT cause manifest generation to fail.
+	idx := BuildIndex(tasksDir)
+	idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
+		State: DirBacklog,
+		Path:  filepath.Join(tasksDir, DirBacklog, "good.md"),
+		Err:   fmt.Errorf("invalid glob syntax in affects: [unclosed"),
+	})
+
+	view := ComputeRunnableBacklogView(tasksDir, idx)
+	manifest, err := ComputeQueueManifestFromView(tasksDir, nil, idx, view)
+	if err != nil {
+		t.Fatalf("ComputeQueueManifestFromView should not fail on per-task warning: %v", err)
+	}
+	if manifest != "good.md\n" {
+		t.Errorf("manifest = %q, want %q", manifest, "good.md\n")
+	}
+}
+
+func TestComputeQueueManifest_BacklogDirUnreadableAborts(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// Simulate a directory-level read failure for the backlog directory.
+	idx := &PollIndex{
+		buildWarnings: []BuildWarning{{
+			State:    DirBacklog,
+			Path:     filepath.Join(tasksDir, DirBacklog),
+			Err:      os.ErrPermission,
+			DirLevel: true,
+		}},
+	}
+
+	view := ComputeRunnableBacklogView(tasksDir, idx)
+	_, err := ComputeQueueManifestFromView(tasksDir, nil, idx, view)
+	if err == nil {
+		t.Fatal("expected error when backlog directory is unreadable")
+	}
+	if !strings.Contains(err.Error(), "read backlog dir") {
+		t.Fatalf("error = %v, want backlog read failure", err)
+	}
+}
+
+func TestComputeQueueManifest_InvalidGlobStillSucceeds(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	writeTask(t, tasksDir, DirBacklog, "good.md",
+		"---\nid: good\npriority: 50\n---\n# Good\n")
+	writeTask(t, tasksDir, DirBacklog, "bad-glob.md",
+		"---\nid: bad-glob\npriority: 30\naffects:\n  - \"[unclosed\"\n---\n# Bad Glob\n")
+
+	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
+	if err != nil {
+		t.Fatalf("ComputeQueueManifest should succeed with invalid glob: %v", err)
+	}
+
+	// Both tasks should appear (invalid glob doesn't remove the task).
+	if !strings.Contains(manifest, "good.md") {
+		t.Errorf("manifest missing good.md: %q", manifest)
+	}
+	if !strings.Contains(manifest, "bad-glob.md") {
+		t.Errorf("manifest missing bad-glob.md: %q", manifest)
 	}
 }
