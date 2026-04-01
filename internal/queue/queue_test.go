@@ -789,7 +789,7 @@ func TestNormalizeOrphanContent(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "removes runtime metadata and trims",
+			name: "removes leading runtime metadata and trims",
 			data: "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/fix-bug -->\n# Fix bug\n\nDo it.\n",
 			want: "# Fix bug\n\nDo it.",
 		},
@@ -797,6 +797,31 @@ func TestNormalizeOrphanContent(t *testing.T) {
 			name: "normalizes windows newlines",
 			data: "<!-- branch: task/fix-bug -->\r\n# Fix bug\r\n\r\nBody\r\n",
 			want: "# Fix bug\n\nBody",
+		},
+		{
+			name: "preserves markers inside fenced code block",
+			data: "# Example task\n\n```markdown\n<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/example -->\n```\n\nEnd.\n",
+			want: "# Example task\n\n```markdown\n<!-- claimed-by: example-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/example -->\n```\n\nEnd.",
+		},
+		{
+			name: "preserves markers inside tilde fence",
+			data: "# Docs\n\n~~~\n<!-- branch: task/demo -->\n~~~\n",
+			want: "# Docs\n\n~~~\n<!-- branch: task/demo -->\n~~~",
+		},
+		{
+			name: "strips leading markers but preserves fenced ones",
+			data: "<!-- claimed-by: real-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/real -->\n# Task\n\n```\n<!-- branch: task/fenced-example -->\n```\n",
+			want: "# Task\n\n```\n<!-- branch: task/fenced-example -->\n```",
+		},
+		{
+			name: "preserves marker-like prose outside fences",
+			data: "# How markers work\n\nThe scheduler prepends:\n<!-- branch: task/example -->\nand\n<!-- claimed-by: agent1  claimed-at: 2026-01-01T00:00:00Z -->\nto each task file.\n",
+			want: "# How markers work\n\nThe scheduler prepends:\n<!-- branch: task/example -->\nand\n<!-- claimed-by: agent1  claimed-at: 2026-01-01T00:00:00Z -->\nto each task file.",
+		},
+		{
+			name: "skips leading blank lines between markers",
+			data: "<!-- claimed-by: a  claimed-at: 2026-01-01T00:00:00Z -->\n\n<!-- branch: task/b -->\n# Title\n",
+			want: "# Title",
 		},
 	}
 
@@ -833,6 +858,24 @@ func TestEquivalentOrphanContent(t *testing.T) {
 			name: "different body remains different",
 			a:    "# Fix bug\n",
 			b:    "# Different task\n",
+			want: false,
+		},
+		{
+			name: "fenced marker-like text makes bodies different",
+			a:    "# Task A\n\n```\n<!-- branch: task/example -->\n```\n",
+			b:    "# Task A\n",
+			want: false,
+		},
+		{
+			name: "same fenced markers are equivalent",
+			a:    "<!-- claimed-by: x  claimed-at: 2026-01-01T00:00:00Z -->\n# Task\n\n```\n<!-- branch: task/demo -->\n```\n",
+			b:    "# Task\n\n```\n<!-- branch: task/demo -->\n```\n",
+			want: true,
+		},
+		{
+			name: "prose marker-like text outside fence makes bodies different",
+			a:    "# Task\n\nExample:\n<!-- branch: task/demo -->\n",
+			b:    "# Task\n",
 			want: false,
 		},
 	}

@@ -422,6 +422,36 @@ func WriteClaimedByComment(w io.Writer, agentID, claimedAt string) error {
 	return err
 }
 
+// StripRuntimeMarkers removes only the leading scheduler-managed metadata
+// lines (claimed-by and branch markers) that the host prepends when claiming a
+// task. It stops stripping as soon as it encounters any non-empty line that is
+// not one of these markers, so marker-like text appearing in the task body
+// (prose, examples, or code blocks) is never removed. Windows newlines are
+// normalized and surrounding whitespace is trimmed. Returns nil for empty
+// results.
+func StripRuntimeMarkers(data []byte) []byte {
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	start := 0
+	for start < len(lines) {
+		trimmed := strings.TrimSpace(lines[start])
+		if trimmed == "" {
+			start++
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<!-- claimed-by:") || strings.HasPrefix(trimmed, "<!-- branch:") {
+			start++
+			continue
+		}
+		break
+	}
+	normalized := strings.TrimSpace(strings.Join(lines[start:], "\n"))
+	if normalized == "" {
+		return nil
+	}
+	return []byte(normalized)
+}
+
 // failureMarkerPrefixes lists all failure-related HTML comment prefixes that
 // should be stripped when retrying a task. This is the single source of truth
 // for retry marker cleanup — no other package should define its own list.

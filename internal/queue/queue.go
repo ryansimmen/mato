@@ -220,20 +220,7 @@ func equivalentOrphanContent(srcData, dstData []byte) bool {
 }
 
 func normalizeOrphanContent(data []byte) []byte {
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "<!-- claimed-by:") || strings.HasPrefix(trimmed, "<!-- branch:") {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-	normalized := strings.TrimSpace(strings.Join(filtered, "\n"))
-	if normalized == "" {
-		return nil
-	}
-	return []byte(normalized)
+	return taskfile.StripRuntimeMarkers(data)
 }
 
 func laterStateDuplicateDir(tasksDir, name string) string {
