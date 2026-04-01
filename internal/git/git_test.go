@@ -963,11 +963,11 @@ func TestResolveIdentity_Defaults(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(emptyHome, "nonexistent"))
 
 	name, email := ResolveIdentity(repo)
-	if name != "mato" {
-		t.Errorf("expected default name %q, got %q", "mato", name)
+	if name != defaultGitName {
+		t.Errorf("expected default name %q, got %q", defaultGitName, name)
 	}
-	if email != "mato@local.invalid" {
-		t.Errorf("expected default email %q, got %q", "mato@local.invalid", email)
+	if email != defaultGitEmail {
+		t.Errorf("expected default email %q, got %q", defaultGitEmail, email)
 	}
 }
 
@@ -995,8 +995,8 @@ func TestResolveIdentity_PartialConfig(t *testing.T) {
 	if name != "partial-user" {
 		t.Errorf("expected name %q, got %q", "partial-user", name)
 	}
-	if email != "mato@local.invalid" {
-		t.Errorf("expected default email %q, got %q", "mato@local.invalid", email)
+	if email != defaultGitEmail {
+		t.Errorf("expected default email %q, got %q", defaultGitEmail, email)
 	}
 }
 
@@ -1014,26 +1014,26 @@ func TestEnsureIdentity_SetsDefaults(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(emptyHome, "nonexistent"))
 
 	name, email := EnsureIdentity(repo)
-	if name != "mato" {
-		t.Fatalf("name = %q, want %q", name, "mato")
+	if name != defaultGitName {
+		t.Fatalf("name = %q, want %q", name, defaultGitName)
 	}
-	if email != "mato@local.invalid" {
-		t.Fatalf("email = %q, want %q", email, "mato@local.invalid")
+	if email != defaultGitEmail {
+		t.Fatalf("email = %q, want %q", email, defaultGitEmail)
 	}
 
 	storedName, err := Output(repo, "config", "--local", "user.name")
 	if err != nil {
 		t.Fatalf("git config --local user.name: %v", err)
 	}
-	if strings.TrimSpace(storedName) != "mato" {
-		t.Fatalf("stored user.name = %q, want %q", strings.TrimSpace(storedName), "mato")
+	if strings.TrimSpace(storedName) != defaultGitName {
+		t.Fatalf("stored user.name = %q, want %q", strings.TrimSpace(storedName), defaultGitName)
 	}
 	storedEmail, err := Output(repo, "config", "--local", "user.email")
 	if err != nil {
 		t.Fatalf("git config --local user.email: %v", err)
 	}
-	if strings.TrimSpace(storedEmail) != "mato@local.invalid" {
-		t.Fatalf("stored user.email = %q, want %q", strings.TrimSpace(storedEmail), "mato@local.invalid")
+	if strings.TrimSpace(storedEmail) != defaultGitEmail {
+		t.Fatalf("stored user.email = %q, want %q", strings.TrimSpace(storedEmail), defaultGitEmail)
 	}
 }
 
