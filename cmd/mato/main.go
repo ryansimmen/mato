@@ -203,6 +203,32 @@ func resolveBoolOption(envKey string, configVal *bool, defaultVal bool) (bool, e
 	return defaultVal, nil
 }
 
+// resolveDurationOption resolves a duration from an environment variable or
+// config value. It returns zero if neither source is set.
+func resolveDurationOption(envKey string, configVal *string, name string) (time.Duration, error) {
+	if v := os.Getenv(envKey); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return 0, fmt.Errorf("parse %s %q: %w", envKey, v, err)
+		}
+		if d <= 0 {
+			return 0, fmt.Errorf("%s must be positive, got %v", envKey, d)
+		}
+		return d, nil
+	}
+	if configVal != nil {
+		d, err := time.ParseDuration(*configVal)
+		if err != nil {
+			return 0, fmt.Errorf("invalid %s %q in .mato.yaml: %w", name, *configVal, err)
+		}
+		if d <= 0 {
+			return 0, fmt.Errorf("%s in .mato.yaml must be positive, got %v", name, d)
+		}
+		return d, nil
+	}
+	return 0, nil
+}
+
 func validateReasoningEffort(value, flagName string) error {
 	if !validReasoningEfforts[value] {
 		return fmt.Errorf("invalid %s %q: must be one of low, medium, high, xhigh", flagName, value)
@@ -247,43 +273,15 @@ func resolveRunOptions(flags runFlags, cfg config.Config) (runner.RunOptions, er
 		return opts, err
 	}
 
-	if v := os.Getenv("MATO_AGENT_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return opts, fmt.Errorf("parse MATO_AGENT_TIMEOUT %q: %w", v, err)
-		}
-		if d <= 0 {
-			return opts, fmt.Errorf("MATO_AGENT_TIMEOUT must be positive, got %v", d)
-		}
-		opts.AgentTimeout = d
-	} else if cfg.AgentTimeout != nil {
-		d, err := time.ParseDuration(*cfg.AgentTimeout)
-		if err != nil {
-			return opts, fmt.Errorf("invalid agent_timeout %q in .mato.yaml: %w", *cfg.AgentTimeout, err)
-		}
-		if d <= 0 {
-			return opts, fmt.Errorf("agent_timeout in .mato.yaml must be positive, got %v", d)
-		}
+	if d, err := resolveDurationOption("MATO_AGENT_TIMEOUT", cfg.AgentTimeout, "agent_timeout"); err != nil {
+		return opts, err
+	} else if d > 0 {
 		opts.AgentTimeout = d
 	}
 
-	if v := os.Getenv("MATO_RETRY_COOLDOWN"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return opts, fmt.Errorf("parse MATO_RETRY_COOLDOWN %q: %w", v, err)
-		}
-		if d <= 0 {
-			return opts, fmt.Errorf("MATO_RETRY_COOLDOWN must be positive, got %v", d)
-		}
-		opts.RetryCooldown = d
-	} else if cfg.RetryCooldown != nil {
-		d, err := time.ParseDuration(*cfg.RetryCooldown)
-		if err != nil {
-			return opts, fmt.Errorf("invalid retry_cooldown %q in .mato.yaml: %w", *cfg.RetryCooldown, err)
-		}
-		if d <= 0 {
-			return opts, fmt.Errorf("retry_cooldown in .mato.yaml must be positive, got %v", d)
-		}
+	if d, err := resolveDurationOption("MATO_RETRY_COOLDOWN", cfg.RetryCooldown, "retry_cooldown"); err != nil {
+		return opts, err
+	} else if d > 0 {
 		opts.RetryCooldown = d
 	}
 
