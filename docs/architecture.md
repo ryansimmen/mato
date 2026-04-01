@@ -259,7 +259,7 @@ Relevant frontmatter defaults from `frontmatter.go`:
 Before processing the queue, `Run()` calls `merge.AcquireLock(tasksDir)`. The lock file is `.mato/.locks/merge.lock`.
 Behavior:
 - create with `O_CREATE|O_EXCL`
-- write a `"PID:starttime"` identity (via `process.LockIdentity`) into the file to detect PID reuse; on non-Linux systems the start time is unavailable so the value is just `"PID"`
+- write a `"PID:starttime"` identity (via `process.LockIdentity`) into the file to detect PID reuse; on non-Linux systems the start time is unavailable (it requires Linux `/proc`) so the value is just `"PID"`, which means stale-lock detection works but PID-reuse protection is absent
 - if the file already exists, read the identity string
 - if `process.IsLockHolderAlive(...)` determines the holder is still running (PID alive and start-time matches), skip merging this loop
 - if the holder is stale, dead, or the identity is invalid, remove the lock and retry once
@@ -408,6 +408,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `IsLockHolderAlive(identity)` — parses an identity string and checks process liveness with start-time verification to detect PID reuse.
 - `processStartTime(pid)` — reads `/proc/<pid>/stat` field 22 (unexported).
 - `isProcessActive(pid)` — sends signal 0 to check if a PID is alive (unexported).
+- **Platform note:** Basic liveness checks (`isProcessActive`) use `os.FindProcess` + signal 0 and work on all platforms. Start-time verification (`processStartTime`) depends on the Linux `/proc` filesystem and is unavailable elsewhere. On non-Linux systems, lock identities are PID-only, so stale-lock detection still works but cannot guard against PID reuse between host restarts.
 
 ### `internal/atomicwrite/`
 - `WriteFile` — atomically writes `[]byte` to a path via temp-file-then-rename. Fsyncs the temp file before rename and syncs the parent directory afterward for crash durability.
