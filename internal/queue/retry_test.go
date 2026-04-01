@@ -10,11 +10,11 @@ import (
 	"testing"
 )
 
-func withOpenRetryDestinationFn(t *testing.T, fn func(string) (*os.File, error)) {
+func withCreateRetryTempFileFn(t *testing.T, fn func(string, string) (*os.File, error)) {
 	t.Helper()
-	orig := openRetryDestinationFn
-	openRetryDestinationFn = fn
-	t.Cleanup(func() { openRetryDestinationFn = orig })
+	orig := createRetryTempFileFn
+	createRetryTempFileFn = fn
+	t.Cleanup(func() { createRetryTempFileFn = orig })
 }
 
 func TestRetryTask_Success(t *testing.T) {
@@ -205,7 +205,7 @@ func TestRetryTask_ConcurrentReservationAllowsSingleWinner(t *testing.T) {
 	}
 }
 
-func TestRetryTask_ReservationFailureLeavesNoPlaceholder(t *testing.T) {
+func TestRetryTask_TempFileFailureLeavesNoPlaceholder(t *testing.T) {
 	tmp := t.TempDir()
 	for _, dir := range []string{DirFailed, DirBacklog} {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
@@ -216,16 +216,16 @@ func TestRetryTask_ReservationFailureLeavesNoPlaceholder(t *testing.T) {
 		t.Fatal(err)
 	}
 	backlogPath := filepath.Join(tmp, DirBacklog, "task.md")
-	withOpenRetryDestinationFn(t, func(path string) (*os.File, error) {
+	withCreateRetryTempFileFn(t, func(dir, pattern string) (*os.File, error) {
 		return nil, io.ErrUnexpectedEOF
 	})
 
 	err := RetryTask(tmp, "task")
-	if err == nil || !strings.Contains(err.Error(), "reserve task path in backlog") {
-		t.Fatalf("err = %v, want reserve task path in backlog error", err)
+	if err == nil || !strings.Contains(err.Error(), "create temp file in backlog") {
+		t.Fatalf("err = %v, want create temp file in backlog error", err)
 	}
 	if _, err := os.Stat(backlogPath); !os.IsNotExist(err) {
-		t.Fatalf("backlog placeholder should not exist after reservation failure, stat err = %v", err)
+		t.Fatalf("backlog file should not exist after temp file creation failure, stat err = %v", err)
 	}
 }
 
@@ -428,5 +428,53 @@ Body text.
 				}
 			}
 		})
+	}
+}
+
+func TestRetryTask_NoEmptyPlaceholderDuringWrite(t *testing.T) {
+	tmp := t.TempDir()
+	for _, dir := range []string{DirFailed, DirBacklog} {
+		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	content := "---\nid: race-check\npriority: 10\n---\n# Race check task\n\nBody.\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "race-check.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	backlogPath := filepath.Join(tmp, DirBacklog, "race-check.md")
+
+	// Wrap the real createRetryTempFileFn to intercept the moment just
+	// before the temp file is created, and verify that no empty file
+	// exists at the final backlog path at that point.
+	origCreate := createRetryTempFileFn
+	createRetryTempFileFn = func(dir, pattern string) (*os.File, error) {
+		// At this point, the backlog path must not exist yet.
+		if _, err := os.Stat(backlogPath); !os.IsNotExist(err) {
+			t.Errorf("backlog file visible before temp file creation; stat err = %v", err)
+		}
+		return origCreate(dir, pattern)
+	}
+	t.Cleanup(func() { createRetryTempFileFn = origCreate })
+
+	if err := RetryTask(tmp, "race-check"); err != nil {
+		t.Fatalf("RetryTask() error: %v", err)
+	}
+
+	// After retry succeeds, verify the file at the backlog path has content.
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("backlog file not found: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("backlog file is empty after retry")
+	}
+	if !strings.Contains(string(data), "# Race check task") {
+		t.Errorf("backlog file missing task title; got:\n%s", string(data))
+	}
+	if strings.Contains(string(data), "<!-- failure:") {
+		t.Errorf("backlog file still contains failure marker; got:\n%s", string(data))
 	}
 }
