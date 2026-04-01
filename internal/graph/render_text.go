@@ -102,7 +102,6 @@ func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*Gr
 	type depEntry struct {
 		label   string
 		fromKey string // empty for hidden deps
-		sort    string
 	}
 	var deps []depEntry
 
@@ -123,18 +122,14 @@ func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*Gr
 			deps = append(deps, depEntry{
 				label:   fmt.Sprintf("%s (self-dependency)", fromNode.ID),
 				fromKey: "",
-				sort:    fromNode.ID,
 			})
 			continue
 		}
-		_, alreadyVisited := visited[e.From]
 		ann := depStateAnnotation(fromNode, e.Satisfied)
 		deps = append(deps, depEntry{
 			label:   fmt.Sprintf("%s (%s)", fromNode.ID, ann),
 			fromKey: e.From,
-			sort:    fromNode.ID,
 		})
-		_ = alreadyVisited // used below
 	}
 
 	// Hidden deps.
@@ -142,7 +137,6 @@ func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*Gr
 		deps = append(deps, depEntry{
 			label:   fmt.Sprintf("%s (%s)", hd.DependencyID, hiddenDepAnnotation(hd.Status)),
 			fromKey: "",
-			sort:    hd.DependencyID,
 		})
 	}
 
