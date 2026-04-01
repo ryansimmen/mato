@@ -332,6 +332,43 @@ func TestParseFailureMarkers(t *testing.T) {
 	}
 }
 
+func TestHasMergedMarker(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			name: "standalone merged marker",
+			data: "# Task\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n",
+			want: true,
+		},
+		{
+			name: "merged marker in prose",
+			data: "Mention <!-- merged: merge-queue at 2026-01-01T00:00:00Z --> in docs.\n",
+			want: false,
+		},
+		{
+			name: "merged marker in fenced code",
+			data: strings.Join([]string{
+				"```",
+				"<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->",
+				"```",
+			}, "\n"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := HasMergedMarker([]byte(tt.data))
+			if got != tt.want {
+				t.Fatalf("HasMergedMarker() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseReviewRejectionMarkers(t *testing.T) {
 	tests := []struct {
 		name string

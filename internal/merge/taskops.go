@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"mato/internal/atomicwrite"
@@ -103,7 +102,7 @@ func taskHasMergeSuccessRecord(path string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(data), mergedTaskRecordPrefix)
+	return taskfile.HasMergedMarker(data)
 }
 
 func appendTaskRecord(path, format string, args ...any) error {

@@ -34,7 +34,17 @@ func TestTaskHasMergeSuccessRecord(t *testing.T) {
 		{
 			name:    "marker as substring in line",
 			content: "blah <!-- merged: merge-queue at 2026-01-01T00:00:00Z --> blah\n",
-			want:    true,
+			want:    false,
+		},
+		{
+			name: "marker inside fenced code block",
+			content: strings.Join([]string{
+				"# Task",
+				"```",
+				"<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->",
+				"```",
+			}, "\n"),
+			want: false,
 		},
 	}
 
