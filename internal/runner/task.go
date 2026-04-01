@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -164,50 +165,69 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 	if _, err := git.Output(cloneDir, "push", "--force-with-lease", "origin", claimed.Branch); err != nil {
 		return fmt.Errorf("push task branch %s: %w", claimed.Branch, err)
 	}
-
-	// Move task to ready-for-review/ and write branch marker.
-	if err := moveTaskToReviewWithMarker(env.tasksDir, claimed, claimed.Branch); err != nil {
-		return err
-	}
-	recordTaskStateUpdate(env.tasksDir, claimed.Filename, "record work push taskstate", func(state *taskstate.TaskState) {
+	recordTaskStateUpdate(env.tasksDir, claimed.Filename, "record pushed branch taskstate", func(state *taskstate.TaskState) {
 		state.TaskBranch = claimed.Branch
 		state.TargetBranch = env.targetBranch
 		state.LastHeadSHA = currentTip
-		state.LastOutcome = "work-pushed"
+		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
 	})
 	recordSessionUpdate(env.tasksDir, sessionmeta.KindWork, claimed.Filename, "record work session", func(session *sessionmeta.Session) {
 		session.TaskBranch = claimed.Branch
 		session.LastHeadSHA = currentTip
 	})
 
-	// Send conflict-warning with changed files.
-	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", env.targetBranch+"..HEAD")
+	// Move task to ready-for-review/ and write branch marker.
+	if err := moveTaskToReviewWithMarker(env.tasksDir, claimed, claimed.Branch); err != nil {
+		return err
+	}
+	finalizePushedTask(env.tasksDir, env.targetBranch, agentID, claimed.Filename, claimed.Branch, currentTip, changedFilesSinceTarget(cloneDir, env.targetBranch), true)
+	return nil
+}
+
+func changedFilesSinceTarget(cloneDir, targetBranch string) []string {
+	filesOut, _ := git.Output(cloneDir, "diff", "--name-only", targetBranch+"..HEAD")
 	var filesChanged []string
 	for _, f := range strings.Split(strings.TrimSpace(filesOut), "\n") {
 		if f != "" {
 			filesChanged = append(filesChanged, f)
 		}
 	}
-	messaging.WriteMessage(env.tasksDir, messaging.Message{
+	return filesChanged
+}
+
+func finalizePushedTask(tasksDir, targetBranch, agentID, filename, branch, currentTip string, filesChanged []string, logMove bool) {
+	recordTaskStateUpdate(tasksDir, filename, "record work push taskstate", func(state *taskstate.TaskState) {
+		state.TaskBranch = branch
+		state.TargetBranch = targetBranch
+		state.LastHeadSHA = currentTip
+		state.LastOutcome = "work-pushed"
+	})
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not rebuild file claims after pushing %s: %v\n", filename, err)
+	}
+
+	// Send conflict-warning with changed files.
+	messaging.WriteMessage(tasksDir, messaging.Message{
 		From:   agentID,
 		Type:   "conflict-warning",
-		Task:   claimed.Filename,
-		Branch: claimed.Branch,
+		Task:   filename,
+		Branch: branch,
 		Files:  filesChanged,
 		Body:   "About to push",
 	})
 
 	// Send completion message.
-	messaging.WriteMessage(env.tasksDir, messaging.Message{
+	messaging.WriteMessage(tasksDir, messaging.Message{
 		From:   agentID,
 		Type:   "completion",
-		Task:   claimed.Filename,
-		Branch: claimed.Branch,
+		Task:   filename,
+		Branch: branch,
 		Files:  filesChanged,
 		Body:   "Task complete, ready for review",
 	})
-	fmt.Printf("Pushed %s and moved %s to ready-for-review/\n", claimed.Branch, claimed.Filename)
-	return nil
+	if logMove {
+		fmt.Printf("Pushed %s and moved %s to ready-for-review/\n", branch, filename)
+	}
 }
 
 // moveTaskToReviewWithMarker atomically moves a task from in-progress/ to
@@ -245,6 +265,13 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 		return
 	}
 
+	if recovered, branch, currentTip, filesChanged := recoverPushedTaskToReview(tasksDir, claimed); recovered {
+		if branch != "" {
+			finalizePushedTask(tasksDir, loadRecoveredTargetBranch(tasksDir, claimed.Filename), "host-recovery", claimed.Filename, branch, currentTip, filesChanged, false)
+		}
+		return
+	}
+
 	dst := filepath.Join(tasksDir, queue.DirBacklog, claimed.Filename)
 	if err := queue.AtomicMove(claimed.TaskPath, dst); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
@@ -262,6 +289,51 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	}
 
 	fmt.Printf("Recovered task %s after agent exit\n", claimed.Filename)
+}
+
+func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (bool, string, string, []string) {
+	state, err := taskstate.Load(tasksDir, claimed.Filename)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not load taskstate for %s during pushed-task recovery: %v\n", claimed.Filename, err)
+		return false, "", "", nil
+	}
+	if state == nil || state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
+		return false, "", "", nil
+	}
+
+	branch := strings.TrimSpace(state.TaskBranch)
+	if branch == "" {
+		branch = claimed.Branch
+	}
+	if strings.TrimSpace(branch) == "" {
+		fmt.Fprintf(os.Stderr, "warning: pushed task %s is missing task branch metadata; leaving it in in-progress/\n", claimed.Filename)
+		return true, "", "", nil
+	}
+	if err := moveTaskToReviewWithMarker(tasksDir, claimed, branch); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not recover pushed task %s to ready-for-review: %v\n", claimed.Filename, err)
+		return true, "", "", nil
+	}
+	fmt.Printf("Recovered pushed task %s to ready-for-review/\n", claimed.Filename)
+	return true, branch, strings.TrimSpace(state.LastHeadSHA), recoveredFilesChanged(tasksDir, claimed.Filename)
+}
+
+func loadRecoveredTargetBranch(tasksDir, filename string) string {
+	state, err := taskstate.Load(tasksDir, filename)
+	if err != nil || state == nil {
+		return ""
+	}
+	return strings.TrimSpace(state.TargetBranch)
+}
+
+func recoveredFilesChanged(tasksDir, filename string) []string {
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, filename)
+	meta, _, err := frontmatter.ParseTaskFile(readyPath)
+	if err != nil || len(meta.Affects) == 0 {
+		return nil
+	}
+	filesChanged := append([]string(nil), meta.Affects...)
+	sort.Strings(filesChanged)
+	return filesChanged
 }
 
 // agentWroteFailureRecord checks whether the task file already contains a

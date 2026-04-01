@@ -190,6 +190,92 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	}
 }
 
+func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	for _, sub := range []string{"messages", "messages/events", "messages/completions", "messages/presence"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "pushed-task.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/pushed-task -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.TaskBranch = "task/pushed-task"
+		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/pushed-task", Title: "Example Task", TaskPath: inProgressPath}
+	stdout, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+	if !strings.Contains(stdout, "Recovered pushed task") {
+		t.Fatalf("expected pushed-task recovery message in stdout, got:\n%s", stdout)
+	}
+	if strings.Contains(stderr, "warning:") {
+		t.Fatalf("expected no stderr warnings, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to backlog, got err: %v", err)
+	}
+	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	data, err := os.ReadFile(readyPath)
+	if err != nil {
+		t.Fatalf("task should be moved to ready-for-review: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- branch: task/pushed-task -->") {
+		t.Fatalf("ready-for-review task should keep branch marker, got:\n%s", string(data))
+	}
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "work-pushed" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=work-pushed", state)
+	}
+	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	var hasConflictWarning bool
+	var hasCompletion bool
+	for _, msg := range msgs {
+		if msg.Task != taskFile {
+			continue
+		}
+		switch msg.Type {
+		case "conflict-warning":
+			hasConflictWarning = true
+		case "completion":
+			hasCompletion = true
+		}
+	}
+	if !hasConflictWarning {
+		t.Fatal("expected recovered pushed task to emit conflict-warning message")
+	}
+	if !hasCompletion {
+		t.Fatal("expected recovered pushed task to emit completion message")
+	}
+	for _, msg := range msgs {
+		if msg.Task != taskFile {
+			continue
+		}
+		if (msg.Type == "conflict-warning" || msg.Type == "completion") && len(msg.Files) != 0 {
+			t.Fatalf("recovered pushed task without affects should emit empty file list, got %v for %s", msg.Files, msg.Type)
+		}
+	}
+}
+
 func TestBuildDockerArgs_ModelAndReasoningEffort_FromRunContext(t *testing.T) {
 	baseEnv := envConfig{
 		homeDir: "/home/test",
@@ -3617,6 +3703,151 @@ func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
 	}
 }
 
+func TestPollCleanup_RebuildsFileClaimsAfterRecoveringPushedTask(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("seed file claims: %v", err)
+	}
+	content := strings.Join([]string{
+		"<!-- claimed-by: deadagent1  claimed-at: 2026-01-01T00:00:00Z -->",
+		"<!-- branch: task/pushed-claims -->",
+		"---",
+		"id: pushed-claims",
+		"affects:",
+		"  - src/api.go",
+		"---",
+		"# Pushed Claims",
+		"",
+	}, "\n")
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, "pushed-claims.md")
+	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, "pushed-claims.md", func(state *taskstate.TaskState) {
+		state.TaskBranch = "task/pushed-claims"
+		state.TargetBranch = "mato"
+		state.LastHeadSHA = "deadbeef"
+		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	captureStdoutStderr(t, func() {
+		pollCleanup(tasksDir)
+	})
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, "pushed-claims.md")); err != nil {
+		t.Fatalf("recovered pushed task should be in ready-for-review: %v", err)
+	}
+	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
+		t.Fatalf("rebuild file claims after recovery: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("read file-claims.json: %v", err)
+	}
+	var claims map[string]messaging.FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("parse file-claims.json: %v", err)
+	}
+	claim, ok := claims["src/api.go"]
+	if !ok {
+		t.Fatal("expected recovered pushed task to appear in file-claims.json")
+	}
+	if claim.Task != "pushed-claims.md" {
+		t.Fatalf("claim.Task = %q, want %q", claim.Task, "pushed-claims.md")
+	}
+	if claim.Status != queue.DirReadyReview {
+		t.Fatalf("claim.Status = %q, want %q", claim.Status, queue.DirReadyReview)
+	}
+	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	var hasConflictWarning bool
+	var hasCompletion bool
+	for _, msg := range msgs {
+		if msg.Task != "pushed-claims.md" {
+			continue
+		}
+		switch msg.Type {
+		case "conflict-warning":
+			hasConflictWarning = true
+			want := []string{"src/api.go"}
+			if len(msg.Files) != len(want) || msg.Files[0] != want[0] {
+				t.Fatalf("conflict-warning files = %v, want %v", msg.Files, want)
+			}
+		case "completion":
+			hasCompletion = true
+			want := []string{"src/api.go"}
+			if len(msg.Files) != len(want) || msg.Files[0] != want[0] {
+				t.Fatalf("completion files = %v, want %v", msg.Files, want)
+			}
+		}
+	}
+	if !hasConflictWarning {
+		t.Fatal("expected pollCleanup recovery to emit conflict-warning message")
+	}
+	if !hasCompletion {
+		t.Fatal("expected pollCleanup recovery to emit completion message")
+	}
+}
+
+func TestRecoverStuckTask_PushedTaskRecoveryUsesAffectsForMessageFiles(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	content := strings.Join([]string{
+		"<!-- claimed-by: deadagent1  claimed-at: 2026-01-01T00:00:00Z -->",
+		"<!-- branch: task/recovered-files -->",
+		"---",
+		"id: recovered-files",
+		"affects:",
+		"  - src/b.go",
+		"  - src/a.go",
+		"---",
+		"# Recovered Files",
+		"",
+	}, "\n")
+	taskFile := "recovered-files.md"
+	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+		state.TaskBranch = "task/recovered-files"
+		state.TargetBranch = "mato"
+		state.LastHeadSHA = "deadbeef"
+		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/recovered-files", Title: "Recovered Files", TaskPath: inProgressPath}
+	captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+
+	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
+	if err != nil {
+		t.Fatalf("ReadMessages: %v", err)
+	}
+	var gotFiles []string
+	for _, msg := range msgs {
+		if msg.Task == taskFile && msg.Type == "completion" {
+			gotFiles = msg.Files
+			break
+		}
+	}
+	want := []string{"src/a.go", "src/b.go"}
+	if len(gotFiles) != len(want) {
+		t.Fatalf("completion files = %v, want %v", gotFiles, want)
+	}
+	for i := range want {
+		if gotFiles[i] != want[i] {
+			t.Fatalf("completion files = %v, want %v", gotFiles, want)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // pollReconcile tests
 // ---------------------------------------------------------------------------
@@ -4362,6 +4593,24 @@ func TestResumeRejected(t *testing.T) {
 				t.Fatalf("resumeRejected(%q) = %v, want %v", tt.output, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResumeDetectionBuffer_MatchesAcrossLargeOutput(t *testing.T) {
+	var buf resumeDetectionBuffer
+	chunkA := strings.Repeat("x", resumeDetectionBufferLimit)
+	chunkB := strings.Repeat("y", resumeDetectionBufferLimit) + "\nerror: failed to resume session 123\n"
+	if _, err := buf.Write([]byte(chunkA)); err != nil {
+		t.Fatalf("Write chunkA: %v", err)
+	}
+	if buf.Matched() {
+		t.Fatal("buffer should not match before resume rejection text appears")
+	}
+	if _, err := buf.Write([]byte(chunkB)); err != nil {
+		t.Fatalf("Write chunkB: %v", err)
+	}
+	if !buf.Matched() {
+		t.Fatal("buffer should detect resume rejection after large output")
 	}
 }
 

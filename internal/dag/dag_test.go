@@ -424,6 +424,48 @@ func TestAnalyze_EmptyStringMixedWithUnsatisfiedDep(t *testing.T) {
 	}
 }
 
+func TestAnalyze_DuplicateDependsOnEntries(t *testing.T) {
+	// A node lists the same dependency twice. The duplicate should be
+	// deduplicated so only one BlockDetail entry is produced.
+	waiting := []Node{
+		{ID: "blocker"},
+		{ID: "task-a", DependsOn: []string{"blocker", "blocker"}},
+	}
+	known := map[string]struct{}{"task-a": {}, "blocker": {}}
+
+	result := Analyze(waiting, nil, known, nil)
+
+	if !reflect.DeepEqual(result.DepsSatisfied, []string{"blocker"}) {
+		t.Fatalf("DepsSatisfied = %v, want [blocker]", result.DepsSatisfied)
+	}
+	blocked := result.Blocked["task-a"]
+	if len(blocked) != 1 {
+		t.Fatalf("Blocked[task-a] has %d entries, want 1 (no duplicates): %v", len(blocked), blocked)
+	}
+	if blocked[0].DependencyID != "blocker" || blocked[0].Reason != BlockedByWaiting {
+		t.Fatalf("Blocked[task-a][0] = %v, want {blocker BlockedByWaiting}", blocked[0])
+	}
+}
+
+func TestAnalyze_DuplicateDependsOnSatisfied(t *testing.T) {
+	// A node lists the same completed dependency twice — should still be
+	// deps-satisfied without issues.
+	waiting := []Node{
+		{ID: "task-a", DependsOn: []string{"done", "done"}},
+	}
+	completed := map[string]struct{}{"done": {}}
+	known := map[string]struct{}{"task-a": {}, "done": {}}
+
+	result := Analyze(waiting, completed, known, nil)
+
+	if !reflect.DeepEqual(result.DepsSatisfied, []string{"task-a"}) {
+		t.Fatalf("DepsSatisfied = %v, want [task-a]", result.DepsSatisfied)
+	}
+	if len(result.Blocked) != 0 {
+		t.Fatalf("Blocked = %v, want empty", result.Blocked)
+	}
+}
+
 func TestAnalyze_CompletedAndWaitingOverlapIsAmbiguous(t *testing.T) {
 	// When a dependency ID exists in both completed/ and waiting/
 	// (and is therefore in ambiguousIDs), it should be classified as

@@ -82,13 +82,15 @@ func LoadOrCreate(tasksDir, kind, taskFilename, taskBranch string) (*Session, er
 		branchChanged = session.TaskBranch != trimmedTaskBranch
 		session.TaskBranch = trimmedTaskBranch
 	}
-	if strings.TrimSpace(session.CopilotSessionID) == "" {
+	if strings.TrimSpace(session.CopilotSessionID) == "" || branchChanged {
 		sessionID, err := newSessionID()
 		if err != nil {
 			return nil, err
 		}
 		session.CopilotSessionID = sessionID
-		createdFresh = true
+		if !branchChanged {
+			createdFresh = true
+		}
 	}
 	if createdFresh || branchChanged {
 		if err := write(statePath, &session); err != nil {
