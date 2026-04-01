@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,6 +152,48 @@ func TestPostReviewAction_TaskAlreadyMoved(t *testing.T) {
 	files, _ := os.ReadDir(filepath.Join(tasksDir, queue.DirReadyMerge))
 	if len(files) > 0 {
 		t.Fatal("no files should appear in ready-to-merge/ for already-moved task")
+	}
+}
+
+func TestPostReviewAction_TaskAlreadyMovedLogsWarning(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Task file does NOT exist (already moved by another process).
+	task := &queue.ClaimedTask{
+		Filename: "moved-task.md",
+		Branch:   "task/moved-task",
+		Title:    "Moved Task",
+		TaskPath: filepath.Join(tasksDir, queue.DirReadyReview, "moved-task.md"),
+	}
+
+	// Capture stderr to verify the warning is emitted.
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	postReviewAction(tasksDir, "host-agent", task)
+
+	w.Close()
+	os.Stderr = oldStderr
+
+	var buf []byte
+	buf, err = io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(buf)
+
+	if !strings.Contains(output, "warning: review verdict for moved-task.md discarded") {
+		t.Fatalf("expected warning about discarded verdict, got: %q", output)
+	}
+	if !strings.Contains(output, "task file moved") {
+		t.Fatalf("expected 'task file moved' in warning, got: %q", output)
 	}
 }
 
