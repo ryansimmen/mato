@@ -564,13 +564,13 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 
 	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, repoRoot, tasksDir, opts)
 
-	if err := ensureDockerImage(cfg.image); err != nil {
-		return err
-	}
-
 	ctx, cancel := setupSignalContext()
 	defer cancel()
 	defer signal.Stop(signalChan(ctx))
+
+	if err := ensureDockerImage(ctx, cfg.image); err != nil {
+		return err
+	}
 
 	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown)
 }
@@ -811,6 +811,10 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 // performs post-review actions (approve or reject). It returns whether a
 // review was processed.
 func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, branch, agentID string, idx *queue.PollIndex) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
 	reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx)
 	if reviewTask == nil {
 		return false
@@ -831,14 +835,18 @@ func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, br
 
 // pollMerge acquires the merge lock and processes the squash-merge queue.
 // It returns the number of tasks successfully merged.
-func pollMerge(repoRoot, tasksDir, branch string) int {
+func pollMerge(ctx context.Context, repoRoot, tasksDir, branch string) int {
+	if ctx.Err() != nil {
+		return 0
+	}
+
 	cleanup, ok := merge.AcquireLock(tasksDir)
 	if !ok {
 		return 0
 	}
 	defer cleanup()
 
-	count := merge.ProcessQueue(repoRoot, tasksDir, branch)
+	count := merge.ProcessQueueContext(ctx, repoRoot, tasksDir, branch)
 	if count > 0 {
 		fmt.Printf("Merged %d task(s) into %s\n", count, branch)
 	}
@@ -892,7 +900,7 @@ func pollIterate(
 		}
 	}
 
-	if result.claimedTask && ctx.Err() != nil {
+	if ctx.Err() != nil {
 		result.pauseActive = ps1.Active
 		return result
 	}
@@ -902,7 +910,9 @@ func pollIterate(
 		result.reviewProcessed = pollReviewFn(ctx, env, run, tasksDir, branch, agentID, idx)
 	}
 
-	result.mergeCount = pollMergeFn(repoRoot, tasksDir, branch)
+	if ctx.Err() == nil {
+		result.mergeCount = pollMergeFn(ctx, repoRoot, tasksDir, branch)
+	}
 	result.pauseActive = ps2.Active
 
 	now := nowFn().UTC()
@@ -929,7 +939,7 @@ func pollIterate(
 		hb.recordActivity(now)
 	}
 
-	result.hasReviewTasks = selectTaskForReview(tasksDir, nil) != nil
+	result.hasReviewTasks = hasReviewCandidates(tasksDir)
 	result.hasReadyMerge = merge.HasReadyTasks(tasksDir)
 	return result
 }
@@ -959,10 +969,11 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		result := pollIterate(ctx, env, run, repoRoot, tasksDir, branch, agentID, cooldown, &heartbeat, failedDirExcluded, priorPaused)
 		priorPaused = result.pauseActive
 
-		// If a shutdown signal was received during the task run, exit
-		// now that the task has been properly recovered. This avoids
-		// starting review or merge work with a cancelled context.
-		if result.claimedTask && ctx.Err() != nil {
+		// If a shutdown signal was received during the iteration, exit
+		// immediately. This is unconditional — regardless of whether a
+		// task was claimed — to avoid starting new work with a cancelled
+		// context.
+		if ctx.Err() != nil {
 			return nil
 		}
 
@@ -1018,14 +1029,6 @@ func surfaceBuildWarnings(idx *queue.PollIndex) bool {
 		}
 	}
 	return hasDirReadFailure
-}
-
-// checkIdleTransition returns true when the system transitions from active to
-// idle, so the caller should print the idle message exactly once per idle period.
-func checkIdleTransition(isIdle bool, wasIdle *bool) bool {
-	shouldPrint := isIdle && !*wasIdle
-	*wasIdle = isIdle
-	return shouldPrint
 }
 
 // appendToFileFn is the function used to append text to files in post-agent

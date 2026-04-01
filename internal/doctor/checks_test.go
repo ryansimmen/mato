@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/lockfile"
 	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
@@ -318,6 +319,46 @@ func TestDoctor_StaleMergeLock_LivePID(t *testing.T) {
 	}
 }
 
+func TestDoctor_DoesNotTreatUnreadableAgentLockAsStale(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	lockPath := filepath.Join(tasksDir, ".locks", "liveagent.pid")
+	testutil.WriteFile(t, lockPath, process.LockIdentity(os.Getpid()))
+
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.stale_pid" && strings.Contains(f.Path, "liveagent.pid") {
+				t.Fatalf("unreadable live lock must not be reported as stale: %+v", f)
+			}
+		}
+	}
+	foundUnreadable := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.unreadable_pid" && strings.Contains(f.Path, "liveagent.pid") {
+				foundUnreadable = true
+			}
+		}
+	}
+	if !foundUnreadable {
+		t.Fatal("expected locks.unreadable_pid finding for unreadable live lock")
+	}
+}
+
 // ---------- Leftover Temp Files ----------
 
 func TestDoctor_LeftoverTempFiles_Clean(t *testing.T) {
@@ -486,6 +527,253 @@ func TestDoctor_LeftoverTempFiles_NormalFilesIgnored(t *testing.T) {
 				t.Error("unexpected leftover_temp_files finding for normal files")
 			}
 		}
+	}
+}
+
+// ---------- Cross-Device (xdev) Leftover Temp Files ----------
+
+func TestDoctor_LeftoverXdevFiles_Detected(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create a leftover cross-device temp file in a queue directory.
+	xdevFile := filepath.Join(tasksDir, "backlog", ".fix-bug.md.xdev-789012")
+	testutil.WriteFile(t, xdevFile, "partial xdev write")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if !f.Fixable {
+					t.Error("expected leftover_temp_files to be fixable")
+				}
+				if !strings.Contains(f.Message, "1 leftover") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding for xdev file")
+	}
+}
+
+func TestDoctor_LeftoverXdevFiles_MixedWithTmp(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create both .tmp- and .xdev- leftover files.
+	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", ".task.md.tmp-111"), "tmp data")
+	testutil.WriteFile(t, filepath.Join(tasksDir, "backlog", ".task.md.xdev-222"), "xdev data")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if !strings.Contains(f.Message, "2 leftover") {
+					t.Errorf("expected 2 temp files (tmp + xdev), got: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding")
+	}
+}
+
+func TestDoctor_LeftoverXdevFiles_Fix_OldFiles(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	xdevFile := filepath.Join(tasksDir, "backlog", ".task.md.xdev-999")
+	testutil.WriteFile(t, xdevFile, "partial xdev write")
+	// Backdate beyond the 1-hour threshold.
+	old := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(xdevFile, old, old)
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, statErr := os.Stat(xdevFile); !os.IsNotExist(statErr) {
+		t.Error("expected old xdev temp file to be removed by --fix")
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" && f.Fixed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("expected leftover_temp_files to be marked fixed for xdev files")
+	}
+}
+
+func TestDoctor_LeftoverXdevFiles_InMessageDir(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create xdev temp file in a messaging directory.
+	testutil.WriteFile(t, filepath.Join(tasksDir, "messages", "events", ".msg.json.xdev-333"), "xdev data")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if !strings.Contains(f.Message, "1 leftover") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding for xdev file in message dir")
+	}
+}
+
+// ---------- Retry temp file leftovers ----------
+
+func TestDoctor_LeftoverRetryFiles_Detected(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Create a leftover retry temp file in the backlog directory.
+	retryFile := filepath.Join(tasksDir, "backlog", ".fix-bug.md.retry-123456")
+	testutil.WriteFile(t, retryFile, "partial retry write")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if !f.Fixable {
+					t.Error("expected leftover_temp_files to be fixable")
+				}
+				if !strings.Contains(f.Message, "1 leftover") {
+					t.Errorf("unexpected message: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding for retry temp file")
+	}
+}
+
+func TestDoctor_LeftoverRetryFiles_Fix_OldFiles(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	retryFile := filepath.Join(tasksDir, "backlog", ".task.md.retry-999")
+	testutil.WriteFile(t, retryFile, "partial retry write")
+	// Backdate beyond the 1-hour threshold.
+	old := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(retryFile, old, old)
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, statErr := os.Stat(retryFile); !os.IsNotExist(statErr) {
+		t.Error("expected old retry temp file to be removed by --fix")
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" && f.Fixed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("expected leftover_temp_files to be marked fixed for retry files")
+	}
+}
+
+func TestDoctor_LeftoverRetryFiles_Fix_RecentNotRemoved(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	retryFile := filepath.Join(tasksDir, "backlog", ".task.md.retry-recent")
+	testutil.WriteFile(t, retryFile, "in progress retry")
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, statErr := os.Stat(retryFile); os.IsNotExist(statErr) {
+		t.Error("recent retry temp file should not be removed by --fix")
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.leftover_temp_files" {
+				found = true
+				if f.Fixed {
+					t.Error("expected leftover_temp_files NOT to be marked fixed (recent retry file kept)")
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.leftover_temp_files finding")
+	}
+}
+
+func TestIsTempFile(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{".task.md.tmp-123456", true},
+		{".task.md.xdev-789012", true},
+		{".task.md.retry-345678", true},
+		{".msg.json.tmp-222", true},
+		{".msg.json.xdev-333", true},
+		{".msg.json.retry-444", true},
+		{"real-task.md", false},
+		{".hidden-file", false},
+		{"tmp-not-dotted", false},
+		{"xdev-not-dotted", false},
+		{"retry-not-dotted", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTempFile(tt.name); got != tt.want {
+				t.Errorf("isTempFile(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
 	}
 }
 

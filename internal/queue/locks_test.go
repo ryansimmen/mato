@@ -1,10 +1,12 @@
 package queue
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"mato/internal/lockfile"
 	"mato/internal/process"
 )
 
@@ -108,6 +110,33 @@ func TestCleanStaleLocks_MissingLocksDir(t *testing.T) {
 
 	// Should not panic when .locks doesn't exist.
 	CleanStaleLocks(tasksDir)
+}
+
+func TestCleanStaleLocks_PreservesUnreadableLock(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+	locksDir := filepath.Join(tasksDir, ".locks")
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("mkdir .locks: %v", err)
+	}
+	lockPath := filepath.Join(locksDir, "unknown-agent.pid")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	orig := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	})
+	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+
+	CleanStaleLocks(tasksDir)
+
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("unreadable lock should be preserved: %v", err)
+	}
 }
 
 func TestAcquireReviewLock_SuccessWhenNoLock(t *testing.T) {

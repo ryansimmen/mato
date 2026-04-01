@@ -1,11 +1,13 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func withStatPathFn(t *testing.T, fn func(string) (os.FileInfo, error)) {
@@ -438,7 +440,7 @@ func TestEnsureDockerImage_Found(t *testing.T) {
 		return nil
 	}
 
-	if err := ensureDockerImage("test:latest"); err != nil {
+	if err := ensureDockerImage(context.Background(), "test:latest"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !inspectCalled {
@@ -458,7 +460,7 @@ func TestEnsureDockerImage_NotFound_PullSucceeds(t *testing.T) {
 		return fmt.Errorf("No such image: %s", image)
 	}
 	pullCalled := false
-	dockerPullFn = func(image string) error {
+	dockerPullFn = func(_ context.Context, image string) error {
 		pullCalled = true
 		if image != "myimage:v1" {
 			t.Errorf("expected image %q, got %q", "myimage:v1", image)
@@ -467,7 +469,7 @@ func TestEnsureDockerImage_NotFound_PullSucceeds(t *testing.T) {
 	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := ensureDockerImage("myimage:v1"); err != nil {
+		if err := ensureDockerImage(context.Background(), "myimage:v1"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -494,12 +496,12 @@ func TestEnsureDockerImage_NotFound_PullFails(t *testing.T) {
 	dockerImageInspectFn = func(image string) error {
 		return fmt.Errorf("No such image: %s", image)
 	}
-	dockerPullFn = func(image string) error {
+	dockerPullFn = func(_ context.Context, image string) error {
 		return fmt.Errorf("network timeout")
 	}
 
 	_, _ = captureStdoutStderr(t, func() {
-		err := ensureDockerImage("bad:image")
+		err := ensureDockerImage(context.Background(), "bad:image")
 		if err == nil {
 			t.Fatal("expected error when pull fails")
 		}
@@ -510,4 +512,98 @@ func TestEnsureDockerImage_NotFound_PullFails(t *testing.T) {
 			t.Errorf("expected actionable guidance in error: %v", err)
 		}
 	})
+}
+
+func TestEnsureDockerImage_PullCancelled(t *testing.T) {
+	origInspect := dockerImageInspectFn
+	origPull := dockerPullFn
+	t.Cleanup(func() {
+		dockerImageInspectFn = origInspect
+		dockerPullFn = origPull
+	})
+
+	dockerImageInspectFn = func(image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	}
+	dockerPullFn = func(ctx context.Context, image string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, _ = captureStdoutStderr(t, func() {
+		err := ensureDockerImage(ctx, "test:latest")
+		if err == nil {
+			t.Fatal("expected error when context is cancelled")
+		}
+		if !strings.Contains(err.Error(), "cancelled") {
+			t.Errorf("expected cancellation error, got: %v", err)
+		}
+	})
+}
+
+func TestEnsureDockerImage_PullTimeout(t *testing.T) {
+	origInspect := dockerImageInspectFn
+	origPull := dockerPullFn
+	origTimeout := dockerPullTimeout
+	t.Cleanup(func() {
+		dockerImageInspectFn = origInspect
+		dockerPullFn = origPull
+		dockerPullTimeout = origTimeout
+	})
+
+	dockerPullTimeout = 50 * time.Millisecond
+
+	dockerImageInspectFn = func(image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	}
+	dockerPullFn = func(ctx context.Context, image string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	_, _ = captureStdoutStderr(t, func() {
+		err := ensureDockerImage(context.Background(), "slow:image")
+		if err == nil {
+			t.Fatal("expected error when pull times out")
+		}
+		if !strings.Contains(err.Error(), "timed out") {
+			t.Errorf("expected timeout error, got: %v", err)
+		}
+	})
+}
+
+func TestEnsureDockerImage_PullReceivesContext(t *testing.T) {
+	origInspect := dockerImageInspectFn
+	origPull := dockerPullFn
+	t.Cleanup(func() {
+		dockerImageInspectFn = origInspect
+		dockerPullFn = origPull
+	})
+
+	dockerImageInspectFn = func(image string) error {
+		return fmt.Errorf("No such image: %s", image)
+	}
+
+	var receivedCtx context.Context
+	dockerPullFn = func(ctx context.Context, image string) error {
+		receivedCtx = ctx
+		return nil
+	}
+
+	_, _ = captureStdoutStderr(t, func() {
+		if err := ensureDockerImage(context.Background(), "test:latest"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	if receivedCtx == nil {
+		t.Fatal("expected dockerPullFn to receive a non-nil context")
+	}
+	// The pull context should have a deadline (from dockerPullTimeout).
+	if _, ok := receivedCtx.Deadline(); !ok {
+		t.Error("expected pull context to have a deadline")
+	}
 }

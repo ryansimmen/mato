@@ -44,10 +44,16 @@ var dockerImageInspectFn = func(image string) error {
 	return exec.CommandContext(ctx, "docker", "image", "inspect", image).Run()
 }
 
-// dockerPullFn pulls a Docker image. It is a variable so tests can inject
-// a stub without calling Docker.
-var dockerPullFn = func(image string) error {
-	cmd := exec.Command("docker", "pull", image)
+// dockerPullTimeout is the maximum time allowed for a docker pull operation.
+// Image pulls can be large and slow, so this is generous but prevents
+// indefinite hangs from a stuck daemon or stalled network.
+var dockerPullTimeout = 10 * time.Minute
+
+// dockerPullFn pulls a Docker image. It accepts a context for cancellation
+// and timeout support. It is a variable so tests can inject a stub without
+// calling Docker.
+var dockerPullFn = func(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "pull", image)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -55,15 +61,23 @@ var dockerPullFn = func(image string) error {
 
 // ensureDockerImage checks that the configured Docker image is available
 // locally. If not, it prints a message and attempts to pull it with
-// stdout/stderr forwarded to the user. Returns an error if the pull fails.
-// The check is idempotent: once an image is pulled, subsequent calls
-// return immediately.
-func ensureDockerImage(image string) error {
+// stdout/stderr forwarded to the user. Returns an error if the pull fails
+// or the context is cancelled. The check is idempotent: once an image is
+// pulled, subsequent calls return immediately.
+func ensureDockerImage(ctx context.Context, image string) error {
 	if err := dockerImageInspectFn(image); err == nil {
 		return nil
 	}
 	fmt.Printf("Docker image %s not found locally. Pulling...\n", image)
-	if err := dockerPullFn(image); err != nil {
+	pullCtx, cancel := context.WithTimeout(ctx, dockerPullTimeout)
+	defer cancel()
+	if err := dockerPullFn(pullCtx, image); err != nil {
+		if pullCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("docker pull %s timed out after %s: %w", image, dockerPullTimeout, err)
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("docker pull %s cancelled: %w", image, err)
+		}
 		return fmt.Errorf("failed to pull Docker image %s: verify the image name and your network connection: %w", image, err)
 	}
 	return nil

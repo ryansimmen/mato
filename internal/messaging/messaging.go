@@ -18,6 +18,18 @@ import (
 	"mato/internal/taskfile"
 )
 
+var osReadFile = os.ReadFile
+
+// TestHookReadFile exposes the current read hook for tests.
+func TestHookReadFile() func(string) ([]byte, error) {
+	return osReadFile
+}
+
+// SetTestHookReadFile replaces the read hook for tests.
+func SetTestHookReadFile(fn func(string) ([]byte, error)) {
+	osReadFile = fn
+}
+
 type Message struct {
 	ID     string    `json:"id"`
 	From   string    `json:"from"`
@@ -127,7 +139,7 @@ func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(eventsDir, entry.Name()))
+		data, err := osReadFile(filepath.Join(eventsDir, entry.Name()))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -160,14 +172,18 @@ func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 // by os.ReadDir) to skip older entries without reading or parsing them.
 // If limit <= 0, all messages are read (equivalent to ReadMessages with a
 // zero time).
-func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
+//
+// Per-file read failures are collected as structured warnings (the second
+// return value) instead of aborting, so callers can surface them in
+// dashboards. A non-nil error is only returned for directory-level failures.
+func ReadRecentMessages(tasksDir string, limit int) ([]Message, []string, error) {
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, err := os.ReadDir(eventsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("read messages dir: %w", err)
+		return nil, nil, fmt.Errorf("read messages dir: %w", err)
 	}
 
 	// Filter to JSON files only.
@@ -184,19 +200,21 @@ func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
 		jsonEntries = jsonEntries[len(jsonEntries)-limit:]
 	}
 
+	var warnings []string
 	messages := make([]Message, 0, len(jsonEntries))
 	for _, entry := range jsonEntries {
-		data, err := os.ReadFile(filepath.Join(eventsDir, entry.Name()))
+		data, err := osReadFile(filepath.Join(eventsDir, entry.Name()))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read message %s: %w", entry.Name(), err)
+			warnings = append(warnings, fmt.Sprintf("could not read message %s: %v", entry.Name(), err))
+			continue
 		}
 
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse message %s: %v\n", entry.Name(), err)
+			warnings = append(warnings, fmt.Sprintf("could not parse message %s: %v", entry.Name(), err))
 			continue
 		}
 		messages = append(messages, msg)
@@ -209,7 +227,7 @@ func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
 		return messages[i].SentAt.Before(messages[j].SentAt)
 	})
 
-	return messages, nil
+	return messages, warnings, nil
 }
 
 // filenameTimestampPrefix is the length of the timestamp prefix in message
@@ -222,6 +240,10 @@ const filenameTimestampPrefix = len("20060102T150405.000000000Z")
 // possible. Filenames that do not contain "-progress-" are skipped without
 // parsing.
 //
+// Per-file read failures are collected as structured warnings (the second
+// return value) instead of aborting, so callers can surface them in
+// dashboards. A non-nil error is only returned for directory-level failures.
+//
 // The tie-break rule for equal timestamps is the canonical contract shared
 // with latestProgressByAgent: when two progress messages from the same agent
 // share the same timestamp, the one with the lexically smallest ID wins.
@@ -232,18 +254,18 @@ const filenameTimestampPrefix = len("20060102T150405.000000000Z")
 // are finalized as soon as the filename timestamp prefix drops below their
 // match timestamp, so the scan stops early even when an agent has no older
 // entries.
-func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (map[string]Message, error) {
+func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (map[string]Message, []string, error) {
 	if len(agentIDs) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, err := os.ReadDir(eventsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("read messages dir: %w", err)
+		return nil, nil, fmt.Errorf("read messages dir: %w", err)
 	}
 
 	// Filter to JSON files only.
@@ -257,7 +279,7 @@ func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (
 	// Only look at entries older than the skip window.
 	end := len(jsonEntries) - skip
 	if end <= 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	jsonEntries = jsonEntries[:end]
 
@@ -266,6 +288,7 @@ func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (
 		wantedSet[id] = struct{}{}
 	}
 
+	var warnings []string
 	result := make(map[string]Message, len(agentIDs))
 	// pending tracks agents whose latest timestamp has been found but
 	// which may still have equal-timestamp entries with a smaller ID.
@@ -308,16 +331,18 @@ func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(eventsDir, name))
+		data, err := osReadFile(filepath.Join(eventsDir, name))
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read message %s: %w", name, err)
+			warnings = append(warnings, fmt.Sprintf("could not read older progress message %s: %v", name, err))
+			continue
 		}
 
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
+			warnings = append(warnings, fmt.Sprintf("could not parse older progress message %s: %v", name, err))
 			continue
 		}
 
@@ -345,7 +370,7 @@ func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (
 		}
 	}
 
-	return result, nil
+	return result, warnings, nil
 }
 
 func WritePresence(tasksDir, agentID, taskFile, branch string) error {
@@ -431,7 +456,12 @@ func CleanStalePresence(tasksDir string) {
 			agentID = info.AgentID
 		}
 
-		if !identity.IsAgentActive(tasksDir, agentID) {
+		status, err := identity.DescribeAgentActivity(tasksDir, agentID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not verify agent lock for presence file %s: %v\n", entry.Name(), err)
+			continue
+		}
+		if status == identity.AgentInactive {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				fmt.Fprintf(os.Stderr, "warning: could not remove stale presence file %s: %v\n", entry.Name(), err)
 			}

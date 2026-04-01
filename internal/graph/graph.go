@@ -147,8 +147,7 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 	}
 
 	var data GraphData
-	aliasMap := make(map[string][]string)    // ref → []nodeKey
-	nodeByKey := make(map[string]*GraphNode) // key → node pointer
+	aliasMap := make(map[string][]string) // ref → []nodeKey
 
 	// Track which waiting IDs are retained (for duplicate detection).
 	retainedWaitingIDs := diag.RetainedFiles // id → filename
@@ -178,7 +177,6 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 			}
 
 			data.Nodes = append(data.Nodes, node)
-			nodeByKey[key] = &data.Nodes[len(data.Nodes)-1]
 
 			// Step 4: Build alias map.
 			stem := frontmatter.TaskFileStem(snap.Filename)

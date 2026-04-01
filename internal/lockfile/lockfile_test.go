@@ -110,6 +110,8 @@ func TestConcurrentAcquireMutualExclusion(t *testing.T) {
 
 	var mu sync.Mutex
 	winners := 0
+	activeHolders := 0
+	maxConcurrent := 0
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
@@ -120,20 +122,30 @@ func TestConcurrentAcquireMutualExclusion(t *testing.T) {
 			if ok {
 				mu.Lock()
 				winners++
+				activeHolders++
+				if activeHolders > maxConcurrent {
+					maxConcurrent = activeHolders
+				}
 				mu.Unlock()
 				// Hold the lock briefly to let other goroutines attempt.
 				time.Sleep(5 * time.Millisecond)
+				mu.Lock()
+				activeHolders--
+				mu.Unlock()
 				release()
 			}
 		}()
 	}
 	wg.Wait()
 
-	// Because all goroutines share the same PID, only one should succeed
-	// at any given moment. With the current non-blocking implementation
-	// and no retry delay, exactly one goroutine wins.
-	if winners != 1 {
-		t.Errorf("expected exactly 1 winner among concurrent acquires, got %d", winners)
+	// The real invariant is mutual exclusion: even if multiple goroutines win
+	// sequentially as earlier holders release the lock, there must never be
+	// more than one active holder at a time.
+	if winners == 0 {
+		t.Fatal("expected at least one winner among concurrent acquires")
+	}
+	if maxConcurrent != 1 {
+		t.Errorf("expected max 1 concurrent lock holder, got %d", maxConcurrent)
 	}
 }
 
@@ -313,6 +325,87 @@ func TestIsHeld_EmptyFile(t *testing.T) {
 
 	if IsHeld(lockPath) {
 		t.Error("IsHeld should return false for an empty lock file")
+	}
+}
+
+// --- CheckHeld tests ---
+
+func TestCheckHeld_LiveProcess(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "live.lock")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+	held, err := CheckHeld(lockPath)
+	if err != nil {
+		t.Fatalf("CheckHeld returned unexpected error: %v", err)
+	}
+	if !held {
+		t.Error("CheckHeld should return true for a lock held by the current process")
+	}
+}
+
+func TestCheckHeld_DeadProcess(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "dead.lock")
+	if err := os.WriteFile(lockPath, []byte("4194300:99999999"), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+	held, err := CheckHeld(lockPath)
+	if err != nil {
+		t.Fatalf("CheckHeld returned unexpected error: %v", err)
+	}
+	if held {
+		t.Error("CheckHeld should return false for a lock held by a dead process")
+	}
+}
+
+func TestCheckHeld_MissingFile(t *testing.T) {
+	held, err := CheckHeld("/nonexistent/path/to/lock")
+	if err != nil {
+		t.Fatalf("CheckHeld should return nil error for missing file, got: %v", err)
+	}
+	if held {
+		t.Error("CheckHeld should return false for a missing file")
+	}
+}
+
+func TestCheckHeld_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "empty.lock")
+	if err := os.WriteFile(lockPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+	held, err := CheckHeld(lockPath)
+	if err != nil {
+		t.Fatalf("CheckHeld returned unexpected error: %v", err)
+	}
+	if held {
+		t.Error("CheckHeld should return false for an empty lock file")
+	}
+}
+
+func TestCheckHeld_UnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "unreadable.lock")
+	if err := os.WriteFile(lockPath, []byte("12345:99999"), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+	orig := osReadFile
+	osReadFile = func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	}
+	t.Cleanup(func() { osReadFile = orig })
+
+	held, err := CheckHeld(lockPath)
+	if err == nil {
+		t.Fatal("CheckHeld should return an error for an unreadable lock file")
+	}
+	if held {
+		t.Error("CheckHeld should return false when the file is unreadable")
 	}
 }
 
