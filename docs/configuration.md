@@ -89,6 +89,10 @@ task-specific scheduling metadata.
 ## Precedence
 Settings resolve in this order: CLI flag > environment variable > `.mato.yaml` > hardcoded default.
 
+For user-facing CLI defaults, treat command help as canonical: `mato --help`,
+`mato run --help`, and each subcommand's `--help` output reflect the built-in
+fallbacks documented here.
+
 Only settings that exist on more than one surface participate in this precedence
 chain. Task frontmatter is separate from CLI/env/config resolution and controls
 per-task scheduling behavior. It can still override runtime defaults that `mato`
@@ -98,7 +102,7 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 | Setting | CLI Flag | Env Var | Config File | Default |
 | --- | --- | --- | --- | --- |
 | repo | `--repo` | — | — | current directory |
-| branch | `mato run --branch` | `MATO_BRANCH` | `branch` | `mato` |
+| branch | `mato run --branch`, `mato init --branch` | `MATO_BRANCH` | `branch` | `mato` |
 | docker image | — | `MATO_DOCKER_IMAGE` | `docker_image` | `ubuntu:24.04` |
 | task model | `mato run --task-model` | `MATO_TASK_MODEL` | `task_model` | `claude-opus-4.6` |
 | review model | `mato run --review-model` | `MATO_REVIEW_MODEL` | `review_model` | `gpt-5.4` |
@@ -110,10 +114,11 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 
 ## CLI Flags
 Long flags support both `--flag value` and `--flag=value` forms.
+
 | Flag | Applies to | Default | Description |
 | --- | --- | --- | --- |
 | `--repo <path>` | root persistent flag and all repo-aware subcommands | current directory | Target Git repository. `mato` resolves it to the repository top level with `git rev-parse --show-toplevel`. |
-| `--branch <name>` | `mato run`, `mato init` | `mato` | Target branch used for merge processing. |
+| `--branch <name>` | `mato run`, `mato init` | `mato` | Target branch used for merge processing and repository bootstrap. |
 | `--dry-run` | `mato run` | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, computes the effective `.queue` manifest, and prints a summary. Exits after one pass. |
 | `--once` | `mato run` | `false` | Run exactly one host poll iteration, then exit. This can claim a task, process one existing review from the iteration snapshot, and merge ready tasks, but it does not keep polling to drain follow-on review or merge work. |
 | `--until-idle` | `mato run` | `false` | Keep polling until no immediately claimable backlog tasks remain, no review candidates remain, and no tasks remain in `ready-to-merge/`, then exit. A paused but otherwise empty queue is considered idle. |
