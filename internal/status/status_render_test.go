@@ -681,6 +681,213 @@ func TestRenderWarnings_WithWarnings(t *testing.T) {
 	}
 }
 
+func TestRenderCompactAgents_PrefixedAgentIDUsesProgress(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "agent-abc12345", PID: 1234}},
+		activeProgress: []progressEntry{{
+			displayID: "agent-abc12345",
+			body:      "Step: WORK",
+			task:      "task-a.md",
+			ago:       "2 min",
+		}},
+	}
+
+	renderCompactAgents(&buf, c, data)
+	output := buf.String()
+
+	for _, want := range []string{"agent-abc12345", "task-a.md", "WORK", "2 min"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderCompactQueueSummary(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		queueCounts: map[string]int{
+			queue.DirBacklog:     24,
+			queue.DirInProgress:  7,
+			queue.DirReadyReview: 3,
+			queue.DirReadyMerge:  1,
+			queue.DirFailed:      2,
+		},
+		runnable: 9,
+	}
+
+	renderCompactQueueSummary(&buf, c, data)
+	output := buf.String()
+
+	for _, want := range []string{
+		"Queue: 24 backlog | 9 runnable | 7 running | 3 review | 1 merge | 2 failed",
+		"Pause: not paused",
+		"Merge queue: idle",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderCompactAgents_WithPresenceNoProgress(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+		presenceMap: map[string]messaging.PresenceInfo{
+			"abc12345": {Task: "my-task.md", Branch: "task/my-task"},
+		},
+	}
+
+	renderCompactAgents(&buf, c, data)
+	output := buf.String()
+
+	for _, want := range []string{"agent-abc12345", "my-task.md", "task/my-task"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q, got:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "WORK") {
+		t.Errorf("output should not invent a progress stage, got:\n%s", output)
+	}
+}
+
+func TestRenderCompactAgents_WithProgressNoPresenceFallsBackToProgressTask(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+		activeProgress: []progressEntry{{
+			displayID: "agent-abc12345",
+			body:      "Step: COMMIT",
+			task:      "fallback-task.md",
+			ago:       "30 sec",
+		}},
+	}
+
+	renderCompactAgents(&buf, c, data)
+	output := buf.String()
+
+	for _, want := range []string{"agent-abc12345", "fallback-task.md", "COMMIT", "30 sec"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderCompactAgents_TruncatesLongList(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	agents := make([]statusAgent, 0, 7)
+	for i := range 7 {
+		agents = append(agents, statusAgent{ID: "agent-" + intToStr(i), PID: 1000 + i})
+	}
+
+	renderCompactAgents(&buf, c, statusData{agents: agents})
+	output := buf.String()
+
+	if !strings.Contains(output, "... +2 more") {
+		t.Errorf("output should include truncation summary, got:\n%s", output)
+	}
+	if strings.Contains(output, "agent-5") || strings.Contains(output, "agent-6") {
+		t.Errorf("output should omit rows beyond compact limit, got:\n%s", output)
+	}
+}
+
+func TestRenderCompactAttention_OrphanedInProgressTaskShown(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		inProgressTasks: []taskEntry{{
+			name:      "orphaned-task.md",
+			claimedBy: "missing-agent",
+		}},
+	}
+
+	renderCompactAttention(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "orphaned-task.md") {
+		t.Errorf("output missing orphaned in-progress task, got:\n%s", output)
+	}
+	if !strings.Contains(output, "running without active agent") {
+		t.Errorf("output missing orphaned-task summary, got:\n%s", output)
+	}
+}
+
+func TestRenderCompactAttention_ShowsWarningsInlineWhenShort(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{warnings: []string{"warning one", "warning two"}}
+
+	renderCompactAttention(&buf, c, data)
+	output := buf.String()
+
+	for _, want := range []string{"Attention", "warning: warning one", "warning: warning two"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderCompactAttention_SummarizesWarningsWhenMany(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{warnings: []string{"one", "two", "three", "four"}}
+
+	renderCompactAttention(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "4 warnings") {
+		t.Errorf("output should summarize warnings count, got:\n%s", output)
+	}
+	if strings.Contains(output, "warning: one") {
+		t.Errorf("output should not list individual warnings when summarized, got:\n%s", output)
+	}
+}
+
+func TestRenderCompactNextUp_TruncatesLongList(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	tasks := make([]taskEntry, 0, 7)
+	for i := range 7 {
+		tasks = append(tasks, taskEntry{name: "task-" + intToStr(i) + ".md", title: "Task " + intToStr(i)})
+	}
+
+	renderCompactNextUp(&buf, c, statusData{runnableBacklog: tasks})
+	output := buf.String()
+
+	if !strings.Contains(output, "... +2 more") {
+		t.Errorf("output should include truncation summary, got:\n%s", output)
+	}
+	if strings.Contains(output, "task-5.md") || strings.Contains(output, "task-6.md") {
+		t.Errorf("output should omit tasks beyond compact limit, got:\n%s", output)
+	}
+}
+
+func TestCompactProgressLabel(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "short raw body", body: "plain progress", want: "plain progress"},
+		{name: "exact boundary", body: "123456789012345678901234", want: "123456789012345678901234"},
+		{name: "long raw body", body: "1234567890123456789012345", want: "123456789012345678901..."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := compactProgressLabel(tt.body); got != tt.want {
+				t.Fatalf("compactProgressLabel(%q) = %q, want %q", tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRenderReadyForReview_Empty(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()

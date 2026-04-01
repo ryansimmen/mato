@@ -29,13 +29,34 @@ import (
 // Tests can replace it to simulate read failures.
 var readLockFileFn = os.ReadFile
 
+type textViewMode int
+
+const (
+	textViewCompact textViewMode = iota
+	textViewVerbose
+)
+
 // Show writes the status dashboard to os.Stdout.
 func Show(repoRoot string) error {
-	return ShowTo(os.Stdout, repoRoot)
+	return showToMode(os.Stdout, repoRoot, textViewCompact)
+}
+
+// ShowVerbose writes the expanded status dashboard to os.Stdout.
+func ShowVerbose(repoRoot string) error {
+	return showToMode(os.Stdout, repoRoot, textViewVerbose)
 }
 
 // ShowTo writes the status dashboard to the given writer.
 func ShowTo(w io.Writer, repoRoot string) error {
+	return showToMode(w, repoRoot, textViewCompact)
+}
+
+// ShowVerboseTo writes the expanded status dashboard to the given writer.
+func ShowVerboseTo(w io.Writer, repoRoot string) error {
+	return showToMode(w, repoRoot, textViewVerbose)
+}
+
+func showToMode(w io.Writer, repoRoot string, mode textViewMode) error {
 	resolvedRepoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return err
@@ -49,19 +70,11 @@ func ShowTo(w io.Writer, repoRoot string) error {
 	}
 
 	c := newColorSet()
-	renderQueueOverview(w, c, data)
-	renderRunnableBacklog(w, c, data)
-	renderActiveAgents(w, c, data)
-	renderAgentProgress(w, c, data)
-	renderInProgressTasks(w, c, data)
-	renderReadyForReview(w, c, data)
-	renderReadyToMerge(w, c, data)
-	renderDependencyBlocked(w, c, data)
-	renderConflictDeferred(w, c, data)
-	renderFailedTasks(w, c, data)
-	renderRecentCompletions(w, c, data)
-	renderRecentMessages(w, c, data)
-	renderWarnings(w, c, data)
+	if mode == textViewVerbose {
+		renderVerboseDashboard(w, c, data)
+	} else {
+		renderCompactDashboard(w, c, data)
+	}
 
 	return nil
 }
@@ -336,7 +349,12 @@ func pluralize(n int, singular, plural string) string {
 // Watch calls Show in a loop, redrawing the terminal without flicker.
 // It writes to os.Stdout; use WatchTo to write to a different writer.
 func Watch(ctx context.Context, repoRoot string, interval time.Duration) error {
-	return WatchTo(ctx, os.Stdout, repoRoot, interval)
+	return watchToMode(ctx, os.Stdout, repoRoot, interval, textViewCompact)
+}
+
+// WatchVerbose calls ShowVerbose in a loop, redrawing the terminal without flicker.
+func WatchVerbose(ctx context.Context, repoRoot string, interval time.Duration) error {
+	return watchToMode(ctx, os.Stdout, repoRoot, interval, textViewVerbose)
 }
 
 // WatchTo calls ShowTo in a loop, redrawing the given writer without flicker.
@@ -346,12 +364,21 @@ func Watch(ctx context.Context, repoRoot string, interval time.Duration) error {
 // It runs until the context is cancelled or a write error occurs (e.g. stdout
 // closed by a pager or pipe).
 func WatchTo(ctx context.Context, w io.Writer, repoRoot string, interval time.Duration) error {
+	return watchToMode(ctx, w, repoRoot, interval, textViewCompact)
+}
+
+// WatchVerboseTo calls ShowVerboseTo in a loop, redrawing the given writer.
+func WatchVerboseTo(ctx context.Context, w io.Writer, repoRoot string, interval time.Duration) error {
+	return watchToMode(ctx, w, repoRoot, interval, textViewVerbose)
+}
+
+func watchToMode(ctx context.Context, w io.Writer, repoRoot string, interval time.Duration, mode textViewMode) error {
 	dim := color.New(color.Faint).SprintFunc()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		var buf bytes.Buffer
-		if err := ShowTo(&buf, repoRoot); err != nil {
+		if err := showToMode(&buf, repoRoot, mode); err != nil {
 			return err
 		}
 		fmt.Fprintf(&buf, "\n%s\n", dim(fmt.Sprintf("Refreshing every %s — press Ctrl+C to stop", interval)))

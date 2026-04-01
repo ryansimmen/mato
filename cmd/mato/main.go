@@ -536,6 +536,7 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 	var watch bool
 	var interval time.Duration
 	var format string
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -556,6 +557,9 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 				if watch {
 					return newUsageError(cmd, fmt.Errorf("--format json and --watch cannot be used together"))
 				}
+				if verbose {
+					return newUsageError(cmd, fmt.Errorf("--verbose can only be used with text output"))
+				}
 				return status.ShowJSON(os.Stdout, repo)
 			}
 			if watch {
@@ -564,7 +568,13 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 				}
 				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 				defer stop()
+				if verbose {
+					return status.WatchVerbose(ctx, repo, interval)
+				}
 				return status.Watch(ctx, repo, interval)
+			}
+			if verbose {
+				return status.ShowVerbose(repo)
 			}
 			return status.Show(repo)
 		},
@@ -574,6 +584,7 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "Continuously refresh the status display")
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "Refresh interval for watch mode")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "Show the expanded text status view")
 
 	return cmd
 }

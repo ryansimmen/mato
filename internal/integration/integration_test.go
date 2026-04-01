@@ -454,8 +454,8 @@ func TestStatusWithParseFailedTasksPreservesRuntimeMetadata(t *testing.T) {
 			"---\npriority: nope\n---\n# Broken failed\n")
 
 	var buf bytes.Buffer
-	if err := status.ShowTo(&buf, repoRoot); err != nil {
-		t.Fatalf("status.ShowTo: %v", err)
+	if err := status.ShowVerboseTo(&buf, repoRoot); err != nil {
+		t.Fatalf("status.ShowVerboseTo: %v", err)
 	}
 	output := buf.String()
 
