@@ -160,14 +160,18 @@ func ReadMessages(tasksDir string, since time.Time) ([]Message, error) {
 // by os.ReadDir) to skip older entries without reading or parsing them.
 // If limit <= 0, all messages are read (equivalent to ReadMessages with a
 // zero time).
-func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
+//
+// Per-file read failures are collected as structured warnings (the second
+// return value) instead of aborting, so callers can surface them in
+// dashboards. A non-nil error is only returned for directory-level failures.
+func ReadRecentMessages(tasksDir string, limit int) ([]Message, []string, error) {
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, err := os.ReadDir(eventsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("read messages dir: %w", err)
+		return nil, nil, fmt.Errorf("read messages dir: %w", err)
 	}
 
 	// Filter to JSON files only.
@@ -184,6 +188,7 @@ func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
 		jsonEntries = jsonEntries[len(jsonEntries)-limit:]
 	}
 
+	var warnings []string
 	messages := make([]Message, 0, len(jsonEntries))
 	for _, entry := range jsonEntries {
 		data, err := os.ReadFile(filepath.Join(eventsDir, entry.Name()))
@@ -191,12 +196,13 @@ func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read message %s: %w", entry.Name(), err)
+			warnings = append(warnings, fmt.Sprintf("could not read message %s: %v", entry.Name(), err))
+			continue
 		}
 
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse message %s: %v\n", entry.Name(), err)
+			warnings = append(warnings, fmt.Sprintf("could not parse message %s: %v", entry.Name(), err))
 			continue
 		}
 		messages = append(messages, msg)
@@ -209,7 +215,7 @@ func ReadRecentMessages(tasksDir string, limit int) ([]Message, error) {
 		return messages[i].SentAt.Before(messages[j].SentAt)
 	})
 
-	return messages, nil
+	return messages, warnings, nil
 }
 
 // filenameTimestampPrefix is the length of the timestamp prefix in message

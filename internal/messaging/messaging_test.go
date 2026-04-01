@@ -2304,7 +2304,7 @@ func TestReadRecentMessages_ReturnsAll_WhenUnderLimit(t *testing.T) {
 		}
 	}
 
-	msgs, err := ReadRecentMessages(tasksDir, 10)
+	msgs, _, err := ReadRecentMessages(tasksDir, 10)
 	if err != nil {
 		t.Fatalf("ReadRecentMessages: %v", err)
 	}
@@ -2331,7 +2331,7 @@ func TestReadRecentMessages_LimitsToMostRecent(t *testing.T) {
 		}
 	}
 
-	msgs, err := ReadRecentMessages(tasksDir, 3)
+	msgs, _, err := ReadRecentMessages(tasksDir, 3)
 	if err != nil {
 		t.Fatalf("ReadRecentMessages: %v", err)
 	}
@@ -2365,7 +2365,7 @@ func TestReadRecentMessages_ZeroLimitReadsAll(t *testing.T) {
 		}
 	}
 
-	msgs, err := ReadRecentMessages(tasksDir, 0)
+	msgs, _, err := ReadRecentMessages(tasksDir, 0)
 	if err != nil {
 		t.Fatalf("ReadRecentMessages: %v", err)
 	}
@@ -2375,7 +2375,7 @@ func TestReadRecentMessages_ZeroLimitReadsAll(t *testing.T) {
 }
 
 func TestReadRecentMessages_NonExistentDir(t *testing.T) {
-	msgs, err := ReadRecentMessages(filepath.Join(t.TempDir(), "nope"), 5)
+	msgs, _, err := ReadRecentMessages(filepath.Join(t.TempDir(), "nope"), 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2402,7 +2402,7 @@ func TestReadRecentMessages_PreservesOrder(t *testing.T) {
 		}
 	}
 
-	msgs, err := ReadRecentMessages(tasksDir, 3)
+	msgs, _, err := ReadRecentMessages(tasksDir, 3)
 	if err != nil {
 		t.Fatalf("ReadRecentMessages: %v", err)
 	}
@@ -2538,12 +2538,15 @@ func TestReadRecentMessages_SkipsMalformedFile(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	got, err := ReadRecentMessages(tasksDir, 10)
+	got, skippedWarnings, err := ReadRecentMessages(tasksDir, 10)
 	if err != nil {
 		t.Fatalf("ReadRecentMessages: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("expected 1 valid message, got %d", len(got))
+	}
+	if len(skippedWarnings) != 2 {
+		t.Fatalf("expected 2 warnings for malformed files, got %d: %v", len(skippedWarnings), skippedWarnings)
 	}
 	if got[0].ID != "valid-msg" {
 		t.Fatalf("got ID %q, want %q", got[0].ID, "valid-msg")
@@ -2593,7 +2596,7 @@ func TestReadRecentMessages_ToleratesDeletedFiles(t *testing.T) {
 		defer wg.Done()
 		<-start
 		for i := 0; i < 10; i++ {
-			msgs, readErr := ReadRecentMessages(tasksDir, total+5)
+			msgs, _, readErr := ReadRecentMessages(tasksDir, total+5)
 			if readErr != nil {
 				errCh <- fmt.Errorf("ReadRecentMessages iteration %d: %w", i, readErr)
 				return
@@ -2640,7 +2643,7 @@ func TestReadRecentMessages_ToleratesDeletedFiles(t *testing.T) {
 		}
 	}
 
-	final, err := ReadRecentMessages(tasksDir, total+5)
+	final, _, err := ReadRecentMessages(tasksDir, total+5)
 	if err != nil {
 		t.Fatalf("ReadRecentMessages final: %v", err)
 	}
@@ -2673,7 +2676,7 @@ func TestReadRecentMessages_EqualTimestampTieBreakParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMessages: %v", err)
 	}
-	recentMsgs, err := ReadRecentMessages(tasksDir, 3)
+	recentMsgs, _, err := ReadRecentMessages(tasksDir, 3)
 	if err != nil {
 		t.Fatalf("ReadRecentMessages: %v", err)
 	}
@@ -3227,6 +3230,59 @@ func writeNMessages(b *testing.B, tasksDir string, n int) {
 	}
 }
 
+func TestReadRecentMessages_ToleratesUnreadableFiles(t *testing.T) {
+	tasksDir := t.TempDir()
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
+	good1 := Message{
+		ID: "good-1", From: "agent", Type: "intent",
+		Task: "task.md", Branch: "branch", Body: "first",
+		SentAt: base,
+	}
+	good2 := Message{
+		ID: "good-2", From: "agent", Type: "progress",
+		Task: "task.md", Branch: "branch", Body: "second",
+		SentAt: base.Add(2 * time.Minute),
+	}
+	if err := WriteMessage(tasksDir, good1); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+	if err := WriteMessage(tasksDir, good2); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Create a file with no read permission between the two good files.
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	unreadable := filepath.Join(eventsDir, base.Add(time.Minute).Format("20060102T150405.000000000Z")+"-unreadable.json")
+	if err := os.WriteFile(unreadable, []byte(`{"id":"bad"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+
+	got, warnings, err := ReadRecentMessages(tasksDir, 10)
+	if err != nil {
+		t.Fatalf("ReadRecentMessages should not return error for unreadable file, got: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for unreadable file, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "could not read message") {
+		t.Errorf("warning should mention 'could not read message', got: %q", warnings[0])
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 valid messages, got %d", len(got))
+	}
+	if got[0].ID != "good-1" || got[1].ID != "good-2" {
+		t.Fatalf("got IDs %q and %q, want good-1 and good-2", got[0].ID, got[1].ID)
+	}
+}
+
 func BenchmarkReadMessages(b *testing.B) {
 	counts := []int{100, 500, 1000}
 	for _, n := range counts {
@@ -3252,7 +3308,7 @@ func BenchmarkReadMessages(b *testing.B) {
 			writeNMessages(b, tasksDir, n)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := ReadRecentMessages(tasksDir, 50)
+				_, _, err := ReadRecentMessages(tasksDir, 50)
 				if err != nil {
 					b.Fatalf("ReadRecentMessages: %v", err)
 				}
