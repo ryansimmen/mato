@@ -36,7 +36,7 @@ Ask each participant agent to:
 1. Inspect the repository and relevant docs.
 2. Research external references when useful.
 3. Propose **at most 3** highest-impact new features worth considering next.
-4. Return a concise ranking with rationale, cited evidence, risks, and validation gaps using the required round structure.
+4. Return a concise ranking with rationale, cited evidence, risks, and validation gaps using the required round structure (defined in each participant agent file).
 
 Synthesize the three responses into a shortlist of **at most 5** candidate features, noting overlap and early disagreement.
 

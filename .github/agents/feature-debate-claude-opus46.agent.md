@@ -47,10 +47,6 @@ List your ranking in order. Include **at most 3** candidates.
 
 Identify the strongest argument made against your position in the prior round. Address it directly — concede, rebut with new evidence, or refine your position. Do not ignore it.
 
-### Re-ranking After Critique (Round 2 only)
-
-State your updated ranking after critique and why it changed.
-
 ### Final Recommendation (Round 3 only)
 
 State which feature should win now and why.
