@@ -72,11 +72,12 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	}
 
 	// Active agents.
-	agents, err := activeAgents(tasksDir)
+	agents, lockWarnings, err := activeAgents(tasksDir)
 	if err != nil {
 		return data, err
 	}
 	data.agents = agents
+	data.warnings = append(data.warnings, lockWarnings...)
 
 	// Presence info.
 	presenceMap, presenceErr := messaging.ReadAllPresence(tasksDir)

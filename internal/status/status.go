@@ -25,6 +25,10 @@ import (
 	"mato/internal/queue"
 )
 
+// readLockFileFn is the function used to read lock file contents.
+// Tests can replace it to simulate read failures.
+var readLockFileFn = os.ReadFile
+
 // Show writes the status dashboard to os.Stdout.
 func Show(repoRoot string) error {
 	return ShowTo(os.Stdout, repoRoot)
@@ -157,15 +161,16 @@ type waitingTaskSummary struct {
 	Dependencies []waitingDep
 }
 
-func activeAgents(tasksDir string) ([]statusAgent, error) {
+func activeAgents(tasksDir string) ([]statusAgent, []string, error) {
 	entries, err := os.ReadDir(filepath.Join(tasksDir, ".locks"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("read locks dir: %w", err)
+		return nil, nil, fmt.Errorf("read locks dir: %w", err)
 	}
 
+	var warnings []string
 	agents := make([]statusAgent, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pid") {
@@ -175,9 +180,10 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 		if !identity.IsAgentActive(tasksDir, agentID) {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(tasksDir, ".locks", entry.Name()))
+		data, err := readLockFileFn(filepath.Join(tasksDir, ".locks", entry.Name()))
 		if err != nil {
-			return nil, fmt.Errorf("read lock file %s: %w", entry.Name(), err)
+			warnings = append(warnings, fmt.Sprintf("skipped unreadable lock file %s: %v", entry.Name(), err))
+			continue
 		}
 		// Lock identity format is "PID:starttime" (or legacy "PID").
 		identity := strings.TrimSpace(string(data))
@@ -192,7 +198,7 @@ func activeAgents(tasksDir string) ([]statusAgent, error) {
 	sort.Slice(agents, func(i, j int) bool {
 		return agents[i].displayName() < agents[j].displayName()
 	})
-	return agents, nil
+	return agents, warnings, nil
 }
 
 // waitingTasksFromIndex derives dependency-blocked task summaries from the

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,7 +259,7 @@ func TestStatusAgentDisplayName(t *testing.T) {
 
 func TestActiveAgents_EmptyLocksDir(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -269,7 +270,7 @@ func TestActiveAgents_EmptyLocksDir(t *testing.T) {
 
 func TestActiveAgents_NoLocksDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -283,7 +284,7 @@ func TestActiveAgents_DeadProcess(t *testing.T) {
 	// PID that almost certainly doesn't exist.
 	os.WriteFile(filepath.Join(tasksDir, ".locks", "dead0001.pid"), []byte("2147483647"), 0o644)
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestActiveAgents_LiveProcess(t *testing.T) {
 	}
 	defer cleanup()
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -328,7 +329,7 @@ func TestActiveAgents_SortedByDisplayName(t *testing.T) {
 		_ = pid // registered via RegisterAgent
 	}
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -348,7 +349,7 @@ func TestActiveAgents_SkipsNonPIDFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, ".locks", "notes.txt"), []byte("hello"), 0o644)
 	os.MkdirAll(filepath.Join(tasksDir, ".locks", "subdir"), 0o755)
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
@@ -362,12 +363,64 @@ func TestActiveAgents_InvalidPID(t *testing.T) {
 	// Lock file with non-numeric content — should be skipped.
 	os.WriteFile(filepath.Join(tasksDir, ".locks", "badpid01.pid"), []byte("not-a-number"), 0o644)
 
-	agents, err := activeAgents(tasksDir)
+	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
 		t.Fatalf("activeAgents: %v", err)
 	}
 	if len(agents) != 0 {
 		t.Errorf("expected 0 agents (invalid PID), got %d", len(agents))
+	}
+}
+
+func TestActiveAgents_UnreadableLockFile(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+
+	// Register a real agent so IsAgentActive returns true.
+	cleanup, err := queue.RegisterAgent(tasksDir, "good0001")
+	if err != nil {
+		t.Fatalf("RegisterAgent(good0001): %v", err)
+	}
+	defer cleanup()
+
+	// Register a second agent whose lock file will be "unreadable".
+	cleanup2, err := queue.RegisterAgent(tasksDir, "bad00001")
+	if err != nil {
+		t.Fatalf("RegisterAgent(bad00001): %v", err)
+	}
+	defer cleanup2()
+
+	// Inject a ReadFile hook that fails for the bad agent's lock file.
+	origFn := readLockFileFn
+	readLockFileFn = func(name string) ([]byte, error) {
+		if filepath.Base(name) == "bad00001.pid" {
+			return nil, errors.New("simulated read error")
+		}
+		return origFn(name)
+	}
+	defer func() { readLockFileFn = origFn }()
+
+	agents, warnings, err := activeAgents(tasksDir)
+	if err != nil {
+		t.Fatalf("activeAgents returned error: %v", err)
+	}
+
+	// The good agent should still appear.
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if agents[0].ID != "good0001" {
+		t.Errorf("agent ID = %q, want %q", agents[0].ID, "good0001")
+	}
+
+	// A warning should be emitted for the unreadable lock file.
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "bad00001.pid") {
+		t.Errorf("warning should mention bad00001.pid, got %q", warnings[0])
+	}
+	if !strings.Contains(warnings[0], "simulated read error") {
+		t.Errorf("warning should mention error, got %q", warnings[0])
 	}
 }
 
