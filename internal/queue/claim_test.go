@@ -16,7 +16,7 @@ import (
 func setupClaimTestDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, sub := range append(AllDirs, ".locks") {
+	for _, sub := range append(AllDirs, DirLocks) {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			t.Fatal(err)
 		}
