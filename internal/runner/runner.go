@@ -1264,25 +1264,56 @@ func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extra
 
 func resumeRejected(output string) bool {
 	for _, rawLine := range strings.Split(output, "\n") {
-		line := strings.ToLower(strings.TrimSpace(rawLine))
-		if line == "" {
-			continue
-		}
-		if !strings.Contains(line, "resume") && !strings.Contains(line, "session") {
-			continue
-		}
-		if !strings.Contains(line, "error") && !strings.Contains(line, "failed") && !strings.Contains(line, "invalid") {
-			continue
-		}
-		for _, marker := range []string{"resume session", "--resume", "cannot resume", "failed to resume", "invalid session", "unknown session", "session not found", "resume rejected", "invalid value for '--resume'", "unknown option '--resume'"} {
-			if strings.Contains(line, marker) {
-				return true
-			}
+		if resumeRejectedLine([]byte(rawLine)) {
+			return true
 		}
 	}
 	return false
 }
 
 func resumeRejectedBytes(output []byte) bool {
-	return resumeRejected(string(output))
+	for len(output) > 0 {
+		line := output
+		if i := bytes.IndexByte(output, '\n'); i >= 0 {
+			line = output[:i]
+			output = output[i+1:]
+		} else {
+			output = nil
+		}
+		if resumeRejectedLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func resumeRejectedLine(rawLine []byte) bool {
+	line := bytes.TrimSpace(rawLine)
+	if len(line) == 0 {
+		return false
+	}
+	lower := bytes.ToLower(line)
+	if !bytes.Contains(lower, []byte("resume")) && !bytes.Contains(lower, []byte("session")) {
+		return false
+	}
+	if !bytes.Contains(lower, []byte("error")) && !bytes.Contains(lower, []byte("failed")) && !bytes.Contains(lower, []byte("invalid")) {
+		return false
+	}
+	for _, marker := range [][]byte{
+		[]byte("resume session"),
+		[]byte("--resume"),
+		[]byte("cannot resume"),
+		[]byte("failed to resume"),
+		[]byte("invalid session"),
+		[]byte("unknown session"),
+		[]byte("session not found"),
+		[]byte("resume rejected"),
+		[]byte("invalid value for '--resume'"),
+		[]byte("unknown option '--resume'"),
+	} {
+		if bytes.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
