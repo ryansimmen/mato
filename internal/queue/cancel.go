@@ -19,9 +19,9 @@ var appendCancelledRecordFn = taskfile.AppendCancelledRecord
 
 // CancelResult carries the outcome of a single CancelTask call.
 type CancelResult struct {
-	Filename   string
-	PriorState string
-	Warnings   []string
+	Filename   string   `json:"filename"`
+	PriorState string   `json:"prior_state"`
+	Warnings   []string `json:"warnings,omitempty"`
 }
 
 // CancelTask cancels the named task reference.

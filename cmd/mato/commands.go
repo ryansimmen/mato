@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -41,12 +42,16 @@ var cancelTaskFn = queue.CancelTask
 
 func newInitCmd(repoFlag *string) *cobra.Command {
 	var initBranch string
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize a repository for mato use",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
 				return err
@@ -74,6 +79,9 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if format == "json" {
+				return writeJSON(os.Stdout, result)
+			}
 			printInitResult(result)
 			return nil
 		},
@@ -81,6 +89,7 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&initBranch, "branch", "", "Target branch name (default: mato)")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd
 }
@@ -368,12 +377,16 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 }
 
 func newRetryCmd(repoFlag *string) *cobra.Command {
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "retry <task-ref> [task-ref...]",
 		Short: "Requeue failed tasks back to backlog",
 		Args:  usageMinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
 				return err
@@ -390,17 +403,51 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 				return err
 			}
 
+			type retryItemResult struct {
+				Task              string   `json:"task"`
+				Requeued          bool     `json:"requeued"`
+				Error             string   `json:"error,omitempty"`
+				DependencyBlocked bool     `json:"dependency_blocked,omitempty"`
+				Warnings          []string `json:"warnings,omitempty"`
+			}
+
+			var items []retryItemResult
 			var firstErr error
 			for _, name := range args {
-				if err := queue.RetryTask(tasksDir, name); err != nil {
-					fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+				result, err := queue.RetryTask(tasksDir, name)
+				if err != nil {
+					if format == "json" {
+						items = append(items, retryItemResult{
+							Task:  strings.TrimSuffix(name, ".md"),
+							Error: err.Error(),
+						})
+					} else {
+						fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+					}
 					if firstErr == nil {
 						firstErr = err
 					}
 					continue
 				}
-				stem := strings.TrimSuffix(name, ".md")
-				fmt.Printf("Requeued %s to backlog\n", stem)
+				stem := strings.TrimSuffix(result.Filename, ".md")
+				if format == "json" {
+					items = append(items, retryItemResult{
+						Task:              stem,
+						Requeued:          true,
+						DependencyBlocked: result.DependencyBlocked,
+						Warnings:          result.Warnings,
+					})
+				} else {
+					fmt.Printf("Requeued %s to backlog\n", stem)
+					for _, w := range result.Warnings {
+						ui.Warnf("warning: %s\n", w)
+					}
+				}
+			}
+			if format == "json" {
+				if err := writeJSON(os.Stdout, items); err != nil {
+					return err
+				}
 			}
 			if firstErr != nil {
 				return &SilentError{Err: firstErr, Code: 1}
@@ -410,16 +457,22 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+
 	return cmd
 }
 
 func newPauseCmd(repoFlag *string) *cobra.Command {
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "pause",
 		Short: "Pause new task claims and review launches",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
 				return err
@@ -439,6 +492,9 @@ func newPauseCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if format == "json" {
+				return writeJSON(os.Stdout, result)
+			}
 			since := result.Since.Format(time.RFC3339)
 			switch {
 			case result.AlreadyPaused:
@@ -452,16 +508,23 @@ func newPauseCmd(repoFlag *string) *cobra.Command {
 		},
 	}
 	configureCommand(cmd)
+
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+
 	return cmd
 }
 
 func newResumeCmd(repoFlag *string) *cobra.Command {
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "resume",
 		Short: "Resume task claims and review launches",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
 				return err
@@ -481,6 +544,9 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if format == "json" {
+				return writeJSON(os.Stdout, result)
+			}
 			if result.WasActive {
 				fmt.Println("Resumed")
 			} else {
@@ -490,16 +556,23 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 		},
 	}
 	configureCommand(cmd)
+
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+
 	return cmd
 }
 
 func newCancelCmd(repoFlag *string) *cobra.Command {
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "cancel <task-ref> [task-ref...]",
 		Short: "Withdraw tasks from the queue by moving them to failed/",
 		Args:  usageMinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
 				return err
@@ -516,33 +589,63 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 				return err
 			}
 
+			type cancelItemResult struct {
+				Task       string   `json:"task"`
+				Cancelled  bool     `json:"cancelled"`
+				PriorState string   `json:"prior_state,omitempty"`
+				Warnings   []string `json:"warnings,omitempty"`
+				Error      string   `json:"error,omitempty"`
+			}
+
+			var items []cancelItemResult
 			var firstErr error
 			for _, ref := range args {
 				result, err := cancelTaskFn(tasksDir, ref)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+					if format == "json" {
+						items = append(items, cancelItemResult{
+							Task:  strings.TrimSuffix(ref, ".md"),
+							Error: err.Error(),
+						})
+					} else {
+						fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+					}
 					if firstErr == nil {
 						firstErr = err
 					}
 					continue
 				}
 				stem := strings.TrimSuffix(result.Filename, ".md")
-				fmt.Printf("cancelled: %s (was in %s/)\n", result.Filename, result.PriorState)
-				if result.PriorState == queue.DirInProgress {
-					ui.Warnf("warning: agent container for %s may still be running\n", stem)
-				}
-				if result.PriorState == queue.DirReadyReview {
-					ui.Warnf("warning: task is in ready-for-review/ — a review agent may be running\n")
-				}
-				if result.PriorState == queue.DirReadyMerge {
-					ui.Warnf("warning: merge queue may still merge %s's branch\n", stem)
-				}
-				if len(result.Warnings) > 0 {
-					ui.Warnf("warning: %d task(s) depend on %s:\n", len(result.Warnings), stem)
-					for _, warning := range result.Warnings {
-						ui.Warnf("  %s\n", warning)
+				if format == "json" {
+					items = append(items, cancelItemResult{
+						Task:       stem,
+						Cancelled:  true,
+						PriorState: result.PriorState,
+						Warnings:   result.Warnings,
+					})
+				} else {
+					fmt.Printf("cancelled: %s (was in %s/)\n", result.Filename, result.PriorState)
+					if result.PriorState == queue.DirInProgress {
+						ui.Warnf("warning: agent container for %s may still be running\n", stem)
 					}
-					ui.Warnf("these tasks will remain blocked until %s is retried\n", stem)
+					if result.PriorState == queue.DirReadyReview {
+						ui.Warnf("warning: task is in ready-for-review/ — a review agent may be running\n")
+					}
+					if result.PriorState == queue.DirReadyMerge {
+						ui.Warnf("warning: merge queue may still merge %s's branch\n", stem)
+					}
+					if len(result.Warnings) > 0 {
+						ui.Warnf("warning: %d task(s) depend on %s:\n", len(result.Warnings), stem)
+						for _, warning := range result.Warnings {
+							ui.Warnf("  %s\n", warning)
+						}
+						ui.Warnf("these tasks will remain blocked until %s is retried\n", stem)
+					}
+				}
+			}
+			if format == "json" {
+				if err := writeJSON(os.Stdout, items); err != nil {
+					return err
 				}
 			}
 			if firstErr != nil {
@@ -553,7 +656,16 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+
 	return cmd
+}
+
+// writeJSON encodes v as indented JSON to w.
+func writeJSON(w *os.File, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
 
 func newVersionCmd() *cobra.Command {

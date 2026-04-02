@@ -18,14 +18,14 @@ const ignorePattern = "/" + dirs.Root + "/"
 
 // InitResult describes what repository initialization changed.
 type InitResult struct {
-	DirsCreated        []string
-	GitignoreUpdated   bool
-	IgnorePattern      string
-	BranchName         string
-	BranchSource       git.BranchSource
-	LocalBranchExisted bool
-	AlreadyOnBranch    bool
-	TasksDir           string
+	DirsCreated        []string         `json:"dirs_created"`
+	GitignoreUpdated   bool             `json:"gitignore_updated"`
+	IgnorePattern      string           `json:"ignore_pattern"`
+	BranchName         string           `json:"branch_name"`
+	BranchSource       git.BranchSource `json:"branch_source"`
+	LocalBranchExisted bool             `json:"local_branch_existed"`
+	AlreadyOnBranch    bool             `json:"already_on_branch"`
+	TasksDir           string           `json:"tasks_dir"`
 }
 
 // InitRepo performs the full non-Docker initialization of a mato repository.
