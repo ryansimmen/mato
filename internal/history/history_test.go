@@ -179,6 +179,112 @@ func TestShowTo_FailsWhenNoSourceReadableAndOneSourceFails(t *testing.T) {
 	}
 }
 
+func TestShowTo_WarnsWhenCompletionSourceFailsButTaskSourceSucceeds(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Replace the completions directory with a regular file so ReadDir fails.
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	if err := os.RemoveAll(completionsDir); err != nil {
+		t.Fatalf("os.RemoveAll(completions): %v", err)
+	}
+	if err := os.WriteFile(completionsDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile completions: %v", err)
+	}
+
+	writeTask(t, tasksDir, queue.DirFailed, "good-task.md",
+		"# Good task\n\n<!-- failure: worker-a at 2026-03-20T10:00:00Z step=WORK error=build_failed -->\n")
+
+	var warnings bytes.Buffer
+	origWarnings := warningWriter
+	warningWriter = &warnings
+	defer func() { warningWriter = origWarnings }()
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo should not error when one source succeeds: %v", err)
+	}
+	if !strings.Contains(buf.String(), "good-task.md") {
+		t.Fatalf("expected task event in output, got:\n%s", buf.String())
+	}
+	if !strings.Contains(warnings.String(), "read completions dir") {
+		t.Fatalf("expected warning about completions dir failure, got: %q", warnings.String())
+	}
+}
+
+func TestShowTo_JSONPartialFailureWarnsToStderr(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	if err := os.RemoveAll(completionsDir); err != nil {
+		t.Fatalf("os.RemoveAll(completions): %v", err)
+	}
+	if err := os.WriteFile(completionsDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile completions: %v", err)
+	}
+
+	writeTask(t, tasksDir, queue.DirFailed, "good-task.md",
+		"# Good task\n\n<!-- failure: worker-a at 2026-03-20T10:00:00Z step=WORK error=build_failed -->\n")
+
+	var warnings bytes.Buffer
+	origWarnings := warningWriter
+	warningWriter = &warnings
+	defer func() { warningWriter = origWarnings }()
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "json"); err != nil {
+		t.Fatalf("ShowTo should not error: %v", err)
+	}
+
+	var events []Event
+	if err := json.Unmarshal(buf.Bytes(), &events); err != nil {
+		t.Fatalf("json.Unmarshal: %v\n%s", err, buf.String())
+	}
+	if len(events) != 1 || events[0].TaskFile != "good-task.md" {
+		t.Fatalf("expected one task event, got: %v", events)
+	}
+	if !strings.Contains(warnings.String(), "read completions dir") {
+		t.Fatalf("expected warning about completions dir on stderr, got: %q", warnings.String())
+	}
+}
+
+func TestShowTo_WarnsWhenTaskSourceFailsButCompletionSourceSucceeds(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Remove all queue directories and replace them with regular files.
+	for _, dir := range queue.AllDirs {
+		dirPath := filepath.Join(tasksDir, dir)
+		if err := os.RemoveAll(dirPath); err != nil {
+			t.Fatalf("os.RemoveAll(%s): %v", dir, err)
+		}
+		if err := os.WriteFile(dirPath, []byte("not a dir"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile(%s): %v", dir, err)
+		}
+	}
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "merged-task",
+		TaskFile:  "merged-task.md",
+		CommitSHA: "abc1234567890",
+		MergedAt:  mustParseTime(t, "2026-03-20T12:00:00Z"),
+	})
+
+	var warnings bytes.Buffer
+	origWarnings := warningWriter
+	warningWriter = &warnings
+	defer func() { warningWriter = origWarnings }()
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo should not error when completions source succeeds: %v", err)
+	}
+	if !strings.Contains(buf.String(), "merged-task.md") {
+		t.Fatalf("expected merged event in output, got:\n%s", buf.String())
+	}
+	if !strings.Contains(warnings.String(), "read queue directory") {
+		t.Fatalf("expected warning about queue directory failure, got: %q", warnings.String())
+	}
+}
+
 func writeTask(t *testing.T, tasksDir, dir, name, content string) {
 	t.Helper()
 	testutil.WriteFile(t, filepath.Join(tasksDir, dir, name), content)

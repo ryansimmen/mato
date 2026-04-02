@@ -29,7 +29,7 @@ func ComputeQueueManifestFromView(tasksDir string, exclude map[string]struct{}, 
 
 	for _, warn := range idx.BuildWarnings() {
 		fmt.Fprintf(os.Stderr, "warning: could not build queue index cleanly: read %s: %v\n", warn.Path, warn.Err)
-		if warn.State == DirBacklog {
+		if warn.State == DirBacklog && warn.DirLevel {
 			return "", fmt.Errorf("read backlog dir: %w", warn.Err)
 		}
 	}

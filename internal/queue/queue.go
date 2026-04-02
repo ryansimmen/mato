@@ -64,7 +64,7 @@ func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
 // mato instances can detect PID reuse. Falls back to PID-only when start time
 // is unavailable (non-Linux). Returns a cleanup function.
 func RegisterAgent(tasksDir, agentID string) (func(), error) {
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	return lockfile.Register(locksDir, agentID)
 }
 
@@ -85,7 +85,11 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 	for _, name := range names {
 		src := filepath.Join(inProgress, name)
 
-		if laterDir := laterStateDuplicateDir(tasksDir, name); laterDir != "" {
+		laterDir, warns := LaterStateDuplicateDir(name, laterStateDirs(tasksDir)...)
+		for _, w := range warns {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", w)
+		}
+		if laterDir != "" {
 			if err := os.Remove(src); err != nil {
 				if !os.IsNotExist(err) {
 					fmt.Fprintf(os.Stderr, "warning: could not remove stale in-progress copy %s: %v\n", name, err)
@@ -266,15 +270,33 @@ func isRuntimeBranchForPath(path, branch string) bool {
 	return branch == expected || branch == expected+"-"+frontmatter.BranchDisambiguator(base)
 }
 
-func laterStateDuplicateDir(tasksDir, name string) string {
-	for _, laterDir := range []string{DirReadyReview, DirReadyMerge, DirCompleted, DirFailed} {
-		if _, err := os.Stat(filepath.Join(tasksDir, laterDir, name)); err == nil {
-			return laterDir
-		} else if !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: could not check %s for duplicate %s: %v\n", laterDir, name, err)
+// LaterStateDuplicateDir checks whether filename exists in any of the given
+// dirs. It returns filepath.Base of the first directory that contains the
+// file, or "" if none do. Non-ENOENT stat errors are collected in the
+// second return value so the caller can decide how to report them.
+func LaterStateDuplicateDir(filename string, dirs ...string) (string, []error) {
+	var warnings []error
+	for _, dir := range dirs {
+		_, err := os.Stat(filepath.Join(dir, filename))
+		if err == nil {
+			return filepath.Base(dir), warnings
+		}
+		if !os.IsNotExist(err) {
+			warnings = append(warnings, fmt.Errorf("could not check %s for duplicate %s: %w", filepath.Base(dir), filename, err))
 		}
 	}
-	return ""
+	return "", warnings
+}
+
+// laterStateDirs returns the default later-state directory paths rooted at
+// tasksDir. Used by callers that need the standard set of directories.
+func laterStateDirs(tasksDir string) []string {
+	return []string{
+		filepath.Join(tasksDir, DirReadyReview),
+		filepath.Join(tasksDir, DirReadyMerge),
+		filepath.Join(tasksDir, DirCompleted),
+		filepath.Join(tasksDir, DirFailed),
+	}
 }
 
 // ErrDestinationExists is returned by AtomicMove when the destination path
@@ -332,11 +354,15 @@ func crossDeviceMove(src, dst string) error {
 	}
 	if err := writeFileFn(f, data); err != nil {
 		f.Close()
-		removeFn(dst)
+		if cleanErr := removeFn(dst); cleanErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: cross-device move cleanup failed for %s: %v\n", dst, cleanErr)
+		}
 		return fmt.Errorf("atomic move %s → %s: write destination: %w", src, dst, err)
 	}
 	if err := f.Close(); err != nil {
-		removeFn(dst)
+		if cleanErr := removeFn(dst); cleanErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: cross-device move cleanup failed for %s: %v\n", dst, cleanErr)
+		}
 		return fmt.Errorf("atomic move %s → %s: close destination: %w", src, dst, err)
 	}
 	return finalizeAtomicMove(src, dst, "copying")

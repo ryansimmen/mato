@@ -1,5 +1,11 @@
 // Package process provides shared helpers for process identity and liveness
 // checks used by the merge queue and agent lock systems.
+//
+// Liveness checks (isProcessActive) use os.FindProcess + signal 0, which works
+// on all platforms. Start-time verification, however, reads /proc/<pid>/stat
+// and is therefore Linux-only. On Linux, lock identities are "PID:starttime"
+// pairs that detect PID reuse; on non-Linux platforms the identity falls back
+// to a bare PID, which is still correct but does not guard against PID reuse.
 package process
 
 import (
@@ -44,7 +50,9 @@ func IsLockHolderAlive(identity string) bool {
 }
 
 // processStartTime reads the start time of a process from /proc/<pid>/stat.
-// Returns empty string if unavailable (non-Linux or process gone).
+// This is Linux-specific: /proc is not available on macOS, Windows, or other
+// non-Linux platforms, so this function silently returns "" there, causing
+// LockIdentity to fall back to PID-only identities.
 func processStartTime(pid int) string {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
@@ -75,7 +83,8 @@ func parseStartTime(s string) string {
 	return fields[19]
 }
 
-// isProcessActive checks whether a process with the given PID is currently running.
+// isProcessActive checks whether a process with the given PID is currently
+// running. Uses os.FindProcess + signal 0, which is cross-platform.
 func isProcessActive(pid int) bool {
 	if pid <= 0 {
 		return false

@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -145,7 +146,7 @@ func isPermanentMoveError(err error) bool {
 		errors.Is(err, os.ErrPermission)
 }
 
-func moveTaskWithRetry(src, dst string) error {
+func moveTaskWithRetry(ctx context.Context, src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("create task destination dir: %w", err)
 	}
@@ -159,7 +160,11 @@ func moveTaskWithRetry(src, dst string) error {
 				return err
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return lastErr
 }

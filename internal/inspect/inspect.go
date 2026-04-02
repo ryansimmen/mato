@@ -100,22 +100,39 @@ func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
 		return fmt.Errorf("unsupported format %q", format)
 	}
 
-	resolvedRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
 		return err
 	}
-	repoRoot = strings.TrimSpace(resolvedRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
+
+	if err := requireTasksDir(tasksDir); err != nil {
+		return err
+	}
 
 	result, err := inspectTask(tasksDir, taskRef)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect task: %w", err)
 	}
 
 	if format == "json" {
 		return renderJSON(w, result)
 	}
 	renderText(w, result)
+	return nil
+}
+
+func requireTasksDir(tasksDir string) error {
+	info, err := os.Stat(tasksDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
+		}
+		return fmt.Errorf("stat %s: %w", tasksDir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists but is not a directory", tasksDir)
+	}
 	return nil
 }
 

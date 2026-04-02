@@ -12,6 +12,7 @@ const (
 	DirReadyMerge  = dirs.ReadyMerge
 	DirCompleted   = dirs.Completed
 	DirFailed      = dirs.Failed
+	DirLocks       = dirs.Locks
 )
 
 // AllDirs is the ordered list of all queue directories.

@@ -15,6 +15,10 @@ import (
 	"golang.org/x/term"
 )
 
+// DefaultDockerImage is the fallback Docker image used when no override is
+// provided via MATO_DOCKER_IMAGE or .mato.yaml configuration.
+const DefaultDockerImage = "ubuntu:24.04"
+
 var statPathFn = os.Stat
 
 // checkDocker verifies that Docker is installed and the daemon is running
@@ -222,5 +226,8 @@ func appendCacheMount(args []string, hostPath, containerPath, label string) []st
 // target branch. Returns an error if the git config command fails.
 func configureReceiveDeny(repoRoot string) error {
 	_, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead")
-	return err
+	if err != nil {
+		return fmt.Errorf("configure receive.denyCurrentBranch: %w", err)
+	}
+	return nil
 }

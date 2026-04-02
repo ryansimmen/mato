@@ -12,6 +12,17 @@ import (
 	"mato/internal/atomicwrite"
 )
 
+// ResolveRepoRoot resolves the repository root directory for the given path
+// by running "git rev-parse --show-toplevel". The result is trimmed of
+// whitespace so callers receive a clean absolute path.
+func ResolveRepoRoot(dir string) (string, error) {
+	out, err := Output(dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("resolve repo root: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // Output runs a git command and returns only its stdout. Stderr is captured
 // separately so that git warnings (e.g. detached HEAD, fsmonitor) never
 // pollute the parsed output. On error, the returned message includes both
@@ -60,6 +71,9 @@ const (
 	BranchSourceHeadRemoteMissing     BranchSource = "head_remote_missing"
 	BranchSourceHeadRemoteUnavailable BranchSource = "head_remote_unavailable"
 )
+
+const defaultGitName = "mato"
+const defaultGitEmail = "mato@local.invalid"
 
 // EnsureBranchResult describes how EnsureBranch resolved the target branch.
 type EnsureBranchResult struct {
@@ -241,7 +255,7 @@ func EnsureGitignoreContains(repoRoot, pattern string) (bool, error) {
 
 // ResolveIdentity reads git user.name and user.email from the local repo
 // config in repoRoot, falling back to global config, and applying defaults
-// ("mato" / "mato@local.invalid") when neither is set. Returns the resolved
+// (defaultGitName / defaultGitEmail) when neither is set. Returns the resolved
 // name and email.
 func ResolveIdentity(repoRoot string) (name, email string) {
 	name, _ = Output(repoRoot, "config", "user.name")
@@ -250,7 +264,7 @@ func ResolveIdentity(repoRoot string) (name, email string) {
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = "mato"
+		name = defaultGitName
 	}
 
 	email, _ = Output(repoRoot, "config", "user.email")
@@ -259,7 +273,7 @@ func ResolveIdentity(repoRoot string) (name, email string) {
 	}
 	email = strings.TrimSpace(email)
 	if email == "" {
-		email = "mato@local.invalid"
+		email = defaultGitEmail
 	}
 
 	return name, email
