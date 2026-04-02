@@ -783,18 +783,18 @@ func TestReviewProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 		t.Fatalf("after run2: expected 2 VERIFY_REVIEW messages (one per run), got %d", count2)
 	}
 
-	// Same-second runs from the same agent should produce the same stable ID
-	// (PID is only in the filename, not in the id field) so the tie-break
-	// contract is preserved.
-	if collectedIDs[0] != collectedIDs[1] {
-		t.Fatalf("same-second runs produced different IDs %q and %q; "+
-			"IDs should be stable (PID only in filename)", collectedIDs[0], collectedIDs[1])
+	// Same-second runs from the same agent should produce unique IDs
+	// (PID suffix ensures per-event uniqueness) while sharing the same
+	// tie-break prefix (<ts>-<agent>-<state>).
+	if collectedIDs[0] == collectedIDs[1] {
+		t.Fatalf("same-second runs produced identical IDs %q; "+
+			"IDs should be unique (PID suffix ensures per-event uniqueness)", collectedIDs[0])
 	}
 
-	// Verify the ID does NOT contain a PID segment.
+	// Verify the ID follows the <ts>-<agent>-<step>-<pid> format.
 	for _, id := range collectedIDs {
-		if !strings.HasPrefix(id, "20260101T000000Z-same-reviewer-") {
-			t.Fatalf("ID %q does not match expected format <ts>-<agent>-<step>", id)
+		if !strings.HasPrefix(id, "20260101T000000Z-same-reviewer-verify-review-") {
+			t.Fatalf("ID %q does not match expected format <ts>-<agent>-<step>-<pid>", id)
 		}
 	}
 
