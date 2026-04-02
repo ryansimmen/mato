@@ -341,6 +341,59 @@ func TestVersionCmd_DefaultFallback(t *testing.T) {
 	}
 }
 
+func TestVersionCmd_FormatJSON(t *testing.T) {
+	origVersion := version
+	defer func() { version = origVersion }()
+	version = "1.2.3"
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"version", "--format=json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result map[string]string
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, out.String())
+	}
+	if result["version"] != "1.2.3" {
+		t.Errorf("version = %q, want %q", result["version"], "1.2.3")
+	}
+}
+
+func TestVersionCmd_FormatText(t *testing.T) {
+	origVersion := version
+	defer func() { version = origVersion }()
+	version = "1.2.3"
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"version", "--format=text"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.String() != "mato 1.2.3\n" {
+		t.Fatalf("output = %q, want %q", out.String(), "mato 1.2.3\n")
+	}
+}
+
+func TestVersionCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"version", "--format=yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestWriteCommandError_UsageErrorIncludesUsage(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"status", "extra"})

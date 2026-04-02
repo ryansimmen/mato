@@ -735,14 +735,25 @@ func writeJSON(w *os.File, v any) error {
 }
 
 func newVersionCmd() *cobra.Command {
+	var format string
+
 	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print mato version",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+			}
+			if format == "json" {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(map[string]string{"version": version})
+			}
 			return printVersion(cmd.OutOrStdout())
 		},
 	}
 	configureCommand(cmd)
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	return cmd
 }
