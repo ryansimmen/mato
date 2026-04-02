@@ -415,6 +415,11 @@ func PostReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	// Task must still be in ready-for-review/ (agent no longer moves files).
 	if _, err := os.Stat(task.TaskPath); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: review verdict for %s discarded: task file moved (%v)\n", task.Filename, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: could not verify review task file %s: %v\n", task.Filename, err)
+		}
 		return
 	}
 

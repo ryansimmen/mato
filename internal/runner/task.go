@@ -26,6 +26,23 @@ var createCloneFn = git.CreateClone
 var removeCloneFn = git.RemoveClone
 var ensureBranchFn = git.EnsureBranch
 var writeBranchMarkerFn = queue.WriteBranchMarker
+var writeDebugMarkerFn = writeDebugMarker
+
+// debugMarkerFile is a sentinel file written into a clone directory when it
+// is intentionally preserved after a postAgentPush failure. Its presence
+// positively identifies the directory as a mato debug clone eligible for
+// later cleanup.
+const debugMarkerFile = ".mato-debug-clone"
+
+// writeDebugMarker creates the sentinel marker file inside dir. Errors are
+// logged but not fatal — the clone is still preserved for debugging even if
+// the marker write fails.
+func writeDebugMarker(dir string) {
+	path := filepath.Join(dir, debugMarkerFile)
+	if err := os.WriteFile(path, []byte("preserved after post-agent push failure\n"), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write debug marker in %s: %v\n", dir, err)
+	}
+}
 
 func allowRecordedBranchResume(source git.BranchSource) bool {
 	switch source {
@@ -122,6 +139,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 	if claimed != nil {
 		if err := postAgentPush(env, run.agentID, claimed, cloneDir, startingTip); err != nil {
 			cleanupClone = false
+			writeDebugMarkerFn(cloneDir)
 			postPushErr = fmt.Errorf("post-agent push failed; preserving clone at %s: %w", cloneDir, err)
 		}
 	}

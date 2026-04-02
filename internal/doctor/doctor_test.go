@@ -1176,6 +1176,21 @@ func TestDoctor_GitResolveFailed(t *testing.T) {
 	}
 }
 
+func TestDoctor_RepoErrDetail_IgnoresParenthesesInPath(t *testing.T) {
+	allOK(t)
+
+	cc := &checkContext{
+		repoInput: "/tmp/foo(bar)",
+		repoErr:   fmt.Errorf("resolve repo root: git -C /tmp/foo(bar) rev-parse --show-toplevel: exit status 128 (fatal: not a git repository: /tmp/foo(bar))"),
+	}
+
+	got := cc.repoErrDetail()
+	want := "fatal: not a git repository: /tmp/foo(bar)"
+	if got != want {
+		t.Fatalf("repoErrDetail() = %q, want %q", got, want)
+	}
+}
+
 func TestDoctor_UnreadableLocksDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission-based test not reliable on Windows")

@@ -4889,6 +4889,65 @@ func TestResumeDetectionBuffer_MatchesAcrossLargeOutput(t *testing.T) {
 	}
 }
 
+// resumeDetectionBufferOld is the previous string-concatenation implementation,
+// preserved here for benchmark comparison against the current bytes.Buffer version.
+type resumeDetectionBufferOld struct {
+	matched bool
+	carry   string
+}
+
+func (b *resumeDetectionBufferOld) Write(p []byte) (int, error) {
+	combined := b.carry + string(p)
+	if !b.matched && resumeRejected(combined) {
+		b.matched = true
+	}
+	if len(combined) > resumeDetectionBufferLimit {
+		combined = combined[len(combined)-resumeDetectionBufferLimit:]
+	}
+	b.carry = combined
+	return len(p), nil
+}
+
+func BenchmarkResumeDetectionBuffer_LargeChunks(b *testing.B) {
+	chunk := []byte(strings.Repeat("normal output line without any resume markers\n", 100))
+	b.Run("Old_StringConcat", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var buf resumeDetectionBufferOld
+			for j := 0; j < 100; j++ {
+				buf.Write(chunk)
+			}
+		}
+	})
+	b.Run("New_BytesBuffer", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var buf resumeDetectionBuffer
+			for j := 0; j < 100; j++ {
+				buf.Write(chunk)
+			}
+		}
+	})
+}
+
+func BenchmarkResumeDetectionBuffer_SmallChunks(b *testing.B) {
+	chunk := []byte("short line\n")
+	b.Run("Old_StringConcat", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var buf resumeDetectionBufferOld
+			for j := 0; j < 1000; j++ {
+				buf.Write(chunk)
+			}
+		}
+	})
+	b.Run("New_BytesBuffer", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var buf resumeDetectionBuffer
+			for j := 0; j < 1000; j++ {
+				buf.Write(chunk)
+			}
+		}
+	})
+}
+
 // ---------------------------------------------------------------------------
 // pollLoop integration-level tests
 // ---------------------------------------------------------------------------
@@ -5126,5 +5185,117 @@ func TestStartupPullCancelledBySignalContext(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("ensureDockerImage did not return after context cancellation")
+	}
+}
+
+func TestCleanStaleClones_RemovesOldCloneDirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	origTempDirFn := tempDirFn
+	t.Cleanup(func() { tempDirFn = origTempDirFn })
+	tempDirFn = func() string { return tmpDir }
+
+	origNowFn := nowFn
+	t.Cleanup(func() { nowFn = origNowFn })
+	fakeNow := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	nowFn = func() time.Time { return fakeNow }
+
+	staleTime := fakeNow.Add(-25 * time.Hour)
+	freshTime := fakeNow.Add(-1 * time.Hour)
+
+	// Create a stale clone with debug marker (should be removed).
+	staleDir := filepath.Join(tmpDir, "mato-stale123")
+	os.MkdirAll(staleDir, 0o755)
+	os.WriteFile(filepath.Join(staleDir, debugMarkerFile), []byte("preserved"), 0o644)
+	os.Chtimes(staleDir, staleTime, staleTime)
+
+	// Create a fresh clone with debug marker (should NOT be removed).
+	freshDir := filepath.Join(tmpDir, "mato-fresh456")
+	os.MkdirAll(freshDir, 0o755)
+	os.WriteFile(filepath.Join(freshDir, debugMarkerFile), []byte("preserved"), 0o644)
+	os.Chtimes(freshDir, freshTime, freshTime)
+
+	// Create a stale clone WITHOUT debug marker (should NOT be removed).
+	noMarkerDir := filepath.Join(tmpDir, "mato-nomarker789")
+	os.MkdirAll(filepath.Join(noMarkerDir, ".git"), 0o755)
+	os.Chtimes(noMarkerDir, staleTime, staleTime)
+
+	// Create a stale non-mato directory with debug marker (should NOT be removed).
+	otherDir := filepath.Join(tmpDir, "other-stale")
+	os.MkdirAll(otherDir, 0o755)
+	os.WriteFile(filepath.Join(otherDir, debugMarkerFile), []byte("preserved"), 0o644)
+	os.Chtimes(otherDir, staleTime, staleTime)
+
+	// Create a regular file with mato- prefix (should be ignored).
+	regularFile := filepath.Join(tmpDir, "mato-file.txt")
+	os.WriteFile(regularFile, []byte("data"), 0o644)
+	os.Chtimes(regularFile, staleTime, staleTime)
+
+	cleanStaleClones(24 * time.Hour)
+
+	// Stale debug clone should be removed.
+	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
+		t.Errorf("expected stale debug clone to be removed: %s", staleDir)
+	}
+
+	// Fresh debug clone should still exist.
+	if _, err := os.Stat(freshDir); err != nil {
+		t.Errorf("fresh debug clone should not be removed: %v", err)
+	}
+
+	// Clone without debug marker should still exist.
+	if _, err := os.Stat(noMarkerDir); err != nil {
+		t.Errorf("clone without debug marker should not be removed: %v", err)
+	}
+
+	// Non-mato directory should still exist.
+	if _, err := os.Stat(otherDir); err != nil {
+		t.Errorf("non-mato directory should not be removed: %v", err)
+	}
+
+	// Regular file should still exist.
+	if _, err := os.Stat(regularFile); err != nil {
+		t.Errorf("regular file should not be removed: %v", err)
+	}
+}
+
+func TestCleanStaleClones_NoEntriesNoPanic(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	origTempDirFn := tempDirFn
+	t.Cleanup(func() { tempDirFn = origTempDirFn })
+	tempDirFn = func() string { return tmpDir }
+
+	// Should not panic when there are no entries.
+	cleanStaleClones(24 * time.Hour)
+}
+
+func TestCleanStaleClones_LogsRemovedDirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	origTempDirFn := tempDirFn
+	t.Cleanup(func() { tempDirFn = origTempDirFn })
+	tempDirFn = func() string { return tmpDir }
+
+	origNowFn := nowFn
+	t.Cleanup(func() { nowFn = origNowFn })
+	fakeNow := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	nowFn = func() time.Time { return fakeNow }
+
+	staleDir := filepath.Join(tmpDir, "mato-logtest")
+	os.MkdirAll(staleDir, 0o755)
+	os.WriteFile(filepath.Join(staleDir, debugMarkerFile), []byte("preserved"), 0o644)
+	staleTime := fakeNow.Add(-48 * time.Hour)
+	os.Chtimes(staleDir, staleTime, staleTime)
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		cleanStaleClones(24 * time.Hour)
+	})
+
+	if !strings.Contains(stdout, "Cleaned up stale clone directory") {
+		t.Errorf("expected cleanup log message, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "mato-logtest") {
+		t.Errorf("expected directory name in log message, got: %q", stdout)
 	}
 }

@@ -1052,6 +1052,32 @@ func TestDoctorCmd_EnvImageWithMultiDocConfigFails(t *testing.T) {
 	}
 }
 
+func TestDoctorCmd_WhitespaceOnlyEnvImageFallsBackToConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: from-config:1.0\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "   ")
+
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedOpts.DockerImage != "from-config:1.0" {
+		t.Errorf("DockerImage = %q, want %q (whitespace-only env should fall back to config)", capturedOpts.DockerImage, "from-config:1.0")
+	}
+}
+
 func TestDoctorNeedsDockerConfig(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1207,6 +1233,36 @@ func TestGraphCmd_EndToEnd(t *testing.T) {
 	cmd.SetArgs([]string{"graph", "--repo", dir, "--format", "text"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("graph end-to-end failed: %v", err)
+	}
+}
+
+func TestGraphCmd_MissingMatoDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	// Do NOT create .mato/ — the repo is uninitialized.
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"graph", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing .mato directory, got nil")
+	}
+	want := ".mato/ directory not found - run 'mato init' first"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want containing %q", err.Error(), want)
+	}
+}
+
+func TestInspectCmd_MissingMatoDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	// Do NOT create .mato/ — the repo is uninitialized.
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inspect", "some-task", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing .mato directory, got nil")
+	}
+	want := ".mato/ directory not found - run 'mato init' first"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want containing %q", err.Error(), want)
 	}
 }
 
@@ -2044,6 +2100,24 @@ func TestCancelCmd_ReadyToMergeWarning(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_ReadyForReviewWarning(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "reviewing.md"), []byte("---\nid: reviewing\n---\n# Reviewing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "reviewing"})
+	stderr := captureStderr(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel command failed: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "warning: task is in ready-for-review/ — a review agent may be running") {
+		t.Fatalf("missing ready-for-review warning: %q", stderr)
+	}
+}
+
 func TestCancelCmd_DownstreamWarnings(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
@@ -2206,6 +2280,28 @@ func TestResolveRunOptions(t *testing.T) {
 		}
 		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
+		}
+	})
+
+	t.Run("whitespace-only docker image env falls back to config", func(t *testing.T) {
+		t.Setenv("MATO_DOCKER_IMAGE", "  \t ")
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("from-config:1.0"), nil, nil, nil, nil, nil, nil, nil))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.DockerImage != "from-config:1.0" {
+			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-config:1.0")
+		}
+	})
+
+	t.Run("real docker image env still overrides config", func(t *testing.T) {
+		t.Setenv("MATO_DOCKER_IMAGE", "from-env:2.0")
+		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("from-config:1.0"), nil, nil, nil, nil, nil, nil, nil))
+		if err != nil {
+			t.Fatalf("resolveRunOptions: %v", err)
+		}
+		if opts.DockerImage != "from-env:2.0" {
+			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-env:2.0")
 		}
 	})
 
@@ -2540,6 +2636,29 @@ func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
 	runFn = func(_ string, _ string, opts runner.RunOptions) error {
 		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || !opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "high" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestRunCmd_WhitespaceOnlyDockerImageEnvFallsBackToConfig(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: from-config:1.0\n")
+
+	t.Setenv("MATO_DOCKER_IMAGE", "   ")
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
+		if opts.DockerImage != "from-config:1.0" {
+			t.Fatalf("DockerImage = %q, want %q (whitespace-only env should fall back to config)", opts.DockerImage, "from-config:1.0")
 		}
 		return nil
 	}

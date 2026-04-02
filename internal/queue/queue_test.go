@@ -417,6 +417,61 @@ func TestAtomicMove_CrossDeviceWriteFailCleansUp(t *testing.T) {
 	}
 }
 
+func TestAtomicMove_CrossDeviceCleanupFailureWarns(t *testing.T) {
+	// When writeFileFn fails and the subsequent removeFn(dst) also fails,
+	// the warning should be printed to stderr.
+	withLinkFn(t, func(_, _ string) error {
+		return &os.LinkError{Op: "link", Err: syscall.EXDEV}
+	})
+	withWriteFileFn(t, func(f *os.File, data []byte) error {
+		return fmt.Errorf("injected write error")
+	})
+	withRemoveFn(t, func(name string) error {
+		return fmt.Errorf("injected remove error")
+	})
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+
+	if err := os.WriteFile(src, []byte("content\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	// Capture stderr output.
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	os.Stderr = w
+
+	moveErr := AtomicMove(src, dst)
+
+	w.Close()
+	os.Stderr = oldStderr
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	r.Close()
+
+	if moveErr == nil {
+		t.Fatal("AtomicMove should fail when write fails")
+	}
+	if !strings.Contains(moveErr.Error(), "write destination") {
+		t.Fatalf("unexpected error: %v", moveErr)
+	}
+	stderr := buf.String()
+	if !strings.Contains(stderr, "warning: cross-device move cleanup failed") {
+		t.Fatalf("expected cleanup warning on stderr, got: %q", stderr)
+	}
+	if !strings.Contains(stderr, "injected remove error") {
+		t.Fatalf("expected injected remove error in warning, got: %q", stderr)
+	}
+}
+
 func TestAtomicMove_RemoveSourceFailureRollsBackDestination(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.md")
@@ -575,11 +630,11 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 
 func TestRecoverOrphanedTasks_SkipsUnreadableAgentLock(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{DirBacklog, DirInProgress, ".locks"} {
+	for _, sub := range []string{DirBacklog, DirInProgress, DirLocks} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	lockPath := filepath.Join(tasksDir, ".locks", "agent-1.pid")
+	lockPath := filepath.Join(tasksDir, DirLocks, "agent-1.pid")
 	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
 		t.Fatalf("WriteFile lock: %v", err)
 	}
@@ -990,7 +1045,7 @@ func TestResolveOrphanCollision_PreservesLeadingClaimMarkerLikeBodyLines(t *test
 
 func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{DirBacklog, DirInProgress, ".locks"} {
+	for _, sub := range []string{DirBacklog, DirInProgress, DirLocks} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -998,7 +1053,7 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	task := filepath.Join(tasksDir, DirInProgress, "active-task.md")
 	content := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: 2026-01-01T00:00:00Z -->\n# Active task\n", agentID)
 	os.WriteFile(task, []byte(content), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirLocks, agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
 
 	_ = RecoverOrphanedTasks(tasksDir)
 
@@ -1007,6 +1062,87 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "active-task.md")); err == nil {
 		t.Fatal("task claimed by active agent should NOT appear in backlog")
+	}
+}
+
+func TestLaterStateDuplicateDir(t *testing.T) {
+	tests := []struct {
+		name         string
+		setup        func(t *testing.T) []string
+		wantDir      string
+		wantWarnings int
+	}{
+		{
+			name: "returns first matching later state basename",
+			setup: func(t *testing.T) []string {
+				tasksDir := t.TempDir()
+				readyReview := filepath.Join(tasksDir, DirReadyReview)
+				completed := filepath.Join(tasksDir, DirCompleted)
+				if err := os.MkdirAll(readyReview, 0o755); err != nil {
+					t.Fatalf("mkdir ready review: %v", err)
+				}
+				if err := os.MkdirAll(completed, 0o755); err != nil {
+					t.Fatalf("mkdir completed: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(completed, "task.md"), []byte("done"), 0o644); err != nil {
+					t.Fatalf("write completed task: %v", err)
+				}
+				return []string{readyReview, completed}
+			},
+			wantDir:      DirCompleted,
+			wantWarnings: 0,
+		},
+		{
+			name: "returns empty when file is absent everywhere",
+			setup: func(t *testing.T) []string {
+				tasksDir := t.TempDir()
+				readyMerge := filepath.Join(tasksDir, DirReadyMerge)
+				failed := filepath.Join(tasksDir, DirFailed)
+				if err := os.MkdirAll(readyMerge, 0o755); err != nil {
+					t.Fatalf("mkdir ready merge: %v", err)
+				}
+				if err := os.MkdirAll(failed, 0o755); err != nil {
+					t.Fatalf("mkdir failed: %v", err)
+				}
+				return []string{readyMerge, failed}
+			},
+			wantDir:      "",
+			wantWarnings: 0,
+		},
+		{
+			name: "collects non-enoent stat warnings",
+			setup: func(t *testing.T) []string {
+				tasksDir := t.TempDir()
+				blockedPath := filepath.Join(tasksDir, "not-a-directory")
+				if err := os.WriteFile(blockedPath, []byte("x"), 0o644); err != nil {
+					t.Fatalf("write blocked path: %v", err)
+				}
+				completed := filepath.Join(tasksDir, DirCompleted)
+				if err := os.MkdirAll(completed, 0o755); err != nil {
+					t.Fatalf("mkdir completed: %v", err)
+				}
+				return []string{blockedPath, completed}
+			},
+			wantDir:      "",
+			wantWarnings: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirs := tt.setup(t)
+
+			gotDir, warnings := LaterStateDuplicateDir("task.md", dirs...)
+			if gotDir != tt.wantDir {
+				t.Fatalf("LaterStateDuplicateDir() dir = %q, want %q", gotDir, tt.wantDir)
+			}
+			if len(warnings) != tt.wantWarnings {
+				t.Fatalf("LaterStateDuplicateDir() warnings = %d, want %d", len(warnings), tt.wantWarnings)
+			}
+			if tt.wantWarnings > 0 && !strings.Contains(warnings[0].Error(), "could not check") {
+				t.Fatalf("warning = %q, want duplicate-check context", warnings[0])
+			}
+		})
 	}
 }
 
@@ -1274,7 +1410,7 @@ func TestRegisterAgent(t *testing.T) {
 		t.Fatalf("RegisterAgent: %v", err)
 	}
 
-	lockFile := filepath.Join(tasksDir, ".locks", "test-agent.pid")
+	lockFile := filepath.Join(tasksDir, DirLocks, "test-agent.pid")
 	data, err := os.ReadFile(lockFile)
 	if err != nil {
 		t.Fatalf("lock file not created: %v", err)
@@ -1308,7 +1444,7 @@ func TestRegisterAgent_RacesCleanStaleLocks(t *testing.T) {
 	}
 	defer cleanup()
 
-	lockFile := filepath.Join(tasksDir, ".locks", "race-agent.pid")
+	lockFile := filepath.Join(tasksDir, DirLocks, "race-agent.pid")
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -1324,7 +1460,7 @@ func TestRegisterAgent_RacesCleanStaleLocks(t *testing.T) {
 
 func TestCleanStaleLocks(t *testing.T) {
 	tasksDir := t.TempDir()
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	os.MkdirAll(locksDir, 0o755)
 
 	os.WriteFile(filepath.Join(locksDir, "alive.pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
@@ -1666,7 +1802,7 @@ func TestWriteQueueManifest_WithIndexSkipsMalformedBacklogFiles(t *testing.T) {
 
 func TestWriteQueueManifest_WithIndexFailsWhenBacklogUnreadable(t *testing.T) {
 	tasksDir := t.TempDir()
-	idx := &PollIndex{buildWarnings: []BuildWarning{{State: DirBacklog, Path: filepath.Join(tasksDir, DirBacklog), Err: os.ErrPermission}}}
+	idx := &PollIndex{buildWarnings: []BuildWarning{{State: DirBacklog, Path: filepath.Join(tasksDir, DirBacklog), Err: os.ErrPermission, DirLevel: true}}}
 
 	stderr := captureStderr(t, func() {
 		err := WriteQueueManifest(tasksDir, nil, idx)
@@ -2233,14 +2369,14 @@ func TestCountPromotableWaitingTasks_ExcludesInvalidGlobs(t *testing.T) {
 
 func TestAcquireReviewLock_Success(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, DirLocks), 0o755)
 
 	cleanup, ok := AcquireReviewLock(tasksDir, "test-task.md")
 	if !ok {
 		t.Fatal("expected lock acquisition to succeed")
 	}
 
-	lockFile := filepath.Join(tasksDir, ".locks", "review-test-task.md.lock")
+	lockFile := filepath.Join(tasksDir, DirLocks, "review-test-task.md.lock")
 	if _, err := os.Stat(lockFile); err != nil {
 		t.Fatalf("lock file should exist: %v", err)
 	}
@@ -2258,7 +2394,7 @@ func TestAcquireReviewLock_Success(t *testing.T) {
 
 func TestAcquireReviewLock_BlockedByLiveProcess(t *testing.T) {
 	tasksDir := t.TempDir()
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	os.MkdirAll(locksDir, 0o755)
 
 	// Pre-create a lock held by the current process (alive).
@@ -2273,7 +2409,7 @@ func TestAcquireReviewLock_BlockedByLiveProcess(t *testing.T) {
 
 func TestAcquireReviewLock_ReclaimsStaleLock(t *testing.T) {
 	tasksDir := t.TempDir()
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	os.MkdirAll(locksDir, 0o755)
 
 	// Pre-create a lock with a dead PID.
@@ -2289,7 +2425,7 @@ func TestAcquireReviewLock_ReclaimsStaleLock(t *testing.T) {
 
 func TestAcquireReviewLock_TwoLocksOnDifferentTasks(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, DirLocks), 0o755)
 
 	cleanup1, ok1 := AcquireReviewLock(tasksDir, "task-a.md")
 	if !ok1 {
@@ -2306,7 +2442,7 @@ func TestAcquireReviewLock_TwoLocksOnDifferentTasks(t *testing.T) {
 
 func TestCleanStaleReviewLocks(t *testing.T) {
 	tasksDir := t.TempDir()
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	os.MkdirAll(locksDir, 0o755)
 
 	// Live process lock — should survive.

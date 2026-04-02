@@ -151,7 +151,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 		completedPath := filepath.Join(tasksDir, queue.DirCompleted, task.name)
 		if taskHasMergeSuccessRecord(task.path) {
 			recoverCompletionDetailForMergedTask(repoRoot, tasksDir, branch, task)
-			if err := moveTaskWithRetry(task.path, completedPath); err != nil {
+			if err := moveTaskWithRetry(ctx, task.path, completedPath); err != nil {
 				// If the destination already exists, the task was already
 				// moved to completed/ by a prior cycle. Remove the
 				// ready-to-merge copy to avoid an infinite retry loop.
@@ -203,7 +203,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 			// using the already-merged detection path.
 		}
 		bookkeepingComplete := false
-		if err := moveTaskWithRetry(task.path, completedPath); err != nil {
+		if err := moveTaskWithRetry(ctx, task.path, completedPath); err != nil {
 			if _, statErr := os.Stat(completedPath); statErr == nil {
 				if removeErr := removeTaskFileFn(task.path); removeErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)

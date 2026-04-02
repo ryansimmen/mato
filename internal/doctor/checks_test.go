@@ -359,6 +359,131 @@ func TestDoctor_DoesNotTreatUnreadableAgentLockAsStale(t *testing.T) {
 	}
 }
 
+// ---------- Fix Removal Failure ----------
+
+func TestDoctor_StaleMergeLock_Fix_RemoveError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root to trigger permission error")
+	}
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	locksDir := filepath.Join(tasksDir, ".locks")
+	lockFile := filepath.Join(locksDir, "merge.lock")
+	testutil.WriteFile(t, lockFile, "999999:0")
+
+	// Make locks dir read-only so os.Remove fails with permission denied.
+	if err := os.Chmod(locksDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.stale_merge_lock" {
+				found = true
+				if f.Fixed {
+					t.Error("expected Fixed=false when removal fails")
+				}
+				if !strings.Contains(f.Message, "fix failed:") {
+					t.Errorf("expected 'fix failed:' in message, got: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected hygiene.stale_merge_lock finding")
+	}
+}
+
+func TestDoctor_StaleReviewLock_Fix_RemoveError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root to trigger permission error")
+	}
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	locksDir := filepath.Join(tasksDir, ".locks")
+	lockFile := filepath.Join(locksDir, "review-test.lock")
+	// Write a lock file with a dead PID so it's considered stale.
+	testutil.WriteFile(t, lockFile, "999999:0")
+
+	// Make locks dir read-only so os.Remove fails with permission denied.
+	if err := os.Chmod(locksDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.stale_review" {
+				found = true
+				if f.Fixed {
+					t.Error("expected Fixed=false when removal fails")
+				}
+				if !strings.Contains(f.Message, "fix failed:") {
+					t.Errorf("expected 'fix failed:' in message, got: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected locks.stale_review finding")
+	}
+}
+
+func TestDoctor_StalePIDLock_Fix_RemoveError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root to trigger permission error")
+	}
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	locksDir := filepath.Join(tasksDir, ".locks")
+	lockFile := filepath.Join(locksDir, "deadbeef.pid")
+	testutil.WriteFile(t, lockFile, "999999:0")
+
+	if err := os.Chmod(locksDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.stale_pid" && strings.Contains(f.Path, "deadbeef.pid") {
+				found = true
+				if f.Fixed {
+					t.Error("expected Fixed=false when removal fails")
+				}
+				if !strings.Contains(f.Message, "fix failed:") {
+					t.Errorf("expected 'fix failed:' in message, got: %s", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected locks.stale_pid finding")
+	}
+}
+
 // ---------- Leftover Temp Files ----------
 
 func TestDoctor_LeftoverTempFiles_Clean(t *testing.T) {
@@ -988,6 +1113,42 @@ func TestDoctor_DockerImage_FromOptions(t *testing.T) {
 	}
 }
 
+func TestDoctor_DockerImage_WhitespaceOnlyEnvFallsBackToDefault(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	t.Setenv("MATO_DOCKER_IMAGE", "  \t  ")
+
+	var inspectedImage string
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		inspectedImage = image
+		return nil
+	})
+
+	report, err := Run(context.Background(), repoRoot, Options{
+		Format: "text",
+		Only:   []string{"docker"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if inspectedImage != "ubuntu:24.04" {
+		t.Fatalf("inspected image = %q, want %q", inspectedImage, "ubuntu:24.04")
+	}
+
+	foundDefault := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "docker.image_available" && strings.Contains(f.Message, "ubuntu:24.04") {
+				foundDefault = true
+			}
+		}
+	}
+	if !foundDefault {
+		t.Fatal("expected docker.image_available finding mentioning default image")
+	}
+}
+
 func TestDoctor_Dependencies_FlagsDependencyBlockedBacklogTask(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	allOK(t)
@@ -1019,5 +1180,110 @@ func TestDoctor_Dependencies_FlagsDependencyBlockedBacklogTask(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected deps.backlog_blocked finding")
+	}
+}
+
+func TestDoctor_QueueLayout_DirIsFile_CoreQueue(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Replace the backlog directory with a regular file.
+	backlogPath := filepath.Join(tasksDir, queue.DirBacklog)
+	if err := os.RemoveAll(backlogPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backlogPath, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"queue"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "queue.not_a_directory" && strings.Contains(f.Message, queue.DirBacklog) {
+				found = true
+				if f.Severity != SeverityError {
+					t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected queue.not_a_directory finding for backlog path that is a file")
+	}
+}
+
+func TestDoctor_QueueLayout_DirIsFile_MessagingDir(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	// Replace the messages/events directory with a regular file.
+	eventsPath := filepath.Join(tasksDir, "messages", "events")
+	if err := os.RemoveAll(eventsPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eventsPath, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"queue"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "queue.not_a_directory" && strings.Contains(f.Message, "messages/events") {
+				found = true
+				if f.Severity != SeverityError {
+					t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected queue.not_a_directory finding for messages/events path that is a file")
+	}
+}
+
+func TestDoctor_QueueLayout_UnreadableDirStatError(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	origStat := osStatFn
+	osStatFn = func(name string) (os.FileInfo, error) {
+		if name == filepath.Join(tasksDir, queue.DirBacklog) {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return origStat(name)
+	}
+	defer func() { osStatFn = origStat }()
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"queue"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "queue.unreadable_dir" && strings.Contains(f.Message, queue.DirBacklog) {
+				found = true
+				if f.Severity != SeverityError {
+					t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)
+				}
+				if !strings.Contains(f.Message, "permission denied") {
+					t.Errorf("Message = %q, want permission denied detail", f.Message)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected queue.unreadable_dir finding for stat failure")
 	}
 }

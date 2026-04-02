@@ -63,7 +63,11 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	}
 
 	// Capture merge result for completion detail.
-	sha, _ := gitOutput(cloneDir, "rev-parse", "HEAD")
+	sha, err := gitOutput(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not determine commit SHA after push: %v\n", err)
+		sha = "unknown"
+	}
 	filesOut, _ := gitOutput(cloneDir, "diff", "--name-only", "HEAD~1..HEAD")
 	filesChanged := parseFilesChanged(filesOut)
 

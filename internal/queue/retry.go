@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"mato/internal/frontmatter"
+	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
 )
 
@@ -120,6 +121,10 @@ func RetryTask(tasksDir, taskRef string) error {
 		// The requeue is logically complete; warn but don't fail.
 		fmt.Fprintf(os.Stderr, "warning: could not remove %s after requeue: %v\n", failedPath, err)
 	}
+
+	// Clean up stale runtime state (taskstate, sessionmeta) from the
+	// previous failed attempt so a fresh agent run starts clean.
+	runtimecleanup.DeleteAll(tasksDir, match.Filename)
 
 	idx = BuildIndex(tasksDir)
 	if blocks, ok := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[match.Filename]; ok {

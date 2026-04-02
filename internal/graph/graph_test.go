@@ -798,6 +798,48 @@ func TestBuild_PriorityOrdering(t *testing.T) {
 	}
 }
 
+func TestBuild_DuplicateDependsOn_EdgesDeduped(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+
+	writeTask(t, tasksDir, "backlog", "target.md", "---\nid: target\npriority: 10\n---\n# Target\n")
+	writeTask(t, tasksDir, "backlog", "consumer.md", "---\nid: consumer\npriority: 20\ndepends_on:\n  - target\n  - target\n---\n# Consumer\n")
+
+	idx := queue.BuildIndex(tasksDir)
+	data := Build(tasksDir, idx, false)
+
+	edges := edgesTo(data, "backlog/consumer.md")
+	if len(edges) != 1 {
+		t.Fatalf("edges to consumer = %d, want 1 (duplicate depends_on should be deduped)", len(edges))
+	}
+	if edges[0].From != "backlog/target.md" {
+		t.Errorf("edge from = %q, want %q", edges[0].From, "backlog/target.md")
+	}
+}
+
+func TestBuild_DuplicateDependsOn_HiddenDepsDeduped(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+
+	writeTask(t, tasksDir, "completed", "gone.md", "---\nid: gone\npriority: 10\n---\n# Gone\n")
+	writeTask(t, tasksDir, "backlog", "consumer.md", "---\nid: consumer\npriority: 20\ndepends_on:\n  - gone\n  - gone\n---\n# Consumer\n")
+
+	idx := queue.BuildIndex(tasksDir)
+	data := Build(tasksDir, idx, false)
+
+	node := findNode(data, "backlog/consumer.md")
+	if node == nil {
+		t.Fatal("consumer node not found")
+	}
+	if len(node.HiddenDeps) != 1 {
+		t.Fatalf("hidden deps = %d, want 1 (duplicate depends_on should be deduped)", len(node.HiddenDeps))
+	}
+	if node.HiddenDeps[0].DependencyID != "gone" {
+		t.Errorf("hidden dep id = %q, want %q", node.HiddenDeps[0].DependencyID, "gone")
+	}
+	if node.HiddenDeps[0].Status != "satisfied" {
+		t.Errorf("hidden dep status = %q, want %q", node.HiddenDeps[0].Status, "satisfied")
+	}
+}
+
 // --- Test helpers ---
 
 func nodeKeySet(data GraphData) map[string]struct{} {
@@ -825,4 +867,24 @@ func edgesTo(data GraphData, toKey string) []Edge {
 		}
 	}
 	return result
+}
+
+func TestShowTo_MissingMatoDir(t *testing.T) {
+	repoDir := testutil.SetupRepo(t)
+	// Do NOT create .mato/ — the repo is uninitialized.
+
+	formats := []string{"text", "dot", "json"}
+	for _, format := range formats {
+		t.Run(format, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := ShowTo(&buf, repoDir, format, false)
+			if err == nil {
+				t.Fatal("expected error for missing .mato directory, got nil")
+			}
+			want := ".mato/ directory not found - run 'mato init' first"
+			if err.Error() != want {
+				t.Errorf("error = %q, want %q", err.Error(), want)
+			}
+		})
+	}
 }

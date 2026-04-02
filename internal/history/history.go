@@ -53,11 +53,10 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 		return fmt.Errorf("unsupported format %q", format)
 	}
 
-	resolvedRoot, err := git.Output(repo, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repo)
 	if err != nil {
 		return err
 	}
-	repoRoot := strings.TrimSpace(resolvedRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	if err := requireTasksDir(tasksDir); err != nil {
@@ -66,7 +65,7 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 
 	events, err := collectEvents(tasksDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("collect history events: %w", err)
 	}
 	sortEvents(events)
 	if limit > 0 && len(events) > limit {
@@ -107,6 +106,14 @@ func collectEvents(tasksDir string) ([]Event, error) {
 		if taskStatus == sourceFailed && taskErr != nil {
 			return nil, taskErr
 		}
+	}
+
+	// Surface partial failures: one source failed but the other succeeded.
+	if completionStatus == sourceFailed && taskStatus == sourceRead && completionErr != nil {
+		warnf("warning: %v\n", completionErr)
+	}
+	if taskStatus == sourceFailed && completionStatus == sourceRead && taskErr != nil {
+		warnf("warning: %v\n", taskErr)
 	}
 
 	return events, nil

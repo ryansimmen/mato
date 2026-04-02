@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"errors"
@@ -35,23 +36,25 @@ const resumeDetectionBufferLimit = 8192
 
 type resumeDetectionBuffer struct {
 	matched bool
-	carry   string
+	buf     bytes.Buffer
 }
 
 func (b *resumeDetectionBuffer) Write(p []byte) (int, error) {
-	combined := b.carry + string(p)
-	if !b.matched && resumeRejected(combined) {
+	b.buf.Write(p)
+	if !b.matched && resumeRejectedBytes(b.buf.Bytes()) {
 		b.matched = true
 	}
-	if len(combined) > resumeDetectionBufferLimit {
-		combined = combined[len(combined)-resumeDetectionBufferLimit:]
+	if b.buf.Len() > resumeDetectionBufferLimit {
+		data := b.buf.Bytes()
+		tail := data[len(data)-resumeDetectionBufferLimit:]
+		b.buf.Reset()
+		b.buf.Write(tail)
 	}
-	b.carry = combined
 	return len(p), nil
 }
 
 func (b *resumeDetectionBuffer) Matched() bool {
-	return b.matched || resumeRejected(b.carry)
+	return b.matched || resumeRejectedBytes(b.buf.Bytes())
 }
 
 var execCommandContext = exec.CommandContext
@@ -252,14 +255,13 @@ func formatDurationShort(d time.Duration) string {
 // It runs one iteration of queue management (dependency promotion, overlap
 // detection, manifest writing) and reports the results, then exits.
 func DryRun(repoRoot, branch string, opts RunOptions) error {
-	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
 		return err
 	}
-	repoRoot = strings.TrimSpace(repoRoot)
 	opts, err = normalizeAndValidateRunOptions(opts)
 	if err != nil {
-		return err
+		return fmt.Errorf("validate run options: %w", err)
 	}
 
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
@@ -522,19 +524,18 @@ func resolveDepState(depID string, idx *queue.PollIndex) string {
 }
 
 func Run(repoRoot, branch string, opts RunOptions) error {
-	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
 		return err
 	}
-	repoRoot = strings.TrimSpace(repoRoot)
 	opts, err = normalizeAndValidateRunOptions(opts)
 	if err != nil {
-		return err
+		return fmt.Errorf("validate run options: %w", err)
 	}
 
 	branchResult, err := git.EnsureBranch(repoRoot, branch)
 	if err != nil {
-		return err
+		return fmt.Errorf("ensure branch: %w", err)
 	}
 	reportBranchResolution(branchResult)
 
@@ -568,17 +569,17 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 
 	changed, err := git.EnsureGitignoreContains(repoRoot, "/"+dirs.Root+"/")
 	if err != nil {
-		return err
+		return fmt.Errorf("update .gitignore: %w", err)
 	}
 	if changed {
 		if err := git.CommitGitignore(repoRoot, "chore: add /"+dirs.Root+"/ to .gitignore"); err != nil {
-			return err
+			return fmt.Errorf("commit .gitignore: %w", err)
 		}
 	}
 
 	tools, err := discoverHostTools()
 	if err != nil {
-		return err
+		return fmt.Errorf("discover host tools: %w", err)
 	}
 
 	cfg, run := buildEnvAndRunContext(branch, tools, agentID, gitName, gitEmail, repoRoot, tasksDir, opts)
@@ -590,6 +591,8 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 	if err := ensureDockerImage(ctx, cfg.image); err != nil {
 		return err
 	}
+
+	cleanStaleClones(staleCloneMaxAge)
 
 	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown, opts.Mode)
 }
@@ -620,7 +623,7 @@ func resolveGitIdentity(repoRoot string) (name, email string) {
 func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail, repoRoot, tasksDir string, opts RunOptions) (envConfig, runContext) {
 	image := opts.DockerImage
 	if image == "" {
-		image = "ubuntu:24.04"
+		image = DefaultDockerImage
 	}
 	timeout := opts.AgentTimeout
 	if timeout <= 0 {
@@ -724,6 +727,77 @@ func pollCleanup(tasksDir string) {
 	}
 	if err := sessionmeta.Sweep(tasksDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not clean stale sessionmeta: %v\n", err)
+	}
+}
+
+// cloneDirPrefix is the prefix used by git.CreateClone when creating temp
+// directories. Only directories matching this prefix are considered for
+// cleanup.
+const cloneDirPrefix = "mato-"
+
+// staleCloneMaxAge is the age threshold beyond which a preserved debug clone
+// is considered stale and eligible for removal. 24 hours gives operators
+// ample time to inspect a failed push before the directory is reclaimed.
+const staleCloneMaxAge = 24 * time.Hour
+
+// tempDirFn returns the OS temp directory. Tests override it to avoid
+// touching the real /tmp.
+var tempDirFn = os.TempDir
+
+// cleanStaleClones removes clone directories in the OS temp directory that
+// were preserved for debugging after a failed push (see runOnce in task.go).
+//
+// A directory is removed only when all three conditions are met:
+//  1. Its name starts with the "mato-" prefix used by git.CreateClone.
+//  2. It contains the ".mato-debug-clone" sentinel marker written by
+//     writeDebugMarker when a clone is intentionally preserved after a
+//     postAgentPush failure. This positively identifies the directory as
+//     a mato debug clone rather than an active or unrelated temp clone.
+//  3. Its modification time is older than maxAge.
+//
+// This runs once at runner startup, before the poll loop begins, so that
+// stale clones from previous runs are reclaimed without risking removal of
+// clones that may still be in active use by a currently running agent.
+func cleanStaleClones(maxAge time.Duration) {
+	tmpDir := tempDirFn()
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not list temp directory for clone cleanup: %v\n", err)
+		return
+	}
+
+	cutoff := nowFn().Add(-maxAge)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if !strings.HasPrefix(entry.Name(), cloneDirPrefix) {
+			continue
+		}
+		dirPath := filepath.Join(tmpDir, entry.Name())
+
+		// Only remove directories that contain the debug marker,
+		// confirming they were intentionally preserved after a
+		// postAgentPush failure.
+		markerPath := filepath.Join(dirPath, debugMarkerFile)
+		if _, err := os.Stat(markerPath); err != nil {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+
+		if err := os.RemoveAll(dirPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remove stale clone %s: %v\n", dirPath, err)
+			continue
+		}
+		fmt.Printf("Cleaned up stale clone directory: %s (age: %s)\n", dirPath, nowFn().Sub(info.ModTime()).Truncate(time.Minute))
 	}
 }
 
@@ -1190,20 +1264,55 @@ func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extra
 
 func resumeRejected(output string) bool {
 	for _, rawLine := range strings.Split(output, "\n") {
-		line := strings.ToLower(strings.TrimSpace(rawLine))
-		if line == "" {
-			continue
+		if resumeRejectedLine([]byte(rawLine)) {
+			return true
 		}
-		if !strings.Contains(line, "resume") && !strings.Contains(line, "session") {
-			continue
+	}
+	return false
+}
+
+func resumeRejectedBytes(output []byte) bool {
+	for len(output) > 0 {
+		line := output
+		if i := bytes.IndexByte(output, '\n'); i >= 0 {
+			line = output[:i]
+			output = output[i+1:]
+		} else {
+			output = nil
 		}
-		if !strings.Contains(line, "error") && !strings.Contains(line, "failed") && !strings.Contains(line, "invalid") {
-			continue
+		if resumeRejectedLine(line) {
+			return true
 		}
-		for _, marker := range []string{"resume session", "--resume", "cannot resume", "failed to resume", "invalid session", "unknown session", "session not found", "resume rejected", "invalid value for '--resume'", "unknown option '--resume'"} {
-			if strings.Contains(line, marker) {
-				return true
-			}
+	}
+	return false
+}
+
+func resumeRejectedLine(rawLine []byte) bool {
+	line := bytes.TrimSpace(rawLine)
+	if len(line) == 0 {
+		return false
+	}
+	lower := bytes.ToLower(line)
+	if !bytes.Contains(lower, []byte("resume")) && !bytes.Contains(lower, []byte("session")) {
+		return false
+	}
+	if !bytes.Contains(lower, []byte("error")) && !bytes.Contains(lower, []byte("failed")) && !bytes.Contains(lower, []byte("invalid")) {
+		return false
+	}
+	for _, marker := range [][]byte{
+		[]byte("resume session"),
+		[]byte("--resume"),
+		[]byte("cannot resume"),
+		[]byte("failed to resume"),
+		[]byte("invalid session"),
+		[]byte("unknown session"),
+		[]byte("session not found"),
+		[]byte("resume rejected"),
+		[]byte("invalid value for '--resume'"),
+		[]byte("unknown option '--resume'"),
+	} {
+		if bytes.Contains(lower, marker) {
+			return true
 		}
 	}
 	return false
