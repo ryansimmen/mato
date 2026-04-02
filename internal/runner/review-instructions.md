@@ -31,6 +31,11 @@ REVIEW_CONTEXT_PLACEHOLDER
 - Messaging is best-effort: if reading or writing messages fails, continue the review anyway.
 - Send at most 1 agent-written message: one `progress` for VERIFY_REVIEW. The host sends the `completion` message after processing the verdict. No `intent` message is sent for reviews.
 - Do not stop midway. End only after writing the verdict file.
+- Do not invent process-management cleanup commands (e.g., `kill`, `pkill`, `killall`). The host manages all process lifecycle.
+- Do not collapse multiple state blocks into a single shell command. Execute each step as a separate invocation or use the agent's file-writing tools for creating files like JSON messages and verdicts.
+- Avoid command substitution (`$(...)` and backticks) in shell commands. Use pipes, redirects, temp files, or your file-writing/editing tools instead. For example, pipe a command's output to a file and read from it rather than capturing inline.
+- Prefer `printf` or `date` format strings over heredocs (`<< EOF`) when writing structured files.
+- For verdict files that contain rejection reasons with special characters (double quotes, backslashes, newlines), use your file-writing tool to create proper JSON rather than shell escaping.
 ## Workflow State Machine
 Execute states in this exact order:
 `VERIFY_REVIEW → DIFF → REVIEW → VERDICT`
@@ -46,25 +51,23 @@ AGENT_ID="${MATO_AGENT_ID:-unknown}"
 **Goal:** Read the pre-set environment variables, confirm the task file exists in `ready-for-review/`, and read the task description to understand what was requested.
 **Commands:**
 ```bash
-FILENAME="${MATO_TASK_FILE:?MATO_TASK_FILE is required}"
-BRANCH="${MATO_TASK_BRANCH:?MATO_TASK_BRANCH is required}"
-TASK_TITLE="${MATO_TASK_TITLE:-}"
-TASK_PATH="${MATO_TASK_PATH:?MATO_TASK_PATH is required}"
-VERDICT_PATH="${MATO_REVIEW_VERDICT_PATH:?MATO_REVIEW_VERDICT_PATH is required}"
+FILENAME="$MATO_TASK_FILE"
+BRANCH="$MATO_TASK_BRANCH"
+TASK_TITLE="$MATO_TASK_TITLE"
+TASK_PATH="$MATO_TASK_PATH"
+VERDICT_PATH="$MATO_REVIEW_VERDICT_PATH"
+if [ -z "$FILENAME" ] || [ -z "$BRANCH" ] || [ -z "$TASK_PATH" ] || [ -z "$VERDICT_PATH" ]; then
+  echo "Required environment variables MATO_TASK_FILE, MATO_TASK_BRANCH, MATO_TASK_PATH, or MATO_REVIEW_VERDICT_PATH are not set. Exiting."
+  exit 1
+fi
 if [ ! -f "$TASK_PATH" ]; then
   echo "Task file not found at $TASK_PATH. Exiting."
   exit 0
 fi
-[ -n "$TASK_TITLE" ] || TASK_TITLE="$(grep -m1 '^# ' "$TASK_PATH" | sed 's/^# //')"
-[ -n "$TASK_TITLE" ] || TASK_TITLE="$(basename "$FILENAME" .md)"
 cat "$TASK_PATH"
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-verify-review"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: VERIFY_REVIEW","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
+date -u +'{"id":"%Y%m%dT%H%M%SZ-'"$AGENT_ID"'-verify-review","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: VERIFY_REVIEW","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${AGENT_ID}-verify-review.json" || true
 ```
+If `TASK_TITLE` is empty, read the first `# ` heading from the task file and use it as the title. If no heading is found, use the filename (without `.md` extension) as the title.
 Read the full task file to understand the requirements. Task files may have YAML frontmatter between `---` delimiters at the top. This is metadata for the host scheduler. Ignore it when reading task instructions. The task instructions begin after the frontmatter block (or at the start if there is no frontmatter). The `#` heading is the task title.
 Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, `<!-- failure: ... -->`, `<!-- review-failure: ... -->`, and `<!-- review-rejection: ... -->` when interpreting the task body.
 **Decision table:**
@@ -87,7 +90,7 @@ git diff --name-only "TARGET_BRANCH_PLACEHOLDER...origin/$BRANCH"
 ```
 Read the full content of each changed file on the task branch for context:
 ```bash
-for f in $(git diff --name-only "TARGET_BRANCH_PLACEHOLDER...origin/$BRANCH"); do
+git diff --name-only "TARGET_BRANCH_PLACEHOLDER...origin/$BRANCH" | while read f; do
   echo "=== $f ==="
   git show "origin/$BRANCH:$f" 2>/dev/null || echo "(file deleted)"
 done
@@ -135,21 +138,21 @@ previously rejected issues were actually fixed.
 ### If APPROVED:
 **Commands:**
 ```bash
-cat > "$VERDICT_PATH" << 'VERDICTEOF'
-{"verdict":"approve"}
-VERDICTEOF
+printf '{"verdict":"approve"}\n' > "$VERDICT_PATH"
 echo "Approved $FILENAME on $BRANCH. Host will move to ready-to-merge/."
 ```
 
 ### If REJECTED:
 Write the verdict file with a specific, actionable reason. The reason must explain exactly what needs to be fixed.
-**Commands:**
+
+Use your file-writing tool to create the verdict JSON file directly, ensuring proper JSON encoding of the reason string. The file must contain valid JSON in this format:
+```json
+{"verdict":"reject","reason":"<one-paragraph summary of the specific issue(s) found>"}
+```
+For simple reasons that do not contain double quotes, backslashes, or newlines, you may use:
 ```bash
 REJECT_REASON='<one-paragraph summary of the specific issue(s) found>'
-ESCAPED_REASON=$(printf '%s' "$REJECT_REASON" | sed 's/\\/\\\\/g; s/"/\\"/g; :a;N;$!ba;s/\n/\\n/g')
-cat > "$VERDICT_PATH" <<VERDICTEOF
-{"verdict":"reject","reason":"$ESCAPED_REASON"}
-VERDICTEOF
+printf '{"verdict":"reject","reason":"%s"}\n' "$REJECT_REASON" > "$VERDICT_PATH"
 echo "Rejected $FILENAME. Host will move back to backlog/."
 ```
 **Important:** Replace `<one-paragraph summary ...>` with the actual rejection reason. Keep the reason to one paragraph.
@@ -170,12 +173,15 @@ echo "Rejected $FILENAME. Host will move back to backlog/."
 **Goal:** Write a verdict file indicating failure so the host can record it. The host will handle retry logic.
 Use this state for unrecoverable errors only, such as inability to fetch the branch or read the task file.
 **Commands:**
+
+Use your file-writing tool to create the verdict JSON file directly:
+```json
+{"verdict":"error","reason":"<step>: <error description>"}
+```
+For simple error reasons you may use:
 ```bash
 ERROR_REASON="${FAIL_STEP:-REVIEW}: ${FAIL_REASON:-unknown error}"
-ESCAPED_ERROR_REASON=$(printf '%s' "$ERROR_REASON" | sed 's/\\/\\\\/g; s/"/\\"/g; :a;N;$!ba;s/\n/\\n/g')
-cat > "$VERDICT_PATH" <<VERDICTEOF
-{"verdict":"error","reason":"$ESCAPED_ERROR_REASON"}
-VERDICTEOF
+printf '{"verdict":"error","reason":"%s"}\n' "$ERROR_REASON" > "$VERDICT_PATH"
 ```
 **Decision table:**
 | If | Then |

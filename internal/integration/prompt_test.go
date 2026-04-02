@@ -167,6 +167,94 @@ func TestPromptFileClaimsMentionGlobPatterns(t *testing.T) {
 	}
 }
 
+// TestPromptSandboxSafeShellPatterns verifies that bash blocks in the task
+// instructions do not use shell constructs likely to be blocked by execution
+// sandboxes: command substitution, heredocs with variable interpolation,
+// ${VAR:?} parameter expansions, and process-management commands.
+func TestPromptSandboxSafeShellPatterns(t *testing.T) {
+	data, err := os.ReadFile(taskInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(task instructions): %v", err)
+	}
+
+	// Extract all bash code blocks from the prompt.
+	blocks := extractBashBlocks(t, string(data))
+	if len(blocks) == 0 {
+		t.Fatal("no bash blocks found in task instructions")
+	}
+
+	for i, block := range blocks {
+		// No command substitution — sandbox blocks $(...)
+		if strings.Contains(block, "$(") {
+			t.Fatalf("bash block %d contains command substitution $(...):\n%s", i, block)
+		}
+
+		// No ${VAR:?message} parameter expansions — sandbox may reject the
+		// error-text syntax.
+		if strings.Contains(block, ":?") {
+			t.Fatalf("bash block %d contains ${VAR:?...} parameter expansion:\n%s", i, block)
+		}
+
+		// No heredocs with variable interpolation (unquoted EOF delimiter).
+		if strings.Contains(block, "<< EOF") || strings.Contains(block, "<<EOF") {
+			t.Fatalf("bash block %d contains heredoc with interpolation (<< EOF):\n%s", i, block)
+		}
+
+		// No process-management commands.
+		for _, cmd := range []string{"kill ", "pkill ", "killall "} {
+			if strings.Contains(block, cmd) {
+				t.Fatalf("bash block %d contains process-management command %q:\n%s", i, cmd, block)
+			}
+		}
+	}
+}
+
+// TestPromptSandboxSafeInvariants verifies the task instructions include
+// guidance telling agents to avoid sandbox-risky patterns.
+func TestPromptSandboxSafeInvariants(t *testing.T) {
+	data, err := os.ReadFile(taskInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(task instructions): %v", err)
+	}
+	text := string(data)
+
+	required := []struct {
+		substring string
+		reason    string
+	}{
+		{"process-management cleanup commands", "should warn agents not to invent kill/pkill commands"},
+		{"Do not collapse multiple state blocks", "should warn agents not to flatten steps into one shell command"},
+		{"Avoid command substitution", "should explicitly ban $(...)"},
+		{"file-writing", "should recommend agent file-writing tools as alternative"},
+	}
+	for _, r := range required {
+		if !strings.Contains(text, r.substring) {
+			t.Fatalf("task instructions missing %q: %s", r.substring, r.reason)
+		}
+	}
+}
+
+// extractBashBlocks returns all ```bash ... ``` blocks from a markdown document.
+func extractBashBlocks(t *testing.T, text string) []string {
+	t.Helper()
+	var blocks []string
+	remaining := text
+	for {
+		start := strings.Index(remaining, "```bash\n")
+		if start < 0 {
+			break
+		}
+		remaining = remaining[start+len("```bash\n"):]
+		end := strings.Index(remaining, "\n```")
+		if end < 0 {
+			t.Fatal("unterminated bash block in prompt")
+		}
+		blocks = append(blocks, remaining[:end])
+		remaining = remaining[end+len("\n```"):]
+	}
+	return blocks
+}
+
 func createPromptClone(t *testing.T, repoRoot, tasksDir string) string {
 	t.Helper()
 
