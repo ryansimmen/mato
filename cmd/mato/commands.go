@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -24,6 +26,7 @@ import (
 	"mato/internal/ui"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // doctorRunFn is the function used to run health checks. It defaults to
@@ -39,6 +42,11 @@ var inspectShowFn = inspect.Show
 var logShowFn = history.Show
 
 var cancelTaskFn = queue.CancelTask
+
+// confirmCancelFn asks the user to confirm cancellation. It receives an
+// io.Reader (normally os.Stdin) and returns true if the user confirmed.
+// Tests replace it to simulate user input.
+var confirmCancelFn = confirmCancel
 
 func newInitCmd(repoFlag *string) *cobra.Command {
 	var initBranch string
@@ -564,6 +572,7 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 
 func newCancelCmd(repoFlag *string) *cobra.Command {
 	var format string
+	var yes bool
 
 	cmd := &cobra.Command{
 		Use:   "cancel <task-ref> [task-ref...]",
@@ -587,6 +596,46 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 			tasksDir := filepath.Join(repoRoot, dirs.Root)
 			if err := requireTasksDir(tasksDir); err != nil {
 				return err
+			}
+
+			// Interactive confirmation when stdin is a TTY,
+			// --yes is not set, and output is not JSON.
+			if !yes && format != "json" && term.IsTerminal(int(os.Stdin.Fd())) {
+				idx := queue.BuildIndex(tasksDir)
+				type taskInfo struct {
+					stem  string
+					state string
+					agent string
+				}
+				var resolved []taskInfo
+				for _, ref := range args {
+					match, err := queue.ResolveTask(idx, ref)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+						return &SilentError{Err: err, Code: 1}
+					}
+					stem := strings.TrimSuffix(match.Filename, ".md")
+					agent := ""
+					if match.Snapshot != nil {
+						agent = match.Snapshot.ClaimedBy
+					}
+					resolved = append(resolved, taskInfo{stem: stem, state: match.State, agent: agent})
+				}
+
+				fmt.Println("The following tasks will be cancelled:")
+				for _, ti := range resolved {
+					if ti.agent != "" {
+						fmt.Printf("  %-20s (%s, agent %s)\n", ti.stem, ti.state, ti.agent)
+					} else {
+						fmt.Printf("  %-20s (%s)\n", ti.stem, ti.state)
+					}
+				}
+				fmt.Println()
+				fmt.Printf("Cancel %d task(s)? [y/N]: ", len(resolved))
+				if !confirmCancelFn(os.Stdin) {
+					fmt.Println("Cancelled. No tasks were modified.")
+					return nil
+				}
 			}
 
 			type cancelItemResult struct {
@@ -657,8 +706,25 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 	configureCommand(cmd)
 
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
 
 	return cmd
+}
+
+// confirmCancel reads a line from r and returns true if the user confirmed
+// with y, Y, yes, or YES.
+func confirmCancel(r io.Reader) bool {
+	scanner := bufio.NewScanner(r)
+	if !scanner.Scan() {
+		return false
+	}
+	answer := strings.TrimSpace(scanner.Text())
+	switch strings.ToLower(answer) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // writeJSON encodes v as indented JSON to w.
