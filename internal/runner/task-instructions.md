@@ -61,7 +61,9 @@ if [ ! -f "$TASK_PATH" ]; then
   echo "Task file not found at $TASK_PATH. Exiting."
   exit 0
 fi
-date -u +'{"id":"%Y%m%dT%H%M%SZ-'"$AGENT_ID"'-verify-claim","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: VERIFY_CLAIM","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${AGENT_ID}-verify-claim.json" || true
+date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
+read MATO_TS < /tmp/mato-ts-$$.txt
+date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-verify-claim","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: VERIFY_CLAIM","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_TS}-${AGENT_ID}-verify-claim.json" || true
 ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read f; do cat "$f"; echo; done || true
 # Read dependency context if provided by the host
 if [ -n "${MATO_DEPENDENCY_CONTEXT:-}" ] && [ -f "$MATO_DEPENDENCY_CONTEXT" ]; then
@@ -102,7 +104,9 @@ Task files may have YAML frontmatter between `---` delimiters at the top. This i
 Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` when interpreting the task body.
 **Commands:**
 ```bash
-date -u +'{"id":"%Y%m%dT%H%M%SZ-'"$AGENT_ID"'-work","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: WORK","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${AGENT_ID}-work.json" || true
+date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
+read MATO_TS < /tmp/mato-ts-$$.txt
+date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-work","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: WORK","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_TS}-${AGENT_ID}-work.json" || true
 cat "$TASK_PATH"
 VALIDATION_ATTEMPT=1
 while [ "$VALIDATION_ATTEMPT" -le 3 ]; do
@@ -126,7 +130,9 @@ done
 **Goal:** Create a mandatory commit containing only the task work, with a descriptive commit message. After committing, the agent's work is done — the host will push the branch and move the task to review.
 **Commands:**
 ```bash
-date -u +'{"id":"%Y%m%dT%H%M%SZ-'"$AGENT_ID"'-commit","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: COMMIT","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${AGENT_ID}-commit.json" || true
+date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
+read MATO_TS < /tmp/mato-ts-$$.txt
+date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-commit","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: COMMIT","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_TS}-${AGENT_ID}-commit.json" || true
 git status --short
 git add -A
 COMMIT_SUBJECT="$TASK_TITLE"

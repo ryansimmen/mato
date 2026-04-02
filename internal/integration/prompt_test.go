@@ -1071,3 +1071,82 @@ func TestPromptProgressMessagesAreDistinct(t *testing.T) {
 		t.Fatalf("expected 3 distinct progress messages, got %d: %v", len(progressBodies), progressBodies)
 	}
 }
+
+// TestPromptProgressMessagesAccumulateAcrossRuns verifies that two separate
+// runs from the same agent ID produce distinct progress message files that
+// do not overwrite each other. This is a regression test for the append-only
+// messaging invariant.
+func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirInProgress, "accumulate-test.md",
+		"<!-- claimed-by: same-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"# Accumulate Test\nTest that progress messages accumulate.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
+
+	taskPath := filepath.Join(cloneTasksDir, queue.DirInProgress, "accumulate-test.md")
+
+	// Build the script that runs just the VERIFY_CLAIM message-write snippet.
+	script := strings.Join([]string{
+		promptPreamble(t),
+		`FILENAME="accumulate-test.md"`,
+		`BRANCH="task/accumulate-test"`,
+		`TASK_TITLE="Accumulate Test"`,
+		`TASK_PATH="` + taskPath + `"`,
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	env := []string{
+		"MATO_AGENT_ID=same-agent",
+		"MATO_TASK_FILE=accumulate-test.md",
+		"MATO_TASK_BRANCH=task/accumulate-test",
+		"MATO_TASK_TITLE=Accumulate Test",
+		"MATO_TASK_PATH=" + taskPath,
+	}
+
+	// Run #1.
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash run1: %v\noutput:\n%s", err, out)
+	}
+
+	msgs1 := readPromptEventMessages(t, tasksDir)
+	var count1 int
+	for _, msg := range msgs1 {
+		if msg.Type == "progress" && msg.From == "same-agent" &&
+			strings.Contains(msg.Body, "VERIFY_CLAIM") {
+			count1++
+		}
+	}
+	if count1 != 1 {
+		t.Fatalf("after run1: expected 1 VERIFY_CLAIM message, got %d", count1)
+	}
+
+	// Sleep 1 second so the timestamp-based filename differs.
+	sleepScript := "sleep 1\n\n" + script
+	out2, err := runBash(t, cloneDir, env, sleepScript)
+	if err != nil {
+		t.Fatalf("runBash run2: %v\noutput:\n%s", err, out2)
+	}
+
+	// After two runs, there should be 2 distinct VERIFY_CLAIM messages.
+	msgs2 := readPromptEventMessages(t, tasksDir)
+	var count2 int
+	ids := make(map[string]bool)
+	for _, msg := range msgs2 {
+		if msg.Type == "progress" && msg.From == "same-agent" &&
+			strings.Contains(msg.Body, "VERIFY_CLAIM") {
+			count2++
+			if ids[msg.ID] {
+				t.Fatalf("duplicate message ID across runs: %s", msg.ID)
+			}
+			ids[msg.ID] = true
+		}
+	}
+	if count2 != 2 {
+		t.Fatalf("after run2: expected 2 VERIFY_CLAIM messages (one per run), got %d", count2)
+	}
+}
