@@ -30,14 +30,14 @@ type State struct {
 
 // PauseResult describes what Pause did. Since is always UTC-normalized.
 type PauseResult struct {
-	AlreadyPaused bool
-	Repaired      bool
-	Since         time.Time
+	AlreadyPaused bool      `json:"already_paused"`
+	Repaired      bool      `json:"repaired"`
+	Since         time.Time `json:"since"`
 }
 
 // ResumeResult describes what Resume did.
 type ResumeResult struct {
-	WasActive bool
+	WasActive bool `json:"was_active"`
 }
 
 var statFn = os.Stat

@@ -267,7 +267,7 @@ func TestDependencyBlockedBacklogDemotedAndRetriedTaskWaits(t *testing.T) {
 	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "blocked.md"))
 	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"))
 
-	if err := queue.RetryTask(tasksDir, "retry-blocked"); err != nil {
+	if _, err := queue.RetryTask(tasksDir, "retry-blocked"); err != nil {
 		t.Fatalf("queue.RetryTask: %v", err)
 	}
 	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "retry-blocked.md"))

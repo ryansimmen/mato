@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -2882,5 +2883,419 @@ func configFixtureWithValues(dockerImage, taskModel, reviewModel *string, review
 		ReviewReasoningEffort: reviewReasoningEffort,
 		AgentTimeout:          agentTimeout,
 		RetryCooldown:         retryCooldown,
+	}
+}
+
+// --- JSON format tests for mutating commands ---
+
+func TestInitCmd_FormatJSON(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot, "--format=json"})
+
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("init --format=json failed: %v", err)
+		}
+	})
+
+	var result setup.InitResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if result.BranchName != "mato" {
+		t.Errorf("branch_name = %q, want %q", result.BranchName, "mato")
+	}
+	if len(result.DirsCreated) == 0 {
+		t.Error("expected dirs_created to be non-empty on first init")
+	}
+}
+
+func TestInitCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--format=yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestPauseCmd_FormatJSON(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"pause", "--repo", repoRoot, "--format=json"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("pause --format=json failed: %v", err)
+		}
+	})
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if _, ok := result["since"]; !ok {
+		t.Error("expected 'since' field in JSON output")
+	}
+	if result["already_paused"] != false {
+		t.Errorf("already_paused = %v, want false", result["already_paused"])
+	}
+}
+
+func TestPauseCmd_FormatJSON_AlreadyPaused(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".paused"), []byte("2026-03-23T10:00:00Z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"pause", "--repo", repoRoot, "--format=json"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("pause --format=json failed: %v", err)
+		}
+	})
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if result["already_paused"] != true {
+		t.Errorf("already_paused = %v, want true", result["already_paused"])
+	}
+}
+
+func TestPauseCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"pause", "--format=yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestResumeCmd_FormatJSON(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".paused"), []byte("2026-03-23T10:00:00Z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"resume", "--repo", repoRoot, "--format=json"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("resume --format=json failed: %v", err)
+		}
+	})
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if result["was_active"] != true {
+		t.Errorf("was_active = %v, want true", result["was_active"])
+	}
+}
+
+func TestResumeCmd_FormatJSON_NotPaused(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"resume", "--repo", repoRoot, "--format=json"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("resume --format=json failed: %v", err)
+		}
+	})
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if result["was_active"] != false {
+		t.Errorf("was_active = %v, want false", result["was_active"])
+	}
+}
+
+func TestResumeCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"resume", "--format=yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestRetryCmd_FormatJSON_Success(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# Fix bug\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "fix-bug.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--format=json", "fix-bug"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("retry --format=json failed: %v", err)
+		}
+	})
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0]["task"] != "fix-bug" {
+		t.Errorf("task = %v, want %q", items[0]["task"], "fix-bug")
+	}
+	if items[0]["requeued"] != true {
+		t.Errorf("requeued = %v, want true", items[0]["requeued"])
+	}
+}
+
+func TestRetryCmd_FormatJSON_PartialFailure(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# Good\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "good.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--format=json", "good", "missing"})
+	var execErr error
+	output := captureStdout(t, func() {
+		execErr = cmd.Execute()
+	})
+	if execErr == nil {
+		t.Fatal("expected error for partial failure")
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0]["requeued"] != true {
+		t.Errorf("first item requeued = %v, want true", items[0]["requeued"])
+	}
+	if items[1]["error"] == nil || items[1]["error"] == "" {
+		t.Error("second item should have an error")
+	}
+}
+
+func TestRetryCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--format=yaml", "foo"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestCancelCmd_FormatJSON_SingleTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--format=json", "fix-bug"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel --format=json failed: %v", err)
+		}
+	})
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0]["task"] != "fix-bug" {
+		t.Errorf("task = %v, want %q", items[0]["task"], "fix-bug")
+	}
+	if items[0]["cancelled"] != true {
+		t.Errorf("cancelled = %v, want true", items[0]["cancelled"])
+	}
+	if items[0]["prior_state"] != queue.DirBacklog {
+		t.Errorf("prior_state = %v, want %q", items[0]["prior_state"], queue.DirBacklog)
+	}
+}
+
+func TestCancelCmd_FormatJSON_PartialFailure(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--format=json", "good", "missing"})
+	var execErr error
+	output := captureStdout(t, func() {
+		execErr = cmd.Execute()
+	})
+	if execErr == nil {
+		t.Fatal("expected error for partial failure")
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0]["cancelled"] != true {
+		t.Errorf("first item cancelled = %v, want true", items[0]["cancelled"])
+	}
+	if items[1]["error"] == nil || items[1]["error"] == "" {
+		t.Error("second item should have an error")
+	}
+}
+
+func TestCancelCmd_FormatJSON_DownstreamWarnings(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte("---\nid: waiter\ndepends_on: [dep]\n---\n# Waiter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--format=json", "dep"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel --format=json failed: %v", err)
+		}
+	})
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	warnings, ok := items[0]["warnings"].([]interface{})
+	if !ok || len(warnings) == 0 {
+		t.Error("expected warnings in JSON output for downstream dependencies")
+	}
+}
+
+func TestCancelCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--format=yaml", "foo"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestRetryCmd_FormatJSON_DependencyBlockedWarnings(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	content := "---\nid: blocked\ndepends_on: [missing-dep]\n---\n# Blocked\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, "failed", "blocked.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--format=json", "blocked"})
+	var stderr string
+	output := captureStdout(t, func() {
+		stderr = captureStderr(t, func() {
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("retry --format=json failed: %v", err)
+			}
+		})
+	})
+
+	// JSON mode should not leak warnings as prose to stderr.
+	if strings.Contains(stderr, "warning:") {
+		t.Errorf("stderr should be clean in JSON mode, got %q", stderr)
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0]["dependency_blocked"] != true {
+		t.Errorf("dependency_blocked = %v, want true", items[0]["dependency_blocked"])
+	}
+	warnings, ok := items[0]["warnings"].([]interface{})
+	if !ok || len(warnings) == 0 {
+		t.Error("expected warnings in JSON output for dependency-blocked retry")
+	}
+	if ok && len(warnings) > 0 {
+		w, _ := warnings[0].(string)
+		if !strings.Contains(w, "dependency-blocked") {
+			t.Errorf("warning = %q, want substring 'dependency-blocked'", w)
+		}
+	}
+}
+
+func TestRetryCmd_TextMode_DependencyBlockedWarningOnStderr(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	content := "---\nid: blocked\ndepends_on: [missing-dep]\n---\n# Blocked\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, "failed", "blocked.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "blocked"})
+	stderr := captureStderr(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("retry failed: %v", err)
+		}
+	})
+
+	if !strings.Contains(stderr, "dependency-blocked") {
+		t.Errorf("stderr = %q, want warning about dependency block", stderr)
 	}
 }
