@@ -17,6 +17,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
+	"mato/internal/ui"
 )
 
 // Event is a durable task outcome shown by mato log.
@@ -40,8 +41,6 @@ const (
 	sourceFailed sourceStatus = "failed"
 )
 
-var warningWriter io.Writer = os.Stderr
-
 // Show writes durable task history to stdout.
 func Show(repo string, limit int, format string) error {
 	return ShowTo(os.Stdout, repo, limit, format)
@@ -49,8 +48,8 @@ func Show(repo string, limit int, format string) error {
 
 // ShowTo writes durable task history to w.
 func ShowTo(w io.Writer, repo string, limit int, format string) error {
-	if format != "text" && format != "json" {
-		return fmt.Errorf("unsupported format %q", format)
+	if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+		return err
 	}
 
 	repoRoot, err := git.ResolveRepoRoot(repo)
@@ -59,7 +58,7 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 	}
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
-	if err := requireTasksDir(tasksDir); err != nil {
+	if err := ui.RequireTasksDir(tasksDir); err != nil {
 		return err
 	}
 
@@ -76,20 +75,6 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 		return renderJSON(w, events)
 	}
 	renderText(w, events)
-	return nil
-}
-
-func requireTasksDir(tasksDir string) error {
-	info, err := os.Stat(tasksDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
-		}
-		return fmt.Errorf("stat %s: %w", tasksDir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s exists but is not a directory", tasksDir)
-	}
 	return nil
 }
 
@@ -110,10 +95,10 @@ func collectEvents(tasksDir string) ([]Event, error) {
 
 	// Surface partial failures: one source failed but the other succeeded.
 	if completionStatus == sourceFailed && taskStatus == sourceRead && completionErr != nil {
-		warnf("warning: %v\n", completionErr)
+		ui.Warnf("warning: %v\n", completionErr)
 	}
 	if taskStatus == sourceFailed && completionStatus == sourceRead && taskErr != nil {
-		warnf("warning: %v\n", taskErr)
+		ui.Warnf("warning: %v\n", taskErr)
 	}
 
 	return events, nil
@@ -140,17 +125,17 @@ func collectCompletionEvents(tasksDir string) ([]Event, sourceStatus, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			warnf("warning: could not read completion detail %s: %v\n", entry.Name(), err)
+			ui.Warnf("warning: could not read completion detail %s: %v\n", entry.Name(), err)
 			continue
 		}
 
 		var detail messaging.CompletionDetail
 		if err := json.Unmarshal(data, &detail); err != nil {
-			warnf("warning: could not parse completion detail %s: %v\n", entry.Name(), err)
+			ui.Warnf("warning: could not parse completion detail %s: %v\n", entry.Name(), err)
 			continue
 		}
 		if err := validateCompletionDetail(detail); err != nil {
-			warnf("warning: could not parse completion detail %s: %v\n", entry.Name(), err)
+			ui.Warnf("warning: could not parse completion detail %s: %v\n", entry.Name(), err)
 			continue
 		}
 
@@ -196,7 +181,7 @@ func collectTaskEvents(tasksDir string) ([]Event, sourceStatus, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			warnf("warning: could not read queue directory %s: %v\n", dir, err)
+			ui.Warnf("warning: could not read queue directory %s: %v\n", dir, err)
 			if failedErr == nil {
 				failedErr = fmt.Errorf("read queue directory %s: %w", dir, err)
 			}
@@ -211,7 +196,7 @@ func collectTaskEvents(tasksDir string) ([]Event, sourceStatus, error) {
 				if os.IsNotExist(err) {
 					continue
 				}
-				warnf("warning: could not read task file %s/%s: %v\n", dir, name, err)
+				ui.Warnf("warning: could not read task file %s/%s: %v\n", dir, name, err)
 				continue
 			}
 
@@ -323,11 +308,4 @@ func shortSHA(sha string) string {
 		return sha
 	}
 	return sha[:7]
-}
-
-func warnf(format string, args ...any) {
-	if warningWriter == nil {
-		return
-	}
-	fmt.Fprintf(warningWriter, format, args...)
 }

@@ -29,7 +29,7 @@ func plainColorSet() colorSet {
 		}
 		return buf.String()
 	}
-	return colorSet{bold: plain, green: plain, red: plain, yellow: plain, cyan: plain, dim: plain}
+	return colorSet{Bold: plain, Green: plain, Red: plain, Yellow: plain, Cyan: plain, Dim: plain}
 }
 
 func intToStr(n int) string {
