@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"io"
 	"sort"
+
+	"mato/internal/ui"
 )
+
+var colors = ui.NewColorSet()
 
 // RenderText writes a human-readable indented view of the graph grouped
 // by state. Tasks with dependencies show inline dependency trees with
@@ -14,7 +18,7 @@ func RenderText(w io.Writer, data GraphData) {
 	edgeCount := len(data.Edges)
 	cycleCount := len(data.Cycles)
 
-	fmt.Fprintf(w, "mato graph — %d tasks, %d edges, %d cycles\n", nodeCount, edgeCount, cycleCount)
+	fmt.Fprintf(w, "%s — %d tasks, %d edges, %d cycles\n", colors.Bold("mato graph"), nodeCount, edgeCount, cycleCount)
 
 	// Build lookup maps.
 	nodeByKey := make(map[string]*GraphNode, len(data.Nodes))
@@ -50,7 +54,7 @@ func RenderText(w io.Writer, data GraphData) {
 	}
 
 	for _, g := range groups {
-		fmt.Fprintf(w, "\n%s/\n", g.state)
+		fmt.Fprintf(w, "\n%s\n", colors.Bold(g.state+"/"))
 		for _, node := range g.nodes {
 			renderTextNode(w, node, nodeByKey, edgesByTo)
 		}
@@ -76,10 +80,10 @@ func renderTextNode(w io.Writer, node *GraphNode, nodeByKey map[string]*GraphNod
 	// Build annotation.
 	annotation := fmt.Sprintf("priority: %d", node.Priority)
 	if len(node.BlockDetails) > 0 {
-		annotation += ", blocked"
+		annotation += ", " + colors.Yellow("blocked")
 	}
 	if node.IsCycleMember {
-		annotation += ", cycle ⚠"
+		annotation += ", " + colors.Yellow("cycle ⚠")
 	}
 
 	fmt.Fprintf(w, "  %s (%s)\n", node.ID, annotation)
@@ -166,19 +170,19 @@ func renderDepTree(w io.Writer, nodeKey, prefix string, nodeByKey map[string]*Gr
 func depStateAnnotation(node *GraphNode, satisfied bool) string {
 	state := string(node.State)
 	if satisfied {
-		return state + " ✓"
+		return state + " " + colors.Green("✓")
 	}
 	if node.IsCycleMember {
-		return state + " ⚠"
+		return state + " " + colors.Yellow("⚠")
 	}
 	switch state {
 	case "in-progress":
-		return state + " ⟳"
+		return state + " " + colors.Cyan("⟳")
 	case "completed":
-		return "completed ✓"
+		return "completed " + colors.Green("✓")
 	default:
 		if len(node.BlockDetails) > 0 {
-			return state + ", blocked"
+			return state + ", " + colors.Yellow("blocked")
 		}
 		return state
 	}
@@ -189,11 +193,11 @@ func depStateAnnotation(node *GraphNode, satisfied bool) string {
 func hiddenDepAnnotation(status string) string {
 	switch status {
 	case "satisfied":
-		return "completed ✓"
+		return "completed " + colors.Green("✓")
 	case "external":
-		return "external ✗"
+		return "external " + colors.Red("✗")
 	case "ambiguous":
-		return "ambiguous ⚠"
+		return "ambiguous " + colors.Yellow("⚠")
 	default:
 		return "unknown ?"
 	}

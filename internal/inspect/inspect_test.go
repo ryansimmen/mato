@@ -783,3 +783,74 @@ func TestShowTo_InvalidFormat(t *testing.T) {
 		t.Fatalf("error = %q, should mention the invalid format name", err.Error())
 	}
 }
+
+func TestRenderText_NoColorFallback(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, tasksDir string)
+		taskRef string
+		want    []string
+	}{
+		{
+			name: "runnable status readable without color",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirBacklog, "my-task.md", "---\nid: my-task\npriority: 5\n---\n# My Task\n")
+			},
+			taskRef: "my-task",
+			want:    []string{"Task: my-task", "Status: runnable", "State: backlog"},
+		},
+		{
+			name: "failed status with failure details readable without color",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "broken.md",
+					"<!-- failure: agent at 2026-01-01T00:00:00Z step=WORK error=build_failed -->\n---\nid: broken\nmax_retries: 3\n---\n# Broken\n")
+			},
+			taskRef: "broken",
+			want:    []string{"Status: failed", "Failure: retry", "Last failure: build_failed"},
+		},
+		{
+			name: "blocked status with dependencies readable without color",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirFailed, "dep.md", "---\nid: dep\n---\n# Dep\n<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=broken -->\n")
+				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
+			},
+			taskRef: "consumer",
+			want:    []string{"Status: blocked", "Blocking dependencies:", "dep (failed/dep.md)"},
+		},
+		{
+			name: "deferred status with review history readable without color",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirInProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
+				writeTask(t, tasksDir, queue.DirBacklog, "deferred.md", "---\nid: deferred\naffects: [pkg/file.go]\n---\n# Deferred\n<!-- review-rejection: r at 2026-01-01T00:00:00Z — add tests -->\n")
+			},
+			taskRef: "deferred",
+			want:    []string{"Status: deferred", "Review history: previously rejected: add tests", "Conflicting affects: pkg/file.go"},
+		},
+		{
+			name: "in-progress with claim info readable without color",
+			setup: func(t *testing.T, tasksDir string) {
+				writeTask(t, tasksDir, queue.DirInProgress, "running.md", "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: running\n---\n# Running\n")
+			},
+			taskRef: "running",
+			want:    []string{"Status: running", "Claimed by: agent-1 at 2026-01-01T00:00:00Z"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+			tt.setup(t, tasksDir)
+
+			var buf bytes.Buffer
+			if err := ShowTo(&buf, repoRoot, tt.taskRef, "text"); err != nil {
+				t.Fatalf("ShowTo: %v", err)
+			}
+			output := buf.String()
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q:\n%s", want, output)
+				}
+			}
+		})
+	}
+}

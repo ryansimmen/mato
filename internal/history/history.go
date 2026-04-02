@@ -253,6 +253,25 @@ func sortEvents(events []Event) {
 	})
 }
 
+var colors = ui.NewColorSet()
+
+// colorEventType applies semantic color to a pre-padded event type
+// string. Padding must happen before coloring so ANSI escape sequences
+// do not count toward the visible column width.
+func colorEventType(padded string) string {
+	trimmed := strings.TrimRight(padded, " ")
+	switch trimmed {
+	case "MERGED":
+		return colors.Green(trimmed) + padded[len(trimmed):]
+	case "FAILED":
+		return colors.Red(trimmed) + padded[len(trimmed):]
+	case "REJECTED":
+		return colors.Yellow(trimmed) + padded[len(trimmed):]
+	default:
+		return padded
+	}
+}
+
 func renderText(w io.Writer, events []Event) {
 	if len(events) == 0 {
 		fmt.Fprintln(w, "(no history)")
@@ -267,7 +286,8 @@ func renderText(w io.Writer, events []Event) {
 	}
 
 	for _, event := range events {
-		fmt.Fprintf(w, "%s  %-8s  %-*s", event.Timestamp.UTC().Format(time.RFC3339), event.Type, taskWidth, event.TaskFile)
+		padded := fmt.Sprintf("%-8s", event.Type)
+		fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(event.Timestamp.UTC().Format(time.RFC3339)), colorEventType(padded), taskWidth, event.TaskFile)
 		detail := textDetail(event)
 		if detail != "" {
 			fmt.Fprintf(w, "  %s", detail)
