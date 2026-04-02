@@ -1161,21 +1161,18 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 		t.Fatalf("after run2: expected 2 VERIFY_CLAIM messages (one per run), got %d", count2)
 	}
 
-	// Same-second runs from the same agent should produce the same stable ID
-	// (PID is only in the filename, not in the id field) so the tie-break
-	// contract is preserved.
-	if collectedIDs[0] != collectedIDs[1] {
-		t.Fatalf("same-second runs produced different IDs %q and %q; "+
-			"IDs should be stable (PID only in filename)", collectedIDs[0], collectedIDs[1])
+	// Same-second runs from the same agent should produce unique IDs
+	// (PID suffix ensures per-event uniqueness) while sharing the same
+	// tie-break prefix (<ts>-<agent>-<state>).
+	if collectedIDs[0] == collectedIDs[1] {
+		t.Fatalf("same-second runs produced identical IDs %q; "+
+			"IDs should be unique (PID suffix ensures per-event uniqueness)", collectedIDs[0])
 	}
 
-	// Verify the ID does NOT contain a PID segment (no dash-digit between
-	// timestamp and agent ID).
+	// Verify the ID follows the <ts>-<agent>-<step>-<pid> format.
 	for _, id := range collectedIDs {
-		// Expected format: <timestamp>-<agentID>-verify-claim
-		// NOT: <timestamp>-<PID>-<agentID>-verify-claim
-		if !strings.HasPrefix(id, "20260101T000000Z-same-agent-") {
-			t.Fatalf("ID %q does not match expected format <ts>-<agent>-<step>", id)
+		if !strings.HasPrefix(id, "20260101T000000Z-same-agent-verify-claim-") {
+			t.Fatalf("ID %q does not match expected format <ts>-<agent>-<step>-<pid>", id)
 		}
 	}
 
@@ -1194,9 +1191,9 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 }
 
 // TestPromptProgressIDsPreserveTieBreakSemantics verifies that prompt-generated
-// progress message IDs are stable across same-second runs (no PID component),
-// so the equal-timestamp tie-break contract (lexically smallest ID wins) is
-// deterministic regardless of shell PID ordering.
+// progress message IDs include a PID suffix for per-event uniqueness while
+// preserving the equal-timestamp tie-break contract (lexically smallest ID wins)
+// via a deterministic <ts>-<agent>-<state> prefix.
 func TestPromptProgressIDsPreserveTieBreakSemantics(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
@@ -1260,17 +1257,22 @@ func TestPromptProgressIDsPreserveTieBreakSemantics(t *testing.T) {
 		t.Fatalf("expected 3 VERIFY_CLAIM messages, got %d", len(ids))
 	}
 
-	// All IDs should be identical — no PID component.
-	for i := 1; i < len(ids); i++ {
-		if ids[i] != ids[0] {
-			t.Fatalf("IDs differ across runs: %q vs %q; PID should not be in the ID", ids[0], ids[i])
+	// All IDs should be unique — PID suffix ensures per-event uniqueness.
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		if idSet[id] {
+			t.Fatalf("duplicate ID across runs: %q; PID suffix should ensure uniqueness", id)
 		}
+		idSet[id] = true
 	}
 
-	// The ID should follow the <timestamp>-<agentID>-<step> format.
-	expectedID := "20260601T120000Z-tiebreak-agent-verify-claim"
-	if ids[0] != expectedID {
-		t.Fatalf("ID = %q, want %q", ids[0], expectedID)
+	// All IDs should share the same <ts>-<agent>-<state> prefix, preserving
+	// tie-break ordering.
+	expectedPrefix := "20260601T120000Z-tiebreak-agent-verify-claim-"
+	for _, id := range ids {
+		if !strings.HasPrefix(id, expectedPrefix) {
+			t.Fatalf("ID %q does not match expected prefix %q", id, expectedPrefix)
+		}
 	}
 
 	// Verify distinct filenames (PID in filename ensures collision resistance).
