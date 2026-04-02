@@ -50,7 +50,9 @@ Status mode prints queue counts, active agents, waiting-task dependency summarie
 recent messages. `mato status` rejects both extra positional arguments and
 unrecognized flags such as `--branch`.
 ## Config File
-`mato` optionally loads `.mato.yaml` from the repository root (next to `.git/`).
+`mato` optionally loads a config file from the repository root (next to `.git/`).
+Both `.mato.yaml` and `.mato.yml` are accepted. If both files exist, `mato`
+returns an error asking you to remove one to avoid ambiguity.
 All fields are optional:
 
 ```yaml
@@ -69,7 +71,6 @@ retry_cooldown: 5m
 - Unknown YAML keys cause a parse error. This catches typos such as `dockr_image`
   instead of silently ignoring them.
 - Empty and whitespace-only string values are treated as unset.
-- `.yml` is not supported; the filename must be `.mato.yaml`.
 
 ## Which Surface To Use
 Use the narrowest surface that matches the scope of the setting:
