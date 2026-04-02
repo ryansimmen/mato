@@ -64,7 +64,7 @@ func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
 // mato instances can detect PID reuse. Falls back to PID-only when start time
 // is unavailable (non-Linux). Returns a cleanup function.
 func RegisterAgent(tasksDir, agentID string) (func(), error) {
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	return lockfile.Register(locksDir, agentID)
 }
 

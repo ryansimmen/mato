@@ -630,11 +630,11 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 
 func TestRecoverOrphanedTasks_SkipsUnreadableAgentLock(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{DirBacklog, DirInProgress, ".locks"} {
+	for _, sub := range []string{DirBacklog, DirInProgress, DirLocks} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	lockPath := filepath.Join(tasksDir, ".locks", "agent-1.pid")
+	lockPath := filepath.Join(tasksDir, DirLocks, "agent-1.pid")
 	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
 		t.Fatalf("WriteFile lock: %v", err)
 	}
@@ -1045,7 +1045,7 @@ func TestResolveOrphanCollision_PreservesLeadingClaimMarkerLikeBodyLines(t *test
 
 func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{DirBacklog, DirInProgress, ".locks"} {
+	for _, sub := range []string{DirBacklog, DirInProgress, DirLocks} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -1053,7 +1053,7 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	task := filepath.Join(tasksDir, DirInProgress, "active-task.md")
 	content := fmt.Sprintf("<!-- claimed-by: %s  claimed-at: 2026-01-01T00:00:00Z -->\n# Active task\n", agentID)
 	os.WriteFile(task, []byte(content), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, ".locks", agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, DirLocks, agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
 
 	_ = RecoverOrphanedTasks(tasksDir)
 
@@ -1329,7 +1329,7 @@ func TestRegisterAgent(t *testing.T) {
 		t.Fatalf("RegisterAgent: %v", err)
 	}
 
-	lockFile := filepath.Join(tasksDir, ".locks", "test-agent.pid")
+	lockFile := filepath.Join(tasksDir, DirLocks, "test-agent.pid")
 	data, err := os.ReadFile(lockFile)
 	if err != nil {
 		t.Fatalf("lock file not created: %v", err)
@@ -1363,7 +1363,7 @@ func TestRegisterAgent_RacesCleanStaleLocks(t *testing.T) {
 	}
 	defer cleanup()
 
-	lockFile := filepath.Join(tasksDir, ".locks", "race-agent.pid")
+	lockFile := filepath.Join(tasksDir, DirLocks, "race-agent.pid")
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -1379,7 +1379,7 @@ func TestRegisterAgent_RacesCleanStaleLocks(t *testing.T) {
 
 func TestCleanStaleLocks(t *testing.T) {
 	tasksDir := t.TempDir()
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	os.MkdirAll(locksDir, 0o755)
 
 	os.WriteFile(filepath.Join(locksDir, "alive.pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
@@ -2288,14 +2288,14 @@ func TestCountPromotableWaitingTasks_ExcludesInvalidGlobs(t *testing.T) {
 
 func TestAcquireReviewLock_Success(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, DirLocks), 0o755)
 
 	cleanup, ok := AcquireReviewLock(tasksDir, "test-task.md")
 	if !ok {
 		t.Fatal("expected lock acquisition to succeed")
 	}
 
-	lockFile := filepath.Join(tasksDir, ".locks", "review-test-task.md.lock")
+	lockFile := filepath.Join(tasksDir, DirLocks, "review-test-task.md.lock")
 	if _, err := os.Stat(lockFile); err != nil {
 		t.Fatalf("lock file should exist: %v", err)
 	}
@@ -2313,7 +2313,7 @@ func TestAcquireReviewLock_Success(t *testing.T) {
 
 func TestAcquireReviewLock_BlockedByLiveProcess(t *testing.T) {
 	tasksDir := t.TempDir()
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	os.MkdirAll(locksDir, 0o755)
 
 	// Pre-create a lock held by the current process (alive).
@@ -2328,7 +2328,7 @@ func TestAcquireReviewLock_BlockedByLiveProcess(t *testing.T) {
 
 func TestAcquireReviewLock_ReclaimsStaleLock(t *testing.T) {
 	tasksDir := t.TempDir()
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	os.MkdirAll(locksDir, 0o755)
 
 	// Pre-create a lock with a dead PID.
@@ -2344,7 +2344,7 @@ func TestAcquireReviewLock_ReclaimsStaleLock(t *testing.T) {
 
 func TestAcquireReviewLock_TwoLocksOnDifferentTasks(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, DirLocks), 0o755)
 
 	cleanup1, ok1 := AcquireReviewLock(tasksDir, "task-a.md")
 	if !ok1 {
@@ -2361,7 +2361,7 @@ func TestAcquireReviewLock_TwoLocksOnDifferentTasks(t *testing.T) {
 
 func TestCleanStaleReviewLocks(t *testing.T) {
 	tasksDir := t.TempDir()
-	locksDir := filepath.Join(tasksDir, ".locks")
+	locksDir := filepath.Join(tasksDir, DirLocks)
 	os.MkdirAll(locksDir, 0o755)
 
 	// Live process lock — should survive.
