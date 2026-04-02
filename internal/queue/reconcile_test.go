@@ -873,6 +873,44 @@ func TestReconcileReadyQueue_InvalidGlobWithSatisfiedDepsNoSpuriousMove(t *testi
 	}
 }
 
+func TestReconcileReadyQueue_InvalidGlobNotPromotedWhenQuarantineFails(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// Completed dependency so the task would be promotable.
+	writeTask(t, tasksDir, DirCompleted, "dep.md",
+		"---\nid: dep\n---\n# Dep\n")
+
+	// Waiting task with invalid glob and satisfied dependency.
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-promote.md",
+		"---\nid: bad-glob-promote\ndepends_on: [dep]\naffects:\n  - \"[invalid\"\n---\n# Bad glob promote\n")
+
+	// Make AtomicMove fail when the destination is in the failed/ directory,
+	// simulating a quarantine move failure.
+	withLinkFn(t, func(src, dst string) error {
+		if strings.Contains(dst, "/"+DirFailed+"/") {
+			return os.ErrPermission
+		}
+		return os.Link(src, dst)
+	})
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+
+	// The quarantine move failed, so the task should remain in waiting/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "bad-glob-promote.md")); err != nil {
+		t.Fatalf("bad-glob-promote.md should still be in waiting/: %v", err)
+	}
+
+	// Must NOT be promoted to backlog/ despite having satisfied deps.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "bad-glob-promote.md")); !os.IsNotExist(err) {
+		t.Fatalf("bad-glob-promote.md was incorrectly promoted to backlog/")
+	}
+
+	// No successful moves occurred.
+	if moved {
+		t.Fatalf("moved = true, want false (quarantine move failed, no promotion)")
+	}
+}
+
 func TestBuildIndex_CachesGlobError(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
