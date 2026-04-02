@@ -63,7 +63,8 @@ if [ ! -f "$TASK_PATH" ]; then
 fi
 date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
 read MATO_TS < /tmp/mato-ts-$$.txt
-date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-verify-claim","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: VERIFY_CLAIM","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_TS}-${AGENT_ID}-verify-claim.json" || true
+MATO_NONCE="${MATO_TS}-$$"
+date -u +'{"id":"'"$MATO_NONCE"'-'"$AGENT_ID"'-verify-claim","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: VERIFY_CLAIM","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_NONCE}-${AGENT_ID}-verify-claim.json" || true
 ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read f; do cat "$f"; echo; done || true
 # Read dependency context if provided by the host
 if [ -n "${MATO_DEPENDENCY_CONTEXT:-}" ] && [ -f "$MATO_DEPENDENCY_CONTEXT" ]; then
@@ -106,7 +107,8 @@ Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... --
 ```bash
 date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
 read MATO_TS < /tmp/mato-ts-$$.txt
-date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-work","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: WORK","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_TS}-${AGENT_ID}-work.json" || true
+MATO_NONCE="${MATO_TS}-$$"
+date -u +'{"id":"'"$MATO_NONCE"'-'"$AGENT_ID"'-work","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: WORK","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_NONCE}-${AGENT_ID}-work.json" || true
 cat "$TASK_PATH"
 VALIDATION_ATTEMPT=1
 while [ "$VALIDATION_ATTEMPT" -le 3 ]; do
@@ -132,7 +134,8 @@ done
 ```bash
 date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
 read MATO_TS < /tmp/mato-ts-$$.txt
-date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-commit","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: COMMIT","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_TS}-${AGENT_ID}-commit.json" || true
+MATO_NONCE="${MATO_TS}-$$"
+date -u +'{"id":"'"$MATO_NONCE"'-'"$AGENT_ID"'-commit","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: COMMIT","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_NONCE}-${AGENT_ID}-commit.json" || true
 git status --short
 git add -A
 COMMIT_SUBJECT="$TASK_TITLE"
