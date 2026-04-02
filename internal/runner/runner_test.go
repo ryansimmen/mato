@@ -4889,6 +4889,65 @@ func TestResumeDetectionBuffer_MatchesAcrossLargeOutput(t *testing.T) {
 	}
 }
 
+// resumeDetectionBufferOld is the previous string-concatenation implementation,
+// preserved here for benchmark comparison against the current bytes.Buffer version.
+type resumeDetectionBufferOld struct {
+	matched bool
+	carry   string
+}
+
+func (b *resumeDetectionBufferOld) Write(p []byte) (int, error) {
+	combined := b.carry + string(p)
+	if !b.matched && resumeRejected(combined) {
+		b.matched = true
+	}
+	if len(combined) > resumeDetectionBufferLimit {
+		combined = combined[len(combined)-resumeDetectionBufferLimit:]
+	}
+	b.carry = combined
+	return len(p), nil
+}
+
+func BenchmarkResumeDetectionBuffer_LargeChunks(b *testing.B) {
+	chunk := []byte(strings.Repeat("normal output line without any resume markers\n", 100))
+	b.Run("Old_StringConcat", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var buf resumeDetectionBufferOld
+			for j := 0; j < 100; j++ {
+				buf.Write(chunk)
+			}
+		}
+	})
+	b.Run("New_BytesBuffer", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var buf resumeDetectionBuffer
+			for j := 0; j < 100; j++ {
+				buf.Write(chunk)
+			}
+		}
+	})
+}
+
+func BenchmarkResumeDetectionBuffer_SmallChunks(b *testing.B) {
+	chunk := []byte("short line\n")
+	b.Run("Old_StringConcat", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var buf resumeDetectionBufferOld
+			for j := 0; j < 1000; j++ {
+				buf.Write(chunk)
+			}
+		}
+	})
+	b.Run("New_BytesBuffer", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			var buf resumeDetectionBuffer
+			for j := 0; j < 1000; j++ {
+				buf.Write(chunk)
+			}
+		}
+	})
+}
+
 // ---------------------------------------------------------------------------
 // pollLoop integration-level tests
 // ---------------------------------------------------------------------------
