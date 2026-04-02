@@ -195,9 +195,11 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 		} else {
 			deleteTaskState(tasksDir, snap.Filename)
-			quarantined[snap.Filename] = struct{}{}
 			moved = true
 		}
+		// Always mark as quarantined so the promotion pass skips this
+		// task even when the move to failed/ did not succeed.
+		quarantined[snap.Filename] = struct{}{}
 	}
 
 	// Move cycle members to failed/ using the cycle-to-failed sequence.
