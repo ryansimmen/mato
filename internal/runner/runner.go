@@ -591,6 +591,8 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 		return err
 	}
 
+	cleanStaleClones(staleCloneMaxAge)
+
 	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown, opts.Mode)
 }
 
@@ -724,6 +726,77 @@ func pollCleanup(tasksDir string) {
 	}
 	if err := sessionmeta.Sweep(tasksDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not clean stale sessionmeta: %v\n", err)
+	}
+}
+
+// cloneDirPrefix is the prefix used by git.CreateClone when creating temp
+// directories. Only directories matching this prefix are considered for
+// cleanup.
+const cloneDirPrefix = "mato-"
+
+// staleCloneMaxAge is the age threshold beyond which a preserved debug clone
+// is considered stale and eligible for removal. 24 hours gives operators
+// ample time to inspect a failed push before the directory is reclaimed.
+const staleCloneMaxAge = 24 * time.Hour
+
+// tempDirFn returns the OS temp directory. Tests override it to avoid
+// touching the real /tmp.
+var tempDirFn = os.TempDir
+
+// cleanStaleClones removes clone directories in the OS temp directory that
+// were preserved for debugging after a failed push (see runOnce in task.go).
+//
+// A directory is removed only when all three conditions are met:
+//  1. Its name starts with the "mato-" prefix used by git.CreateClone.
+//  2. It contains the ".mato-debug-clone" sentinel marker written by
+//     writeDebugMarker when a clone is intentionally preserved after a
+//     postAgentPush failure. This positively identifies the directory as
+//     a mato debug clone rather than an active or unrelated temp clone.
+//  3. Its modification time is older than maxAge.
+//
+// This runs once at runner startup, before the poll loop begins, so that
+// stale clones from previous runs are reclaimed without risking removal of
+// clones that may still be in active use by a currently running agent.
+func cleanStaleClones(maxAge time.Duration) {
+	tmpDir := tempDirFn()
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not list temp directory for clone cleanup: %v\n", err)
+		return
+	}
+
+	cutoff := nowFn().Add(-maxAge)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if !strings.HasPrefix(entry.Name(), cloneDirPrefix) {
+			continue
+		}
+		dirPath := filepath.Join(tmpDir, entry.Name())
+
+		// Only remove directories that contain the debug marker,
+		// confirming they were intentionally preserved after a
+		// postAgentPush failure.
+		markerPath := filepath.Join(dirPath, debugMarkerFile)
+		if _, err := os.Stat(markerPath); err != nil {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+
+		if err := os.RemoveAll(dirPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remove stale clone %s: %v\n", dirPath, err)
+			continue
+		}
+		fmt.Printf("Cleaned up stale clone directory: %s (age: %s)\n", dirPath, nowFn().Sub(info.ModTime()).Truncate(time.Minute))
 	}
 }
 
