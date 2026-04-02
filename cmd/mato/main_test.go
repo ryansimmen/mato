@@ -3235,6 +3235,122 @@ func TestCancelCmd_InvalidFormatRejected(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_YesSkipsPrompt(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--yes", "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel --yes failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+		t.Fatalf("task should be in failed after cancel --yes: %v", err)
+	}
+}
+
+func TestCancelCmd_NonTTYSkipsPrompt(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// In go test, stdin is not a TTY, so the prompt should be skipped.
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel command failed (non-TTY): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+		t.Fatalf("task should be in failed after cancel (non-TTY): %v", err)
+	}
+}
+
+func TestCancelCmd_ConfirmAbort(t *testing.T) {
+	// confirmCancel is tested directly since in go test stdin is not a TTY,
+	// meaning the interactive prompt path is not exercised via the command.
+	if confirmCancel(strings.NewReader("n\n")) {
+		t.Error("confirmCancel should return false for 'n'")
+	}
+	if confirmCancel(strings.NewReader("\n")) {
+		t.Error("confirmCancel should return false for empty input")
+	}
+	if confirmCancel(strings.NewReader("no\n")) {
+		t.Error("confirmCancel should return false for 'no'")
+	}
+}
+
+func TestCancelCmd_ConfirmAccept(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"y", "y\n", true},
+		{"Y", "Y\n", true},
+		{"yes", "yes\n", true},
+		{"YES", "YES\n", true},
+		{"Yes", "Yes\n", true},
+		{"n", "n\n", false},
+		{"empty", "\n", false},
+		{"no", "no\n", false},
+		{"random", "maybe\n", false},
+		{"eof", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := confirmCancel(strings.NewReader(tt.input))
+			if got != tt.want {
+				t.Errorf("confirmCancel(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCancelCmd_FormatJSONSkipsPrompt(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--format=json", "fix-bug"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel --format=json failed: %v", err)
+		}
+	})
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0]["cancelled"] != true {
+		t.Errorf("cancelled = %v, want true", items[0]["cancelled"])
+	}
+}
+
+func TestCancelCmd_YesShortFlag(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "-y", "fix-bug"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel -y failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+		t.Fatalf("task should be in failed after cancel -y: %v", err)
+	}
+}
+
 func TestRetryCmd_FormatJSON_DependencyBlockedWarnings(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	content := "---\nid: blocked\ndepends_on: [missing-dep]\n---\n# Blocked\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
