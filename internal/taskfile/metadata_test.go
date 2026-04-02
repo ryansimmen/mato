@@ -1180,3 +1180,448 @@ func TestExtractReviewRejections_IgnoresProseMarkers(t *testing.T) {
 		})
 	}
 }
+
+// Regression tests: unterminated markers and markers with trailing text after
+// --> must be rejected. Only exact standalone HTML comment lines count.
+
+func TestIsStandaloneMarker(t *testing.T) {
+	tests := []struct {
+		name   string
+		line   string
+		prefix string
+		want   bool
+	}{
+		{"valid failure marker", "<!-- failure: a at T step=WORK error=e -->", "<!-- failure:", true},
+		{"unterminated failure", "<!-- failure: a at T step=WORK error=e", "<!-- failure:", false},
+		{"trailing text after close", "<!-- failure: a at T step=WORK error=e --> extra text", "<!-- failure:", false},
+		{"trailing text ending with close", "<!-- failure: a at T step=WORK error=e --> extra -->", "<!-- failure:", false},
+		{"trailing comment after close", "<!-- cancelled: operator at 2026-01-01T00:00:00Z --> <!-- note -->", "<!-- cancelled:", false},
+		{"truncated close", "<!-- failure: a at T step=WORK error=e --", "<!-- failure:", false},
+		{"valid cancelled marker", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->", "<!-- cancelled:", true},
+		{"unterminated cancelled", "<!-- cancelled: operator at 2026-01-01T00:00:00Z", "<!-- cancelled:", false},
+		{"wrong prefix", "<!-- branch: task/foo -->", "<!-- failure:", false},
+		{"empty string", "", "<!-- failure:", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isStandaloneMarker(tt.line, tt.prefix); got != tt.want {
+				t.Fatalf("isStandaloneMarker(%q, %q) = %v, want %v", tt.line, tt.prefix, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountFailureMarkers_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want int
+	}{
+		{
+			"unterminated failure marker ignored",
+			"<!-- failure: a at T step=WORK error=e\n<!-- failure: b at T step=WORK error=e -->",
+			1,
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- failure: a at T step=WORK error=e --> trailing\n<!-- failure: b at T step=WORK error=e -->",
+			1,
+		},
+		{
+			"truncated close ignored",
+			"<!-- failure: a at T step=WORK error=e --\n<!-- failure: b at T step=WORK error=e -->",
+			1,
+		},
+		{
+			"all malformed ignored",
+			"<!-- failure: a at T step=WORK error=e\n<!-- failure: b at T step=WORK error=e --> extra\n<!-- failure: c at T step=WORK error=e --",
+			0,
+		},
+		{
+			"trailing text ending with close ignored",
+			"<!-- failure: a at T step=WORK error=e --> extra -->\n<!-- failure: b at T step=WORK error=e -->",
+			1,
+		},
+		{
+			"trailing comment ending with close ignored",
+			"<!-- failure: a at T step=WORK error=e --> <!-- note -->\n<!-- failure: b at T step=WORK error=e -->",
+			1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CountFailureMarkers([]byte(tt.data)); got != tt.want {
+				t.Fatalf("CountFailureMarkers() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountReviewFailureMarkers_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want int
+	}{
+		{
+			"unterminated review-failure ignored",
+			"<!-- review-failure: a at T step=REVIEW error=e\n<!-- review-failure: b at T step=REVIEW error=e -->",
+			1,
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- review-failure: a at T step=REVIEW error=e --> extra\n<!-- review-failure: b at T step=REVIEW error=e -->",
+			1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CountReviewFailureMarkers([]byte(tt.data)); got != tt.want {
+				t.Fatalf("CountReviewFailureMarkers() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractFailureLines_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			"unterminated failure ignored",
+			"<!-- failure: a at T step=WORK error=e\n<!-- failure: b at T step=WORK error=real -->",
+			"<!-- failure: b at T step=WORK error=real -->",
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- failure: a at T step=WORK error=e --> extra\n<!-- failure: b at T step=WORK error=real -->",
+			"<!-- failure: b at T step=WORK error=real -->",
+		},
+		{
+			"all malformed returns empty",
+			"<!-- failure: a at T step=WORK error=e\n<!-- failure: b at T step=WORK error=e --> extra",
+			"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExtractFailureLines([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractReviewRejections_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			"unterminated rejection ignored",
+			"<!-- review-rejection: a at T — reason\n<!-- review-rejection: b at T — real -->",
+			"<!-- review-rejection: b at T — real -->",
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- review-rejection: a at T — reason --> extra\n<!-- review-rejection: b at T — real -->",
+			"<!-- review-rejection: b at T — real -->",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExtractReviewRejections([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseClaimedBy_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		want   string
+		wantOK bool
+	}{
+		{
+			"unterminated claimed-by ignored",
+			"<!-- claimed-by: agent123\n<!-- claimed-by: real456 -->",
+			"real456", true,
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- claimed-by: agent123 --> extra text\n<!-- claimed-by: real456 -->",
+			"real456", true,
+		},
+		{
+			"all malformed returns empty",
+			"<!-- claimed-by: agent123\n<!-- claimed-by: agent456 --> extra text",
+			"", false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseClaimedBy([]byte(tt.data))
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseClaimedAt_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		wantOK bool
+	}{
+		{
+			"unterminated claimed-at ignored",
+			"<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z\n<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->",
+			true,
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z --> extra\n<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z -->",
+			true,
+		},
+		{
+			"all malformed returns false",
+			"<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z\n<!-- claimed-by: abc  claimed-at: 2026-03-15T10:30:00Z --> extra",
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := ParseClaimedAt([]byte(tt.data))
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestContainsFailureFrom_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		agentID string
+		want    bool
+	}{
+		{
+			"unterminated failure ignored",
+			"<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail",
+			"abc12345", false,
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail --> extra",
+			"abc12345", false,
+		},
+		{
+			"valid marker still detected",
+			"<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=fail -->",
+			"abc12345", true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsFailureFrom([]byte(tt.data), tt.agentID); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsCancelledMarker_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			"unterminated cancelled ignored",
+			"<!-- cancelled: operator at 2026-01-01T00:00:00Z",
+			false,
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- cancelled: operator at 2026-01-01T00:00:00Z --> extra",
+			false,
+		},
+		{
+			"trailing text ending with close ignored",
+			"<!-- cancelled: operator at 2026-01-01T00:00:00Z --> <!-- note -->",
+			false,
+		},
+		{
+			"trailing content ending with close ignored",
+			"<!-- cancelled: operator at 2026-01-01T00:00:00Z --> extra -->",
+			false,
+		},
+		{
+			"valid marker detected",
+			"<!-- cancelled: operator at 2026-01-01T00:00:00Z -->",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsCancelledMarker([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsCycleFailure_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			"unterminated cycle-failure ignored",
+			"<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency",
+			false,
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency --> extra",
+			false,
+		},
+		{
+			"trailing comment ending with close ignored",
+			"<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency --> <!-- note -->",
+			false,
+		},
+		{
+			"valid marker detected",
+			"<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsCycleFailure([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsTerminalFailure_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			"unterminated terminal-failure ignored",
+			"<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — reason",
+			false,
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — reason --> extra",
+			false,
+		},
+		{
+			"trailing comment ending with close ignored",
+			"<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — reason --> <!-- note -->",
+			false,
+		},
+		{
+			"valid marker detected",
+			"<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — reason -->",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsTerminalFailure([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripFailureMarkers_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			"unterminated failure kept as content",
+			"# Title\n<!-- failure: a at T step=WORK error=e\nBody.\n",
+			"<!-- failure: a at T step=WORK error=e",
+		},
+		{
+			"trailing text after close kept as content",
+			"# Title\n<!-- failure: a at T step=WORK error=e --> extra\nBody.\n",
+			"<!-- failure: a at T step=WORK error=e --> extra",
+		},
+		{
+			"well-formed failure stripped but malformed kept",
+			"# Title\n<!-- failure: a at T step=WORK error=e -->\n<!-- failure: b at T step=WORK error=e --> extra\nBody.\n",
+			"<!-- failure: b at T step=WORK error=e --> extra",
+		},
+		{
+			"trailing comment ending with close kept as content",
+			"# Title\n<!-- failure: a at T step=WORK error=e --> <!-- note -->\nBody.\n",
+			"<!-- failure: a at T step=WORK error=e --> <!-- note -->",
+		},
+		{
+			"trailing text ending with close kept as content",
+			"# Title\n<!-- failure: a at T step=WORK error=e --> extra -->\nBody.\n",
+			"<!-- failure: a at T step=WORK error=e --> extra -->",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := StripFailureMarkers(tt.data)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("expected output to contain %q, got:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestLastFailureReason_IgnoresUnterminatedAndTrailingText(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			"unterminated marker ignored",
+			"<!-- failure: a at T — tests failed\n<!-- failure: b at T — real error -->",
+			"real error",
+		},
+		{
+			"trailing text after close ignored",
+			"<!-- failure: a at T — tests failed --> extra\n<!-- failure: b at T — real error -->",
+			"real error",
+		},
+		{
+			"only malformed returns empty",
+			"<!-- failure: a at T — tests failed\n<!-- failure: b at T — real error --> extra",
+			"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LastFailureReason([]byte(tt.data)); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

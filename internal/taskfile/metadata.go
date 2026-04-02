@@ -42,6 +42,18 @@ func forEachMarkerLine(data []byte, fn func(trimmed string) bool) {
 	})
 }
 
+// isStandaloneMarker reports whether trimmed is exactly one HTML comment marker
+// line: it starts with prefix and the first "-->" closes the comment at the end
+// of the line. Lines where "-->" appears earlier (e.g., trailing prose or a
+// second comment) are rejected.
+func isStandaloneMarker(trimmed, prefix string) bool {
+	if !strings.HasPrefix(trimmed, prefix) {
+		return false
+	}
+	idx := strings.Index(trimmed, "-->")
+	return idx >= 0 && idx == len(trimmed)-3
+}
+
 func isFenceLine(trimmed string) bool {
 	if len(trimmed) < 3 {
 		return false
@@ -169,11 +181,11 @@ func ParseClaimedBy(data []byte) (string, bool) {
 	var claimedBy string
 	var ok bool
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if !strings.HasPrefix(trimmed, "<!-- claimed-by:") {
+		if !isStandaloneMarker(trimmed, "<!-- claimed-by:") {
 			return false
 		}
 		m := claimedByRe.FindStringSubmatch(trimmed)
-		if len(m) >= 2 {
+		if len(m) >= 2 && m[0] == trimmed {
 			claimedBy = m[1]
 			ok = true
 			return true
@@ -190,11 +202,11 @@ func ParseClaimedAt(data []byte) (time.Time, bool) {
 	var claimedAt time.Time
 	var ok bool
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if !strings.HasPrefix(trimmed, "<!-- claimed-by:") {
+		if !isStandaloneMarker(trimmed, "<!-- claimed-by:") {
 			return false
 		}
 		m := claimedAtRe.FindStringSubmatch(trimmed)
-		if len(m) >= 2 {
+		if len(m) >= 2 && m[0] == trimmed {
 			t, err := time.Parse(time.RFC3339, m[1])
 			if err != nil {
 				return false
@@ -213,7 +225,7 @@ func ParseClaimedAt(data []byte) (time.Time, bool) {
 func CountFailureMarkers(data []byte) int {
 	count := 0
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, failurePrefix) && !strings.HasPrefix(trimmed, reviewFailureStr) {
+		if isStandaloneMarker(trimmed, failurePrefix) && !strings.HasPrefix(trimmed, reviewFailureStr) {
 			count++
 		}
 		return false
@@ -225,7 +237,7 @@ func CountFailureMarkers(data []byte) int {
 func CountReviewFailureMarkers(data []byte) int {
 	count := 0
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, reviewFailureStr) {
+		if isStandaloneMarker(trimmed, reviewFailureStr) {
 			count++
 		}
 		return false
@@ -238,7 +250,7 @@ func CountReviewFailureMarkers(data []byte) int {
 func ExtractFailureLines(data []byte) string {
 	var lines []string
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, failurePrefix) {
+		if isStandaloneMarker(trimmed, failurePrefix) {
 			lines = append(lines, trimmed)
 		}
 		return false
@@ -252,7 +264,7 @@ func ExtractFailureLines(data []byte) string {
 func ExtractReviewRejections(data []byte) string {
 	var rejections []string
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, reviewRejectionStr) {
+		if isStandaloneMarker(trimmed, reviewRejectionStr) {
 			rejections = append(rejections, trimmed)
 		}
 		return false
@@ -266,7 +278,7 @@ func ExtractReviewRejections(data []byte) string {
 func ParseFailureMarkers(data []byte) []MarkerRecord {
 	var records []MarkerRecord
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if !strings.HasPrefix(trimmed, failurePrefix) || strings.HasPrefix(trimmed, reviewFailureStr) {
+		if !isStandaloneMarker(trimmed, failurePrefix) || strings.HasPrefix(trimmed, reviewFailureStr) {
 			return false
 		}
 		record, ok := parseMarkerRecord(trimmed, failurePrefix)
@@ -284,7 +296,7 @@ func ParseFailureMarkers(data []byte) []MarkerRecord {
 func ParseReviewRejectionMarkers(data []byte) []MarkerRecord {
 	var records []MarkerRecord
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if !strings.HasPrefix(trimmed, reviewRejectionStr) {
+		if !isStandaloneMarker(trimmed, reviewRejectionStr) {
 			return false
 		}
 		record, ok := parseMarkerRecord(trimmed, reviewRejectionStr)
@@ -303,7 +315,7 @@ func ContainsFailureFrom(data []byte, agentID string) bool {
 	target := "<!-- failure: " + agentID + " "
 	found := false
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, target) {
+		if isStandaloneMarker(trimmed, target) {
 			found = true
 			return true
 		}
@@ -317,7 +329,7 @@ func ContainsFailureFrom(data []byte, agentID string) bool {
 func LastFailureReason(data []byte) string {
 	last := ""
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if !strings.HasPrefix(trimmed, failurePrefix) || strings.HasPrefix(trimmed, reviewFailureStr) {
+		if !isStandaloneMarker(trimmed, failurePrefix) || strings.HasPrefix(trimmed, reviewFailureStr) {
 			return false
 		}
 		reason := failureReasonFromLine(trimmed)
@@ -334,7 +346,7 @@ func LastFailureReason(data []byte) string {
 func LastReviewRejectionReason(data []byte) string {
 	last := ""
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if !strings.HasPrefix(trimmed, reviewRejectionStr) {
+		if !isStandaloneMarker(trimmed, reviewRejectionStr) {
 			return false
 		}
 		reason := failureReasonFromLine(trimmed)
@@ -445,7 +457,7 @@ func StripFailureMarkers(content string) string {
 		strip := false
 		if !inFence && !isFenceLine(trimmed) {
 			for _, prefix := range failureMarkerPrefixes {
-				if strings.HasPrefix(trimmed, prefix) {
+				if isStandaloneMarker(trimmed, prefix) {
 					strip = true
 					break
 				}
@@ -491,7 +503,7 @@ func AppendCancelledRecord(path string) error {
 func ContainsCancelledMarker(data []byte) bool {
 	found := false
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, cancelledMarkerStr) {
+		if isStandaloneMarker(trimmed, cancelledMarkerStr) {
 			found = true
 			return true
 		}
@@ -517,7 +529,7 @@ func AppendCycleFailureRecord(path string) error {
 func ContainsCycleFailure(data []byte) bool {
 	found := false
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, cycleFailurePrefix) {
+		if isStandaloneMarker(trimmed, cycleFailurePrefix) {
 			found = true
 			return true
 		}
@@ -530,7 +542,7 @@ func ContainsCycleFailure(data []byte) bool {
 func CountCycleFailureMarkers(data []byte) int {
 	count := 0
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, cycleFailurePrefix) {
+		if isStandaloneMarker(trimmed, cycleFailurePrefix) {
 			count++
 		}
 		return false
@@ -543,7 +555,7 @@ func CountCycleFailureMarkers(data []byte) int {
 func LastCycleFailureReason(data []byte) string {
 	last := ""
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if !strings.HasPrefix(trimmed, cycleFailurePrefix) {
+		if !isStandaloneMarker(trimmed, cycleFailurePrefix) {
 			return false
 		}
 		reason := failureReasonFromLine(trimmed)
@@ -586,7 +598,7 @@ func AppendTerminalFailureRecord(path, reason string) error {
 func ContainsTerminalFailure(data []byte) bool {
 	found := false
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, terminalFailurePrefix) {
+		if isStandaloneMarker(trimmed, terminalFailurePrefix) {
 			found = true
 			return true
 		}
@@ -599,7 +611,7 @@ func ContainsTerminalFailure(data []byte) bool {
 func CountTerminalFailureMarkers(data []byte) int {
 	count := 0
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if strings.HasPrefix(trimmed, terminalFailurePrefix) {
+		if isStandaloneMarker(trimmed, terminalFailurePrefix) {
 			count++
 		}
 		return false
@@ -612,7 +624,7 @@ func CountTerminalFailureMarkers(data []byte) int {
 func LastTerminalFailureReason(data []byte) string {
 	last := ""
 	forEachMarkerLine(data, func(trimmed string) bool {
-		if !strings.HasPrefix(trimmed, terminalFailurePrefix) {
+		if !isStandaloneMarker(trimmed, terminalFailurePrefix) {
 			return false
 		}
 		reason := failureReasonFromLine(trimmed)

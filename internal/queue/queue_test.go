@@ -2743,3 +2743,30 @@ func TestReconcileReadyQueue_DuplicateWaitingIDCycleTargetsRetained(t *testing.T
 		t.Fatal("duplicate file should NOT have a cycle-failure marker")
 	}
 }
+
+// TestCountFailureMarkers_MalformedDoNotConsumeRetryBudget verifies that
+// unterminated and trailing-text failure markers are not counted toward the
+// retry budget. This is a downstream regression test that protects the queue
+// behavior end-to-end.
+func TestCountFailureMarkers_MalformedDoNotConsumeRetryBudget(t *testing.T) {
+	data := []byte(strings.Join([]string{
+		"---",
+		"id: budget-test",
+		"priority: 10",
+		"max_retries: 3",
+		"---",
+		"# Budget test task",
+		"",
+		"<!-- failure: agent-1 at 2026-01-01T00:00:00Z step=WORK error=real_failure -->",
+		"<!-- failure: agent-2 at 2026-01-02T00:00:00Z step=WORK error=unterminated",
+		"<!-- failure: agent-3 at 2026-01-03T00:00:00Z step=WORK error=trailing --> extra text",
+		"<!-- failure: agent-4 at 2026-01-04T00:00:00Z step=WORK error=double_close --> extra -->",
+		"<!-- failure: agent-5 at 2026-01-05T00:00:00Z step=WORK error=embedded_comment --> <!-- note -->",
+	}, "\n"))
+
+	// Only the first failure marker is well-formed; unterminated, trailing-text,
+	// and trailing-text-ending-with-close markers must not be counted.
+	if count := taskfile.CountFailureMarkers(data); count != 1 {
+		t.Fatalf("CountFailureMarkers = %d, want 1 (malformed markers should not consume retry budget)", count)
+	}
+}
