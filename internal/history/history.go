@@ -17,6 +17,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
+	"mato/internal/timeutil"
 	"mato/internal/ui"
 )
 
@@ -285,9 +286,15 @@ func renderText(w io.Writer, events []Event) {
 		}
 	}
 
+	now := time.Now().UTC()
 	for _, event := range events {
 		padded := fmt.Sprintf("%-8s", event.Type)
-		fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(event.Timestamp.UTC().Format(time.RFC3339)), colorEventType(padded), taskWidth, event.TaskFile)
+		ts := event.Timestamp.UTC().Format(time.RFC3339)
+		rel := timeutil.RelativeTime(event.Timestamp.UTC(), now)
+		if rel != "" {
+			ts += "  " + rel
+		}
+		fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), taskWidth, event.TaskFile)
 		detail := textDetail(event)
 		if detail != "" {
 			fmt.Fprintf(w, "  %s", detail)

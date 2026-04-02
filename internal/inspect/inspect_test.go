@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mato/internal/queue"
 	"mato/internal/testutil"
@@ -852,5 +853,53 @@ func TestRenderText_NoColorFallback(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestShowTo_TextRelativeTimeInReasonAndClaimedAt(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Create a task claimed 5 minutes ago so relative time appears.
+	claimedAt := time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339)
+	content := "<!-- claimed-by: agent-1  claimed-at: " + claimedAt + " -->\n---\nid: running\n---\n# Running\n"
+	writeTask(t, tasksDir, queue.DirInProgress, "running.md", content)
+
+	// Text output should include relative time annotation.
+	var textBuf bytes.Buffer
+	if err := ShowTo(&textBuf, repoRoot, "running", "text"); err != nil {
+		t.Fatalf("ShowTo text: %v", err)
+	}
+	textOutput := textBuf.String()
+
+	if !strings.Contains(textOutput, "ago]") {
+		t.Errorf("text output should contain relative time annotation, got:\n%s", textOutput)
+	}
+	if !strings.Contains(textOutput, claimedAt) {
+		t.Errorf("text output should still contain absolute timestamp %s, got:\n%s", claimedAt, textOutput)
+	}
+
+	// JSON output must NOT contain relative time annotation.
+	var jsonBuf bytes.Buffer
+	if err := ShowTo(&jsonBuf, repoRoot, "running", "json"); err != nil {
+		t.Fatalf("ShowTo json: %v", err)
+	}
+	jsonOutput := jsonBuf.String()
+
+	if strings.Contains(jsonOutput, "ago]") {
+		t.Errorf("JSON output must not contain relative time annotation, got:\n%s", jsonOutput)
+	}
+
+	// Verify JSON reason field is pure RFC3339.
+	var parsed map[string]any
+	if err := json.Unmarshal(jsonBuf.Bytes(), &parsed); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	reason, _ := parsed["reason"].(string)
+	if strings.Contains(reason, "ago") {
+		t.Errorf("JSON reason should not contain relative time, got: %q", reason)
+	}
+	claimedAtJSON, _ := parsed["claimed_at"].(string)
+	if claimedAtJSON != claimedAt {
+		t.Errorf("JSON claimed_at = %q, want %q", claimedAtJSON, claimedAt)
 	}
 }
