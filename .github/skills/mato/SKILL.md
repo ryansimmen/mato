@@ -27,7 +27,7 @@ Learn the project's conventions from these sources (read all that exist):
 3. **Agent instructions**: Read `AGENTS.md` at the repo root (and any `AGENTS.md` in subdirectories).
 4. **Detect language & tooling**: Read build files (`Makefile`, `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, etc.) to identify the language and project structure.
 5. **Check for a task directory**: Look for `.mato/` with subdirectories like `backlog/`, `waiting/`, `completed/`, etc. If it exists, read completed tasks for tone and style reference.
-6. **Check for existing tasks**: Read `.mato/backlog/`, `.mato/waiting/`, `.mato/in-progress/`, `.mato/ready-for-review/`, and `.mato/ready-to-merge/` to avoid creating duplicates.
+6. **Check for existing tasks**: Read `.mato/backlog/`, `.mato/waiting/`, `.mato/in-progress/`, `.mato/ready-for-review/`, and `.mato/ready-to-merge/` to avoid creating duplicates. Compare by task `id`, filename, **and** issue intent/scope — two tasks with different filenames can still be duplicates if they address the same underlying problem. Skip creating a task when an existing one already covers the same scope, even partially.
 7. **Contributing guidelines**: Read `CONTRIBUTING.md` if present.
 
 ### 2. Research
@@ -78,13 +78,30 @@ Most tasks only need the markdown body plus a few common scheduler fields
 | `id` | string | filename without `.md` | Stable task identifier. |
 | `priority` | int | `50` | Lower = higher priority. **1-10** critical, **11-30** important, **31-50** normal, **51+** low. |
 | `depends_on` | string[] | `[]` | IDs of tasks that must complete first. Use when fixing issue B requires issue A to land first (e.g., both touch the same function, or B builds on A's new API). |
-| `affects` | string[] | `[]` | File paths this task is expected to touch. **Always populate this** with the specific files that need changing. Used to prevent conflicting concurrent work when a task scheduler runs multiple agents in parallel. An entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go`). Combining glob metacharacters with a trailing `/` is invalid. |
+| `affects` | string[] | `[]` | File paths this task is expected to touch. **Always populate this** with the specific files that need changing. Prefer precise file paths (e.g. `src/db/connection.go`) over broad globs or directory prefixes — use globs only when the task genuinely spans many files in a directory. Include likely test files when the task will add or update tests (e.g. `src/db/connection_test.go`), and include documentation files when the task changes user-visible behavior (e.g. `docs/configuration.md`). Used to prevent conflicting concurrent work when a task scheduler runs multiple agents in parallel. An entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go`). Combining glob metacharacters with a trailing `/` is invalid. |
 
 #### Advanced scheduler fields
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `max_retries` | int | `3` | Max allowed failures before the task is moved to `failed/`. Only relevant when using mato as the task scheduler; can be omitted otherwise. |
+
+### Example: strong `affects` list
+
+A well-populated `affects` list names implementation files, their corresponding
+tests, and any docs affected by the change:
+
+```yaml
+affects:
+  - internal/queue/reconcile.go
+  - internal/queue/reconcile_test.go
+  - internal/integration/reconcile_test.go
+  - docs/architecture.md
+```
+
+Avoid overly broad entries like `internal/queue/` or `internal/**/*.go` when you
+can enumerate the specific files. Broad patterns block other tasks from touching
+*any* file under that path, even unrelated ones.
 
 ### Writing Good Task Bodies
 

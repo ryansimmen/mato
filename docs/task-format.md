@@ -52,7 +52,7 @@ Most tasks need only markdown instructions plus a few common scheduler fields
 | `id` | string | filename without `.md` | Stable task ID. If omitted, `my-task.md` becomes `my-task`. Use this in `depends_on`. Completed deps match either explicit `id` or filename stem. Unknown frontmatter keys are ignored. |
 | `priority` | int | `50` | Lower numbers are higher priority. The host derives claim order from the effective runnable backlog, sorted by priority ascending and then filename ascending; `.queue` exports that same derived order for inspection. |
 | `depends_on` | string array | empty | IDs that must be completed before a task is claimable. `depends_on` is authoritative regardless of directory placement: tasks with unmet dependencies belong in `waiting/`, and if one is found in `backlog/` the host moves it back to `waiting/` during reconcile and again at claim time as a safety net. No dependencies means the task is immediately ready. Circular dependencies (including self-dependencies) are detected and the affected tasks are moved to `failed/` with a `<!-- cycle-failure: -->` marker. |
-| `affects` | string array | empty | Expected touched paths. Overlap prevention compares entries and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). Exact strings are compared literally; an entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Combining glob metacharacters with a trailing `/` is invalid and treated as a fatal task error: the queue moves such tasks to `failed/`, and `mato doctor` reports them at error severity (exit code 2). Unsafe path entries — absolute paths (e.g. `/etc/passwd`) and path-traversal entries that escape the repository root (e.g. `../../secret`) — are stripped during parsing and reported by `mato doctor` at error severity (code `tasks.unsafe_affects`). The stripped entries are recorded in structured metadata so diagnostics can report exactly which entries were removed and why. |
+| `affects` | string array | empty | Expected touched paths. Prefer precise file paths (e.g. `pkg/client/http.go`) over broad globs or directory prefixes — use globs only when the task genuinely spans many files in a directory. Include likely test files when the task will add or update tests (e.g. `pkg/client/http_test.go`), and include documentation files when the task changes user-visible behavior (e.g. `docs/configuration.md`). Overlap prevention compares entries and excludes the lower-priority conflicting task from `.queue` (it stays in `backlog/` until the conflict clears). Exact strings are compared literally; an entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns using `doublestar` syntax — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go` conflicts with `internal/runner/task.go`). Combining glob metacharacters with a trailing `/` is invalid and treated as a fatal task error: the queue moves such tasks to `failed/`, and `mato doctor` reports them at error severity (exit code 2). Unsafe path entries — absolute paths (e.g. `/etc/passwd`) and path-traversal entries that escape the repository root (e.g. `../../secret`) — are stripped during parsing and reported by `mato doctor` at error severity (code `tasks.unsafe_affects`). The stripped entries are recorded in structured metadata so diagnostics can report exactly which entries were removed and why. |
 
 For queue-focused preflight checks on task metadata and dependency integrity, use
 `mato doctor --only queue,tasks,deps`.
@@ -92,6 +92,23 @@ id: add-http-retries
 priority: 10
 max_retries: 3
 ```
+
+### Example: strong `affects` list
+
+A well-populated `affects` list names implementation files, their corresponding
+tests, and any docs affected by the change:
+
+```yaml
+affects:
+  - internal/queue/reconcile.go
+  - internal/queue/reconcile_test.go
+  - internal/integration/reconcile_test.go
+  - docs/architecture.md
+```
+
+Avoid overly broad entries like `internal/queue/` or `internal/**/*.go` when you
+can enumerate the specific files. Broad patterns block other tasks from touching
+*any* file under that path, even unrelated ones.
 
 ## Runtime Metadata
 mato and its agents write runtime state as HTML comments. These lines are bookkeeping, not instructions.
