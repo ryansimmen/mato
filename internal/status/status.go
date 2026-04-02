@@ -57,11 +57,10 @@ func ShowVerboseTo(w io.Writer, repoRoot string) error {
 }
 
 func showToMode(w io.Writer, repoRoot string, mode textViewMode) error {
-	resolvedRepoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
-		return fmt.Errorf("resolve repo root: %w", err)
+		return err
 	}
-	repoRoot = strings.TrimSpace(resolvedRepoRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	data, err := gatherStatus(tasksDir)

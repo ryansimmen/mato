@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"mato/internal/dirs"
@@ -103,11 +102,10 @@ type MessageJSON struct {
 
 // ShowJSON writes the status dashboard as JSON to os.Stdout.
 func ShowJSON(w io.Writer, repoRoot string) error {
-	resolvedRepoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
-		return fmt.Errorf("resolve repo root: %w", err)
+		return err
 	}
-	repoRoot = strings.TrimSpace(resolvedRepoRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	data, err := gatherStatus(tasksDir)
