@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"mato/internal/config"
 	"mato/internal/runner"
@@ -74,7 +75,7 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 				opts.Mode = runner.RunModeDaemon
 			}
 			if dryRun {
-				return dryRunFn(repoRoot, resolvedBranch, opts)
+				return dryRunFn(os.Stdout, repoRoot, resolvedBranch, opts)
 			}
 			return runFn(repoRoot, resolvedBranch, opts)
 		},

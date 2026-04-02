@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
 )
 
 // ColorSet holds color formatting functions used by CLI renderers.
@@ -69,6 +70,46 @@ func ValidateFormat(format string, allowed []string) error {
 		}
 	}
 	return fmt.Errorf("unsupported format %q", format)
+}
+
+// TerminalWidth returns the width of the terminal attached to fd. If
+// fd is not a terminal or the width cannot be determined, defaultWidth
+// is returned.
+func TerminalWidth(fd int, defaultWidth int) int {
+	w, _, err := term.GetSize(fd)
+	if err != nil || w <= 0 {
+		return defaultWidth
+	}
+	return w
+}
+
+// fdProvider is the interface checked by WriterWidth to extract a file
+// descriptor from an io.Writer (satisfied by *os.File).
+type fdProvider interface {
+	Fd() uintptr
+}
+
+// WriterWidth returns the terminal width for w if w exposes a file
+// descriptor attached to a terminal. Otherwise it returns defaultWidth.
+func WriterWidth(w io.Writer, defaultWidth int) int {
+	if fp, ok := w.(fdProvider); ok {
+		return TerminalWidth(int(fp.Fd()), defaultWidth)
+	}
+	return defaultWidth
+}
+
+// Truncate shortens s to at most maxLen runes, replacing the final
+// rune with "…" when truncation is needed. If maxLen is zero or
+// negative, s is returned unchanged.
+func Truncate(s string, maxLen int) string {
+	runes := []rune(s)
+	if maxLen <= 0 || len(runes) <= maxLen {
+		return s
+	}
+	if maxLen <= 1 {
+		return "…"
+	}
+	return string(runes[:maxLen-1]) + "…"
 }
 
 // RequireTasksDir checks that tasksDir exists and is a directory.

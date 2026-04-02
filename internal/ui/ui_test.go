@@ -177,3 +177,68 @@ func containsAt(s, substr string) bool {
 	}
 	return false
 }
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"no truncation needed", "hello", 10, "hello"},
+		{"exact length", "hello", 5, "hello"},
+		{"truncated", "hello world", 5, "hell…"},
+		{"maxLen 1", "hello", 1, "…"},
+		{"maxLen 0 returns unchanged", "hello", 0, "hello"},
+		{"negative maxLen returns unchanged", "hello", -1, "hello"},
+		{"empty string", "", 5, ""},
+		{"multibyte no truncation", "日本語テスト", 10, "日本語テスト"},
+		{"multibyte exact length", "日本語テスト", 6, "日本語テスト"},
+		{"multibyte truncated", "日本語テスト", 4, "日本語…"},
+		{"multibyte maxLen 1", "日本語", 1, "…"},
+		{"mixed ascii and multibyte", "task-名前-long", 7, "task-名…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Truncate(tt.input, tt.maxLen)
+			if got != tt.want {
+				t.Errorf("Truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTerminalWidth_NonTTY(t *testing.T) {
+	// In tests stdin/stdout are pipes, not a TTY, so TerminalWidth
+	// should return the default.
+	got := TerminalWidth(0, 80)
+	if got != 80 {
+		t.Errorf("TerminalWidth(0, 80) = %d, want 80 (non-TTY)", got)
+	}
+}
+
+func TestTerminalWidth_InvalidFD(t *testing.T) {
+	got := TerminalWidth(-1, 120)
+	if got != 120 {
+		t.Errorf("TerminalWidth(-1, 120) = %d, want 120", got)
+	}
+}
+
+func TestWriterWidth_NonFileWriter(t *testing.T) {
+	// A bytes.Buffer has no Fd() method, so WriterWidth should
+	// return the default.
+	var buf bytes.Buffer
+	got := WriterWidth(&buf, 100)
+	if got != 100 {
+		t.Errorf("WriterWidth(buffer, 100) = %d, want 100", got)
+	}
+}
+
+func TestWriterWidth_FileWriter(t *testing.T) {
+	// os.Stdout has an Fd(), but in tests it is not a TTY, so the
+	// fallback default should still be returned.
+	got := WriterWidth(os.Stdout, 90)
+	if got != 90 {
+		t.Errorf("WriterWidth(os.Stdout, 90) = %d, want 90 (non-TTY in test)", got)
+	}
+}
