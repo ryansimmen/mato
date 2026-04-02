@@ -67,7 +67,8 @@ fi
 cat "$TASK_PATH"
 date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
 read MATO_TS < /tmp/mato-ts-$$.txt
-date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-verify-review","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: VERIFY_REVIEW","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_TS}-${AGENT_ID}-verify-review.json" || true
+MATO_NONCE="${MATO_TS}-$$"
+date -u +'{"id":"'"$MATO_NONCE"'-'"$AGENT_ID"'-verify-review","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: VERIFY_REVIEW","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_NONCE}-${AGENT_ID}-verify-review.json" || true
 ```
 If `TASK_TITLE` is empty, read the first `# ` heading from the task file and use it as the title. If no heading is found, use the filename (without `.md` extension) as the title.
 Read the full task file to understand the requirements. Task files may have YAML frontmatter between `---` delimiters at the top. This is metadata for the host scheduler. Ignore it when reading task instructions. The task instructions begin after the frontmatter block (or at the start if there is no frontmatter). The `#` heading is the task title.

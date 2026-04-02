@@ -1074,8 +1074,8 @@ func TestPromptProgressMessagesAreDistinct(t *testing.T) {
 
 // TestPromptProgressMessagesAccumulateAcrossRuns verifies that two separate
 // runs from the same agent ID produce distinct progress message files that
-// do not overwrite each other. This is a regression test for the append-only
-// messaging invariant.
+// do not overwrite each other, even when both runs happen in the exact same
+// second. This is a regression test for the append-only messaging invariant.
 func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
@@ -1099,7 +1099,20 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	}, "\n\n")
 	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
 
+	// Create a fake date command that always returns a pinned timestamp for
+	// the +%Y%m%dT%H%M%SZ format so both runs produce the same MATO_TS.
+	// This guarantees both runs execute in the "same second", exercising the
+	// collision path that the PID-based nonce must prevent.
+	fakeDateDir := t.TempDir()
+	fakeDate := filepath.Join(fakeDateDir, "date")
+	if err := os.WriteFile(fakeDate, []byte(
+		"#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in +%Y%m%dT%H%M%SZ) echo 20260101T000000Z; exit 0 ;; esac; done\n/usr/bin/date \"$@\"\n",
+	), 0o755); err != nil {
+		t.Fatalf("write fake date: %v", err)
+	}
+
 	env := []string{
+		"PATH=" + fakeDateDir + ":" + os.Getenv("PATH"),
 		"MATO_AGENT_ID=same-agent",
 		"MATO_TASK_FILE=accumulate-test.md",
 		"MATO_TASK_BRANCH=task/accumulate-test",
@@ -1125,9 +1138,9 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 		t.Fatalf("after run1: expected 1 VERIFY_CLAIM message, got %d", count1)
 	}
 
-	// Sleep 1 second so the timestamp-based filename differs.
-	sleepScript := "sleep 1\n\n" + script
-	out2, err := runBash(t, cloneDir, env, sleepScript)
+	// Run #2 immediately with the same pinned timestamp. The PID-based nonce
+	// in the filename guarantees a distinct file even in the same second.
+	out2, err := runBash(t, cloneDir, env, script)
 	if err != nil {
 		t.Fatalf("runBash run2: %v\noutput:\n%s", err, out2)
 	}
@@ -1136,6 +1149,7 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	msgs2 := readPromptEventMessages(t, tasksDir)
 	var count2 int
 	ids := make(map[string]bool)
+	filenames := make(map[string]bool)
 	for _, msg := range msgs2 {
 		if msg.Type == "progress" && msg.From == "same-agent" &&
 			strings.Contains(msg.Body, "VERIFY_CLAIM") {
@@ -1148,5 +1162,18 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	}
 	if count2 != 2 {
 		t.Fatalf("after run2: expected 2 VERIFY_CLAIM messages (one per run), got %d", count2)
+	}
+
+	// Both runs used the pinned timestamp; verify filenames are still distinct.
+	paths, _ := filepath.Glob(filepath.Join(tasksDir, "messages", "events", "*same-agent*verify-claim*.json"))
+	for _, p := range paths {
+		base := filepath.Base(p)
+		if filenames[base] {
+			t.Fatalf("duplicate filename across runs: %s", base)
+		}
+		filenames[base] = true
+	}
+	if len(filenames) != 2 {
+		t.Fatalf("expected 2 distinct filenames, got %d: %v", len(filenames), filenames)
 	}
 }
