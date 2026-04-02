@@ -502,8 +502,8 @@ func TestReconcileReadyQueue_InvalidGlobHasTerminalMarker(t *testing.T) {
 func TestReconcileReadyQueue_WaitingInvalidGlobHasTerminalMarker(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	// A waiting task with satisfied deps but invalid glob — quarantined during
-	// the promotion pass rather than the backlog scan.
+	// A waiting task with satisfied deps but invalid glob — quarantined
+	// during the early invalid-glob pass.
 	writeTask(t, tasksDir, DirCompleted, "dep.md",
 		"---\nid: dep\n---\n# Dep\n")
 	writeTask(t, tasksDir, DirWaiting, "bad-glob-wait.md",
@@ -517,6 +517,66 @@ func TestReconcileReadyQueue_WaitingInvalidGlobHasTerminalMarker(t *testing.T) {
 	}
 	if !taskfile.ContainsTerminalFailure(data) {
 		t.Error("bad-glob-wait.md in failed/ should contain terminal-failure marker")
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobQuarantinedDespiteUnsatisfiedDeps(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// The dependency exists in backlog (not completed), so deps are NOT satisfied.
+	// The invalid glob should still cause quarantine to failed/.
+	writeTask(t, tasksDir, DirBacklog, "blocker.md",
+		"---\nid: blocker\n---\n# Blocker\n")
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-blocked.md",
+		"---\nid: bad-glob-blocked\ndepends_on: [blocker]\naffects:\n  - \"[invalid\"\n---\n# Bad glob blocked\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-glob-blocked.md")); err != nil {
+		t.Fatalf("bad-glob-blocked.md not found in failed/: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-glob-blocked.md"))
+	if err != nil {
+		t.Fatalf("read failed file: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-glob-blocked.md should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "invalid glob syntax") {
+		t.Error("terminal-failure marker should mention invalid glob syntax")
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobQuarantinedDespiteActiveOverlap(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// An active (in-progress) task overlaps on the same affects path.
+	// The invalid glob should still cause quarantine to failed/.
+	writeTask(t, tasksDir, DirInProgress, "active.md",
+		"---\nid: active\naffects:\n  - src/main.go\n---\n# Active\n")
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-overlap.md",
+		"---\nid: bad-glob-overlap\naffects:\n  - \"[invalid\"\n---\n# Bad glob overlap\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-glob-overlap.md")); err != nil {
+		t.Fatalf("bad-glob-overlap.md not found in failed/: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-glob-overlap.md"))
+	if err != nil {
+		t.Fatalf("read failed file: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-glob-overlap.md should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "invalid glob syntax") {
+		t.Error("terminal-failure marker should mention invalid glob syntax")
 	}
 }
 
