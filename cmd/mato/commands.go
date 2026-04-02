@@ -20,6 +20,7 @@ import (
 	"mato/internal/queue"
 	"mato/internal/setup"
 	"mato/internal/status"
+	"mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -130,7 +131,7 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 		Short: "Show the current state of the task queue",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if format != "text" && format != "json" {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
 				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
 			}
 			repo, err := resolveRepo(*repoFlag)
@@ -198,7 +199,7 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 		Short: "Run health checks on the repository and task queue",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if format != "text" && format != "json" {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
 				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
 			}
 
@@ -284,7 +285,7 @@ func newLogCmd(repoFlag *string) *cobra.Command {
 		Short: "Show recent durable task outcomes",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if format != "text" && format != "json" {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
 				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
 			}
 			if limit < 0 {
@@ -317,7 +318,7 @@ func newGraphCmd(repoFlag *string) *cobra.Command {
 		Short: "Visualize task dependency topology",
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if format != "text" && format != "dot" && format != "json" {
+			if err := ui.ValidateFormat(format, []string{"text", "dot", "json"}); err != nil {
 				return newUsageError(cmd, fmt.Errorf("--format must be text, dot, or json, got %s", format))
 			}
 			repo, err := resolveRepo(*repoFlag)
@@ -346,7 +347,7 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 		Short: "Explain the current state of a single task",
 		Args:  usageExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if format != "text" && format != "json" {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
 				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
 			}
 			repo, err := resolveRepo(*repoFlag)
@@ -528,20 +529,20 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 				stem := strings.TrimSuffix(result.Filename, ".md")
 				fmt.Printf("cancelled: %s (was in %s/)\n", result.Filename, result.PriorState)
 				if result.PriorState == queue.DirInProgress {
-					fmt.Fprintf(os.Stderr, "warning: agent container for %s may still be running\n", stem)
+					ui.Warnf("warning: agent container for %s may still be running\n", stem)
 				}
 				if result.PriorState == queue.DirReadyReview {
-					fmt.Fprintf(os.Stderr, "warning: task is in ready-for-review/ — a review agent may be running\n")
+					ui.Warnf("warning: task is in ready-for-review/ — a review agent may be running\n")
 				}
 				if result.PriorState == queue.DirReadyMerge {
-					fmt.Fprintf(os.Stderr, "warning: merge queue may still merge %s's branch\n", stem)
+					ui.Warnf("warning: merge queue may still merge %s's branch\n", stem)
 				}
 				if len(result.Warnings) > 0 {
-					fmt.Printf("  warning: %d task(s) depend on %s:\n", len(result.Warnings), stem)
+					ui.Warnf("warning: %d task(s) depend on %s:\n", len(result.Warnings), stem)
 					for _, warning := range result.Warnings {
-						fmt.Printf("    %s\n", warning)
+						ui.Warnf("  %s\n", warning)
 					}
-					fmt.Printf("  these tasks will remain blocked until %s is retried\n", stem)
+					ui.Warnf("these tasks will remain blocked until %s is retried\n", stem)
 				}
 			}
 			if firstErr != nil {

@@ -2129,13 +2129,13 @@ func TestCancelCmd_DownstreamWarnings(t *testing.T) {
 
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "dep"})
-	output := captureStdout(t, func() {
+	stderr := captureStderr(t, func() {
 		if err := cmd.Execute(); err != nil {
 			t.Fatalf("cancel command failed: %v", err)
 		}
 	})
-	if !strings.Contains(output, "warning: 1 task(s) depend on dep:") || !strings.Contains(output, "waiting/waiter.md") {
-		t.Fatalf("missing downstream warning output:\n%s", output)
+	if !strings.Contains(stderr, "warning: 1 task(s) depend on dep:") || !strings.Contains(stderr, "waiting/waiter.md") {
+		t.Fatalf("missing downstream warning output on stderr:\n%s", stderr)
 	}
 }
 

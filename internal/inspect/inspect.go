@@ -15,6 +15,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/queue"
+	"mato/internal/ui"
 )
 
 type blockingTask struct {
@@ -96,8 +97,8 @@ func Show(repoRoot, taskRef, format string) error {
 
 // ShowTo writes the inspection result to w.
 func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
-	if format != "text" && format != "json" {
-		return fmt.Errorf("unsupported format %q", format)
+	if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+		return err
 	}
 
 	repoRoot, err := git.ResolveRepoRoot(repoRoot)
@@ -106,7 +107,7 @@ func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
 	}
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
-	if err := requireTasksDir(tasksDir); err != nil {
+	if err := ui.RequireTasksDir(tasksDir); err != nil {
 		return err
 	}
 
@@ -119,20 +120,6 @@ func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
 		return renderJSON(w, result)
 	}
 	renderText(w, result)
-	return nil
-}
-
-func requireTasksDir(tasksDir string) error {
-	info, err := os.Stat(tasksDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
-		}
-		return fmt.Errorf("stat %s: %w", tasksDir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s exists but is not a directory", tasksDir)
-	}
 	return nil
 }
 

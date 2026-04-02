@@ -12,6 +12,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestShowTo_TextMixedHistoryNewestFirst(t *testing.T) {
@@ -131,9 +132,8 @@ func TestShowTo_WarnsAndSkipsMalformedCompletionAndUnreadableTask(t *testing.T) 
 	defer os.Chmod(unreadablePath, 0o644)
 
 	var warnings bytes.Buffer
-	origWarnings := warningWriter
-	warningWriter = &warnings
-	defer func() { warningWriter = origWarnings }()
+	prev := ui.SetWarningWriter(&warnings)
+	defer ui.SetWarningWriter(prev)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
@@ -195,9 +195,8 @@ func TestShowTo_WarnsWhenCompletionSourceFailsButTaskSourceSucceeds(t *testing.T
 		"# Good task\n\n<!-- failure: worker-a at 2026-03-20T10:00:00Z step=WORK error=build_failed -->\n")
 
 	var warnings bytes.Buffer
-	origWarnings := warningWriter
-	warningWriter = &warnings
-	defer func() { warningWriter = origWarnings }()
+	prev := ui.SetWarningWriter(&warnings)
+	defer ui.SetWarningWriter(prev)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
@@ -226,9 +225,8 @@ func TestShowTo_JSONPartialFailureWarnsToStderr(t *testing.T) {
 		"# Good task\n\n<!-- failure: worker-a at 2026-03-20T10:00:00Z step=WORK error=build_failed -->\n")
 
 	var warnings bytes.Buffer
-	origWarnings := warningWriter
-	warningWriter = &warnings
-	defer func() { warningWriter = origWarnings }()
+	prev := ui.SetWarningWriter(&warnings)
+	defer ui.SetWarningWriter(prev)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, 20, "json"); err != nil {
@@ -269,9 +267,8 @@ func TestShowTo_WarnsWhenTaskSourceFailsButCompletionSourceSucceeds(t *testing.T
 	})
 
 	var warnings bytes.Buffer
-	origWarnings := warningWriter
-	warningWriter = &warnings
-	defer func() { warningWriter = origWarnings }()
+	prev := ui.SetWarningWriter(&warnings)
+	defer ui.SetWarningWriter(prev)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
