@@ -314,8 +314,10 @@ func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
 }
 
 // TestReviewRejectReasonWithSpecialChars verifies that rejection reasons
-// containing double quotes and newlines still produce valid JSON in the
-// verdict file when written through the real VERDICT reject block.
+// containing pre-escaped double quotes produce valid JSON in the verdict
+// file when written through the VERDICT reject block's simple printf approach.
+// For reasons containing raw special characters (unescaped quotes, newlines),
+// the prompt instructs agents to use their file-writing tools instead of bash.
 func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -323,22 +325,12 @@ func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
 		check  func(t *testing.T, v reviewVerdict)
 	}{
 		{
-			name:   "double quotes",
+			name:   "pre-escaped double quotes",
 			reason: `missing error wrapping in \"postAgentPush\" — the function does not call fmt.Errorf with %w`,
 			check: func(t *testing.T, v reviewVerdict) {
 				t.Helper()
 				if !strings.Contains(v.Reason, "postAgentPush") {
 					t.Fatalf("reason = %q, want it to contain 'postAgentPush'", v.Reason)
-				}
-			},
-		},
-		{
-			name:   "embedded newlines",
-			reason: "line one\nline two",
-			check: func(t *testing.T, v reviewVerdict) {
-				t.Helper()
-				if !strings.Contains(v.Reason, "\n") {
-					t.Fatalf("reason = %q, want it to contain a literal newline", v.Reason)
 				}
 			},
 		},
@@ -395,6 +387,25 @@ func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
 			}
 			tt.check(t, v)
 		})
+	}
+}
+
+// TestReviewSpecialCharGuidanceInPrompt verifies that the review instructions
+// tell agents to use their file-writing tools for rejection reasons that
+// contain raw special characters (double quotes, backslashes, newlines)
+// rather than relying on shell-based JSON escaping.
+func TestReviewSpecialCharGuidanceInPrompt(t *testing.T) {
+	data, err := os.ReadFile(reviewInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(review instructions): %v", err)
+	}
+	text := string(data)
+
+	if !strings.Contains(text, "file-writing tool") {
+		t.Fatal("review instructions should tell agents to use file-writing tools for JSON verdict creation")
+	}
+	if !strings.Contains(text, "special characters") {
+		t.Fatal("review instructions should mention handling special characters in rejection reasons")
 	}
 }
 
@@ -590,5 +601,213 @@ func TestReviewProgressMessageFilenameIsDistinct(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no progress message found from test-reviewer-progress")
+	}
+}
+
+// TestReviewSandboxSafeShellPatterns verifies that bash blocks in the review
+// instructions do not use shell constructs likely to be blocked by execution
+// sandboxes: command substitution, heredocs with variable interpolation,
+// ${VAR:?} parameter expansions, shell escaping pipelines, and
+// process-management commands.
+func TestReviewSandboxSafeShellPatterns(t *testing.T) {
+	data, err := os.ReadFile(reviewInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(review instructions): %v", err)
+	}
+
+	blocks := extractReviewBashBlocks(t, string(data))
+	if len(blocks) == 0 {
+		t.Fatal("no bash blocks found in review instructions")
+	}
+
+	for i, block := range blocks {
+		// No command substitution — sandbox blocks $(...)
+		if strings.Contains(block, "$(") {
+			t.Fatalf("bash block %d contains command substitution $(...):\n%s", i, block)
+		}
+
+		// No ${VAR:?message} parameter expansions.
+		if strings.Contains(block, ":?") {
+			t.Fatalf("bash block %d contains ${VAR:?...} parameter expansion:\n%s", i, block)
+		}
+
+		// No heredocs with variable interpolation.
+		if strings.Contains(block, "<< EOF") || strings.Contains(block, "<<EOF") ||
+			strings.Contains(block, "<<VERDICTEOF") {
+			t.Fatalf("bash block %d contains heredoc with interpolation:\n%s", i, block)
+		}
+
+		// No shell-based JSON escaping pipelines — agents should use their
+		// file-writing tools for JSON encoding instead.
+		if strings.Contains(block, "ESCAPED_REASON") || strings.Contains(block, "ESCAPED_ERROR") {
+			t.Fatalf("bash block %d contains shell-based JSON escaping pipeline:\n%s", i, block)
+		}
+
+		// No process-management commands.
+		for _, cmd := range []string{"kill ", "pkill ", "killall "} {
+			if strings.Contains(block, cmd) {
+				t.Fatalf("bash block %d contains process-management command %q:\n%s", i, cmd, block)
+			}
+		}
+	}
+}
+
+// TestReviewSandboxSafeInvariants verifies the review instructions include
+// guidance telling agents to avoid sandbox-risky patterns.
+func TestReviewSandboxSafeInvariants(t *testing.T) {
+	data, err := os.ReadFile(reviewInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(review instructions): %v", err)
+	}
+	text := string(data)
+
+	required := []struct {
+		substring string
+		reason    string
+	}{
+		{"process-management cleanup commands", "should warn agents not to invent kill/pkill commands"},
+		{"Do not collapse multiple state blocks", "should warn agents not to flatten steps into one shell command"},
+		{"Avoid command substitution", "should explicitly ban $(...)"},
+		{"file-writing tool", "should recommend agent file-writing tools for verdict JSON"},
+	}
+	for _, r := range required {
+		if !strings.Contains(text, r.substring) {
+			t.Fatalf("review instructions missing %q: %s", r.substring, r.reason)
+		}
+	}
+}
+
+// extractReviewBashBlocks returns all ```bash ... ``` blocks from a markdown document.
+func extractReviewBashBlocks(t *testing.T, text string) []string {
+	t.Helper()
+	var blocks []string
+	remaining := text
+	for {
+		start := strings.Index(remaining, "```bash\n")
+		if start < 0 {
+			break
+		}
+		remaining = remaining[start+len("```bash\n"):]
+		end := strings.Index(remaining, "\n```")
+		if end < 0 {
+			t.Fatal("unterminated bash block in prompt")
+		}
+		blocks = append(blocks, remaining[:end])
+		remaining = remaining[end+len("\n```"):]
+	}
+	return blocks
+}
+
+// TestReviewProgressMessagesAccumulateAcrossRuns verifies that two separate
+// review runs from the same agent ID produce distinct progress message files
+// that do not overwrite each other, even when both runs happen in the exact
+// same second. This is a regression test for the append-only messaging invariant.
+func TestReviewProgressMessagesAccumulateAcrossRuns(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirReadyReview, "review-accum.md",
+		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"<!-- branch: task/review-accum -->\n"+
+			"# Review Accumulate Test\nTest that review progress messages accumulate.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
+
+	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-review-accum.md.json")
+	taskPath := filepath.Join(cloneTasksDir, queue.DirReadyReview, "review-accum.md")
+
+	script := strings.Join([]string{
+		reviewPreamble(t),
+		reviewStateBlock(t, "VERIFY_REVIEW"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	// Create a fake date command that always returns a pinned timestamp for
+	// the +%Y%m%dT%H%M%SZ format so both runs produce the same MATO_TS.
+	fakeDateDir := t.TempDir()
+	fakeDate := filepath.Join(fakeDateDir, "date")
+	if err := os.WriteFile(fakeDate, []byte(
+		"#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in +%Y%m%dT%H%M%SZ) echo 20260101T000000Z; exit 0 ;; esac; done\n/usr/bin/date \"$@\"\n",
+	), 0o755); err != nil {
+		t.Fatalf("write fake date: %v", err)
+	}
+
+	env := []string{
+		"PATH=" + fakeDateDir + ":" + os.Getenv("PATH"),
+		"MATO_AGENT_ID=same-reviewer",
+		"MATO_TASK_FILE=review-accum.md",
+		"MATO_TASK_BRANCH=task/review-accum",
+		"MATO_TASK_TITLE=Review Accumulate Test",
+		"MATO_TASK_PATH=" + taskPath,
+		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
+	}
+
+	// Run #1.
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash run1: %v\noutput:\n%s", err, out)
+	}
+
+	msgs1 := readPromptEventMessages(t, tasksDir)
+	var count1 int
+	for _, msg := range msgs1 {
+		if msg.Type == "progress" && msg.From == "same-reviewer" &&
+			strings.Contains(msg.Body, "VERIFY_REVIEW") {
+			count1++
+		}
+	}
+	if count1 != 1 {
+		t.Fatalf("after run1: expected 1 VERIFY_REVIEW message, got %d", count1)
+	}
+
+	// Run #2 immediately with the same pinned timestamp. The PID-based nonce
+	// in the filename guarantees a distinct file even in the same second.
+	out2, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash run2: %v\noutput:\n%s", err, out2)
+	}
+
+	// After two runs, there should be 2 distinct VERIFY_REVIEW messages.
+	msgs2 := readPromptEventMessages(t, tasksDir)
+	var count2 int
+	var collectedIDs []string
+	filenames := make(map[string]bool)
+	for _, msg := range msgs2 {
+		if msg.Type == "progress" && msg.From == "same-reviewer" &&
+			strings.Contains(msg.Body, "VERIFY_REVIEW") {
+			count2++
+			collectedIDs = append(collectedIDs, msg.ID)
+		}
+	}
+	if count2 != 2 {
+		t.Fatalf("after run2: expected 2 VERIFY_REVIEW messages (one per run), got %d", count2)
+	}
+
+	// Same-second runs from the same agent should produce unique IDs
+	// (PID suffix ensures per-event uniqueness) while sharing the same
+	// tie-break prefix (<ts>-<agent>-<state>).
+	if collectedIDs[0] == collectedIDs[1] {
+		t.Fatalf("same-second runs produced identical IDs %q; "+
+			"IDs should be unique (PID suffix ensures per-event uniqueness)", collectedIDs[0])
+	}
+
+	// Verify the ID follows the <ts>-<agent>-<step>-<pid> format.
+	for _, id := range collectedIDs {
+		if !strings.HasPrefix(id, "20260101T000000Z-same-reviewer-verify-review-") {
+			t.Fatalf("ID %q does not match expected format <ts>-<agent>-<step>-<pid>", id)
+		}
+	}
+
+	// Both runs used the pinned timestamp; verify filenames are still distinct.
+	paths, _ := filepath.Glob(filepath.Join(tasksDir, "messages", "events", "*same-reviewer*verify-review*.json"))
+	for _, p := range paths {
+		base := filepath.Base(p)
+		if filenames[base] {
+			t.Fatalf("duplicate filename across runs: %s", base)
+		}
+		filenames[base] = true
+	}
+	if len(filenames) != 2 {
+		t.Fatalf("expected 2 distinct filenames, got %d: %v", len(filenames), filenames)
 	}
 }

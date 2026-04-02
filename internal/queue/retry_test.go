@@ -431,6 +431,54 @@ Body text.
 	}
 }
 
+func TestStripFailureMarkers_IgnoresUnterminatedDuringRetry(t *testing.T) {
+	// Unterminated or trailing-text failure markers must not be stripped during
+	// retry, since they are not valid standalone markers. This protects user
+	// content that happens to resemble a marker prefix.
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		notWant []string
+	}{
+		{
+			name: "unterminated failure kept during retry strip",
+			input: `# Title
+
+Body text.
+
+<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops
+<!-- failure: def at 2026-01-02T00:00:00Z step=WORK error=real -->
+`,
+			want:    "<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops",
+			notWant: []string{"<!-- failure: def at 2026-01-02T00:00:00Z step=WORK error=real -->"},
+		},
+		{
+			name: "trailing text failure kept during retry strip",
+			input: `# Title
+
+<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops --> trailing
+<!-- failure: def at 2026-01-02T00:00:00Z step=WORK error=real -->
+`,
+			want:    "<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops --> trailing",
+			notWant: []string{"<!-- failure: def at 2026-01-02T00:00:00Z step=WORK error=real -->"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripFailureMarkers(tt.input)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("expected output to contain %q, got:\n%s", tt.want, got)
+			}
+			for _, bad := range tt.notWant {
+				if strings.Contains(got, bad) {
+					t.Errorf("output should not contain %q, got:\n%s", bad, got)
+				}
+			}
+		})
+	}
+}
+
 func TestRetryTask_CleansRuntimeState(t *testing.T) {
 	tmp := t.TempDir()
 	for _, dir := range []string{DirFailed, DirBacklog} {

@@ -502,8 +502,8 @@ func TestReconcileReadyQueue_InvalidGlobHasTerminalMarker(t *testing.T) {
 func TestReconcileReadyQueue_WaitingInvalidGlobHasTerminalMarker(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	// A waiting task with satisfied deps but invalid glob — quarantined during
-	// the promotion pass rather than the backlog scan.
+	// A waiting task with satisfied deps but invalid glob — quarantined
+	// during the early invalid-glob pass.
 	writeTask(t, tasksDir, DirCompleted, "dep.md",
 		"---\nid: dep\n---\n# Dep\n")
 	writeTask(t, tasksDir, DirWaiting, "bad-glob-wait.md",
@@ -517,6 +517,66 @@ func TestReconcileReadyQueue_WaitingInvalidGlobHasTerminalMarker(t *testing.T) {
 	}
 	if !taskfile.ContainsTerminalFailure(data) {
 		t.Error("bad-glob-wait.md in failed/ should contain terminal-failure marker")
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobQuarantinedDespiteUnsatisfiedDeps(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// The dependency exists in backlog (not completed), so deps are NOT satisfied.
+	// The invalid glob should still cause quarantine to failed/.
+	writeTask(t, tasksDir, DirBacklog, "blocker.md",
+		"---\nid: blocker\n---\n# Blocker\n")
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-blocked.md",
+		"---\nid: bad-glob-blocked\ndepends_on: [blocker]\naffects:\n  - \"[invalid\"\n---\n# Bad glob blocked\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-glob-blocked.md")); err != nil {
+		t.Fatalf("bad-glob-blocked.md not found in failed/: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-glob-blocked.md"))
+	if err != nil {
+		t.Fatalf("read failed file: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-glob-blocked.md should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "invalid glob syntax") {
+		t.Error("terminal-failure marker should mention invalid glob syntax")
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobQuarantinedDespiteActiveOverlap(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// An active (in-progress) task overlaps on the same affects path.
+	// The invalid glob should still cause quarantine to failed/.
+	writeTask(t, tasksDir, DirInProgress, "active.md",
+		"---\nid: active\naffects:\n  - src/main.go\n---\n# Active\n")
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-overlap.md",
+		"---\nid: bad-glob-overlap\naffects:\n  - \"[invalid\"\n---\n# Bad glob overlap\n")
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+	if !moved {
+		t.Fatalf("moved = %v, want true", moved)
+	}
+
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-glob-overlap.md")); err != nil {
+		t.Fatalf("bad-glob-overlap.md not found in failed/: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "bad-glob-overlap.md"))
+	if err != nil {
+		t.Fatalf("read failed file: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("bad-glob-overlap.md should contain terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "invalid glob syntax") {
+		t.Error("terminal-failure marker should mention invalid glob syntax")
 	}
 }
 
@@ -734,6 +794,120 @@ func TestCountPromotableAlignedWithReconcile_AllInvalid(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, name)); err != nil {
 			t.Errorf("%s not found in failed/: %v", name, err)
 		}
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobWithCycleNoSpuriousWarnings(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// Create a waiting task that has BOTH an invalid glob AND participates in a
+	// cycle dependency. The invalid-glob quarantine pass should move it to
+	// failed/ first, and the cycle pass must not try to read the already-moved
+	// file (which would emit a spurious "could not read" warning).
+	writeTask(t, tasksDir, DirWaiting, "cycle-bad-glob.md",
+		"---\nid: cycle-bad-glob\ndepends_on: [cycle-partner]\naffects:\n  - \"[invalid\"\n---\n# Cycle bad glob\n")
+	writeTask(t, tasksDir, DirWaiting, "cycle-partner.md",
+		"---\nid: cycle-partner\ndepends_on: [cycle-bad-glob]\n---\n# Cycle partner\n")
+
+	stderr := captureStderr(t, func() {
+		moved := ReconcileReadyQueue(tasksDir, nil)
+		if !moved {
+			t.Fatalf("moved = %v, want true", moved)
+		}
+	})
+
+	// Both should end up in failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "cycle-bad-glob.md")); err != nil {
+		t.Fatalf("cycle-bad-glob.md not found in failed/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "cycle-partner.md")); err != nil {
+		t.Fatalf("cycle-partner.md not found in failed/: %v", err)
+	}
+
+	// The invalid-glob task should have a terminal-failure marker (not a
+	// cycle-failure marker), because it was quarantined before the cycle pass.
+	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "cycle-bad-glob.md"))
+	if err != nil {
+		t.Fatalf("read cycle-bad-glob.md: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Error("cycle-bad-glob.md should have terminal-failure marker")
+	}
+
+	// No spurious "could not read" warning for the already-quarantined task.
+	if strings.Contains(stderr, "could not read cycle-bad-glob.md") {
+		t.Errorf("stderr contains spurious read warning for quarantined task:\n%s", stderr)
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobWithSatisfiedDepsNoSpuriousMove(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// Create a waiting task that has an invalid glob AND satisfied dependencies.
+	// The invalid-glob quarantine pass should move it to failed/ first, and the
+	// promotion pass must not try to AtomicMove the already-moved file (which
+	// would emit a spurious "could not promote" warning).
+	writeTask(t, tasksDir, DirCompleted, "dep.md",
+		"---\nid: dep\n---\n# Dep\n")
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-satisfied.md",
+		"---\nid: bad-glob-satisfied\ndepends_on: [dep]\naffects:\n  - \"[invalid\"\n---\n# Bad glob satisfied deps\n")
+
+	stderr := captureStderr(t, func() {
+		moved := ReconcileReadyQueue(tasksDir, nil)
+		if !moved {
+			t.Fatalf("moved = %v, want true", moved)
+		}
+	})
+
+	// Should be in failed/, not backlog/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "bad-glob-satisfied.md")); err != nil {
+		t.Fatalf("bad-glob-satisfied.md not found in failed/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "bad-glob-satisfied.md")); !os.IsNotExist(err) {
+		t.Fatal("bad-glob-satisfied.md should not be in backlog/")
+	}
+
+	// No spurious promotion warning for the already-quarantined task.
+	if strings.Contains(stderr, "could not promote") {
+		t.Errorf("stderr contains spurious promotion warning for quarantined task:\n%s", stderr)
+	}
+}
+
+func TestReconcileReadyQueue_InvalidGlobNotPromotedWhenQuarantineFails(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+
+	// Completed dependency so the task would be promotable.
+	writeTask(t, tasksDir, DirCompleted, "dep.md",
+		"---\nid: dep\n---\n# Dep\n")
+
+	// Waiting task with invalid glob and satisfied dependency.
+	writeTask(t, tasksDir, DirWaiting, "bad-glob-promote.md",
+		"---\nid: bad-glob-promote\ndepends_on: [dep]\naffects:\n  - \"[invalid\"\n---\n# Bad glob promote\n")
+
+	// Make AtomicMove fail when the destination is in the failed/ directory,
+	// simulating a quarantine move failure.
+	withLinkFn(t, func(src, dst string) error {
+		if strings.Contains(dst, "/"+DirFailed+"/") {
+			return os.ErrPermission
+		}
+		return os.Link(src, dst)
+	})
+
+	moved := ReconcileReadyQueue(tasksDir, nil)
+
+	// The quarantine move failed, so the task should remain in waiting/.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirWaiting, "bad-glob-promote.md")); err != nil {
+		t.Fatalf("bad-glob-promote.md should still be in waiting/: %v", err)
+	}
+
+	// Must NOT be promoted to backlog/ despite having satisfied deps.
+	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "bad-glob-promote.md")); !os.IsNotExist(err) {
+		t.Fatalf("bad-glob-promote.md was incorrectly promoted to backlog/")
+	}
+
+	// No successful moves occurred.
+	if moved {
+		t.Fatalf("moved = true, want false (quarantine move failed, no promotion)")
 	}
 }
 

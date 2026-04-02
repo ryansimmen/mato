@@ -1,9 +1,11 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -711,6 +713,30 @@ func TestExtractFailureLines_MultipleDistinctFailures(t *testing.T) {
 	}
 }
 
+// captureStderr redirects os.Stderr to a pipe, runs fn, and returns whatever
+// was written. Tests that use this must not call t.Parallel because os.Stderr
+// is process-global.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+
+	fn()
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("io.Copy: %v", err)
+	}
+	return buf.String()
+}
+
 func TestWriteDependencyContextFile_InvalidFrontmatter(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, queue.DirInProgress), 0o755)
@@ -826,6 +852,147 @@ func TestRemoveDependencyContextFile_NonexistentFile(t *testing.T) {
 
 	// Should not panic or error.
 	removeDependencyContextFile(tasksDir, "nonexistent.md")
+}
+
+func TestWriteDependencyContextFile_MissingCompletionSkipped(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirInProgress), 0o755)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	taskFile := "skip-missing.md"
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(taskPath, []byte("---\ndepends_on:\n  - no-such-dep\n---\n# Skip Missing\n"), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/skip-missing",
+		Title:    "Skip Missing",
+		TaskPath: taskPath,
+	}
+
+	// Missing completion detail file → silently skipped (no warning).
+	result := writeDependencyContextFile(tasksDir, claimed)
+	if result != "" {
+		t.Fatalf("expected empty string when completion detail does not exist, got %q", result)
+	}
+}
+
+func TestWriteDependencyContextFile_MalformedCompletionWarns(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirInProgress), 0o755)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Write a malformed (non-JSON) completion detail file.
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	os.WriteFile(filepath.Join(completionsDir, "bad-dep.json"), []byte("not json{{{"), 0o644)
+
+	taskFile := "bad-dep-task.md"
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(taskPath, []byte("---\ndepends_on:\n  - bad-dep\n---\n# Bad Dep Task\n"), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/bad-dep-task",
+		Title:    "Bad Dep Task",
+		TaskPath: taskPath,
+	}
+
+	// Malformed file is a non-not-found error; the function should still
+	// return "" (no valid details) and emit a warning to stderr.
+	var result string
+	stderr := captureStderr(t, func() {
+		result = writeDependencyContextFile(tasksDir, claimed)
+	})
+	if result != "" {
+		t.Fatalf("expected empty string when completion detail is malformed, got %q", result)
+	}
+	if !strings.Contains(stderr, "warning:") {
+		t.Fatalf("expected warning on stderr, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "bad-dep") {
+		t.Fatalf("expected stderr to mention dependency ID \"bad-dep\", got %q", stderr)
+	}
+	if !strings.Contains(stderr, taskFile) {
+		t.Fatalf("expected stderr to mention task filename %q, got %q", taskFile, stderr)
+	}
+}
+
+func TestWriteDependencyContextFile_MixedDeps(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirInProgress), 0o755)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Valid completion detail for one dependency.
+	detail := messaging.CompletionDetail{
+		TaskID:    "good-dep",
+		TaskFile:  "good-dep.md",
+		Branch:    "task/good-dep",
+		Title:     "Good Dep",
+		CommitSHA: "def456",
+	}
+	if err := messaging.WriteCompletionDetail(tasksDir, detail); err != nil {
+		t.Fatalf("write completion detail: %v", err)
+	}
+
+	// Write a malformed completion detail for another dependency.
+	completionsDir := filepath.Join(tasksDir, "messages", "completions")
+	os.WriteFile(filepath.Join(completionsDir, "broken-dep.json"), []byte("<<<invalid>>>"), 0o644)
+
+	taskFile := "mixed-deps.md"
+	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	os.WriteFile(taskPath, []byte("---\ndepends_on:\n  - good-dep\n  - broken-dep\n  - missing-dep\n---\n# Mixed Deps\n"), 0o644)
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/mixed-deps",
+		Title:    "Mixed Deps",
+		TaskPath: taskPath,
+	}
+
+	// Should return the valid dep's context despite one malformed and one missing,
+	// and emit a warning to stderr for the malformed dependency only.
+	var result string
+	stderr := captureStderr(t, func() {
+		result = writeDependencyContextFile(tasksDir, claimed)
+	})
+	if result == "" {
+		t.Fatal("expected non-empty path when at least one valid completion exists")
+	}
+
+	// Verify stderr warning for the malformed dependency.
+	if !strings.Contains(stderr, "warning:") {
+		t.Fatalf("expected warning on stderr for broken-dep, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "broken-dep") {
+		t.Fatalf("expected stderr to mention dependency ID \"broken-dep\", got %q", stderr)
+	}
+	if !strings.Contains(stderr, taskFile) {
+		t.Fatalf("expected stderr to mention task filename %q, got %q", taskFile, stderr)
+	}
+	// missing-dep should not trigger a warning (os.ErrNotExist is silently skipped).
+	if strings.Contains(stderr, "missing-dep") {
+		t.Fatalf("missing-dep should not appear in stderr (ErrNotExist is skipped), got %q", stderr)
+	}
+
+	fileData, err := os.ReadFile(result)
+	if err != nil {
+		t.Fatalf("could not read dependency context file: %v", err)
+	}
+	if !strings.Contains(string(fileData), "good-dep.md") {
+		t.Fatalf("dependency context should contain good-dep info, got:\n%s", string(fileData))
+	}
+	if strings.Contains(string(fileData), "broken-dep") {
+		t.Fatalf("dependency context should not contain broken-dep info")
+	}
+	if strings.Contains(string(fileData), "missing-dep") {
+		t.Fatalf("dependency context should not contain missing-dep info")
+	}
 }
 
 func TestRecoverStuckTask_AppendsFailureWithTimestamp(t *testing.T) {
