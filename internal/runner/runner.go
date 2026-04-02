@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"errors"
@@ -35,23 +36,25 @@ const resumeDetectionBufferLimit = 8192
 
 type resumeDetectionBuffer struct {
 	matched bool
-	carry   string
+	buf     bytes.Buffer
 }
 
 func (b *resumeDetectionBuffer) Write(p []byte) (int, error) {
-	combined := b.carry + string(p)
-	if !b.matched && resumeRejected(combined) {
+	b.buf.Write(p)
+	if !b.matched && resumeRejected(b.buf.String()) {
 		b.matched = true
 	}
-	if len(combined) > resumeDetectionBufferLimit {
-		combined = combined[len(combined)-resumeDetectionBufferLimit:]
+	if b.buf.Len() > resumeDetectionBufferLimit {
+		data := b.buf.Bytes()
+		tail := data[len(data)-resumeDetectionBufferLimit:]
+		b.buf.Reset()
+		b.buf.Write(tail)
 	}
-	b.carry = combined
 	return len(p), nil
 }
 
 func (b *resumeDetectionBuffer) Matched() bool {
-	return b.matched || resumeRejected(b.carry)
+	return b.matched || resumeRejected(b.buf.String())
 }
 
 var execCommandContext = exec.CommandContext
