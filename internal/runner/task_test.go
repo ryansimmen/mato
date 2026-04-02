@@ -1,9 +1,11 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -711,6 +713,30 @@ func TestExtractFailureLines_MultipleDistinctFailures(t *testing.T) {
 	}
 }
 
+// captureStderr redirects os.Stderr to a pipe, runs fn, and returns whatever
+// was written. Tests that use this must not call t.Parallel because os.Stderr
+// is process-global.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+
+	fn()
+
+	w.Close()
+	os.Stderr = old
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("io.Copy: %v", err)
+	}
+	return buf.String()
+}
+
 func TestWriteDependencyContextFile_InvalidFrontmatter(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, queue.DirInProgress), 0o755)
@@ -876,10 +902,22 @@ func TestWriteDependencyContextFile_MalformedCompletionWarns(t *testing.T) {
 	}
 
 	// Malformed file is a non-not-found error; the function should still
-	// return "" (no valid details) but the warning path is exercised.
-	result := writeDependencyContextFile(tasksDir, claimed)
+	// return "" (no valid details) and emit a warning to stderr.
+	var result string
+	stderr := captureStderr(t, func() {
+		result = writeDependencyContextFile(tasksDir, claimed)
+	})
 	if result != "" {
 		t.Fatalf("expected empty string when completion detail is malformed, got %q", result)
+	}
+	if !strings.Contains(stderr, "warning:") {
+		t.Fatalf("expected warning on stderr, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "bad-dep") {
+		t.Fatalf("expected stderr to mention dependency ID \"bad-dep\", got %q", stderr)
+	}
+	if !strings.Contains(stderr, taskFile) {
+		t.Fatalf("expected stderr to mention task filename %q, got %q", taskFile, stderr)
 	}
 }
 
@@ -917,10 +955,29 @@ func TestWriteDependencyContextFile_MixedDeps(t *testing.T) {
 		TaskPath: taskPath,
 	}
 
-	// Should return the valid dep's context despite one malformed and one missing.
-	result := writeDependencyContextFile(tasksDir, claimed)
+	// Should return the valid dep's context despite one malformed and one missing,
+	// and emit a warning to stderr for the malformed dependency only.
+	var result string
+	stderr := captureStderr(t, func() {
+		result = writeDependencyContextFile(tasksDir, claimed)
+	})
 	if result == "" {
 		t.Fatal("expected non-empty path when at least one valid completion exists")
+	}
+
+	// Verify stderr warning for the malformed dependency.
+	if !strings.Contains(stderr, "warning:") {
+		t.Fatalf("expected warning on stderr for broken-dep, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "broken-dep") {
+		t.Fatalf("expected stderr to mention dependency ID \"broken-dep\", got %q", stderr)
+	}
+	if !strings.Contains(stderr, taskFile) {
+		t.Fatalf("expected stderr to mention task filename %q, got %q", taskFile, stderr)
+	}
+	// missing-dep should not trigger a warning (os.ErrNotExist is silently skipped).
+	if strings.Contains(stderr, "missing-dep") {
+		t.Fatalf("missing-dep should not appear in stderr (ErrNotExist is skipped), got %q", stderr)
 	}
 
 	fileData, err := os.ReadFile(result)
