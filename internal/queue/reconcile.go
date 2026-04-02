@@ -171,6 +171,30 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		}
 	}
 
+	// Move waiting tasks with invalid glob syntax to failed/ regardless of
+	// dependency satisfaction or active overlap state. Invalid affects globs
+	// are a terminal metadata error per docs/task-format.md.
+	for _, snap := range idx.TasksByState(DirWaiting) {
+		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
+		if !ok || retainedFile != snap.Filename {
+			continue
+		}
+		if snap.GlobError == nil {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "warning: moving waiting task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
+		if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", snap.GlobError)); appendErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
+		}
+		failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+		if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+		} else {
+			deleteTaskState(tasksDir, snap.Filename)
+			moved = true
+		}
+	}
+
 	// Move cycle members to failed/ using the cycle-to-failed sequence.
 	// Build a lookup from retained task ID to waiting snapshot for cycle processing.
 	// Only retained files (from deduped diagnostics) are eligible; duplicates are skipped.
@@ -231,21 +255,6 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			continue
 		}
 		if idx.HasActiveOverlap(snap.Meta.Affects) {
-			continue
-		}
-		// Quarantine tasks with invalid glob syntax instead of promoting.
-		if snap.GlobError != nil {
-			fmt.Fprintf(os.Stderr, "warning: moving waiting task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
-			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", snap.GlobError)); appendErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
-			}
-			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
-			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
-			} else {
-				deleteTaskState(tasksDir, snap.Filename)
-				moved = true
-			}
 			continue
 		}
 		dst := filepath.Join(tasksDir, DirBacklog, snap.Filename)
