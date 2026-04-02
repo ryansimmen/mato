@@ -302,3 +302,52 @@ func mustParseTime(t *testing.T, value string) time.Time {
 	}
 	return ts
 }
+
+func TestRenderText_NoColorFallback(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirFailed, "broken.md",
+		"# Broken\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed -->\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "rejected.md",
+		"# Rejected\n\n<!-- review-rejection: reviewer-a at 2026-03-20T18:12:04Z — missing coverage -->\n")
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "merged-task",
+		TaskFile:  "merged-task.md",
+		Branch:    "task/merged-task",
+		CommitSHA: "abc1234567890",
+		Title:     "Merged task",
+		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
+	})
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d:\n%s", len(lines), output)
+	}
+
+	// Verify all event types are present and readable in no-color mode.
+	if !strings.Contains(output, "MERGED") {
+		t.Errorf("missing MERGED event type in output:\n%s", output)
+	}
+	if !strings.Contains(output, "FAILED") {
+		t.Errorf("missing FAILED event type in output:\n%s", output)
+	}
+	if !strings.Contains(output, "REJECTED") {
+		t.Errorf("missing REJECTED event type in output:\n%s", output)
+	}
+	// Verify detail fields are intact.
+	if !strings.Contains(output, "abc1234") {
+		t.Errorf("missing commit SHA in output:\n%s", output)
+	}
+	if !strings.Contains(output, "tests_failed") {
+		t.Errorf("missing failure reason in output:\n%s", output)
+	}
+	if !strings.Contains(output, "missing coverage") {
+		t.Errorf("missing rejection reason in output:\n%s", output)
+	}
+}
