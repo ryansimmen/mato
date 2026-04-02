@@ -697,3 +697,80 @@ func extractReviewBashBlocks(t *testing.T, text string) []string {
 	}
 	return blocks
 }
+
+// TestReviewProgressMessagesAccumulateAcrossRuns verifies that two separate
+// review runs from the same agent ID produce distinct progress message files
+// that do not overwrite each other. This is a regression test for the
+// append-only messaging invariant.
+func TestReviewProgressMessagesAccumulateAcrossRuns(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirReadyReview, "review-accum.md",
+		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"<!-- branch: task/review-accum -->\n"+
+			"# Review Accumulate Test\nTest that review progress messages accumulate.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
+
+	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-review-accum.md.json")
+	taskPath := filepath.Join(cloneTasksDir, queue.DirReadyReview, "review-accum.md")
+
+	script := strings.Join([]string{
+		reviewPreamble(t),
+		reviewStateBlock(t, "VERIFY_REVIEW"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	env := []string{
+		"MATO_AGENT_ID=same-reviewer",
+		"MATO_TASK_FILE=review-accum.md",
+		"MATO_TASK_BRANCH=task/review-accum",
+		"MATO_TASK_TITLE=Review Accumulate Test",
+		"MATO_TASK_PATH=" + taskPath,
+		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
+	}
+
+	// Run #1.
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash run1: %v\noutput:\n%s", err, out)
+	}
+
+	msgs1 := readPromptEventMessages(t, tasksDir)
+	var count1 int
+	for _, msg := range msgs1 {
+		if msg.Type == "progress" && msg.From == "same-reviewer" &&
+			strings.Contains(msg.Body, "VERIFY_REVIEW") {
+			count1++
+		}
+	}
+	if count1 != 1 {
+		t.Fatalf("after run1: expected 1 VERIFY_REVIEW message, got %d", count1)
+	}
+
+	// Sleep 1 second so the timestamp-based filename differs.
+	sleepScript := "sleep 1\n\n" + script
+	out2, err := runBash(t, cloneDir, env, sleepScript)
+	if err != nil {
+		t.Fatalf("runBash run2: %v\noutput:\n%s", err, out2)
+	}
+
+	// After two runs, there should be 2 distinct VERIFY_REVIEW messages.
+	msgs2 := readPromptEventMessages(t, tasksDir)
+	var count2 int
+	ids := make(map[string]bool)
+	for _, msg := range msgs2 {
+		if msg.Type == "progress" && msg.From == "same-reviewer" &&
+			strings.Contains(msg.Body, "VERIFY_REVIEW") {
+			count2++
+			if ids[msg.ID] {
+				t.Fatalf("duplicate message ID across runs: %s", msg.ID)
+			}
+			ids[msg.ID] = true
+		}
+	}
+	if count2 != 2 {
+		t.Fatalf("after run2: expected 2 VERIFY_REVIEW messages (one per run), got %d", count2)
+	}
+}
