@@ -1613,6 +1613,146 @@ func TestBuildAndWriteFileClaims_ExcludeOnlyMatchingTask(t *testing.T) {
 	}
 }
 
+func TestBuildAndWriteFileClaims_MalformedTaskEmitsWarning(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirInProgress, queue.DirReadyMerge} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// One valid task, one malformed
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "good.md"),
+		[]byte("---\naffects:\n  - good.go\n---\n# Good\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "bad.md"),
+		[]byte("---\naffects: [unterminated\n---\n# Bad\n"), 0o644)
+
+	// Capture stderr to verify warnings are emitted
+	origStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	err := BuildAndWriteFileClaims(tasksDir, "")
+
+	w.Close()
+	stderrBuf, _ := io.ReadAll(r)
+	os.Stderr = origStderr
+
+	if err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	// Valid task should still produce claims
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("file-claims.json not written: %v", err)
+	}
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := claims["good.go"]; !ok {
+		t.Fatal("expected claim for good.go despite malformed sibling")
+	}
+
+	// Warning should have been emitted to stderr
+	if !strings.Contains(string(stderrBuf), "warning: collecting active affects") {
+		t.Errorf("expected warning on stderr, got: %s", stderrBuf)
+	}
+	if !strings.Contains(string(stderrBuf), "bad.md") {
+		t.Errorf("expected warning to mention bad.md, got: %s", stderrBuf)
+	}
+}
+
+func TestBuildAndWriteFileClaims_UnreadableDirEmitsWarning(t *testing.T) {
+	tasksDir := t.TempDir()
+	dir := filepath.Join(tasksDir, queue.DirInProgress)
+	os.MkdirAll(dir, 0o755)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Make directory unreadable (non-ENOENT error)
+	os.Chmod(dir, 0o000)
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	origStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	err := BuildAndWriteFileClaims(tasksDir, "")
+
+	w.Close()
+	stderrBuf, _ := io.ReadAll(r)
+	os.Stderr = origStderr
+
+	if err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	// Warning should mention in-progress directory read error
+	if !strings.Contains(string(stderrBuf), "warning: collecting active affects") {
+		t.Errorf("expected warning on stderr, got: %s", stderrBuf)
+	}
+	if !strings.Contains(string(stderrBuf), queue.DirInProgress) {
+		t.Errorf("expected warning to mention %s, got: %s", queue.DirInProgress, stderrBuf)
+	}
+}
+
+func TestBuildAndWriteFileClaims_UnreadableTaskFileEmitsWarning(t *testing.T) {
+	tasksDir := t.TempDir()
+	dir := filepath.Join(tasksDir, queue.DirInProgress)
+	os.MkdirAll(dir, 0o755)
+	if err := Init(tasksDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// One readable task, one unreadable task file (permission denied = read failure)
+	os.WriteFile(filepath.Join(dir, "good.md"),
+		[]byte("---\naffects:\n  - good.go\n---\n# Good\n"), 0o644)
+	unreadable := filepath.Join(dir, "unreadable.md")
+	os.WriteFile(unreadable,
+		[]byte("---\naffects:\n  - secret.go\n---\n# Unreadable\n"), 0o644)
+	os.Chmod(unreadable, 0o000)
+	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+
+	origStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	err := BuildAndWriteFileClaims(tasksDir, "")
+
+	w.Close()
+	stderrBuf, _ := io.ReadAll(r)
+	os.Stderr = origStderr
+
+	if err != nil {
+		t.Fatalf("BuildAndWriteFileClaims: %v", err)
+	}
+
+	// The readable task should still produce a claim
+	data, err := os.ReadFile(filepath.Join(tasksDir, "messages", "file-claims.json"))
+	if err != nil {
+		t.Fatalf("file-claims.json not written: %v", err)
+	}
+	var claims map[string]FileClaim
+	if err := json.Unmarshal(data, &claims); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := claims["good.go"]; !ok {
+		t.Fatal("expected claim for good.go despite unreadable sibling")
+	}
+
+	// Warning should have been emitted for the unreadable file
+	if !strings.Contains(string(stderrBuf), "warning: collecting active affects") {
+		t.Errorf("expected warning on stderr, got: %s", stderrBuf)
+	}
+	if !strings.Contains(string(stderrBuf), "unreadable.md") {
+		t.Errorf("expected warning to mention unreadable.md, got: %s", stderrBuf)
+	}
+}
+
 func TestWriteMessage_ProgressType(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {

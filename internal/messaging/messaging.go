@@ -620,8 +620,14 @@ type FileClaim struct {
 // If excludeTask is non-empty, skip the task with that filename so the
 // just-claimed task does not see its own files as conflicting. Entries ending
 // with "/" are preserved as directory-prefix claims.
+//
+// Warnings from scanning active task directories are emitted to stderr so
+// operators can see when file-claims.json is based on a partial index.
 func BuildAndWriteFileClaims(tasksDir, excludeTask string) error {
-	active := taskfile.CollectActiveAffects(tasksDir)
+	active, warnings := taskfile.CollectActiveAffects(tasksDir)
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "warning: collecting active affects: %s\n", w.Error())
+	}
 	claims := make(map[string]FileClaim, len(active)*2)
 	for _, t := range active {
 		if excludeTask != "" && t.Name == excludeTask {
