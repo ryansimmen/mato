@@ -770,20 +770,32 @@ func TestReviewProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	// After two runs, there should be 2 distinct VERIFY_REVIEW messages.
 	msgs2 := readPromptEventMessages(t, tasksDir)
 	var count2 int
-	ids := make(map[string]bool)
+	var collectedIDs []string
 	filenames := make(map[string]bool)
 	for _, msg := range msgs2 {
 		if msg.Type == "progress" && msg.From == "same-reviewer" &&
 			strings.Contains(msg.Body, "VERIFY_REVIEW") {
 			count2++
-			if ids[msg.ID] {
-				t.Fatalf("duplicate message ID across runs: %s", msg.ID)
-			}
-			ids[msg.ID] = true
+			collectedIDs = append(collectedIDs, msg.ID)
 		}
 	}
 	if count2 != 2 {
 		t.Fatalf("after run2: expected 2 VERIFY_REVIEW messages (one per run), got %d", count2)
+	}
+
+	// Same-second runs from the same agent should produce the same stable ID
+	// (PID is only in the filename, not in the id field) so the tie-break
+	// contract is preserved.
+	if collectedIDs[0] != collectedIDs[1] {
+		t.Fatalf("same-second runs produced different IDs %q and %q; "+
+			"IDs should be stable (PID only in filename)", collectedIDs[0], collectedIDs[1])
+	}
+
+	// Verify the ID does NOT contain a PID segment.
+	for _, id := range collectedIDs {
+		if !strings.HasPrefix(id, "20260101T000000Z-same-reviewer-") {
+			t.Fatalf("ID %q does not match expected format <ts>-<agent>-<step>", id)
+		}
 	}
 
 	// Both runs used the pinned timestamp; verify filenames are still distinct.
