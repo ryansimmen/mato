@@ -41,7 +41,7 @@ type resumeDetectionBuffer struct {
 
 func (b *resumeDetectionBuffer) Write(p []byte) (int, error) {
 	b.buf.Write(p)
-	if !b.matched && resumeRejected(b.buf.String()) {
+	if !b.matched && resumeRejectedBytes(b.buf.Bytes()) {
 		b.matched = true
 	}
 	if b.buf.Len() > resumeDetectionBufferLimit {
@@ -54,7 +54,7 @@ func (b *resumeDetectionBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *resumeDetectionBuffer) Matched() bool {
-	return b.matched || resumeRejected(b.buf.String())
+	return b.matched || resumeRejectedBytes(b.buf.Bytes())
 }
 
 var execCommandContext = exec.CommandContext
@@ -1281,4 +1281,8 @@ func resumeRejected(output string) bool {
 		}
 	}
 	return false
+}
+
+func resumeRejectedBytes(output []byte) bool {
+	return resumeRejected(string(output))
 }

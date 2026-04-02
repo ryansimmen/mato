@@ -1065,6 +1065,87 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	}
 }
 
+func TestLaterStateDuplicateDir(t *testing.T) {
+	tests := []struct {
+		name         string
+		setup        func(t *testing.T) []string
+		wantDir      string
+		wantWarnings int
+	}{
+		{
+			name: "returns first matching later state basename",
+			setup: func(t *testing.T) []string {
+				tasksDir := t.TempDir()
+				readyReview := filepath.Join(tasksDir, DirReadyReview)
+				completed := filepath.Join(tasksDir, DirCompleted)
+				if err := os.MkdirAll(readyReview, 0o755); err != nil {
+					t.Fatalf("mkdir ready review: %v", err)
+				}
+				if err := os.MkdirAll(completed, 0o755); err != nil {
+					t.Fatalf("mkdir completed: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(completed, "task.md"), []byte("done"), 0o644); err != nil {
+					t.Fatalf("write completed task: %v", err)
+				}
+				return []string{readyReview, completed}
+			},
+			wantDir:      DirCompleted,
+			wantWarnings: 0,
+		},
+		{
+			name: "returns empty when file is absent everywhere",
+			setup: func(t *testing.T) []string {
+				tasksDir := t.TempDir()
+				readyMerge := filepath.Join(tasksDir, DirReadyMerge)
+				failed := filepath.Join(tasksDir, DirFailed)
+				if err := os.MkdirAll(readyMerge, 0o755); err != nil {
+					t.Fatalf("mkdir ready merge: %v", err)
+				}
+				if err := os.MkdirAll(failed, 0o755); err != nil {
+					t.Fatalf("mkdir failed: %v", err)
+				}
+				return []string{readyMerge, failed}
+			},
+			wantDir:      "",
+			wantWarnings: 0,
+		},
+		{
+			name: "collects non-enoent stat warnings",
+			setup: func(t *testing.T) []string {
+				tasksDir := t.TempDir()
+				blockedPath := filepath.Join(tasksDir, "not-a-directory")
+				if err := os.WriteFile(blockedPath, []byte("x"), 0o644); err != nil {
+					t.Fatalf("write blocked path: %v", err)
+				}
+				completed := filepath.Join(tasksDir, DirCompleted)
+				if err := os.MkdirAll(completed, 0o755); err != nil {
+					t.Fatalf("mkdir completed: %v", err)
+				}
+				return []string{blockedPath, completed}
+			},
+			wantDir:      "",
+			wantWarnings: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirs := tt.setup(t)
+
+			gotDir, warnings := LaterStateDuplicateDir("task.md", dirs...)
+			if gotDir != tt.wantDir {
+				t.Fatalf("LaterStateDuplicateDir() dir = %q, want %q", gotDir, tt.wantDir)
+			}
+			if len(warnings) != tt.wantWarnings {
+				t.Fatalf("LaterStateDuplicateDir() warnings = %d, want %d", len(warnings), tt.wantWarnings)
+			}
+			if tt.wantWarnings > 0 && !strings.Contains(warnings[0].Error(), "could not check") {
+				t.Fatalf("warning = %q, want duplicate-check context", warnings[0])
+			}
+		})
+	}
+}
+
 func TestRecoverOrphanedTasks_RemovesStaleInProgressCopyWhenTaskAlreadyAdvanced(t *testing.T) {
 	for _, laterDir := range []string{DirReadyMerge, DirCompleted, DirFailed} {
 		t.Run(laterDir, func(t *testing.T) {

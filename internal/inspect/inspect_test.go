@@ -516,20 +516,6 @@ func TestShowTo_MissingMatoDir(t *testing.T) {
 	}
 }
 
-func TestShowTo_RequiresTasksDir(t *testing.T) {
-	repoDir := testutil.SetupRepo(t)
-
-	var buf bytes.Buffer
-	err := ShowTo(&buf, repoDir, "any-task", "text")
-	if err == nil {
-		t.Fatal("expected error for missing .mato directory, got nil")
-	}
-	want := ".mato/ directory not found - run 'mato init' first"
-	if err.Error() != want {
-		t.Errorf("error = %q, want %q", err.Error(), want)
-	}
-}
-
 func TestShowTo_JSONBlockingDependencies(t *testing.T) {
 	tests := []struct {
 		name    string
