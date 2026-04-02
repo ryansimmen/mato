@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"mato/internal/dirs"
+	"mato/internal/timeutil"
 
 	"github.com/fatih/color"
 
@@ -326,16 +327,10 @@ func latestProgressByAgent(messages []messaging.Message) map[string]messaging.Me
 	return result
 }
 
-// formatDuration returns a human-friendly "X min ago" or "X sec ago" string.
+// formatDuration returns a human-friendly duration string via the shared
+// timeutil helper (e.g. "3 sec", "12 min", "2 hr", "1 day").
 func formatDuration(d time.Duration) string {
-	if d < time.Minute {
-		sec := int(d.Seconds())
-		if sec < 1 {
-			sec = 1
-		}
-		return fmt.Sprintf("%d sec", sec)
-	}
-	return fmt.Sprintf("%d min", int(d.Minutes()))
+	return timeutil.FormatDuration(d)
 }
 
 func pluralize(n int, singular, plural string) string {

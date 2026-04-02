@@ -4,10 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"time"
 
+	"mato/internal/timeutil"
 	"mato/internal/ui"
 )
+
+// rfc3339Re matches RFC3339 timestamps in reason strings so we can annotate
+// them with relative time in text output only.
+var rfc3339Re = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z`)
 
 type inspectJSON struct {
 	TaskID                string               `json:"task_id"`
@@ -64,7 +70,7 @@ func renderText(w io.Writer, result inspectResult) {
 	fmt.Fprintf(w, "File: %s/%s\n", result.State, result.Filename)
 	fmt.Fprintf(w, "State: %s\n", result.State)
 	fmt.Fprintf(w, "Status: %s\n", colorStatus(result.Status))
-	fmt.Fprintf(w, "Reason: %s\n", result.Reason)
+	fmt.Fprintf(w, "Reason: %s\n", annotateTimestamps(result.Reason))
 	fmt.Fprintf(w, "Next step: %s\n", result.NextStep)
 
 	if result.QueuePosition > 0 {
@@ -80,7 +86,12 @@ func renderText(w io.Writer, result inspectResult) {
 		if result.ClaimedAt.IsZero() {
 			fmt.Fprintf(w, "Claimed by: %s\n", colors.Cyan(result.ClaimedBy))
 		} else {
-			fmt.Fprintf(w, "Claimed by: %s at %s\n", colors.Cyan(result.ClaimedBy), colors.Dim(result.ClaimedAt.UTC().Format(time.RFC3339)))
+			ts := result.ClaimedAt.UTC().Format(time.RFC3339)
+			rel := timeutil.RelativeTime(result.ClaimedAt.UTC(), time.Now().UTC())
+			if rel != "" {
+				ts += "  " + rel
+			}
+			fmt.Fprintf(w, "Claimed by: %s at %s\n", colors.Cyan(result.ClaimedBy), colors.Dim(ts))
 		}
 	}
 	if result.ReviewFailureCount > 0 {
@@ -170,4 +181,21 @@ func joinList(items []string) string {
 		result += ", " + items[i]
 	}
 	return result
+}
+
+// annotateTimestamps appends relative time annotations to any RFC3339
+// timestamps found in the string, for text-only display.
+func annotateTimestamps(s string) string {
+	now := time.Now().UTC()
+	return rfc3339Re.ReplaceAllStringFunc(s, func(match string) string {
+		ts, err := time.Parse(time.RFC3339, match)
+		if err != nil {
+			return match
+		}
+		rel := timeutil.RelativeTime(ts, now)
+		if rel != "" {
+			return match + " " + rel
+		}
+		return match
+	})
 }

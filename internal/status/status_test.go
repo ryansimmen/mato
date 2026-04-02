@@ -369,9 +369,9 @@ func TestTimeInState(t *testing.T) {
 
 	output := captureShowVerbose(t, repoRoot)
 
-	// Should show time in state (~120 min).
-	if !contains(output, "min") {
-		t.Errorf("output should contain time-in-state with 'min', got:\n%s", output)
+	// Should show time in state (~2 hr).
+	if !contains(output, "hr") {
+		t.Errorf("output should contain time-in-state with 'hr', got:\n%s", output)
 	}
 	if !contains(output, "agent test-agent") {
 		t.Errorf("output should contain 'agent test-agent', got:\n%s", output)

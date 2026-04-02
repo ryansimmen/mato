@@ -303,6 +303,67 @@ func mustParseTime(t *testing.T, value string) time.Time {
 	return ts
 }
 
+func TestShowTo_TextRelativeTimeAnnotation(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Use recent timestamps so the relative time annotation appears.
+	recentMerged := time.Now().UTC().Add(-5 * time.Minute)
+	recentFailed := time.Now().UTC().Add(-2 * time.Hour)
+	recentMergedStr := recentMerged.Format(time.RFC3339)
+	recentFailedStr := recentFailed.Format(time.RFC3339)
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "recent-merged",
+		TaskFile:  "recent-merged.md",
+		Branch:    "task/recent-merged",
+		CommitSHA: "abc1234567890",
+		Title:     "Recent merge",
+		MergedAt:  recentMerged,
+	})
+	writeTask(t, tasksDir, queue.DirFailed, "recent-failed.md",
+		"# Recent failed\n\n<!-- failure: worker-a at "+recentFailedStr+" step=WORK error=build_broken -->\n")
+
+	// Text output should include both the absolute timestamp and [X ago].
+	var textBuf bytes.Buffer
+	if err := ShowTo(&textBuf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo text: %v", err)
+	}
+	textOutput := textBuf.String()
+
+	if !strings.Contains(textOutput, recentMergedStr) {
+		t.Errorf("text output should contain absolute merged timestamp %s, got:\n%s", recentMergedStr, textOutput)
+	}
+	if !strings.Contains(textOutput, recentFailedStr) {
+		t.Errorf("text output should contain absolute failed timestamp %s, got:\n%s", recentFailedStr, textOutput)
+	}
+	if !strings.Contains(textOutput, "ago]") {
+		t.Errorf("text output should contain relative time annotation [X ago], got:\n%s", textOutput)
+	}
+
+	// JSON output must NOT contain relative time annotations.
+	var jsonBuf bytes.Buffer
+	if err := ShowTo(&jsonBuf, repoRoot, 20, "json"); err != nil {
+		t.Fatalf("ShowTo json: %v", err)
+	}
+	jsonOutput := jsonBuf.String()
+
+	if strings.Contains(jsonOutput, "ago") {
+		t.Errorf("JSON output must not contain relative time annotation, got:\n%s", jsonOutput)
+	}
+
+	// Verify JSON timestamps are pure RFC3339.
+	var events []Event
+	if err := json.Unmarshal(jsonBuf.Bytes(), &events); err != nil {
+		t.Fatalf("json.Unmarshal: %v\n%s", err, jsonBuf.String())
+	}
+	for _, ev := range events {
+		ts := ev.Timestamp.UTC().Format(time.RFC3339)
+		if strings.Contains(ts, "ago") {
+			t.Errorf("JSON event timestamp should be pure RFC3339, got: %q", ts)
+		}
+	}
+}
+
 func TestRenderText_NoColorFallback(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
