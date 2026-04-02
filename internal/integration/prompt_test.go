@@ -1148,20 +1148,35 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	// After two runs, there should be 2 distinct VERIFY_CLAIM messages.
 	msgs2 := readPromptEventMessages(t, tasksDir)
 	var count2 int
-	ids := make(map[string]bool)
+	var collectedIDs []string
 	filenames := make(map[string]bool)
 	for _, msg := range msgs2 {
 		if msg.Type == "progress" && msg.From == "same-agent" &&
 			strings.Contains(msg.Body, "VERIFY_CLAIM") {
 			count2++
-			if ids[msg.ID] {
-				t.Fatalf("duplicate message ID across runs: %s", msg.ID)
-			}
-			ids[msg.ID] = true
+			collectedIDs = append(collectedIDs, msg.ID)
 		}
 	}
 	if count2 != 2 {
 		t.Fatalf("after run2: expected 2 VERIFY_CLAIM messages (one per run), got %d", count2)
+	}
+
+	// Same-second runs from the same agent should produce the same stable ID
+	// (PID is only in the filename, not in the id field) so the tie-break
+	// contract is preserved.
+	if collectedIDs[0] != collectedIDs[1] {
+		t.Fatalf("same-second runs produced different IDs %q and %q; "+
+			"IDs should be stable (PID only in filename)", collectedIDs[0], collectedIDs[1])
+	}
+
+	// Verify the ID does NOT contain a PID segment (no dash-digit between
+	// timestamp and agent ID).
+	for _, id := range collectedIDs {
+		// Expected format: <timestamp>-<agentID>-verify-claim
+		// NOT: <timestamp>-<PID>-<agentID>-verify-claim
+		if !strings.HasPrefix(id, "20260101T000000Z-same-agent-") {
+			t.Fatalf("ID %q does not match expected format <ts>-<agent>-<step>", id)
+		}
 	}
 
 	// Both runs used the pinned timestamp; verify filenames are still distinct.
@@ -1175,5 +1190,96 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	}
 	if len(filenames) != 2 {
 		t.Fatalf("expected 2 distinct filenames, got %d: %v", len(filenames), filenames)
+	}
+}
+
+// TestPromptProgressIDsPreserveTieBreakSemantics verifies that prompt-generated
+// progress message IDs are stable across same-second runs (no PID component),
+// so the equal-timestamp tie-break contract (lexically smallest ID wins) is
+// deterministic regardless of shell PID ordering.
+func TestPromptProgressIDsPreserveTieBreakSemantics(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirInProgress, "tiebreak-test.md",
+		"<!-- claimed-by: tiebreak-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"# Tie-break Test\nTest that IDs preserve tie-break semantics.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
+
+	taskPath := filepath.Join(cloneTasksDir, queue.DirInProgress, "tiebreak-test.md")
+
+	// Run only the VERIFY_CLAIM message-write snippet.
+	script := strings.Join([]string{
+		promptPreamble(t),
+		`FILENAME="tiebreak-test.md"`,
+		`BRANCH="task/tiebreak-test"`,
+		`TASK_TITLE="Tie-break Test"`,
+		`TASK_PATH="` + taskPath + `"`,
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	// Pin the timestamp so all runs produce the same MATO_TS.
+	fakeDateDir := t.TempDir()
+	fakeDate := filepath.Join(fakeDateDir, "date")
+	if err := os.WriteFile(fakeDate, []byte(
+		"#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in +%Y%m%dT%H%M%SZ) echo 20260601T120000Z; exit 0 ;; esac; done\n/usr/bin/date \"$@\"\n",
+	), 0o755); err != nil {
+		t.Fatalf("write fake date: %v", err)
+	}
+
+	env := []string{
+		"PATH=" + fakeDateDir + ":" + os.Getenv("PATH"),
+		"MATO_AGENT_ID=tiebreak-agent",
+		"MATO_TASK_FILE=tiebreak-test.md",
+		"MATO_TASK_BRANCH=task/tiebreak-test",
+		"MATO_TASK_TITLE=Tie-break Test",
+		"MATO_TASK_PATH=" + taskPath,
+	}
+
+	// Run three times with the same pinned timestamp.
+	for i := 0; i < 3; i++ {
+		out, err := runBash(t, cloneDir, env, script)
+		if err != nil {
+			t.Fatalf("runBash run %d: %v\noutput:\n%s", i+1, err, out)
+		}
+	}
+
+	// All three runs should have created distinct files (PID in filename)
+	// but identical JSON IDs (no PID in id field).
+	msgs := readPromptEventMessages(t, tasksDir)
+	var ids []string
+	for _, msg := range msgs {
+		if msg.Type == "progress" && msg.From == "tiebreak-agent" &&
+			strings.Contains(msg.Body, "VERIFY_CLAIM") {
+			ids = append(ids, msg.ID)
+		}
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 VERIFY_CLAIM messages, got %d", len(ids))
+	}
+
+	// All IDs should be identical — no PID component.
+	for i := 1; i < len(ids); i++ {
+		if ids[i] != ids[0] {
+			t.Fatalf("IDs differ across runs: %q vs %q; PID should not be in the ID", ids[0], ids[i])
+		}
+	}
+
+	// The ID should follow the <timestamp>-<agentID>-<step> format.
+	expectedID := "20260601T120000Z-tiebreak-agent-verify-claim"
+	if ids[0] != expectedID {
+		t.Fatalf("ID = %q, want %q", ids[0], expectedID)
+	}
+
+	// Verify distinct filenames (PID in filename ensures collision resistance).
+	paths, _ := filepath.Glob(filepath.Join(tasksDir, "messages", "events", "*tiebreak-agent*verify-claim*.json"))
+	fileSet := make(map[string]bool)
+	for _, p := range paths {
+		fileSet[filepath.Base(p)] = true
+	}
+	if len(fileSet) != 3 {
+		t.Fatalf("expected 3 distinct filenames, got %d: %v", len(fileSet), fileSet)
 	}
 }
