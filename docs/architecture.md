@@ -283,7 +283,7 @@ For each task:
 ### Squash commit message format
 `formatSquashCommitMessage(task, agentLog)` builds the squash-merge commit message from the agent's commit and the task metadata. The format is:
 
-1. **Subject line**: the agent's commit subject. If the agent made no commit (or the log is empty), the task title is used as a fallback.
+1. **Subject line**: the subject of the earliest commit on the task branch (the agent's primary intent commit). If the agent made no commit (or the log is empty), the task title is used as a fallback. For multi-commit branches (e.g. with later review-fix commits), the first commit's subject is always preferred.
 2. **Body** (optional): the agent's commit body, if present. Lines matching `Task: <filename>` and `Changed files:` sections are stripped since that metadata is redundant with the trailers.
 3. **Trailers**: appended after a blank separator line:
    - `Task-ID: <id>` — the task's frontmatter `id` field (omitted if no id is set).
