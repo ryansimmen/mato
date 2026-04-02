@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -21,455 +18,25 @@ import (
 	"mato/internal/inspect"
 	"mato/internal/pause"
 	"mato/internal/queue"
-	"mato/internal/runner"
 	"mato/internal/setup"
 	"mato/internal/status"
 
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+// doctorRunFn is the function used to run health checks. It defaults to
+// doctor.Run and can be replaced in tests to inject failures or exit codes.
+var doctorRunFn = doctor.Run
 
-type runFlags struct {
-	TaskModel             string
-	ReviewModel           string
-	TaskReasoningEffort   string
-	ReviewReasoningEffort string
-}
+// inspectShowFn is the function used to render task inspection results.
+// Tests replace it to verify CLI flag parsing and delegation.
+var inspectShowFn = inspect.Show
 
-var validReasoningEfforts = map[string]bool{
-	"low":    true,
-	"medium": true,
-	"high":   true,
-	"xhigh":  true,
-}
+// logShowFn is the function used to render durable task history.
+// Tests replace it to verify CLI flag parsing and delegation.
+var logShowFn = history.Show
 
-// UsageError marks command-line misuse that should print the command usage.
-type UsageError struct {
-	Err   error
-	Usage string
-}
-
-func (e *UsageError) Error() string {
-	return e.Err.Error()
-}
-
-func (e *UsageError) Unwrap() error {
-	return e.Err
-}
-
-// SilentError carries a non-zero exit code for failures that have already been
-// reported to the user and should not be printed again by main.
-type SilentError struct {
-	Err  error
-	Code int
-}
-
-func (e *SilentError) Error() string {
-	if e.Err == nil {
-		return fmt.Sprintf("exit %d", e.Code)
-	}
-	return e.Err.Error()
-}
-
-func (e *SilentError) Unwrap() error {
-	return e.Err
-}
-
-func newUsageError(cmd *cobra.Command, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &UsageError{Err: err, Usage: cmd.UsageString()}
-}
-
-func usageNoArgs(cmd *cobra.Command, args []string) error {
-	return newUsageError(cmd, cobra.NoArgs(cmd, args))
-}
-
-func usageExactArgs(n int) cobra.PositionalArgs {
-	return func(cmd *cobra.Command, args []string) error {
-		return newUsageError(cmd, cobra.ExactArgs(n)(cmd, args))
-	}
-}
-
-func usageMinimumNArgs(n int) cobra.PositionalArgs {
-	return func(cmd *cobra.Command, args []string) error {
-		return newUsageError(cmd, cobra.MinimumNArgs(n)(cmd, args))
-	}
-}
-
-func configureCommand(cmd *cobra.Command) {
-	cmd.SilenceUsage = true
-	cmd.SilenceErrors = true
-	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
-		return newUsageError(c, err)
-	})
-}
-
-func printVersion(w io.Writer) error {
-	_, err := fmt.Fprintf(w, "mato %s\n", version)
-	return err
-}
-
-func writeCommandError(w io.Writer, err error) int {
-	var exitErr ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.Code
-	}
-
-	var silentErr *SilentError
-	if errors.As(err, &silentErr) {
-		return silentErr.Code
-	}
-
-	var usageErr *UsageError
-	if errors.As(err, &usageErr) {
-		fmt.Fprintf(w, "mato error: %v\n\n", usageErr.Err)
-		_, _ = io.WriteString(w, usageErr.Usage)
-		return 1
-	}
-
-	fmt.Fprintf(w, "mato error: %v\n", err)
-	return 1
-}
-
-func resolveRepo(repo string) (string, error) {
-	if repo != "" {
-		return repo, nil
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
-	}
-	return wd, nil
-}
-
-func resolveEnvBranch() (string, bool, error) {
-	raw, ok := os.LookupEnv("MATO_BRANCH")
-	if !ok || raw == "" {
-		return "", false, nil
-	}
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", false, fmt.Errorf("MATO_BRANCH must not be whitespace-only")
-	}
-	return trimmed, true, nil
-}
-
-func resolveConfigBranch(cfg config.Config, flagValue string) (string, error) {
-	if flagValue != "" {
-		return flagValue, nil
-	}
-	if envBranch, ok, err := resolveEnvBranch(); err != nil {
-		return "", err
-	} else if ok {
-		return envBranch, nil
-	}
-	if cfg.Branch != nil {
-		return *cfg.Branch, nil
-	}
-	return "mato", nil
-}
-
-func resolveStringOption(flagVal, envKey string, configVal *string) string {
-	if v := strings.TrimSpace(flagVal); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
-		return v
-	}
-	if configVal != nil {
-		return *configVal
-	}
-	return ""
-}
-
-func resolveBoolOption(envKey string, configVal *bool, defaultVal bool) (bool, error) {
-	raw, ok := os.LookupEnv(envKey)
-	if ok && strings.TrimSpace(raw) != "" {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
-		case "1", "true", "yes", "on":
-			return true, nil
-		case "0", "false", "no", "off":
-			return false, nil
-		default:
-			return defaultVal, fmt.Errorf("parse %s %q: must be true or false", envKey, raw)
-		}
-	}
-	if configVal != nil {
-		return *configVal, nil
-	}
-	return defaultVal, nil
-}
-
-// resolveDurationOption resolves a duration from an environment variable or
-// config value. It returns zero if neither source is set.
-func resolveDurationOption(envKey string, configVal *string, name string) (time.Duration, error) {
-	if v := os.Getenv(envKey); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return 0, fmt.Errorf("parse %s %q: %w", envKey, v, err)
-		}
-		if d <= 0 {
-			return 0, fmt.Errorf("%s must be positive, got %v", envKey, d)
-		}
-		return d, nil
-	}
-	if configVal != nil {
-		d, err := time.ParseDuration(*configVal)
-		if err != nil {
-			return 0, fmt.Errorf("invalid %s %q in .mato.yaml: %w", name, *configVal, err)
-		}
-		if d <= 0 {
-			return 0, fmt.Errorf("%s in .mato.yaml must be positive, got %v", name, d)
-		}
-		return d, nil
-	}
-	return 0, nil
-}
-
-func validateReasoningEffort(value, flagName string) error {
-	if !validReasoningEfforts[value] {
-		return fmt.Errorf("invalid %s %q: must be one of low, medium, high, xhigh", flagName, value)
-	}
-	return nil
-}
-
-func resolveRunOptions(flags runFlags, cfg config.Config) (runner.RunOptions, error) {
-	var opts runner.RunOptions
-
-	if v := strings.TrimSpace(os.Getenv("MATO_DOCKER_IMAGE")); v != "" {
-		opts.DockerImage = v
-	} else if cfg.DockerImage != nil {
-		opts.DockerImage = *cfg.DockerImage
-	}
-
-	opts.TaskModel = resolveStringOption(flags.TaskModel, "MATO_TASK_MODEL", cfg.TaskModel)
-	if opts.TaskModel == "" {
-		opts.TaskModel = runner.DefaultTaskModel
-	}
-	opts.ReviewModel = resolveStringOption(flags.ReviewModel, "MATO_REVIEW_MODEL", cfg.ReviewModel)
-	if opts.ReviewModel == "" {
-		opts.ReviewModel = runner.DefaultReviewModel
-	}
-	resumeEnabled, err := resolveBoolOption("MATO_REVIEW_SESSION_RESUME_ENABLED", cfg.ReviewSessionResume, true)
-	if err != nil {
-		return opts, err
-	}
-	opts.ReviewSessionResumeEnabled = resumeEnabled
-	opts.TaskReasoningEffort = resolveStringOption(flags.TaskReasoningEffort, "MATO_TASK_REASONING_EFFORT", cfg.TaskReasoningEffort)
-	if opts.TaskReasoningEffort == "" {
-		opts.TaskReasoningEffort = runner.DefaultReasoningEffort
-	}
-	opts.ReviewReasoningEffort = resolveStringOption(flags.ReviewReasoningEffort, "MATO_REVIEW_REASONING_EFFORT", cfg.ReviewReasoningEffort)
-	if opts.ReviewReasoningEffort == "" {
-		opts.ReviewReasoningEffort = runner.DefaultReasoningEffort
-	}
-	if err := validateReasoningEffort(opts.TaskReasoningEffort, "task-reasoning-effort"); err != nil {
-		return opts, err
-	}
-	if err := validateReasoningEffort(opts.ReviewReasoningEffort, "review-reasoning-effort"); err != nil {
-		return opts, err
-	}
-
-	if d, err := resolveDurationOption("MATO_AGENT_TIMEOUT", cfg.AgentTimeout, "agent_timeout"); err != nil {
-		return opts, err
-	} else if d > 0 {
-		opts.AgentTimeout = d
-	}
-
-	if d, err := resolveDurationOption("MATO_RETRY_COOLDOWN", cfg.RetryCooldown, "retry_cooldown"); err != nil {
-		return opts, err
-	} else if d > 0 {
-		opts.RetryCooldown = d
-	}
-
-	return opts, nil
-}
-
-var gitShowTopLevel = func(dir string) (string, error) {
-	return git.Output(dir, "rev-parse", "--show-toplevel")
-}
-
-func resolveRepoRoot(dir string) (string, error) {
-	out, err := gitShowTopLevel(dir)
-	if err != nil {
-		return "", fmt.Errorf("resolve repo root for %q: %w", dir, err)
-	}
-	return strings.TrimSpace(out), nil
-}
-
-// gitCheckRefFormat is the function used to validate branch names. It
-// defaults to running "git check-ref-format --branch" and can be replaced
-// in tests.
-var gitCheckRefFormat = func(name string) error {
-	out, err := exec.Command("git", "check-ref-format", "--branch", name).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("invalid branch name %q: git check-ref-format rejected it (%s)", name, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// validateBranch checks that the branch name is a legal git refname by
-// delegating to "git check-ref-format --branch".
-func validateBranch(branch string) error {
-	return gitCheckRefFormat(branch)
-}
-
-// gitRevParseGitDir is the function used to verify a directory is a git
-// repository. It defaults to running "git rev-parse --git-dir" and can
-// be replaced in tests.
-var gitRevParseGitDir = func(dir string) error {
-	cmd := exec.Command("git", "-C", dir, "rev-parse", "--git-dir")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("repo path %q is not a git repository: %s", dir, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// validateRepoPath checks that dir exists, is a directory, and is a git
-// repository by running a lightweight git command.
-func validateRepoPath(dir string) error {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return fmt.Errorf("repo path %q does not exist: %w", dir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("repo path %q is not a directory", dir)
-	}
-	return gitRevParseGitDir(dir)
-}
-
-func requireTasksDir(tasksDir string) error {
-	info, err := os.Stat(tasksDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
-		}
-		return fmt.Errorf("stat %s: %w", tasksDir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s exists but is not a directory", tasksDir)
-	}
-	return nil
-}
-
-// runFn is the function used to start the orchestrator loop. Defaults to
-// runner.Run and can be replaced in tests to observe resolved values.
-var runFn = runner.Run
-
-// dryRunFn is the function used for dry-run validation. Defaults to
-// runner.DryRun and can be replaced in tests.
-var dryRunFn = runner.DryRun
-
-func newRootCmd() *cobra.Command {
-	var repoFlag string
-
-	root := &cobra.Command{
-		Use:     "mato",
-		Short:   "Orchestrate autonomous Copilot agents against a task queue",
-		Long:    "Mato orchestrates autonomous Copilot agents against a filesystem-backed task queue in Docker.",
-		Example: "mato run\nmato status\nmato version",
-		Args:    usageNoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	configureCommand(root)
-	root.Version = version
-	root.SetVersionTemplate("mato {{.Version}}\n")
-	root.PersistentFlags().StringVar(&repoFlag, "repo", "", "Path to the git repository (default: current directory)")
-
-	root.AddCommand(newRunCmd(&repoFlag))
-	root.AddCommand(newStatusCmd(&repoFlag))
-	root.AddCommand(newLogCmd(&repoFlag))
-	root.AddCommand(newDoctorCmd(&repoFlag))
-	root.AddCommand(newGraphCmd(&repoFlag))
-	root.AddCommand(newInitCmd(&repoFlag))
-	root.AddCommand(newInspectCmd(&repoFlag))
-	root.AddCommand(newCancelCmd(&repoFlag))
-	root.AddCommand(newRetryCmd(&repoFlag))
-	root.AddCommand(newPauseCmd(&repoFlag))
-	root.AddCommand(newResumeCmd(&repoFlag))
-	root.AddCommand(newVersionCmd())
-	return root
-}
-
-func newRunCmd(repoFlag *string) *cobra.Command {
-	var branch string
-	var dryRun bool
-	var once bool
-	var untilIdle bool
-	var flags runFlags
-
-	cmd := &cobra.Command{
-		Use:   "run",
-		Short: "Start the orchestrator loop",
-		Args:  usageNoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if dryRun && once {
-				return newUsageError(cmd, fmt.Errorf("--dry-run and --once are mutually exclusive"))
-			}
-			if dryRun && untilIdle {
-				return newUsageError(cmd, fmt.Errorf("--dry-run and --until-idle are mutually exclusive"))
-			}
-			if once && untilIdle {
-				return newUsageError(cmd, fmt.Errorf("--once and --until-idle are mutually exclusive"))
-			}
-
-			repo, err := resolveRepo(*repoFlag)
-			if err != nil {
-				return err
-			}
-			if err := validateRepoPath(repo); err != nil {
-				return err
-			}
-			repoRoot, err := resolveRepoRoot(repo)
-			if err != nil {
-				return err
-			}
-			fileCfg, err := config.Load(repoRoot)
-			if err != nil {
-				return err
-			}
-			resolvedBranch, err := resolveConfigBranch(fileCfg, branch)
-			if err != nil {
-				return err
-			}
-			if err := validateBranch(resolvedBranch); err != nil {
-				return err
-			}
-			opts, err := resolveRunOptions(flags, fileCfg)
-			if err != nil {
-				return err
-			}
-			switch {
-			case once:
-				opts.Mode = runner.RunModeOnce
-			case untilIdle:
-				opts.Mode = runner.RunModeUntilIdle
-			default:
-				opts.Mode = runner.RunModeDaemon
-			}
-			if dryRun {
-				return dryRunFn(repoRoot, resolvedBranch, opts)
-			}
-			return runFn(repoRoot, resolvedBranch, opts)
-		},
-	}
-	configureCommand(cmd)
-	cmd.Flags().StringVar(&branch, "branch", "", "Target branch for merging (default: mato)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate queue setup without launching Docker containers")
-	cmd.Flags().BoolVar(&once, "once", false, "Run exactly one poll iteration, then exit")
-	cmd.Flags().BoolVar(&untilIdle, "until-idle", false, "Keep polling until no actionable work remains, then exit")
-	cmd.Flags().StringVar(&flags.TaskModel, "task-model", "", "Copilot model for task agents (default: "+runner.DefaultTaskModel+")")
-	cmd.Flags().StringVar(&flags.ReviewModel, "review-model", "", "Copilot model for review agents (default: "+runner.DefaultReviewModel+")")
-	cmd.Flags().StringVar(&flags.TaskReasoningEffort, "task-reasoning-effort", "", "Reasoning effort for task agents (default: "+runner.DefaultReasoningEffort+")")
-	cmd.Flags().StringVar(&flags.ReviewReasoningEffort, "review-reasoning-effort", "", "Reasoning effort for review agents (default: "+runner.DefaultReasoningEffort+")")
-	return cmd
-}
+var cancelTaskFn = queue.CancelTask
 
 func newInitCmd(repoFlag *string) *cobra.Command {
 	var initBranch string
@@ -608,27 +175,6 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 
 	return cmd
 }
-
-// ExitError carries a non-zero exit code without printing "mato error:".
-type ExitError struct {
-	Code int
-}
-
-func (e ExitError) Error() string {
-	return fmt.Sprintf("exit %d", e.Code)
-}
-
-// doctorRunFn is the function used to run health checks. It defaults to
-// doctor.Run and can be replaced in tests to inject failures or exit codes.
-var doctorRunFn = doctor.Run
-
-// inspectShowFn is the function used to render task inspection results.
-// Tests replace it to verify CLI flag parsing and delegation.
-var inspectShowFn = inspect.Show
-
-// logShowFn is the function used to render durable task history.
-// Tests replace it to verify CLI flag parsing and delegation.
-var logShowFn = history.Show
 
 func doctorNeedsDockerConfig(only []string) bool {
 	if len(only) == 0 {
@@ -946,8 +492,6 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 	return cmd
 }
 
-var cancelTaskFn = queue.CancelTask
-
 func newCancelCmd(repoFlag *string) *cobra.Command {
 
 	cmd := &cobra.Command{
@@ -1022,10 +566,4 @@ func newVersionCmd() *cobra.Command {
 	}
 	configureCommand(cmd)
 	return cmd
-}
-
-func main() {
-	if err := newRootCmd().Execute(); err != nil {
-		os.Exit(writeCommandError(os.Stderr, err))
-	}
 }
