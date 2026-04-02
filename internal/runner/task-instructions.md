@@ -29,6 +29,10 @@ The host manages branch creation before you start and handles pushing the branch
 - Messaging is best-effort: if reading or writing messages fails, continue the task anyway.
 - Send at most 4 agent-written messages per task: up to 3 `progress` messages (one per state machine step) and up to 1 for `ON_FAILURE`. The `intent` message is sent by the host before the agent starts. Do NOT send messages for any other reason.
 - Do not stop midway. End only after a successful commit or after recording failure metadata via `ON_FAILURE`.
+- Do not invent process-management cleanup commands (e.g., `kill`, `pkill`, `killall`). The host manages all process lifecycle.
+- Do not collapse multiple state blocks into a single shell command. Execute each step as a separate invocation or use the agent's file-writing tools for creating files like JSON messages.
+- Avoid command substitution (`$(...)` and backticks) in shell commands. Use pipes, redirects, temp files, or your file-writing/editing tools instead. For example, pipe a command's output to a file and read from it rather than capturing inline.
+- Prefer `printf` or `date` format strings over heredocs (`<< EOF`) when writing structured files.
 ## Workflow State Machine
 Execute states in this exact order:
 `VERIFY_CLAIM → WORK → COMMIT`
@@ -45,32 +49,32 @@ AGENT_ID="${MATO_AGENT_ID:-unknown}"
 The host has already selected, claimed, and moved the task to `in-progress/`. It also checked the retry budget, sent the intent message, and created the task branch.
 **Commands:**
 ```bash
-FILENAME="${MATO_TASK_FILE:?MATO_TASK_FILE is required}"
-BRANCH="${MATO_TASK_BRANCH:?MATO_TASK_BRANCH is required}"
-TASK_TITLE="${MATO_TASK_TITLE:-}"
-TASK_PATH="${MATO_TASK_PATH:?MATO_TASK_PATH is required}"
+FILENAME="$MATO_TASK_FILE"
+BRANCH="$MATO_TASK_BRANCH"
+TASK_TITLE="$MATO_TASK_TITLE"
+TASK_PATH="$MATO_TASK_PATH"
+if [ -z "$FILENAME" ] || [ -z "$BRANCH" ] || [ -z "$TASK_PATH" ]; then
+  echo "Required environment variables MATO_TASK_FILE, MATO_TASK_BRANCH, or MATO_TASK_PATH are not set. Exiting."
+  exit 1
+fi
 if [ ! -f "$TASK_PATH" ]; then
   echo "Task file not found at $TASK_PATH. Exiting."
   exit 0
 fi
-[ -n "$TASK_TITLE" ] || TASK_TITLE="$(grep -m1 '^# ' "$TASK_PATH" | sed 's/^# //')"
-[ -n "$TASK_TITLE" ] || TASK_TITLE="$(basename "$FILENAME" .md)"
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-verify-claim"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: VERIFY_CLAIM","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
+date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
+read MATO_TS < /tmp/mato-ts-$$.txt
+MATO_NONCE="${MATO_TS}-$$"
+date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-verify-claim-'"$$"'","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: VERIFY_CLAIM","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_NONCE}-${AGENT_ID}-verify-claim.json" || true
 ls -t MESSAGES_DIR_PLACEHOLDER/events/*.json 2>/dev/null | head -20 | while read f; do cat "$f"; echo; done || true
 # Read dependency context if provided by the host
-if [ -n "${MATO_DEPENDENCY_CONTEXT:-}" ] && [ -f "${MATO_DEPENDENCY_CONTEXT}" ]; then
+if [ -n "${MATO_DEPENDENCY_CONTEXT:-}" ] && [ -f "$MATO_DEPENDENCY_CONTEXT" ]; then
   echo "Dependency context (completed prerequisite tasks):"
   cat "$MATO_DEPENDENCY_CONTEXT"
 fi
 # Read file claims if provided by the host
-if [ -n "${MATO_FILE_CLAIMS:-}" ] && [ -f "${MATO_FILE_CLAIMS}" ]; then
+if [ -n "${MATO_FILE_CLAIMS:-}" ] && [ -f "$MATO_FILE_CLAIMS" ]; then
   echo "Files and directory prefixes currently claimed by other tasks:"
-  cat "${MATO_FILE_CLAIMS}"
+  cat "$MATO_FILE_CLAIMS"
 fi
 # Read previous failure context if provided by the host
 if [ -n "${MATO_PREVIOUS_FAILURES:-}" ]; then
@@ -83,6 +87,7 @@ if [ -n "${MATO_REVIEW_FEEDBACK:-}" ]; then
   echo "$MATO_REVIEW_FEEDBACK"
 fi
 ```
+If `TASK_TITLE` is empty, read the first `# ` heading from the task file and use it as the title. If no heading is found, use the filename (without `.md` extension) as the title.
 **Decision table:**
 | If | Then |
 | --- | --- |
@@ -100,15 +105,11 @@ Task files may have YAML frontmatter between `---` delimiters at the top. This i
 Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` when interpreting the task body.
 **Commands:**
 ```bash
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-work"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: WORK","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
+date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
+read MATO_TS < /tmp/mato-ts-$$.txt
+MATO_NONCE="${MATO_TS}-$$"
+date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-work-'"$$"'","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: WORK","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_NONCE}-${AGENT_ID}-work.json" || true
 cat "$TASK_PATH"
-TASK_TITLE="$(grep -m1 '^# ' "$TASK_PATH" | sed 's/^# //')"
-[ -n "$TASK_TITLE" ] || TASK_TITLE="$(basename "$FILENAME" .md)"
 VALIDATION_ATTEMPT=1
 while [ "$VALIDATION_ATTEMPT" -le 3 ]; do
   echo "Implement the task, then run the repository's existing build/test commands."
@@ -131,20 +132,16 @@ done
 **Goal:** Create a mandatory commit containing only the task work, with a descriptive commit message. After committing, the agent's work is done — the host will push the branch and move the task to review.
 **Commands:**
 ```bash
-{
-  MSG_ID="$(date -u +%Y%m%dT%H%M%SZ)-${AGENT_ID}-commit"
-  cat > "MESSAGES_DIR_PLACEHOLDER/events/${MSG_ID}.json" << EOF
-{"id":"${MSG_ID}","from":"${AGENT_ID}","type":"progress","task":"${FILENAME}","branch":"${BRANCH}","body":"Step: COMMIT","sent_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-EOF
-} || true
+date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt
+read MATO_TS < /tmp/mato-ts-$$.txt
+MATO_NONCE="${MATO_TS}-$$"
+date -u +'{"id":"'"$MATO_TS"'-'"$AGENT_ID"'-commit-'"$$"'","from":"'"$AGENT_ID"'","type":"progress","task":"'"$FILENAME"'","branch":"'"$BRANCH"'","body":"Step: COMMIT","sent_at":"%Y-%m-%dT%H:%M:%SZ"}' > "MESSAGES_DIR_PLACEHOLDER/events/${MATO_NONCE}-${AGENT_ID}-commit.json" || true
 git status --short
 git add -A
 COMMIT_SUBJECT="$TASK_TITLE"
-COMMIT_BODY="Task: ${FILENAME}
-
-Changed files:
-$(git diff --cached --name-only | sort)"
-git commit -m "$COMMIT_SUBJECT" -m "$COMMIT_BODY"
+printf '%s\n\nTask: %s\n\nChanged files:\n' "$COMMIT_SUBJECT" "$FILENAME" > /tmp/mato-commit-msg-$$.txt
+git diff --cached --name-only | sort >> /tmp/mato-commit-msg-$$.txt
+git commit -F /tmp/mato-commit-msg-$$.txt
 git log --oneline -1
 echo "Committed changes for $FILENAME on $BRANCH. Host will push and mark ready for review."
 ```
@@ -175,10 +172,19 @@ Do not move the task file — the host handles all file moves.
 ```bash
 FAIL_STEP="${FAIL_STEP:-WORK}"  # Set this to the state name where failure occurred
 FAIL_REASON="${FAIL_REASON:-brief description of the error}"
-FILES_CHANGED="$(git diff --name-only TARGET_BRANCH_PLACEHOLDER...HEAD 2>/dev/null | paste -sd, -)"
-[ -n "$FILES_CHANGED" ] || FILES_CHANGED="$(git diff --name-only HEAD 2>/dev/null | paste -sd, -)"
-[ -n "$FILES_CHANGED" ] || FILES_CHANGED="none"
-echo "<!-- failure: ${AGENT_ID} at $(date -u +%Y-%m-%dT%H:%M:%SZ) step=${FAIL_STEP} error=${FAIL_REASON} files_changed=${FILES_CHANGED} -->" >> "$TASK_PATH"
+git diff --name-only TARGET_BRANCH_PLACEHOLDER...HEAD 2>/dev/null | paste -sd, - > /tmp/mato-files-changed-$$.txt || true
+if [ ! -s /tmp/mato-files-changed-$$.txt ]; then
+  git diff --name-only HEAD 2>/dev/null | paste -sd, - > /tmp/mato-files-changed-$$.txt || true
+fi
+if [ ! -s /tmp/mato-files-changed-$$.txt ]; then
+  echo -n "none" > /tmp/mato-files-changed-$$.txt
+fi
+printf '<!-- failure: %s at ' "$AGENT_ID" > /tmp/mato-fail-line-$$.txt
+date -u +'%Y-%m-%dT%H:%M:%SZ' | tr -d '\n' >> /tmp/mato-fail-line-$$.txt
+printf ' step=%s error=%s files_changed=' "$FAIL_STEP" "$FAIL_REASON" >> /tmp/mato-fail-line-$$.txt
+tr -d '\n' < /tmp/mato-files-changed-$$.txt >> /tmp/mato-fail-line-$$.txt
+echo ' -->' >> /tmp/mato-fail-line-$$.txt
+cat /tmp/mato-fail-line-$$.txt >> "$TASK_PATH"
 ```
 **Decision table:**
 | If | Then |

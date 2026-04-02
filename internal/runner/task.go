@@ -381,6 +381,10 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 	for _, dep := range meta.DependsOn {
 		detail, err := messaging.ReadCompletionDetail(tasksDir, dep)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "warning: could not read completion detail for dependency %s of task %s: %v\n", dep, claimed.Filename, err)
 			continue
 		}
 		details = append(details, *detail)

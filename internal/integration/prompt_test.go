@@ -167,6 +167,94 @@ func TestPromptFileClaimsMentionGlobPatterns(t *testing.T) {
 	}
 }
 
+// TestPromptSandboxSafeShellPatterns verifies that bash blocks in the task
+// instructions do not use shell constructs likely to be blocked by execution
+// sandboxes: command substitution, heredocs with variable interpolation,
+// ${VAR:?} parameter expansions, and process-management commands.
+func TestPromptSandboxSafeShellPatterns(t *testing.T) {
+	data, err := os.ReadFile(taskInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(task instructions): %v", err)
+	}
+
+	// Extract all bash code blocks from the prompt.
+	blocks := extractBashBlocks(t, string(data))
+	if len(blocks) == 0 {
+		t.Fatal("no bash blocks found in task instructions")
+	}
+
+	for i, block := range blocks {
+		// No command substitution — sandbox blocks $(...)
+		if strings.Contains(block, "$(") {
+			t.Fatalf("bash block %d contains command substitution $(...):\n%s", i, block)
+		}
+
+		// No ${VAR:?message} parameter expansions — sandbox may reject the
+		// error-text syntax.
+		if strings.Contains(block, ":?") {
+			t.Fatalf("bash block %d contains ${VAR:?...} parameter expansion:\n%s", i, block)
+		}
+
+		// No heredocs with variable interpolation (unquoted EOF delimiter).
+		if strings.Contains(block, "<< EOF") || strings.Contains(block, "<<EOF") {
+			t.Fatalf("bash block %d contains heredoc with interpolation (<< EOF):\n%s", i, block)
+		}
+
+		// No process-management commands.
+		for _, cmd := range []string{"kill ", "pkill ", "killall "} {
+			if strings.Contains(block, cmd) {
+				t.Fatalf("bash block %d contains process-management command %q:\n%s", i, cmd, block)
+			}
+		}
+	}
+}
+
+// TestPromptSandboxSafeInvariants verifies the task instructions include
+// guidance telling agents to avoid sandbox-risky patterns.
+func TestPromptSandboxSafeInvariants(t *testing.T) {
+	data, err := os.ReadFile(taskInstructionsPath(t))
+	if err != nil {
+		t.Fatalf("os.ReadFile(task instructions): %v", err)
+	}
+	text := string(data)
+
+	required := []struct {
+		substring string
+		reason    string
+	}{
+		{"process-management cleanup commands", "should warn agents not to invent kill/pkill commands"},
+		{"Do not collapse multiple state blocks", "should warn agents not to flatten steps into one shell command"},
+		{"Avoid command substitution", "should explicitly ban $(...)"},
+		{"file-writing", "should recommend agent file-writing tools as alternative"},
+	}
+	for _, r := range required {
+		if !strings.Contains(text, r.substring) {
+			t.Fatalf("task instructions missing %q: %s", r.substring, r.reason)
+		}
+	}
+}
+
+// extractBashBlocks returns all ```bash ... ``` blocks from a markdown document.
+func extractBashBlocks(t *testing.T, text string) []string {
+	t.Helper()
+	var blocks []string
+	remaining := text
+	for {
+		start := strings.Index(remaining, "```bash\n")
+		if start < 0 {
+			break
+		}
+		remaining = remaining[start+len("```bash\n"):]
+		end := strings.Index(remaining, "\n```")
+		if end < 0 {
+			t.Fatal("unterminated bash block in prompt")
+		}
+		blocks = append(blocks, remaining[:end])
+		remaining = remaining[end+len("\n```"):]
+	}
+	return blocks
+}
+
 func createPromptClone(t *testing.T, repoRoot, tasksDir string) string {
 	t.Helper()
 
@@ -981,5 +1069,219 @@ func TestPromptProgressMessagesAreDistinct(t *testing.T) {
 
 	if len(progressBodies) != 3 {
 		t.Fatalf("expected 3 distinct progress messages, got %d: %v", len(progressBodies), progressBodies)
+	}
+}
+
+// TestPromptProgressMessagesAccumulateAcrossRuns verifies that two separate
+// runs from the same agent ID produce distinct progress message files that
+// do not overwrite each other, even when both runs happen in the exact same
+// second. This is a regression test for the append-only messaging invariant.
+func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirInProgress, "accumulate-test.md",
+		"<!-- claimed-by: same-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"# Accumulate Test\nTest that progress messages accumulate.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
+
+	taskPath := filepath.Join(cloneTasksDir, queue.DirInProgress, "accumulate-test.md")
+
+	// Build the script that runs just the VERIFY_CLAIM message-write snippet.
+	script := strings.Join([]string{
+		promptPreamble(t),
+		`FILENAME="accumulate-test.md"`,
+		`BRANCH="task/accumulate-test"`,
+		`TASK_TITLE="Accumulate Test"`,
+		`TASK_PATH="` + taskPath + `"`,
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	// Create a fake date command that always returns a pinned timestamp for
+	// the +%Y%m%dT%H%M%SZ format so both runs produce the same MATO_TS.
+	// This guarantees both runs execute in the "same second", exercising the
+	// collision path that the PID-based nonce must prevent.
+	fakeDateDir := t.TempDir()
+	fakeDate := filepath.Join(fakeDateDir, "date")
+	if err := os.WriteFile(fakeDate, []byte(
+		"#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in +%Y%m%dT%H%M%SZ) echo 20260101T000000Z; exit 0 ;; esac; done\n/usr/bin/date \"$@\"\n",
+	), 0o755); err != nil {
+		t.Fatalf("write fake date: %v", err)
+	}
+
+	env := []string{
+		"PATH=" + fakeDateDir + ":" + os.Getenv("PATH"),
+		"MATO_AGENT_ID=same-agent",
+		"MATO_TASK_FILE=accumulate-test.md",
+		"MATO_TASK_BRANCH=task/accumulate-test",
+		"MATO_TASK_TITLE=Accumulate Test",
+		"MATO_TASK_PATH=" + taskPath,
+	}
+
+	// Run #1.
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash run1: %v\noutput:\n%s", err, out)
+	}
+
+	msgs1 := readPromptEventMessages(t, tasksDir)
+	var count1 int
+	for _, msg := range msgs1 {
+		if msg.Type == "progress" && msg.From == "same-agent" &&
+			strings.Contains(msg.Body, "VERIFY_CLAIM") {
+			count1++
+		}
+	}
+	if count1 != 1 {
+		t.Fatalf("after run1: expected 1 VERIFY_CLAIM message, got %d", count1)
+	}
+
+	// Run #2 immediately with the same pinned timestamp. The PID-based nonce
+	// in the filename guarantees a distinct file even in the same second.
+	out2, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash run2: %v\noutput:\n%s", err, out2)
+	}
+
+	// After two runs, there should be 2 distinct VERIFY_CLAIM messages.
+	msgs2 := readPromptEventMessages(t, tasksDir)
+	var count2 int
+	var collectedIDs []string
+	filenames := make(map[string]bool)
+	for _, msg := range msgs2 {
+		if msg.Type == "progress" && msg.From == "same-agent" &&
+			strings.Contains(msg.Body, "VERIFY_CLAIM") {
+			count2++
+			collectedIDs = append(collectedIDs, msg.ID)
+		}
+	}
+	if count2 != 2 {
+		t.Fatalf("after run2: expected 2 VERIFY_CLAIM messages (one per run), got %d", count2)
+	}
+
+	// Same-second runs from the same agent should produce unique IDs
+	// (PID suffix ensures per-event uniqueness) while sharing the same
+	// tie-break prefix (<ts>-<agent>-<state>).
+	if collectedIDs[0] == collectedIDs[1] {
+		t.Fatalf("same-second runs produced identical IDs %q; "+
+			"IDs should be unique (PID suffix ensures per-event uniqueness)", collectedIDs[0])
+	}
+
+	// Verify the ID follows the <ts>-<agent>-<step>-<pid> format.
+	for _, id := range collectedIDs {
+		if !strings.HasPrefix(id, "20260101T000000Z-same-agent-verify-claim-") {
+			t.Fatalf("ID %q does not match expected format <ts>-<agent>-<step>-<pid>", id)
+		}
+	}
+
+	// Both runs used the pinned timestamp; verify filenames are still distinct.
+	paths, _ := filepath.Glob(filepath.Join(tasksDir, "messages", "events", "*same-agent*verify-claim*.json"))
+	for _, p := range paths {
+		base := filepath.Base(p)
+		if filenames[base] {
+			t.Fatalf("duplicate filename across runs: %s", base)
+		}
+		filenames[base] = true
+	}
+	if len(filenames) != 2 {
+		t.Fatalf("expected 2 distinct filenames, got %d: %v", len(filenames), filenames)
+	}
+}
+
+// TestPromptProgressIDsPreserveTieBreakSemantics verifies that prompt-generated
+// progress message IDs include a PID suffix for per-event uniqueness while
+// preserving the equal-timestamp tie-break contract (lexically smallest ID wins)
+// via a deterministic <ts>-<agent>-<state> prefix.
+func TestPromptProgressIDsPreserveTieBreakSemantics(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirInProgress, "tiebreak-test.md",
+		"<!-- claimed-by: tiebreak-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
+			"# Tie-break Test\nTest that IDs preserve tie-break semantics.\n")
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
+
+	taskPath := filepath.Join(cloneTasksDir, queue.DirInProgress, "tiebreak-test.md")
+
+	// Run only the VERIFY_CLAIM message-write snippet.
+	script := strings.Join([]string{
+		promptPreamble(t),
+		`FILENAME="tiebreak-test.md"`,
+		`BRANCH="task/tiebreak-test"`,
+		`TASK_TITLE="Tie-break Test"`,
+		`TASK_PATH="` + taskPath + `"`,
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	// Pin the timestamp so all runs produce the same MATO_TS.
+	fakeDateDir := t.TempDir()
+	fakeDate := filepath.Join(fakeDateDir, "date")
+	if err := os.WriteFile(fakeDate, []byte(
+		"#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in +%Y%m%dT%H%M%SZ) echo 20260601T120000Z; exit 0 ;; esac; done\n/usr/bin/date \"$@\"\n",
+	), 0o755); err != nil {
+		t.Fatalf("write fake date: %v", err)
+	}
+
+	env := []string{
+		"PATH=" + fakeDateDir + ":" + os.Getenv("PATH"),
+		"MATO_AGENT_ID=tiebreak-agent",
+		"MATO_TASK_FILE=tiebreak-test.md",
+		"MATO_TASK_BRANCH=task/tiebreak-test",
+		"MATO_TASK_TITLE=Tie-break Test",
+		"MATO_TASK_PATH=" + taskPath,
+	}
+
+	// Run three times with the same pinned timestamp.
+	for i := 0; i < 3; i++ {
+		out, err := runBash(t, cloneDir, env, script)
+		if err != nil {
+			t.Fatalf("runBash run %d: %v\noutput:\n%s", i+1, err, out)
+		}
+	}
+
+	// All three runs should have created distinct files (PID in filename)
+	// but identical JSON IDs (no PID in id field).
+	msgs := readPromptEventMessages(t, tasksDir)
+	var ids []string
+	for _, msg := range msgs {
+		if msg.Type == "progress" && msg.From == "tiebreak-agent" &&
+			strings.Contains(msg.Body, "VERIFY_CLAIM") {
+			ids = append(ids, msg.ID)
+		}
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 VERIFY_CLAIM messages, got %d", len(ids))
+	}
+
+	// All IDs should be unique — PID suffix ensures per-event uniqueness.
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		if idSet[id] {
+			t.Fatalf("duplicate ID across runs: %q; PID suffix should ensure uniqueness", id)
+		}
+		idSet[id] = true
+	}
+
+	// All IDs should share the same <ts>-<agent>-<state> prefix, preserving
+	// tie-break ordering.
+	expectedPrefix := "20260601T120000Z-tiebreak-agent-verify-claim-"
+	for _, id := range ids {
+		if !strings.HasPrefix(id, expectedPrefix) {
+			t.Fatalf("ID %q does not match expected prefix %q", id, expectedPrefix)
+		}
+	}
+
+	// Verify distinct filenames (PID in filename ensures collision resistance).
+	paths, _ := filepath.Glob(filepath.Join(tasksDir, "messages", "events", "*tiebreak-agent*verify-claim*.json"))
+	fileSet := make(map[string]bool)
+	for _, p := range paths {
+		fileSet[filepath.Base(p)] = true
+	}
+	if len(fileSet) != 3 {
+		t.Fatalf("expected 3 distinct filenames, got %d: %v", len(fileSet), fileSet)
 	}
 }
