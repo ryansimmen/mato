@@ -2,11 +2,10 @@ package doctor
 
 import (
 "context"
-"errors"
 "os"
-"os/exec"
 "strings"
 
+"mato/internal/git"
 "mato/internal/queue"
 )
 
@@ -42,29 +41,33 @@ func (c *checkContext) resolveRepo() {
 if c.repoRoot != "" {
 return
 }
-out, err := exec.CommandContext(c.ctx, "git", "-C", c.repoInput, "rev-parse", "--show-toplevel").Output()
+root, err := git.ResolveRepoRoot(c.repoInput)
 if err != nil {
 c.repoErr = err
 return
 }
-c.repoRoot = strings.TrimSpace(string(out))
+c.repoRoot = root
 }
 
 // repoErrDetail returns a human-readable description of the repo
-// resolution failure, extracting stderr from exec.ExitError when
-// available so callers don't get a bare "exit status 128".
+// resolution failure. git.ResolveRepoRoot wraps the error from
+// git.Output, which includes stderr in parentheses at the end of the
+// message. This function extracts that parenthesized content so
+// callers get the actual git error (e.g. "fatal: not a git repository")
+// rather than a technical "exit status 128".
 func (c *checkContext) repoErrDetail() string {
 if c.repoErr == nil {
 return ""
 }
-var exitErr *exec.ExitError
-if errors.As(c.repoErr, &exitErr) {
-stderr := strings.TrimSpace(string(exitErr.Stderr))
-if stderr != "" {
-return stderr
+msg := c.repoErr.Error()
+// git.Output formats errors as "git ...: exit status N (stderr)".
+// Extract the parenthesized stderr for a user-friendly message.
+if i := strings.Index(msg, "("); i >= 0 {
+if j := strings.LastIndex(msg, ")"); j > i {
+return msg[i+1 : j]
 }
 }
-return c.repoErr.Error()
+return msg
 }
 
 // ensureIndex lazily builds the PollIndex from tasksDir.

@@ -180,16 +180,16 @@ func resolveRunOptions(flags runFlags, cfg config.Config) (runner.RunOptions, er
 	return opts, nil
 }
 
-var gitShowTopLevel = func(dir string) (string, error) {
-	return git.Output(dir, "rev-parse", "--show-toplevel")
-}
+// gitResolveRepoRoot is the function used to resolve the repository root.
+// It defaults to git.ResolveRepoRoot and can be replaced in tests.
+var gitResolveRepoRoot = git.ResolveRepoRoot
 
 func resolveRepoRoot(dir string) (string, error) {
-	out, err := gitShowTopLevel(dir)
+	root, err := gitResolveRepoRoot(dir)
 	if err != nil {
 		return "", fmt.Errorf("resolve repo root for %q: %w", dir, err)
 	}
-	return strings.TrimSpace(out), nil
+	return root, nil
 }
 
 // gitCheckRefFormat is the function used to validate branch names. It

@@ -53,11 +53,10 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 		return fmt.Errorf("unsupported format %q", format)
 	}
 
-	resolvedRoot, err := git.Output(repo, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repo)
 	if err != nil {
-		return fmt.Errorf("resolve repo root: %w", err)
+		return err
 	}
-	repoRoot := strings.TrimSpace(resolvedRoot)
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	if err := requireTasksDir(tasksDir); err != nil {

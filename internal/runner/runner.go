@@ -252,11 +252,10 @@ func formatDurationShort(d time.Duration) string {
 // It runs one iteration of queue management (dependency promotion, overlap
 // detection, manifest writing) and reports the results, then exits.
 func DryRun(repoRoot, branch string, opts RunOptions) error {
-	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
-		return fmt.Errorf("resolve repo root: %w", err)
+		return err
 	}
-	repoRoot = strings.TrimSpace(repoRoot)
 	opts, err = normalizeAndValidateRunOptions(opts)
 	if err != nil {
 		return fmt.Errorf("validate run options: %w", err)
@@ -522,11 +521,10 @@ func resolveDepState(depID string, idx *queue.PollIndex) string {
 }
 
 func Run(repoRoot, branch string, opts RunOptions) error {
-	repoRoot, err := git.Output(repoRoot, "rev-parse", "--show-toplevel")
+	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
-		return fmt.Errorf("resolve repo root: %w", err)
+		return err
 	}
-	repoRoot = strings.TrimSpace(repoRoot)
 	opts, err = normalizeAndValidateRunOptions(opts)
 	if err != nil {
 		return fmt.Errorf("validate run options: %w", err)
