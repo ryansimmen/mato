@@ -2761,7 +2761,7 @@ func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
 	origDryRunFn := dryRunFn
 	defer func() { dryRunFn = origDryRunFn }()
 
-	dryRunFn = func(_ string, branch string, opts runner.RunOptions) error {
+	dryRunFn = func(_ io.Writer, _ string, branch string, opts runner.RunOptions) error {
 		if branch != "main" {
 			t.Fatalf("branch = %q, want %q", branch, "main")
 		}

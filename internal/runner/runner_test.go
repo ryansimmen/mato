@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/pause"
@@ -22,6 +25,7 @@ import (
 	"mato/internal/queue"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
+	"mato/internal/ui"
 )
 
 func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
@@ -2648,7 +2652,7 @@ func TestDryRun_BasicValidation(t *testing.T) {
 	taskContent := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n---\n# Task A\nDo something.\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskContent), 0o644)
 
-	err := DryRun(repoDir, "main", testRunOptions())
+	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2676,7 +2680,7 @@ func TestDryRun_DetectsParseErrors(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badContent), 0o644)
 
 	// DryRun should succeed (parse errors are reported, not fatal)
-	err := DryRun(repoDir, "main", testRunOptions())
+	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2700,7 +2704,7 @@ func TestDryRun_DetectsOverlaps(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 
-	err := DryRun(repoDir, "main", testRunOptions())
+	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2723,7 +2727,7 @@ func TestDryRun_MissingDirectories(t *testing.T) {
 	// Only create some subdirs, leaving others missing
 	os.MkdirAll(filepath.Join(tasksDir, queue.DirBacklog), 0o755)
 
-	err := DryRun(repoDir, "main", testRunOptions())
+	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err == nil {
 		t.Fatal("DryRun should return error when directories are missing")
 	}
@@ -2752,7 +2756,7 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 	waitingContent := "---\nid: child-task\npriority: 10\ndepends_on:\n  - dep-task\n---\n# Child Task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "child-task.md"), []byte(waitingContent), 0o644)
 
-	err := DryRun(repoDir, "main", testRunOptions())
+	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2783,7 +2787,7 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(taskContent), 0o644)
 
 	// DryRun should complete without attempting to claim or launch Docker
-	err := DryRun(repoDir, "main", testRunOptions())
+	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
 		t.Fatalf("DryRun returned error: %v", err)
 	}
@@ -2816,11 +2820,11 @@ func TestDryRun_ResolvedSettingsOutput(t *testing.T) {
 		ReviewReasoningEffort: "xhigh",
 	}
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", opts); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", opts); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "=== Resolved Settings ===") {
 		t.Fatalf("missing Resolved Settings section, got:\n%s", stdout)
@@ -2860,11 +2864,11 @@ func TestDryRun_ExecutionOrder(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	// Execution Order should list task-c (priority 5) then task-a (priority 10).
 	// task-b is deferred (overlaps with task-a on shared.go) and excluded.
@@ -2914,11 +2918,11 @@ func TestDryRun_BacklogTaskSummary(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "=== Backlog Task Summary ===") {
 		t.Fatal("missing Backlog Task Summary section")
@@ -2979,11 +2983,11 @@ func TestDryRun_DependencySummary(t *testing.T) {
 	mainTask := "---\nid: main-task\npriority: 10\ndepends_on:\n  - dep-completed\n  - dep-waiting\n  - dep-failed\n  - dep-nonexistent\n---\n# Main Task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "main-task.md"), []byte(mainTask), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "=== Dependency Summary ===") {
 		t.Fatal("missing Dependency Summary section")
@@ -3032,11 +3036,11 @@ func TestDryRun_DependencySummary_Ambiguous(t *testing.T) {
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - ambig-dep\n---\n# Waiter\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "- ambig-dep (ambiguous)") {
 		t.Errorf("ambig-dep should be labeled ambiguous, got:\n%s", stdout)
@@ -3070,11 +3074,11 @@ func TestDryRun_DependencySummary_ActiveAndBacklogStates(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "dep-merge.md"), []byte(mergeTask), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "- dep-backlog (backlog)") {
 		t.Errorf("dep-backlog should be labeled backlog, got:\n%s", stdout)
@@ -3110,11 +3114,11 @@ func TestDryRun_DependencySummary_DuplicateWaitingIDIsAmbiguous(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "dup-b.md"), []byte(dupB), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "- dup-dep (ambiguous)") {
 		t.Errorf("duplicate waiting id should be labeled ambiguous, got:\n%s", stdout)
@@ -3142,11 +3146,11 @@ func TestDryRun_DependencySummary_ParseFailedTargetUsesQueueState(t *testing.T) 
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "parse-target.md"), []byte(badBacklog), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "ERROR backlog/parse-target.md") {
 		t.Errorf("parse-target parse error should be reported, got:\n%s", stdout)
@@ -3176,11 +3180,11 @@ func TestDryRun_AffectsConflictDetail(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "=== Affects Conflict Detection ===") {
 		t.Fatal("missing Affects Conflict Detection section")
@@ -3213,11 +3217,11 @@ func TestDryRun_DependencyBlockedBacklogTask(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"), []byte(blocked), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(runnable), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	if !strings.Contains(stdout, "=== Dependency-Blocked Backlog Tasks ===") {
 		t.Fatalf("missing dependency-blocked backlog section:\n%s", stdout)
@@ -3256,11 +3260,11 @@ func TestDryRun_ParseErrorsWithValidTasks(t *testing.T) {
 	badTask := "---\npriority: not-a-number\n---\n# Bad Task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badTask), 0o644)
 
-	stdout, _ := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
-			t.Fatalf("DryRun returned error: %v", err)
-		}
-	})
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
 
 	// Parse error should be reported.
 	if !strings.Contains(stdout, "ERROR backlog/bad-task.md") {
@@ -3397,7 +3401,7 @@ func TestDryRun_SurfacesBuildWarnings(t *testing.T) {
 	}
 
 	_, stderr := captureStdoutStderr(t, func() {
-		if err := DryRun(repoDir, "main", testRunOptions()); err != nil {
+		if err := DryRun(io.Discard, repoDir, "main", testRunOptions()); err != nil {
 			t.Fatalf("DryRun returned error: %v", err)
 		}
 	})
@@ -5297,5 +5301,383 @@ func TestCleanStaleClones_LogsRemovedDirectories(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "mato-logtest") {
 		t.Errorf("expected directory name in log message, got: %q", stdout)
+	}
+}
+
+// --- DryRunRenderer direct tests ---
+
+func newTestRenderer(buf *bytes.Buffer) *DryRunRenderer {
+	return &DryRunRenderer{
+		W:     buf,
+		Color: ui.NewColorSet(),
+		Width: 80,
+	}
+}
+
+func TestDryRunRenderer_RenderValidation_Success(t *testing.T) {
+	var buf bytes.Buffer
+	r := newTestRenderer(&buf)
+	r.RenderValidation(nil, 5)
+	out := buf.String()
+
+	if !strings.Contains(out, "=== Task File Validation ===") {
+		t.Errorf("missing section header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "All 5 task file(s) parsed successfully") {
+		t.Errorf("missing success message, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_RenderValidation_Errors(t *testing.T) {
+	var buf bytes.Buffer
+	r := newTestRenderer(&buf)
+	failures := []queue.ParseFailure{
+		{State: "backlog", Filename: "bad.md", Err: fmt.Errorf("invalid yaml")},
+	}
+	r.RenderValidation(failures, 3)
+	out := buf.String()
+
+	if !strings.Contains(out, "ERROR backlog/bad.md") {
+		t.Errorf("missing error line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 of 3 task file(s) have parse errors") {
+		t.Errorf("missing error summary, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_RenderExecutionOrder_Empty(t *testing.T) {
+	var buf bytes.Buffer
+	r := newTestRenderer(&buf)
+	r.RenderExecutionOrder(nil)
+	out := buf.String()
+
+	if !strings.Contains(out, "=== Execution Order ===") {
+		t.Errorf("missing section header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "(no runnable tasks)") {
+		t.Errorf("missing empty message, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_RenderExecutionOrder_WithTasks(t *testing.T) {
+	var buf bytes.Buffer
+	r := newTestRenderer(&buf)
+	tasks := []*queue.TaskSnapshot{
+		{Filename: "first.md", Meta: frontmatter.TaskMeta{Priority: 5}},
+		{Filename: "second.md", Meta: frontmatter.TaskMeta{Priority: 10}},
+	}
+	r.RenderExecutionOrder(tasks)
+	out := buf.String()
+
+	if !strings.Contains(out, "1. first.md") {
+		t.Errorf("missing first task, got:\n%s", out)
+	}
+	if !strings.Contains(out, "2. second.md") {
+		t.Errorf("missing second task, got:\n%s", out)
+	}
+	if !strings.Contains(out, "(priority 5)") {
+		t.Errorf("missing priority for first task, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_RenderResolvedSettings(t *testing.T) {
+	var buf bytes.Buffer
+	r := newTestRenderer(&buf)
+	opts := RunOptions{
+		TaskModel:             "claude-sonnet-4",
+		ReviewModel:           "gpt-5.4",
+		TaskReasoningEffort:   "high",
+		ReviewReasoningEffort: "medium",
+	}
+	r.RenderResolvedSettings(opts)
+	out := buf.String()
+
+	if !strings.Contains(out, "=== Resolved Settings ===") {
+		t.Errorf("missing section header, got:\n%s", out)
+	}
+	for _, want := range []string{"claude-sonnet-4", "gpt-5.4", "high", "medium"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in output:\n%s", want, out)
+		}
+	}
+}
+
+func TestDryRunRenderer_RenderDependencyResolution(t *testing.T) {
+	tests := []struct {
+		name       string
+		promotable int
+		want       string
+	}{
+		{"no promotable", 0, "No waiting tasks ready for promotion"},
+		{"some promotable", 3, "3 task(s) in waiting/ would be promoted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			r := newTestRenderer(&buf)
+			r.RenderDependencyResolution(tt.promotable)
+			out := buf.String()
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("expected %q in output:\n%s", tt.want, out)
+			}
+		})
+	}
+}
+
+func TestDryRunRenderer_WarningFormatting(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// Create tasks that produce a dependency diagnostic warning.
+	task := "---\nid: warn-task\npriority: 10\ndepends_on:\n  - nonexistent\n---\n# Warn Task\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "warn-task.md"), []byte(task), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	var buf bytes.Buffer
+	r := newTestRenderer(&buf)
+	r.RenderDependencySummary(tasksDir, idx)
+	out := buf.String()
+
+	if !strings.Contains(out, "WARNING") {
+		t.Errorf("expected WARNING in dependency diagnostics, got:\n%s", out)
+	}
+	if !strings.Contains(out, "depends on unknown id") {
+		t.Errorf("expected unknown-id warning, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_NarrowWidth(t *testing.T) {
+	var buf bytes.Buffer
+	r := &DryRunRenderer{
+		W:     &buf,
+		Color: ui.NewColorSet(),
+		Width: 40,
+	}
+
+	tasks := []*queue.TaskSnapshot{
+		{Filename: "a-very-long-task-filename-that-exceeds-reasonable-bounds.md", Meta: frontmatter.TaskMeta{Priority: 1}},
+	}
+	r.RenderExecutionOrder(tasks)
+	out := buf.String()
+
+	// With width 40, the task name should be truncated.
+	if !strings.Contains(out, "…") {
+		t.Errorf("expected truncation marker in narrow output, got:\n%s", out)
+	}
+	// Should NOT contain the full untruncated filename.
+	if strings.Contains(out, "a-very-long-task-filename-that-exceeds-reasonable-bounds.md") {
+		t.Errorf("expected truncated filename in narrow output, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_RenderQueueSummary(t *testing.T) {
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	task := "---\nid: task-1\npriority: 10\n---\n# Task 1\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-1.md"), []byte(task), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	var buf bytes.Buffer
+	r := newTestRenderer(&buf)
+	r.RenderQueueSummary(idx, queue.AllDirs, map[string]int{}, 1)
+	out := buf.String()
+
+	if !strings.Contains(out, "=== Queue Summary ===") {
+		t.Errorf("missing section header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "backlog") {
+		t.Errorf("missing backlog line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "deferred") {
+		t.Errorf("missing deferred line when count > 0, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_SectionHeaders(t *testing.T) {
+	var buf bytes.Buffer
+	r := newTestRenderer(&buf)
+
+	r.RenderDependencyResolution(0)
+	r.RenderExecutionOrder(nil)
+	r.RenderResolvedSettings(RunOptions{})
+
+	out := buf.String()
+
+	// All section headers should be present.
+	for _, header := range []string{
+		"=== Dependency Resolution ===",
+		"=== Execution Order ===",
+		"=== Resolved Settings ===",
+	} {
+		if !strings.Contains(out, header) {
+			t.Errorf("missing section header %q in output:\n%s", header, out)
+		}
+	}
+}
+
+func TestDryRun_WidthFromWriter(t *testing.T) {
+	// Verify that DryRun derives width from the writer through
+	// writerWidthFn. When passed a bytes.Buffer (no Fd, not a TTY) the
+	// default writerWidthFn returns defaultDryRunWidth (80), so a
+	// filename shorter than that should NOT be truncated.
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	// A task name that fits in 80 columns but would be truncated at 40.
+	longName := "this-is-a-moderately-long-task-name.md"
+	task := "---\nid: long-name\npriority: 10\n---\n# Long Name\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, longName), []byte(task), 0o644)
+
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	stdout := buf.String()
+
+	// With default 80 column width the full filename should appear.
+	if !strings.Contains(stdout, longName) {
+		t.Errorf("expected full filename %q in output (buffer should get default 80-col width), got:\n%s", longName, stdout)
+	}
+}
+
+func TestDryRun_NarrowWidthTruncatesViaCommandPath(t *testing.T) {
+	// Prove that DryRun derives its renderer width through writerWidthFn
+	// by injecting a narrow value and observing truncation in the output.
+	// This exercises the actual command path, not just a hand-built renderer.
+	origFn := writerWidthFn
+	defer func() { writerWidthFn = origFn }()
+	writerWidthFn = func(_ io.Writer, _ int) int { return 40 }
+
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	longName := "this-is-a-very-very-very-long-task-filename-that-should-be-truncated.md"
+	task := "---\nid: trunc-test\npriority: 10\n---\n# Truncation Test\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, longName), []byte(task), 0o644)
+
+	var buf bytes.Buffer
+	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
+		t.Fatalf("DryRun returned error: %v", err)
+	}
+	out := buf.String()
+
+	// Full long name should NOT appear because width is 40.
+	if strings.Contains(out, longName) {
+		t.Errorf("expected truncated filename at width 40 through DryRun command path, but found full name in:\n%s", out)
+	}
+	// Truncation marker should be present.
+	if !strings.Contains(out, "…") {
+		t.Errorf("expected truncation marker '…' in narrow-width DryRun output, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_NarrowWidth_ResolvedSettings(t *testing.T) {
+	// At width 40 the label column (24) + indent (2) + separator (1) leaves
+	// only 13 chars for values. A model name like "claude-opus-4.6" (15 chars)
+	// should be truncated.
+	var buf bytes.Buffer
+	r := &DryRunRenderer{
+		W:     &buf,
+		Color: ui.NewColorSet(),
+		Width: 40,
+	}
+	r.RenderResolvedSettings(RunOptions{
+		TaskModel:             "claude-opus-4.6",
+		ReviewModel:           "gpt-5.4",
+		TaskReasoningEffort:   "high",
+		ReviewReasoningEffort: "high",
+	})
+	out := buf.String()
+
+	// "claude-opus-4.6" is 15 chars but only 13 fit; should be truncated.
+	if strings.Contains(out, "claude-opus-4.6") {
+		t.Errorf("expected task model to be truncated at width 40, got:\n%s", out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Errorf("expected truncation marker in narrow Resolved Settings, got:\n%s", out)
+	}
+	// "gpt-5.4" (7 chars) fits in 13 columns and should appear in full.
+	if !strings.Contains(out, "gpt-5.4") {
+		t.Errorf("expected short model name to appear untruncated, got:\n%s", out)
+	}
+}
+
+func TestDryRunRenderer_NarrowWidth_BacklogSummary(t *testing.T) {
+	// Verify that the backlog summary truncation accounts for the status
+	// label (e.g. "[runnable]") so lines fit within the terminal width.
+	repoDir := t.TempDir()
+	cmd := exec.Command("git", "init", repoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	longName := "extremely-long-backlog-task-name-that-will-overflow.md"
+	task := "---\nid: overflow-test\npriority: 10\n---\n# Overflow\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, longName), []byte(task), 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+	var buf bytes.Buffer
+	r := &DryRunRenderer{
+		W:     &buf,
+		Color: ui.NewColorSet(),
+		Width: 40,
+	}
+	r.RenderBacklogSummary(idx, map[string]struct{}{}, map[string][]queue.DependencyBlock{})
+	out := buf.String()
+
+	// The full long filename should be truncated to fit width 40 minus
+	// the overhead for "  " + " [runnable]".
+	if strings.Contains(out, longName) {
+		t.Errorf("expected filename truncated in backlog summary at width 40, got:\n%s", out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Errorf("expected truncation marker in narrow backlog summary, got:\n%s", out)
+	}
+	// Check no output line exceeds width 40 in runes (ignoring the header).
+	// We use rune count because the "…" truncation marker is a single
+	// display column but 3 UTF-8 bytes.
+	for _, line := range strings.Split(out, "\n") {
+		rc := utf8.RuneCountInString(line)
+		if rc > 40 && !strings.Contains(line, "===") {
+			t.Errorf("line exceeds width 40 (%d runes): %q", rc, line)
+		}
 	}
 }
