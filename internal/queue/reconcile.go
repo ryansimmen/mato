@@ -174,6 +174,10 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	// Move waiting tasks with invalid glob syntax to failed/ regardless of
 	// dependency satisfaction or active overlap state. Invalid affects globs
 	// are a terminal metadata error per docs/task-format.md.
+	//
+	// Track quarantined filenames so later passes (cycle detection, promotion)
+	// skip already-moved tasks instead of operating on stale snapshots.
+	quarantined := make(map[string]struct{})
 	for _, snap := range idx.TasksByState(DirWaiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile != snap.Filename {
@@ -191,6 +195,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 		} else {
 			deleteTaskState(tasksDir, snap.Filename)
+			quarantined[snap.Filename] = struct{}{}
 			moved = true
 		}
 	}
@@ -202,6 +207,9 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	for _, snap := range idx.TasksByState(DirWaiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile != snap.Filename {
+			continue
+		}
+		if _, ok := quarantined[snap.Filename]; ok {
 			continue
 		}
 		waitingByID[snap.Meta.ID] = snap
@@ -249,6 +257,9 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		// Only operate on retained files; skip duplicates.
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile != snap.Filename {
+			continue
+		}
+		if _, ok := quarantined[snap.Filename]; ok {
 			continue
 		}
 		if _, ok := satisfiedSet[snap.Meta.ID]; !ok {
