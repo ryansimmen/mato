@@ -293,11 +293,11 @@ func renderText(w io.Writer, events []Event) {
 	}
 
 	if termWidth > 0 {
-		// Fixed columns: timestamp (20) + "  " + type (8) + "  " + "  " (detail sep) = 34
-		const fixedCols = 34
-		maxTaskWidth := termWidth - fixedCols - 10
-		if maxTaskWidth < 10 {
-			maxTaskWidth = 10
+		// Fixed prefix: absolute timestamp (20) + "  " + type (8) + "  " = 32.
+		const fixedPrefix = 32
+		maxTaskWidth := termWidth - fixedPrefix
+		if maxTaskWidth < 0 {
+			maxTaskWidth = 0
 		}
 		if taskWidth > maxTaskWidth {
 			taskWidth = maxTaskWidth
@@ -307,29 +307,72 @@ func renderText(w io.Writer, events []Event) {
 	now := time.Now().UTC()
 	for _, event := range events {
 		padded := fmt.Sprintf("%-8s", event.Type)
-		ts := event.Timestamp.UTC().Format(time.RFC3339)
+		absTS := event.Timestamp.UTC().Format(time.RFC3339)
+		ts := absTS
 		rel := timeutil.RelativeTime(event.Timestamp.UTC(), now)
 		if rel != "" {
-			ts += "  " + rel
+			ts = absTS + "  " + rel
 		}
 
 		taskName := event.TaskFile
-		if termWidth > 0 && len(taskName) > taskWidth {
-			taskName = ui.Truncate(taskName, taskWidth)
-		}
-		fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), taskWidth, taskName)
-
 		detail := textDetail(event)
-		if detail != "" {
-			if termWidth > 0 {
-				prefixWidth := len(ts) + 2 + 8 + 2 + taskWidth + 2
-				maxDetail := termWidth - prefixWidth
-				if maxDetail < minTruncWidth {
-					maxDetail = minTruncWidth
-				}
-				detail = ui.Truncate(detail, maxDetail)
+		showDetail := detail != ""
+		eventTaskWidth := taskWidth
+
+		if termWidth > 0 {
+			// Visible line: ts + "  " + type(8) + "  " + task [+ "  " + detail].
+			prefixLen := len(ts) + 12
+			lineLen := prefixLen + eventTaskWidth
+			if showDetail {
+				lineLen += 2 + len(detail)
 			}
-			fmt.Fprintf(w, "  %s", detail)
+
+			// Step 1: drop detail if it causes overflow.
+			if lineLen > termWidth && showDetail {
+				showDetail = false
+				lineLen = prefixLen + eventTaskWidth
+			}
+
+			// Step 2: drop relative time if still overflowing.
+			if lineLen > termWidth && rel != "" {
+				ts = absTS
+				prefixLen = len(ts) + 12
+				lineLen = prefixLen + eventTaskWidth
+			}
+
+			// Step 3: shrink task column to fit remaining space.
+			if lineLen > termWidth {
+				eventTaskWidth = termWidth - prefixLen
+				if eventTaskWidth < 0 {
+					eventTaskWidth = 0
+				}
+			}
+
+			if eventTaskWidth > 0 && len(taskName) > eventTaskWidth {
+				taskName = ui.Truncate(taskName, eventTaskWidth)
+			}
+		} else if len(taskName) > eventTaskWidth {
+			taskName = ui.Truncate(taskName, eventTaskWidth)
+		}
+
+		if eventTaskWidth > 0 {
+			fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
+		} else {
+			// No room for task column; omit trailing type padding.
+			fmt.Fprintf(w, "%s  %s", colors.Dim(ts), colorEventType(event.Type))
+		}
+
+		if showDetail && detail != "" {
+			if termWidth > 0 {
+				usedWidth := len(ts) + 12 + eventTaskWidth + 2
+				maxDetail := termWidth - usedWidth
+				if maxDetail > 0 {
+					detail = ui.Truncate(detail, maxDetail)
+					fmt.Fprintf(w, "  %s", detail)
+				}
+			} else {
+				fmt.Fprintf(w, "  %s", detail)
+			}
 		}
 		fmt.Fprintln(w)
 	}
