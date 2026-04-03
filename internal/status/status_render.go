@@ -212,7 +212,15 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 		fmt.Fprintf(w, "%s%s\n", indent, line)
 	}
 	if len(rows) > compactListLimit {
-		fmt.Fprintf(w, "%s%s\n", indent, c.Dim(fmt.Sprintf("... +%d more", len(rows)-compactListLimit)))
+		summary := fmt.Sprintf("... +%d more", len(rows)-compactListLimit)
+		if termWidth > 0 {
+			maxSummary := termWidth - indentN
+			if maxSummary < 1 {
+				maxSummary = 1
+			}
+			summary = ui.Truncate(summary, maxSummary)
+		}
+		fmt.Fprintf(w, "%s%s\n", indent, c.Dim(summary))
 	}
 }
 
