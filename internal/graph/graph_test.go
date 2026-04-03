@@ -358,44 +358,62 @@ func TestBuild_AliasResolution_StemVsMetaID(t *testing.T) {
 	}
 }
 
-func TestBuild_StemAliasToWaiting(t *testing.T) {
+func TestBuild_WaitingAliasParityWithScheduler(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 
-	// Waiting task with meta.ID different from stem.
+	// Waiting task with meta.ID different from filename stem.
 	writeTask(t, tasksDir, "waiting", "target.md", "---\nid: target-id\npriority: 10\n---\n# Target\n")
-	// Another waiting task depends on stem "target" (not meta.ID "target-id").
-	writeTask(t, tasksDir, "waiting", "dep.md", "---\nid: dep\npriority: 20\ndepends_on:\n  - target\n---\n# Dep\n")
+	// dep-stem depends on the filename stem "target" — the scheduler does
+	// NOT recognize stem aliases for waiting-to-waiting resolution.
+	writeTask(t, tasksDir, "waiting", "dep-stem.md", "---\nid: dep-stem\npriority: 20\ndepends_on:\n  - target\n---\n# Dep by stem\n")
+	// dep-id depends on meta.ID "target-id" — the scheduler honors this.
+	writeTask(t, tasksDir, "waiting", "dep-id.md", "---\nid: dep-id\npriority: 20\ndepends_on:\n  - target-id\n---\n# Dep by ID\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
-	// Edge should exist from target to dep (stem alias resolves).
-	edges := edgesTo(data, "waiting/dep.md")
-	if len(edges) != 1 {
-		t.Fatalf("edges = %d, want 1", len(edges))
-	}
-	if edges[0].From != "waiting/target.md" {
-		t.Errorf("edge from = %q, want %q", edges[0].From, "waiting/target.md")
+	// Stem reference "target" should NOT produce an edge (matches scheduler).
+	stemEdges := edgesTo(data, "waiting/dep-stem.md")
+	if len(stemEdges) != 0 {
+		t.Fatalf("stem dep edges = %d, want 0 (graph should match scheduler: no stem alias for waiting)", len(stemEdges))
 	}
 
-	// But the runtime DAG classifies "target" as external (since the runtime
-	// only uses meta.ID for waiting-to-waiting matching). So dep should have
-	// a BlockDetail with reason=external.
-	dep := findNode(data, "waiting/dep.md")
-	if dep == nil {
-		t.Fatal("dep not found")
+	// Instead, "target" should be a HiddenDep since no node is aliased by stem.
+	depStem := findNode(data, "waiting/dep-stem.md")
+	if depStem == nil {
+		t.Fatal("dep-stem node not found")
 	}
-	if len(dep.BlockDetails) == 0 {
-		t.Fatal("dep should have block details")
+	if len(depStem.HiddenDeps) != 1 {
+		t.Fatalf("dep-stem hidden deps = %d, want 1", len(depStem.HiddenDeps))
 	}
-	found := false
-	for _, bd := range dep.BlockDetails {
+	if depStem.HiddenDeps[0].DependencyID != "target" {
+		t.Errorf("hidden dep id = %q, want %q", depStem.HiddenDeps[0].DependencyID, "target")
+	}
+	if depStem.HiddenDeps[0].Status != "external" {
+		t.Errorf("hidden dep status = %q, want %q", depStem.HiddenDeps[0].Status, "external")
+	}
+
+	// The DAG also classifies "target" as external, so BlockDetails should agree.
+	if len(depStem.BlockDetails) == 0 {
+		t.Fatal("dep-stem should have block details")
+	}
+	foundExternal := false
+	for _, bd := range depStem.BlockDetails {
 		if bd.DependencyID == "target" && bd.Reason == "external" {
-			found = true
+			foundExternal = true
 		}
 	}
-	if !found {
-		t.Errorf("expected BlockDetail {target, external}, got %+v", dep.BlockDetails)
+	if !foundExternal {
+		t.Errorf("expected BlockDetail {target, external}, got %+v", depStem.BlockDetails)
+	}
+
+	// Meta.ID reference "target-id" SHOULD produce an edge (matches scheduler).
+	idEdges := edgesTo(data, "waiting/dep-id.md")
+	if len(idEdges) != 1 {
+		t.Fatalf("id dep edges = %d, want 1", len(idEdges))
+	}
+	if idEdges[0].From != "waiting/target.md" {
+		t.Errorf("id dep edge from = %q, want %q", idEdges[0].From, "waiting/target.md")
 	}
 }
 
