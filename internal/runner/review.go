@@ -103,7 +103,7 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				if moveErr := queue.AtomicMove(snap.Path, filepath.Join(failedDir, snap.Filename)); moveErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
 				} else {
-					deleteTaskState(tasksDir, snap.Filename)
+					runtimecleanup.DeleteAllPreservingVerdict(tasksDir, snap.Filename)
 					fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
 						snap.Filename, failures, maxRetries)
 				}
@@ -180,7 +180,7 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				if moveErr := queue.AtomicMove(path, dst); moveErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", name, moveErr)
 				} else {
-					deleteTaskState(tasksDir, name)
+					runtimecleanup.DeleteAllPreservingVerdict(tasksDir, name)
 					fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
 						name, failures, maxRetries)
 				}

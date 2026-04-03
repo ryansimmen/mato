@@ -18,6 +18,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/queue"
 	"mato/internal/sessionmeta"
+	"mato/internal/taskfile"
 	"mato/internal/taskstate"
 	"mato/internal/testutil"
 )
@@ -532,6 +533,52 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget(t *testing.T) {
 	}
 }
 
+func TestReviewCandidates_FilesystemFallback_ExhaustedBudget_PreservesVerdict(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirFailed, "messages"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	content := "---\npriority: 10\nmax_retries: 3\n---\n# Exhausted Task\n" +
+		"<!-- review-failure: agent1 at 2026-01-01T00:00:00Z — fail 1 -->\n" +
+		"<!-- review-failure: agent2 at 2026-01-02T00:00:00Z — fail 2 -->\n" +
+		"<!-- review-failure: agent3 at 2026-01-03T00:00:00Z — fail 3 -->\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"), []byte(content), 0o644)
+	if err := taskstate.Update(tasksDir, "exhausted.md", func(state *taskstate.TaskState) {
+		state.LastOutcome = "review-launched"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	// Seed a verdict file that should survive review retry exhaustion.
+	verdictPayload, _ := json.Marshal(map[string]string{"verdict": "reject", "reason": "needs work"})
+	os.WriteFile(taskfile.VerdictPath(tasksDir, "exhausted.md"), verdictPayload, 0o644)
+
+	captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, nil)
+		if len(candidates) != 0 {
+			t.Fatalf("expected 0 candidates (budget exhausted), got %d", len(candidates))
+		}
+	})
+
+	// Task should be moved to failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); err != nil {
+		t.Fatal("exhausted task should be moved to failed/")
+	}
+	// Taskstate should be deleted.
+	state, err := taskstate.Load(tasksDir, "exhausted.md")
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state != nil {
+		t.Fatal("taskstate should be deleted for exhausted review task")
+	}
+	// Verdict file must be preserved for later retry feedback.
+	if _, ok := taskfile.ReadVerdictRejection(tasksDir, "exhausted.md"); !ok {
+		t.Fatal("verdict file should be preserved when review retry budget is exhausted")
+	}
+}
+
 func TestReviewCandidates_FilesystemFallback_BranchFromMarker(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirReadyReview, queue.DirFailed} {
@@ -981,6 +1028,45 @@ func TestReviewCandidates_Indexed_ExhaustedBudget(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); err != nil {
 		t.Fatal("exhausted task should be moved to failed/")
+	}
+}
+
+func TestReviewCandidates_Indexed_ExhaustedBudget_PreservesVerdict(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+
+	exhaustedContent := "---\npriority: 10\nmax_retries: 2\n---\n# Exhausted\n" +
+		"<!-- review-failure: a1 at 2026-01-01T00:00:00Z — fail 1 -->\n" +
+		"<!-- review-failure: a2 at 2026-01-02T00:00:00Z — fail 2 -->\n"
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"), []byte(exhaustedContent), 0o644)
+
+	// Seed a verdict file that should survive review retry exhaustion.
+	verdictPayload, _ := json.Marshal(map[string]string{"verdict": "reject", "reason": "needs improvement"})
+	os.WriteFile(taskfile.VerdictPath(tasksDir, "exhausted.md"), verdictPayload, 0o644)
+
+	idx := queue.BuildIndex(tasksDir)
+
+	captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, idx)
+		if len(candidates) != 0 {
+			t.Fatalf("expected 0 candidates (budget exhausted), got %d", len(candidates))
+		}
+	})
+
+	// Task should be moved to failed/.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); err != nil {
+		t.Fatal("exhausted task should be moved to failed/")
+	}
+	// Verdict file must be preserved for later retry feedback.
+	vr, ok := taskfile.ReadVerdictRejection(tasksDir, "exhausted.md")
+	if !ok {
+		t.Fatal("verdict file should be preserved when review retry budget is exhausted (indexed path)")
+	}
+	if vr.Reason != "needs improvement" {
+		t.Fatalf("verdict reason = %q, want %q", vr.Reason, "needs improvement")
 	}
 }
 
