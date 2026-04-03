@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"mato/internal/config"
+	"mato/internal/configresolve"
 	"mato/internal/dirs"
 	"mato/internal/doctor"
 	"mato/internal/frontmatter"
@@ -42,6 +43,10 @@ var inspectShowFn = inspect.Show
 // Tests replace it to verify CLI flag parsing and delegation.
 var logShowFn = history.ShowTo
 
+// configShowFn is the function used to render resolved repository config.
+// Tests replace it to verify CLI flag parsing and delegation.
+var configShowFn = showConfig
+
 var cancelTaskFn = queue.CancelTask
 
 // confirmCancelFn asks the user to confirm cancellation. It receives an
@@ -65,6 +70,9 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
 				return newUsageError(cmd, err)
 			}
+			if initBranch != "" && strings.TrimSpace(initBranch) == "" {
+				return newUsageError(cmd, fmt.Errorf("--branch must not be whitespace-only"))
+			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
 				return err
@@ -76,19 +84,19 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fileCfg, err := config.Load(repoRoot)
+			load, err := config.Load(repoRoot)
 			if err != nil {
 				return err
 			}
-			branch, err := resolveConfigBranch(fileCfg, initBranch)
+			branch, err := configresolve.ResolveBranch(load, initBranch)
 			if err != nil {
 				return err
 			}
-			if err := validateBranch(branch); err != nil {
+			if err := validateBranch(branch.Value); err != nil {
 				return err
 			}
 
-			result, err := setup.InitRepo(repoRoot, branch)
+			result, err := setup.InitRepo(repoRoot, branch.Value)
 			if err != nil {
 				return err
 			}
@@ -235,31 +243,15 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 
 			var dockerImage string
 			if doctorNeedsDockerConfig(only) {
-				// Resolve docker image the same way as the run command:
-				// env var > .mato.yaml > default. If the repo root cannot
-				// be determined, fall back to env/default and let the git
-				// check report the problem. Config load errors are fatal
-				// so doctor does not silently produce results based on
-				// the wrong image when .mato.yaml is malformed.
-				if v := strings.TrimSpace(os.Getenv("MATO_DOCKER_IMAGE")); v != "" {
-					dockerImage = v
-					// Still validate repo config so a malformed committed
-					// .mato.yaml is not hidden during a full doctor run
-					// just because an env override supplies the image.
-					if root, err := resolveRepoRoot(repoInput); err == nil {
-						if _, err := config.Load(root); err != nil {
-							return err
-						}
-					}
-				} else if root, err := resolveRepoRoot(repoInput); err == nil {
-					fileCfg, err := config.Load(root)
-					if err != nil {
-						return err
-					}
-					if fileCfg.DockerImage != nil {
-						dockerImage = *fileCfg.DockerImage
-					}
+				repoRoot := ""
+				if root, err := resolveRepoRoot(repoInput); err == nil {
+					repoRoot = root
 				}
+				resolvedImage, err := configresolve.ResolveDoctorDockerImage(repoRoot)
+				if err != nil {
+					return err
+				}
+				dockerImage = resolvedImage.Value
 			}
 
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -296,6 +288,50 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, hygiene, deps)")
 
 	return cmd
+}
+
+func newConfigCmd(repoFlag *string) *cobra.Command {
+	var format string
+
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Show effective repository configuration",
+		Args:  usageNoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+				return newUsageError(cmd, err)
+			}
+			repo, err := resolveRepo(*repoFlag)
+			if err != nil {
+				return err
+			}
+			if err := validateRepoPath(repo); err != nil {
+				return err
+			}
+			repoRoot, err := resolveRepoRoot(repo)
+			if err != nil {
+				return err
+			}
+			return configShowFn(cmd.OutOrStdout(), repoRoot, format)
+		},
+	}
+	configureCommand(cmd)
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+	return cmd
+}
+
+func showConfig(w io.Writer, repoRoot, format string) error {
+	resolved, err := configresolve.ResolveRepoDefaults(repoRoot)
+	if err != nil {
+		return err
+	}
+	if err := validateBranch(resolved.Branch.Value); err != nil {
+		return err
+	}
+	if format == "json" {
+		return configresolve.RenderJSON(w, resolved)
+	}
+	return configresolve.RenderText(w, resolved)
 }
 
 func newLogCmd(repoFlag *string) *cobra.Command {

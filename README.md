@@ -57,6 +57,7 @@ Useful flags:
 - `mato run --review-model`: override the review agent model (defaults to `gpt-5.4`)
 - `mato run --task-reasoning-effort`: override the task agent reasoning effort (defaults to `high`)
 - `mato run --review-reasoning-effort`: override the review agent reasoning effort (defaults to `high`)
+- `mato config --format json`: inspect effective repo defaults and their sources
 
 You can also set `MATO_BRANCH` for a host-side branch default that overrides `.mato.yaml` but is still overridden by `--branch`.
 
@@ -64,7 +65,21 @@ Use `mato --help` and `mato run --help` as the canonical source for current CLI 
 
 Use `mato init` to bootstrap `.mato/`, messaging directories, `.gitignore`, and the target branch without requiring Docker or Copilot. The command is idempotent, so rerunning it is safe. When the branch is missing locally, `mato init` tells you whether it reused a local branch, created from live `origin/<branch>`, created from current `HEAD` because the remote branch was missing, or fell back to a cached remote-tracking ref because `origin` was unavailable.
 
-You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `task_model`, `review_model`, `review_session_resume_enabled`, `task_reasoning_effort`, `review_reasoning_effort`, `agent_timeout`, and `retry_cooldown`. CLI flags win over host env vars, and host env vars win over config.
+You can also add an optional `.mato.yaml` at the repository root to persist defaults such as `branch`, `docker_image`, `task_model`, `review_model`, `review_session_resume_enabled`, `task_reasoning_effort`, `review_reasoning_effort`, `agent_timeout`, and `retry_cooldown`. CLI flags win over host env vars, and host env vars win over config. Use `mato config` to inspect the effective repo defaults mato will use when one-shot command flags are not present, including whether each value came from config, env, or built-in defaults.
+
+## Config Command
+
+`mato config` shows the effective repository-level configuration and where each setting came from:
+
+```bash
+# Human-readable output
+mato config
+
+# Machine-readable output
+mato config --format json
+```
+
+The command is read-only, works in any git repository even before `mato init`, and reports repo defaults rather than simulating every possible one-shot CLI flag combination. When a value comes from the environment, text output includes the exact variable name such as `MATO_DOCKER_IMAGE`.
 
 ## Task Files
 

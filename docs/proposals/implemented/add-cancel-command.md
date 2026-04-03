@@ -1,36 +1,8 @@
----
-id: add-cancel-command
-priority: 26
-affects:
-  - cmd/mato/main.go
-  - cmd/mato/main_test.go
-  - internal/queue/cancel.go
-  - internal/queue/cancel_test.go
-  - internal/queue/resolve.go
-  - internal/queue/resolve_test.go
-  - internal/queue/index.go
-  - internal/taskfile/metadata.go
-  - internal/taskfile/metadata_test.go
-  - internal/frontmatter/frontmatter.go
-  - internal/frontmatter/frontmatter_test.go
-  - internal/inspect/inspect.go
-  - internal/inspect/inspect_test.go
-  - internal/status/status.go
-  - internal/status/status_render.go
-  - internal/status/status_json.go
-  - internal/status/status_test.go
-  - internal/integration/
-  - README.md
-  - docs/architecture.md
-  - docs/task-format.md
-  - .github/skills/mato/SKILL.md
----
+# Add `mato cancel` Command
 
 > **Status: Implemented** — This proposal has been fully implemented.
 > The text below describes the implemented design; see the source code for the
 > current behavior.
-
-# Add `mato cancel` Command
 
 ## 1. Goal
 

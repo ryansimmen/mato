@@ -692,9 +692,9 @@ func TestRenderText_AllStates(t *testing.T) {
 
 func TestRenderText_NoColorFallback(t *testing.T) {
 	tests := []struct {
-		name  string
-		data  GraphData
-		want  []string
+		name string
+		data GraphData
+		want []string
 	}{
 		{
 			name: "header and state groups readable",
