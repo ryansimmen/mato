@@ -26,9 +26,13 @@ func TestLoad_AllFields(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	cfg, err := Load(dir)
+	result, err := Load(dir)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+	cfg := result.Config
+	if !result.Exists || result.Path != path {
+		t.Fatalf("LoadResult = %+v, want exists=true path=%q", result, path)
 	}
 
 	if cfg.Branch == nil || *cfg.Branch != "main" {
@@ -67,10 +71,11 @@ func TestLoad_PartialFields(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	cfg, err := Load(dir)
+	result, err := Load(dir)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	cfg := result.Config
 
 	if cfg.Branch == nil || *cfg.Branch != "develop" {
 		t.Fatalf("Branch = %v, want %q", cfg.Branch, "develop")
@@ -87,22 +92,27 @@ func TestLoad_EmptyFile(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	cfg, err := Load(dir)
+	result, err := Load(dir)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	cfg := result.Config
 	if cfg != (Config{}) {
 		t.Fatalf("cfg = %#v, want zero Config", cfg)
 	}
 }
 
 func TestLoad_FileNotFound(t *testing.T) {
-	cfg, err := Load(t.TempDir())
+	result, err := Load(t.TempDir())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	cfg := result.Config
 	if cfg != (Config{}) {
 		t.Fatalf("cfg = %#v, want zero Config", cfg)
+	}
+	if result.Exists || result.Path != "" {
+		t.Fatalf("LoadResult = %+v, want no discovered file", result)
 	}
 }
 
@@ -135,10 +145,11 @@ func TestLoad_EmptyStringValues(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	cfg, err := Load(dir)
+	result, err := Load(dir)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	cfg := result.Config
 	if cfg.Branch != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.ReviewSessionResume == nil || !*cfg.ReviewSessionResume || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil {
 		t.Fatalf("cfg = %#v, want normalized nil string fields", cfg)
 	}
@@ -160,10 +171,11 @@ func TestLoad_WhitespaceValues(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	cfg, err := Load(dir)
+	result, err := Load(dir)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	cfg := result.Config
 	if cfg.Branch != nil || cfg.TaskModel != nil || cfg.ReviewModel != nil || cfg.TaskReasoningEffort != nil || cfg.ReviewReasoningEffort != nil || cfg.AgentTimeout != nil {
 		t.Fatalf("cfg = %#v, want normalized nil string fields", cfg)
 	}
@@ -279,9 +291,13 @@ func TestLoad_YmlExtension(t *testing.T) {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	cfg, err := Load(dir)
+	result, err := Load(dir)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+	cfg := result.Config
+	if !result.Exists || result.Path != path {
+		t.Fatalf("LoadResult = %+v, want exists=true path=%q", result, path)
 	}
 	if cfg.Branch == nil || *cfg.Branch != "staging" {
 		t.Fatalf("Branch = %v, want %q", cfg.Branch, "staging")

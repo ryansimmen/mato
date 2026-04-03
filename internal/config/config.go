@@ -28,10 +28,18 @@ type Config struct {
 	RetryCooldown         *string `yaml:"retry_cooldown"`
 }
 
+// LoadResult describes the discovered repository-local config file and its
+// parsed contents.
+type LoadResult struct {
+	Config Config
+	Path   string
+	Exists bool
+}
+
 // Load reads .mato.yaml or .mato.yml from dir. It checks for both filenames
-// and returns an error if both exist. Returns a zero Config when neither file
-// exists.
-func Load(dir string) (Config, error) {
+// and returns an error if both exist. Returns a zero LoadResult when neither
+// file exists.
+func Load(dir string) (LoadResult, error) {
 	var found []string
 	for _, name := range configFileNames {
 		path := filepath.Join(dir, name)
@@ -41,16 +49,20 @@ func Load(dir string) (Config, error) {
 			continue
 		}
 		if !os.IsNotExist(err) {
-			return Config{}, fmt.Errorf("stat config file %s: %w", path, err)
+			return LoadResult{}, fmt.Errorf("stat config file %s: %w", path, err)
 		}
 	}
 	if len(found) > 1 {
-		return Config{}, fmt.Errorf("found both .mato.yaml and .mato.yml; remove one to avoid ambiguity")
+		return LoadResult{}, fmt.Errorf("found both .mato.yaml and .mato.yml; remove one to avoid ambiguity")
 	}
 	if len(found) == 0 {
-		return Config{}, nil
+		return LoadResult{}, nil
 	}
-	return LoadFile(found[0])
+	cfg, err := LoadFile(found[0])
+	if err != nil {
+		return LoadResult{}, err
+	}
+	return LoadResult{Config: cfg, Path: found[0], Exists: true}, nil
 }
 
 // LoadFile parses a specific config file path. Returns a zero Config when the
