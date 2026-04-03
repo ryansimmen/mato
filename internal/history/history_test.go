@@ -8,10 +8,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestShowTo_TextMixedHistoryNewestFirst(t *testing.T) {
@@ -131,9 +133,8 @@ func TestShowTo_WarnsAndSkipsMalformedCompletionAndUnreadableTask(t *testing.T) 
 	defer os.Chmod(unreadablePath, 0o644)
 
 	var warnings bytes.Buffer
-	origWarnings := warningWriter
-	warningWriter = &warnings
-	defer func() { warningWriter = origWarnings }()
+	prev := ui.SetWarningWriter(&warnings)
+	defer ui.SetWarningWriter(prev)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
@@ -195,9 +196,8 @@ func TestShowTo_WarnsWhenCompletionSourceFailsButTaskSourceSucceeds(t *testing.T
 		"# Good task\n\n<!-- failure: worker-a at 2026-03-20T10:00:00Z step=WORK error=build_failed -->\n")
 
 	var warnings bytes.Buffer
-	origWarnings := warningWriter
-	warningWriter = &warnings
-	defer func() { warningWriter = origWarnings }()
+	prev := ui.SetWarningWriter(&warnings)
+	defer ui.SetWarningWriter(prev)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
@@ -226,9 +226,8 @@ func TestShowTo_JSONPartialFailureWarnsToStderr(t *testing.T) {
 		"# Good task\n\n<!-- failure: worker-a at 2026-03-20T10:00:00Z step=WORK error=build_failed -->\n")
 
 	var warnings bytes.Buffer
-	origWarnings := warningWriter
-	warningWriter = &warnings
-	defer func() { warningWriter = origWarnings }()
+	prev := ui.SetWarningWriter(&warnings)
+	defer ui.SetWarningWriter(prev)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, 20, "json"); err != nil {
@@ -269,9 +268,8 @@ func TestShowTo_WarnsWhenTaskSourceFailsButCompletionSourceSucceeds(t *testing.T
 	})
 
 	var warnings bytes.Buffer
-	origWarnings := warningWriter
-	warningWriter = &warnings
-	defer func() { warningWriter = origWarnings }()
+	prev := ui.SetWarningWriter(&warnings)
+	defer ui.SetWarningWriter(prev)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
@@ -304,4 +302,223 @@ func mustParseTime(t *testing.T, value string) time.Time {
 		t.Fatalf("time.Parse(%q): %v", value, err)
 	}
 	return ts
+}
+
+func TestShowTo_TextRelativeTimeAnnotation(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Use recent timestamps so the relative time annotation appears.
+	recentMerged := time.Now().UTC().Add(-5 * time.Minute)
+	recentFailed := time.Now().UTC().Add(-2 * time.Hour)
+	recentMergedStr := recentMerged.Format(time.RFC3339)
+	recentFailedStr := recentFailed.Format(time.RFC3339)
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "recent-merged",
+		TaskFile:  "recent-merged.md",
+		Branch:    "task/recent-merged",
+		CommitSHA: "abc1234567890",
+		Title:     "Recent merge",
+		MergedAt:  recentMerged,
+	})
+	writeTask(t, tasksDir, queue.DirFailed, "recent-failed.md",
+		"# Recent failed\n\n<!-- failure: worker-a at "+recentFailedStr+" step=WORK error=build_broken -->\n")
+
+	// Text output should include both the absolute timestamp and [X ago].
+	var textBuf bytes.Buffer
+	if err := ShowTo(&textBuf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo text: %v", err)
+	}
+	textOutput := textBuf.String()
+
+	if !strings.Contains(textOutput, recentMergedStr) {
+		t.Errorf("text output should contain absolute merged timestamp %s, got:\n%s", recentMergedStr, textOutput)
+	}
+	if !strings.Contains(textOutput, recentFailedStr) {
+		t.Errorf("text output should contain absolute failed timestamp %s, got:\n%s", recentFailedStr, textOutput)
+	}
+	if !strings.Contains(textOutput, "ago]") {
+		t.Errorf("text output should contain relative time annotation [X ago], got:\n%s", textOutput)
+	}
+
+	// JSON output must NOT contain relative time annotations.
+	var jsonBuf bytes.Buffer
+	if err := ShowTo(&jsonBuf, repoRoot, 20, "json"); err != nil {
+		t.Fatalf("ShowTo json: %v", err)
+	}
+	jsonOutput := jsonBuf.String()
+
+	if strings.Contains(jsonOutput, "ago") {
+		t.Errorf("JSON output must not contain relative time annotation, got:\n%s", jsonOutput)
+	}
+
+	// Verify JSON timestamps are pure RFC3339.
+	var events []Event
+	if err := json.Unmarshal(jsonBuf.Bytes(), &events); err != nil {
+		t.Fatalf("json.Unmarshal: %v\n%s", err, jsonBuf.String())
+	}
+	for _, ev := range events {
+		ts := ev.Timestamp.UTC().Format(time.RFC3339)
+		if strings.Contains(ts, "ago") {
+			t.Errorf("JSON event timestamp should be pure RFC3339, got: %q", ts)
+		}
+	}
+}
+
+func TestRenderText_NoColorFallback(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeTask(t, tasksDir, queue.DirFailed, "broken.md",
+		"# Broken\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed -->\n")
+	writeTask(t, tasksDir, queue.DirBacklog, "rejected.md",
+		"# Rejected\n\n<!-- review-rejection: reviewer-a at 2026-03-20T18:12:04Z — missing coverage -->\n")
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "merged-task",
+		TaskFile:  "merged-task.md",
+		Branch:    "task/merged-task",
+		CommitSHA: "abc1234567890",
+		Title:     "Merged task",
+		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
+	})
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d:\n%s", len(lines), output)
+	}
+
+	// Verify all event types are present and readable in no-color mode.
+	if !strings.Contains(output, "MERGED") {
+		t.Errorf("missing MERGED event type in output:\n%s", output)
+	}
+	if !strings.Contains(output, "FAILED") {
+		t.Errorf("missing FAILED event type in output:\n%s", output)
+	}
+	if !strings.Contains(output, "REJECTED") {
+		t.Errorf("missing REJECTED event type in output:\n%s", output)
+	}
+	// Verify detail fields are intact.
+	if !strings.Contains(output, "abc1234") {
+		t.Errorf("missing commit SHA in output:\n%s", output)
+	}
+	if !strings.Contains(output, "tests_failed") {
+		t.Errorf("missing failure reason in output:\n%s", output)
+	}
+	if !strings.Contains(output, "missing coverage") {
+		t.Errorf("missing rejection reason in output:\n%s", output)
+	}
+}
+
+func TestShowTo_TextNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 60 })
+	defer ui.SetTermWidthFunc(prev)
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "very-long-task-name-that-exceeds-normal-width",
+		TaskFile:  "very-long-task-name-that-exceeds-normal-width.md",
+		Branch:    "task/very-long-task-name-that-exceeds-normal-width",
+		CommitSHA: "abc1234567890",
+		Title:     "A task with a very long name",
+		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
+	})
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d:\n%s", len(lines), output)
+	}
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "MERGED") {
+		t.Errorf("missing MERGED type in narrow output:\n%s", output)
+	}
+}
+
+func TestShowTo_TextVeryNarrowTerminalTruncates(t *testing.T) {
+	const termW = 20
+	prev := ui.SetTermWidthFunc(func() int { return termW })
+	defer ui.SetTermWidthFunc(prev)
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "very-long-task-name-that-exceeds-normal-width",
+		TaskFile:  "very-long-task-name-that-exceeds-normal-width.md",
+		Branch:    "task/very-long-task-name-that-exceeds-normal-width",
+		CommitSHA: "abc1234567890",
+		Title:     "A task with a very long name",
+		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
+	})
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d:\n%s", len(lines), output)
+	}
+
+	// At width=20, the fixed prefix (timestamp + type) exceeds the budget,
+	// so secondary fields (task name, detail) must be dropped entirely.
+	if strings.Contains(output, "very-long-task") {
+		t.Errorf("task name should be dropped at very narrow width, got:\n%s", output)
+	}
+	if strings.Contains(output, "abc1234") {
+		t.Errorf("detail (SHA) should be dropped at very narrow width, got:\n%s", output)
+	}
+
+	// Verify every data line fits within the configured terminal width.
+	for _, line := range lines {
+		if utf8.RuneCountInString(line) > termW {
+			t.Errorf("line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
+		}
+	}
+}
+
+func TestShowTo_TextNarrowTerminalFitsWidth(t *testing.T) {
+	const termW = 40
+	prev := ui.SetTermWidthFunc(func() int { return termW })
+	defer ui.SetTermWidthFunc(prev)
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "long-task-name-for-narrow-test",
+		TaskFile:  "long-task-name-for-narrow-test.md",
+		Branch:    "task/long-task-name-for-narrow-test",
+		CommitSHA: "abc1234567890",
+		Title:     "Long task title",
+		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
+	})
+	writeTask(t, tasksDir, queue.DirFailed, "another-long-named-task.md",
+		"# Another long named task\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed_with_long_reason -->\n")
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	for _, line := range lines {
+		if utf8.RuneCountInString(line) > termW {
+			t.Errorf("line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
+		}
+	}
 }

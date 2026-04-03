@@ -9,7 +9,7 @@ import (
 
 func TestLoad_AllFields(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
+	path := filepath.Join(dir, ".mato.yaml")
 	content := strings.Join([]string{
 		"branch: main",
 		"docker_image: ubuntu:24.04",
@@ -62,7 +62,7 @@ func TestLoad_AllFields(t *testing.T) {
 
 func TestLoad_PartialFields(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
+	path := filepath.Join(dir, ".mato.yaml")
 	if err := os.WriteFile(path, []byte("branch: develop\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestLoad_PartialFields(t *testing.T) {
 
 func TestLoad_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
+	path := filepath.Join(dir, ".mato.yaml")
 	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 
 func TestLoad_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
+	path := filepath.Join(dir, ".mato.yaml")
 	if err := os.WriteFile(path, []byte("branch: [\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 
 func TestLoad_EmptyStringValues(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
+	path := filepath.Join(dir, ".mato.yaml")
 	content := strings.Join([]string{
 		"branch: \"\"",
 		"task_model: \"\"",
@@ -146,7 +146,7 @@ func TestLoad_EmptyStringValues(t *testing.T) {
 
 func TestLoad_WhitespaceValues(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
+	path := filepath.Join(dir, ".mato.yaml")
 	content := strings.Join([]string{
 		"branch: \"   \"",
 		"task_model: \" \t \"",
@@ -171,7 +171,7 @@ func TestLoad_WhitespaceValues(t *testing.T) {
 
 func TestLoad_UnknownKeys(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
+	path := filepath.Join(dir, ".mato.yaml")
 	if err := os.WriteFile(path, []byte("future_setting: true\nbranch: mato\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestLoad_UnknownKeys(t *testing.T) {
 
 func TestLoad_DefaultModelRejected(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFileName)
+	path := filepath.Join(dir, ".mato.yaml")
 	if err := os.WriteFile(path, []byte("default_model: claude-sonnet-4\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
@@ -269,5 +269,63 @@ func TestLoadFile_SingleDocumentWithTrailingNewlines(t *testing.T) {
 	}
 	if cfg.Branch == nil || *cfg.Branch != "main" {
 		t.Fatalf("Branch = %v, want %q", cfg.Branch, "main")
+	}
+}
+
+func TestLoad_YmlExtension(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".mato.yml")
+	if err := os.WriteFile(path, []byte("branch: staging\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Branch == nil || *cfg.Branch != "staging" {
+		t.Fatalf("Branch = %v, want %q", cfg.Branch, "staging")
+	}
+}
+
+func TestLoad_BothExtensionsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".mato.yaml"), []byte("branch: main\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".mato.yml"), []byte("branch: develop\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error when both .mato.yaml and .mato.yml exist, got nil")
+	}
+	if !strings.Contains(err.Error(), "found both .mato.yaml and .mato.yml") {
+		t.Fatalf("error = %q, want mention of both files", err.Error())
+	}
+}
+
+func TestLoad_StatErrorSurfaced(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root to trigger permission error")
+	}
+	dir := t.TempDir()
+	// Remove execute permission on dir so os.Stat on files inside fails
+	// with a permission error rather than not-exist.
+	if err := os.WriteFile(filepath.Join(dir, ".mato.yaml"), []byte("branch: main\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatalf("os.Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for inaccessible config directory, got nil")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("error = %q, want permission denied", err.Error())
 	}
 }

@@ -18,6 +18,13 @@ import (
 // RetryTask. Doctor uses this to detect leftover retry temp files.
 const RetryTempInfix = ".retry-"
 
+// RetryResult carries the outcome of a single RetryTask call.
+type RetryResult struct {
+	Filename          string   `json:"filename"`
+	DependencyBlocked bool     `json:"dependency_blocked,omitempty"`
+	Warnings          []string `json:"warnings,omitempty"`
+}
+
 var createRetryTempFileFn = func(dir, pattern string) (*os.File, error) {
 	return os.CreateTemp(dir, pattern)
 }
@@ -54,25 +61,25 @@ func normalizeRetryTaskRef(ref string) (string, error) {
 // markers stripped. It writes the cleaned content directly to backlog/
 // (never mutating the failed/ source) so that a destination collision or
 // write error cannot destroy the original file.
-func RetryTask(tasksDir, taskRef string) error {
+func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 	ref, err := normalizeRetryTaskRef(taskRef)
 	if err != nil {
-		return err
+		return RetryResult{}, err
 	}
 
 	idx := BuildIndex(tasksDir)
 	match, err := resolveFailedTask(idx, ref)
 	if err != nil {
-		return err
+		return RetryResult{}, err
 	}
 
 	failedPath := match.Path
 	data, err := os.ReadFile(failedPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("task %s not found in failed/", strings.TrimSuffix(ref, ".md"))
+			return RetryResult{}, fmt.Errorf("task %s not found in failed/", strings.TrimSuffix(ref, ".md"))
 		}
-		return fmt.Errorf("read failed task %s: %w", match.Filename, err)
+		return RetryResult{}, fmt.Errorf("read failed task %s: %w", match.Filename, err)
 	}
 
 	cleaned := stripFailureMarkers(string(data))
@@ -86,23 +93,23 @@ func RetryTask(tasksDir, taskRef string) error {
 	// nothing or the complete task file.
 	tmpFile, err := createRetryTempFileFn(backlogDir, "."+match.Filename+RetryTempInfix+"*")
 	if err != nil {
-		return fmt.Errorf("create temp file in backlog: %w", err)
+		return RetryResult{}, fmt.Errorf("create temp file in backlog: %w", err)
 	}
 	tmpName := tmpFile.Name()
 
 	if err := tmpFile.Chmod(0o644); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpName)
-		return fmt.Errorf("write task to temp file: %w", err)
+		return RetryResult{}, fmt.Errorf("write task to temp file: %w", err)
 	}
 	if _, err := tmpFile.WriteString(cleaned); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpName)
-		return fmt.Errorf("write task to temp file: %w", err)
+		return RetryResult{}, fmt.Errorf("write task to temp file: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("write task to temp file: %w", err)
+		return RetryResult{}, fmt.Errorf("write task to temp file: %w", err)
 	}
 
 	// AtomicMove uses os.Link + os.Remove and returns ErrDestinationExists
@@ -111,27 +118,34 @@ func RetryTask(tasksDir, taskRef string) error {
 	if err := AtomicMove(tmpName, backlogPath); err != nil {
 		os.Remove(tmpName)
 		if errors.Is(err, ErrDestinationExists) {
-			return fmt.Errorf("task %s already exists in backlog/", frontmatter.TaskFileStem(match.Filename))
+			return RetryResult{}, fmt.Errorf("task %s already exists in backlog/", frontmatter.TaskFileStem(match.Filename))
 		}
-		return fmt.Errorf("move task to backlog: %w", err)
+		return RetryResult{}, fmt.Errorf("move task to backlog: %w", err)
 	}
 
 	// Only remove the failed/ copy after the backlog/ write succeeds.
+	var removeWarning string
 	if err := os.Remove(failedPath); err != nil {
 		// The requeue is logically complete; warn but don't fail.
-		fmt.Fprintf(os.Stderr, "warning: could not remove %s after requeue: %v\n", failedPath, err)
+		removeWarning = fmt.Sprintf("could not remove %s after requeue: %v", failedPath, err)
 	}
 
 	// Clean up stale runtime state (taskstate, sessionmeta) from the
 	// previous failed attempt so a fresh agent run starts clean.
 	runtimecleanup.DeleteAll(tasksDir, match.Filename)
 
-	idx = BuildIndex(tasksDir)
-	if blocks, ok := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[match.Filename]; ok {
-		fmt.Fprintf(os.Stderr, "warning: retried task %s was placed in backlog/ but remains dependency-blocked; next reconcile will move it to waiting/ (blocked by %s)\n", match.Filename, FormatDependencyBlocks(blocks))
+	result := RetryResult{Filename: match.Filename}
+	if removeWarning != "" {
+		result.Warnings = append(result.Warnings, removeWarning)
 	}
 
-	return nil
+	idx = BuildIndex(tasksDir)
+	if blocks, ok := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[match.Filename]; ok {
+		result.DependencyBlocked = true
+		result.Warnings = append(result.Warnings, fmt.Sprintf("retried task %s was placed in backlog/ but remains dependency-blocked; next reconcile will move it to waiting/ (blocked by %s)", match.Filename, FormatDependencyBlocks(blocks)))
+	}
+
+	return result, nil
 }
 
 func resolveFailedTask(idx *PollIndex, taskRef string) (TaskMatch, error) {

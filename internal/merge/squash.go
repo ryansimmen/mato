@@ -34,9 +34,16 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 		return nil, fmt.Errorf("%w: task branch %s not found on origin (agent may not have pushed)", errTaskBranchNotPushed, taskBranch)
 	}
 
-	// Extract the agent's commit messages before squashing so we can
-	// incorporate them into the squash commit for richer context.
-	agentLog, _ := gitOutput(cloneDir, "log", "--format=%B", "origin/"+branch+"..origin/"+taskBranch)
+	// Extract the earliest commit message on the task branch so the squash
+	// commit subject reflects the task's primary intent, not a later
+	// review-fix commit. We use rev-list --reverse to find the first SHA,
+	// then read its full message.
+	var agentLog string
+	if revList, err := gitOutput(cloneDir, "rev-list", "--reverse", "origin/"+branch+"..origin/"+taskBranch); err == nil {
+		if firstSHA := firstNonEmptyLine(revList); firstSHA != "" {
+			agentLog, _ = gitOutput(cloneDir, "log", "-1", "--format=%B", firstSHA)
+		}
+	}
 
 	if _, err := gitOutput(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", errSquashMergeConflict, taskBranch, err)
@@ -124,6 +131,15 @@ func parseFilesChanged(out string) []string {
 	return filesChanged
 }
 
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // formatSquashCommitMessage builds the squash-merge commit message.
 // It prefers the agent's commit message (from agentLog) for the subject and
 // body, falling back to the task title when no agent log is available.
@@ -161,10 +177,11 @@ func formatSquashCommitMessage(task mergeQueueTask, agentLog string) string {
 }
 
 // parseAgentCommitLog extracts the subject and body from the agent's commit
-// log output. For multi-commit branches, only the first commit's message is
-// used (the agent is expected to make one primary commit). Lines matching
-// "Task: <filename>" and "Changed files:" sections are stripped from the body
-// since that metadata is redundant with the trailers.
+// log output. The caller is expected to pass a --reverse log so the earliest
+// commit (the task's primary intent) appears first. For multi-commit branches,
+// only the first commit's message is used. Lines matching "Task: <filename>"
+// and "Changed files:" sections are stripped from the body since that metadata
+// is redundant with the trailers.
 func parseAgentCommitLog(log string) (subject, body string) {
 	log = strings.TrimSpace(log)
 	if log == "" {

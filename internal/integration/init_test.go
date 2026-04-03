@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,7 +58,7 @@ func TestInitRepo_ThenDryRunWorks(t *testing.T) {
 	if _, err := setup.InitRepo(repoRoot, "mato"); err != nil {
 		t.Fatalf("InitRepo: %v", err)
 	}
-	if err := runner.DryRun(repoRoot, "mato", runner.RunOptions{
+	if err := runner.DryRun(io.Discard, repoRoot, "mato", runner.RunOptions{
 		TaskModel:             runner.DefaultTaskModel,
 		ReviewModel:           runner.DefaultReviewModel,
 		TaskReasoningEffort:   runner.DefaultReasoningEffort,

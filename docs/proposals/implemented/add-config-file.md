@@ -49,7 +49,7 @@ This proposal assumes the current hard-break queue model:
 
 ### Config File Format
 
-**File name**: `.mato.yaml` (no `.yml` alias)
+**File name**: `.mato.yaml` (`.mato.yml` also accepted; added later)
 **Location**: repository root (same directory as `.git/`)
 
 ```yaml

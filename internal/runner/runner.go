@@ -30,6 +30,7 @@ import (
 	"mato/internal/queue"
 	"mato/internal/sessionmeta"
 	"mato/internal/taskstate"
+	"mato/internal/ui"
 )
 
 const resumeDetectionBufferLimit = 8192
@@ -251,10 +252,41 @@ func formatDurationShort(d time.Duration) string {
 	return fmt.Sprintf("%dh%dm", h, m)
 }
 
+// DryRunRenderer formats dry-run validation output to a writer with
+// optional color and terminal-width-aware layout.
+type DryRunRenderer struct {
+	W     io.Writer
+	Color ui.ColorSet
+	Width int
+}
+
+// defaultDryRunWidth is used when the output is not a terminal.
+const defaultDryRunWidth = 80
+
+// writerWidthFn resolves the terminal width for an io.Writer. Defaults
+// to ui.WriterWidth; tests replace it to inject a narrow width.
+var writerWidthFn = ui.WriterWidth
+
+// header writes a bold section header with a leading blank line.
+func (r *DryRunRenderer) header(title string) {
+	fmt.Fprintf(r.W, "\n%s\n", r.Color.Bold("=== "+title+" ==="))
+}
+
+// valueWidth returns the available width for a value column, given a
+// fixed label column and indentation. The result is always at least 1
+// so callers can always truncate to fit narrow terminals.
+func (r *DryRunRenderer) valueWidth(indent, labelCol int) int {
+	avail := r.Width - indent - labelCol - 1
+	if avail < 1 {
+		return 1
+	}
+	return avail
+}
+
 // DryRun validates the task queue setup without launching Docker containers.
 // It runs one iteration of queue management (dependency promotion, overlap
-// detection, manifest writing) and reports the results, then exits.
-func DryRun(repoRoot, branch string, opts RunOptions) error {
+// detection, manifest writing) and reports the results to w, then exits.
+func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
 		return err
@@ -273,7 +305,7 @@ func DryRun(repoRoot, branch string, opts RunOptions) error {
 	for _, sub := range subdirs {
 		dir := filepath.Join(tasksDir, sub)
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-			fmt.Fprintf(os.Stderr, "warning: missing directory: %s/\n", sub)
+			ui.Warnf("warning: missing directory: %s/\n", sub)
 			missingDirs++
 		}
 	}
@@ -285,154 +317,73 @@ func DryRun(repoRoot, branch string, opts RunOptions) error {
 	idx := queue.BuildIndex(tasksDir)
 	surfaceBuildWarnings(idx)
 
-	// --- Task File Validation ---
-	fmt.Println("=== Task File Validation ===")
+	r := &DryRunRenderer{
+		W:     w,
+		Color: ui.NewColorSet(),
+		Width: writerWidthFn(w, defaultDryRunWidth),
+	}
+
 	parseFailures := idx.ParseFailures()
 	totalTasks := len(parseFailures)
 	for _, sub := range subdirs {
 		totalTasks += len(idx.TasksByState(sub))
 	}
-	if len(parseFailures) > 0 {
-		for _, pf := range parseFailures {
-			fmt.Printf("  ERROR %s/%s: %v\n", pf.State, pf.Filename, pf.Err)
-		}
-		fmt.Printf("  %d of %d task file(s) have parse errors\n", len(parseFailures), totalTasks)
-	} else {
-		fmt.Printf("  All %d task file(s) parsed successfully\n", totalTasks)
-	}
+	r.RenderValidation(parseFailures, totalTasks)
 
-	// --- Dependency Resolution ---
-	fmt.Println("\n=== Dependency Resolution ===")
 	promotable := queue.CountPromotableWaitingTasks(tasksDir, idx)
-	if promotable > 0 {
-		fmt.Printf("  %d task(s) in waiting/ would be promoted to backlog/\n", promotable)
-	} else {
-		fmt.Println("  No waiting tasks ready for promotion")
-	}
+	r.RenderDependencyResolution(promotable)
 
-	// --- Dependency Summary ---
-	dryRunDependencySummary(tasksDir, idx)
+	r.RenderDependencySummary(tasksDir, idx)
 
-	// --- Affects Conflict Detection ---
-	fmt.Println("\n=== Affects Conflict Detection ===")
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
-	blockedBacklog := view.DependencyBlocked
-	if len(blockedBacklog) > 0 {
-		fmt.Println("\n=== Dependency-Blocked Backlog Tasks ===")
-		names := make([]string, 0, len(blockedBacklog))
-		for name := range blockedBacklog {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			fmt.Printf("  BLOCKED %s (depends on %s)\n", name, queue.FormatDependencyBlocks(blockedBacklog[name]))
-		}
-	}
-	detailed := view.Deferred
-	if len(detailed) > 0 {
-		// Sort deferred task names for stable output.
-		names := make([]string, 0, len(detailed))
-		for name := range detailed {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			info := detailed[name]
-			fmt.Printf("  DEFERRED %s (blocked by %s in %s/, conflicting affects: %v)\n",
-				name, info.BlockedBy, info.BlockedByDir, info.ConflictingAffects)
-		}
-	} else {
-		fmt.Println("  No affects conflicts detected")
-	}
+	backlogView := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	r.RenderAffectsConflicts(backlogView)
 
-	// --- Execution Order ---
-	deferredSet := make(map[string]struct{}, len(detailed))
-	for name := range detailed {
+	deferredSet := make(map[string]struct{}, len(backlogView.Deferred))
+	for name := range backlogView.Deferred {
 		deferredSet[name] = struct{}{}
 	}
-	dryRunExecutionOrder(view.Runnable)
+	r.RenderExecutionOrder(backlogView.Runnable)
 
-	// --- Backlog Task Summary ---
-	dryRunBacklogSummary(idx, deferredSet, blockedBacklog)
+	r.RenderBacklogSummary(idx, deferredSet, backlogView.DependencyBlocked)
 
-	// --- Resolved Settings ---
-	fmt.Println("\n=== Resolved Settings ===")
-	fmt.Printf("  %-24s %s\n", "task model:", opts.TaskModel)
-	fmt.Printf("  %-24s %s\n", "review model:", opts.ReviewModel)
-	fmt.Printf("  %-24s %t\n", "review session resume:", opts.ReviewSessionResumeEnabled)
-	fmt.Printf("  %-24s %s\n", "task reasoning effort:", opts.TaskReasoningEffort)
-	fmt.Printf("  %-24s %s\n", "review reasoning effort:", opts.ReviewReasoningEffort)
+	r.RenderResolvedSettings(opts)
 
-	// --- Queue Summary ---
-	// Count includes both successfully parsed tasks and parse failures
-	// so the total matches the actual number of files on disk.
 	parseFailuresByDir := make(map[string]int)
 	for _, pf := range parseFailures {
 		parseFailuresByDir[pf.State]++
 	}
-	fmt.Println("\n=== Queue Summary ===")
-	for _, sub := range subdirs {
-		fmt.Printf("  %-20s %d\n", sub, len(idx.TasksByState(sub))+parseFailuresByDir[sub])
-	}
-	if len(detailed) > 0 {
-		fmt.Printf("  %-20s %d\n", "deferred", len(detailed))
-	}
+	r.RenderQueueSummary(idx, subdirs, parseFailuresByDir, len(backlogView.Deferred))
 
-	fmt.Println("\nDry run complete (read-only). No files were modified and no Docker containers were launched.")
+	fmt.Fprintln(r.W, "\nDry run complete (read-only). No files were modified and no Docker containers were launched.")
 	return nil
 }
 
-// dryRunExecutionOrder prints the === Execution Order === section showing
-// runnable backlog tasks in priority order with their priority values.
-func dryRunExecutionOrder(runnable []*queue.TaskSnapshot) {
-	fmt.Println("\n=== Execution Order ===")
-	if len(runnable) == 0 {
-		fmt.Println("  (no runnable tasks)")
-		return
-	}
-	for i, snap := range runnable {
-		fmt.Printf("  %d. %s (priority %d)\n", i+1, snap.Filename, snap.Meta.Priority)
-	}
-}
-
-// dryRunBacklogSummary prints the === Backlog Task Summary === section with
-// compact frontmatter for every parsed backlog task.
-func dryRunBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}, blocked map[string][]queue.DependencyBlock) {
-	backlog := idx.TasksByState(queue.DirBacklog)
-	if len(backlog) == 0 {
-		return
-	}
-	fmt.Println("\n=== Backlog Task Summary ===")
-	for _, snap := range backlog {
-		status := "runnable"
-		if _, ok := blocked[snap.Filename]; ok {
-			status = "dependency-blocked"
-		} else if _, ok := deferred[snap.Filename]; ok {
-			status = "deferred"
+// RenderValidation writes the === Task File Validation === section.
+func (r *DryRunRenderer) RenderValidation(parseFailures []queue.ParseFailure, totalTasks int) {
+	fmt.Fprintln(r.W, r.Color.Bold("=== Task File Validation ==="))
+	if len(parseFailures) > 0 {
+		for _, pf := range parseFailures {
+			fmt.Fprintf(r.W, "  %s %s/%s: %v\n", r.Color.Red("ERROR"), pf.State, pf.Filename, pf.Err)
 		}
-
-		affects := "none"
-		if len(snap.Meta.Affects) > 0 {
-			affects = strings.Join(snap.Meta.Affects, ", ")
-		}
-		dependsOn := "none"
-		if len(snap.Meta.DependsOn) > 0 {
-			dependsOn = strings.Join(snap.Meta.DependsOn, ", ")
-		}
-
-		fmt.Printf("  %s [%s]\n", snap.Filename, status)
-		fmt.Printf("    id: %s  priority: %d\n", snap.Meta.ID, snap.Meta.Priority)
-		fmt.Printf("    affects: %s\n", affects)
-		fmt.Printf("    depends_on: %s\n", dependsOn)
-		if blocks, ok := blocked[snap.Filename]; ok {
-			fmt.Printf("    blocked by: %s\n", queue.FormatDependencyBlocks(blocks))
-		}
+		fmt.Fprintf(r.W, "  %d of %d task file(s) have parse errors\n", len(parseFailures), totalTasks)
+	} else {
+		fmt.Fprintf(r.W, "  %s %d task file(s) parsed successfully\n", r.Color.Green("All"), totalTasks)
 	}
 }
 
-// dryRunDependencySummary prints the === Dependency Summary === section for
+// RenderDependencyResolution writes the === Dependency Resolution === section.
+func (r *DryRunRenderer) RenderDependencyResolution(promotable int) {
+	r.header("Dependency Resolution")
+	if promotable > 0 {
+		fmt.Fprintf(r.W, "  %d task(s) in waiting/ would be promoted to backlog/\n", promotable)
+	} else {
+		fmt.Fprintln(r.W, "  No waiting tasks ready for promotion")
+	}
+}
+
+// RenderDependencySummary writes the === Dependency Summary === section for
 // waiting/ tasks, showing each dependency and its resolved queue state.
-func dryRunDependencySummary(tasksDir string, idx *queue.PollIndex) {
+func (r *DryRunRenderer) RenderDependencySummary(tasksDir string, idx *queue.PollIndex) {
 	waitingTasks := idx.TasksByState(queue.DirWaiting)
 	if len(waitingTasks) == 0 {
 		return
@@ -440,37 +391,168 @@ func dryRunDependencySummary(tasksDir string, idx *queue.PollIndex) {
 
 	diag := queue.DiagnoseDependencies(tasksDir, idx)
 
-	fmt.Println("\n=== Dependency Summary ===")
+	r.header("Dependency Summary")
 	for _, snap := range waitingTasks {
 		if len(snap.Meta.DependsOn) == 0 {
-			fmt.Printf("  %s: no dependencies\n", snap.Filename)
+			fmt.Fprintf(r.W, "  %s: no dependencies\n", snap.Filename)
 			continue
 		}
-		fmt.Printf("  %s:\n", snap.Filename)
+		fmt.Fprintf(r.W, "  %s:\n", snap.Filename)
 		for _, dep := range snap.Meta.DependsOn {
 			state := resolveDepState(dep, idx)
-			fmt.Printf("    - %s (%s)\n", dep, state)
+			fmt.Fprintf(r.W, "    - %s (%s)\n", dep, state)
 		}
 	}
 
-	// Print diagnostics subsection if there are issues.
 	if len(diag.Issues) > 0 {
-		fmt.Println("  diagnostics:")
+		fmt.Fprintln(r.W, "  diagnostics:")
 		for _, issue := range diag.Issues {
 			switch issue.Kind {
 			case queue.DependencyDuplicateID:
-				fmt.Printf("    WARNING duplicate waiting id %q (files: %s, %s)\n",
-					issue.TaskID, issue.DependsOn, issue.Filename)
+				fmt.Fprintf(r.W, "    %s duplicate waiting id %q (files: %s, %s)\n",
+					r.Color.Yellow("WARNING"), issue.TaskID, issue.DependsOn, issue.Filename)
 			case queue.DependencySelfCycle:
-				fmt.Printf("    WARNING %s depends on itself\n", issue.TaskID)
+				fmt.Fprintf(r.W, "    %s %s depends on itself\n", r.Color.Yellow("WARNING"), issue.TaskID)
 			case queue.DependencyCycle:
-				fmt.Printf("    WARNING %s is part of a dependency cycle\n", issue.TaskID)
+				fmt.Fprintf(r.W, "    %s %s is part of a dependency cycle\n", r.Color.Yellow("WARNING"), issue.TaskID)
 			case queue.DependencyAmbiguousID:
-				fmt.Printf("    WARNING id %q is ambiguous (exists in both completed and non-completed directories)\n", issue.TaskID)
+				fmt.Fprintf(r.W, "    %s id %q is ambiguous (exists in both completed and non-completed directories)\n",
+					r.Color.Yellow("WARNING"), issue.TaskID)
 			case queue.DependencyUnknownID:
-				fmt.Printf("    WARNING %s depends on unknown id %q\n", issue.TaskID, issue.DependsOn)
+				fmt.Fprintf(r.W, "    %s %s depends on unknown id %q\n",
+					r.Color.Yellow("WARNING"), issue.TaskID, issue.DependsOn)
 			}
 		}
+	}
+}
+
+// RenderAffectsConflicts writes the === Affects Conflict Detection ===
+// section and any dependency-blocked backlog tasks.
+func (r *DryRunRenderer) RenderAffectsConflicts(view queue.RunnableBacklogView) {
+	r.header("Affects Conflict Detection")
+	blockedBacklog := view.DependencyBlocked
+	if len(blockedBacklog) > 0 {
+		r.header("Dependency-Blocked Backlog Tasks")
+		names := make([]string, 0, len(blockedBacklog))
+		for name := range blockedBacklog {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(r.W, "  %s %s (depends on %s)\n",
+				r.Color.Red("BLOCKED"), name, queue.FormatDependencyBlocks(blockedBacklog[name]))
+		}
+	}
+	detailed := view.Deferred
+	if len(detailed) > 0 {
+		names := make([]string, 0, len(detailed))
+		for name := range detailed {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			info := detailed[name]
+			fmt.Fprintf(r.W, "  %s %s (blocked by %s in %s/, conflicting affects: %v)\n",
+				r.Color.Yellow("DEFERRED"), name, info.BlockedBy, info.BlockedByDir, info.ConflictingAffects)
+		}
+	} else {
+		fmt.Fprintln(r.W, "  No affects conflicts detected")
+	}
+}
+
+// RenderExecutionOrder writes the === Execution Order === section showing
+// runnable backlog tasks in priority order with their priority values.
+func (r *DryRunRenderer) RenderExecutionOrder(runnable []*queue.TaskSnapshot) {
+	r.header("Execution Order")
+	if len(runnable) == 0 {
+		fmt.Fprintln(r.W, r.Color.Dim("  (no runnable tasks)"))
+		return
+	}
+	maxName := r.Width - 20 // room for "  N. " prefix + " (priority NNN)"
+	for i, snap := range runnable {
+		name := snap.Filename
+		if maxName > 10 {
+			name = ui.Truncate(name, maxName)
+		}
+		fmt.Fprintf(r.W, "  %d. %s %s\n", i+1, name, r.Color.Dim(fmt.Sprintf("(priority %d)", snap.Meta.Priority)))
+	}
+}
+
+// RenderBacklogSummary writes the === Backlog Task Summary === section with
+// compact frontmatter for every parsed backlog task.
+func (r *DryRunRenderer) RenderBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}, blocked map[string][]queue.DependencyBlock) {
+	backlog := idx.TasksByState(queue.DirBacklog)
+	if len(backlog) == 0 {
+		return
+	}
+	r.header("Backlog Task Summary")
+	for _, snap := range backlog {
+		status := r.Color.Green("runnable")
+		if _, ok := blocked[snap.Filename]; ok {
+			status = r.Color.Red("dependency-blocked")
+		} else if _, ok := deferred[snap.Filename]; ok {
+			status = r.Color.Yellow("deferred")
+		}
+
+		affects := "none"
+		if len(snap.Meta.Affects) > 0 {
+			joined := strings.Join(snap.Meta.Affects, ", ")
+			affects = ui.Truncate(joined, r.valueWidth(4, 9)) // "    affects: "
+		}
+		dependsOn := "none"
+		if len(snap.Meta.DependsOn) > 0 {
+			joined := strings.Join(snap.Meta.DependsOn, ", ")
+			dependsOn = ui.Truncate(joined, r.valueWidth(4, 12)) // "    depends_on: "
+		}
+
+		displayName := snap.Filename
+		// Account for "  " prefix + " [" + status text + "]" suffix.
+		// The longest plain-text status is "dependency-blocked" (18 chars).
+		statusLen := 8 // "runnable"
+		if _, ok := blocked[snap.Filename]; ok {
+			statusLen = 18 // "dependency-blocked"
+		} else if _, ok := deferred[snap.Filename]; ok {
+			statusLen = 8 // "deferred"
+		}
+		overhead := 2 + 2 + statusLen + 1 // "  " + " [" + status + "]"
+		maxName := r.Width - overhead
+		if maxName > 0 {
+			displayName = ui.Truncate(displayName, maxName)
+		}
+		fmt.Fprintf(r.W, "  %s [%s]\n", displayName, status)
+		fmt.Fprintf(r.W, "    id: %s  priority: %d\n", snap.Meta.ID, snap.Meta.Priority)
+		fmt.Fprintf(r.W, "    affects: %s\n", affects)
+		fmt.Fprintf(r.W, "    depends_on: %s\n", dependsOn)
+		if blocks, ok := blocked[snap.Filename]; ok {
+			fmt.Fprintf(r.W, "    blocked by: %s\n", queue.FormatDependencyBlocks(blocks))
+		}
+	}
+}
+
+// RenderResolvedSettings writes the === Resolved Settings === section.
+func (r *DryRunRenderer) RenderResolvedSettings(opts RunOptions) {
+	r.header("Resolved Settings")
+	labelW := 24
+	vw := r.valueWidth(2, labelW)
+	printSetting := func(label, value string) {
+		value = ui.Truncate(value, vw)
+		fmt.Fprintf(r.W, "  %-*s %s\n", labelW, label, value)
+	}
+	printSetting("task model:", opts.TaskModel)
+	printSetting("review model:", opts.ReviewModel)
+	fmt.Fprintf(r.W, "  %-*s %t\n", labelW, "review session resume:", opts.ReviewSessionResumeEnabled)
+	printSetting("task reasoning effort:", opts.TaskReasoningEffort)
+	printSetting("review reasoning effort:", opts.ReviewReasoningEffort)
+}
+
+// RenderQueueSummary writes the === Queue Summary === section.
+func (r *DryRunRenderer) RenderQueueSummary(idx *queue.PollIndex, subdirs []string, parseFailuresByDir map[string]int, deferredCount int) {
+	r.header("Queue Summary")
+	for _, sub := range subdirs {
+		fmt.Fprintf(r.W, "  %-20s %d\n", sub, len(idx.TasksByState(sub))+parseFailuresByDir[sub])
+	}
+	if deferredCount > 0 {
+		fmt.Fprintf(r.W, "  %-20s %d\n", "deferred", deferredCount)
 	}
 }
 

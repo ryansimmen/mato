@@ -1,7 +1,6 @@
 package queue
 
 import (
-	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -52,7 +51,7 @@ Some instructions here.
 		t.Fatal(err)
 	}
 
-	if err := RetryTask(tmp, "fix-login"); err != nil {
+	if _, err := RetryTask(tmp, "fix-login"); err != nil {
 		t.Fatalf("RetryTask() error: %v", err)
 	}
 
@@ -111,7 +110,7 @@ func TestRetryTask_NotInFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := RetryTask(tmp, "nonexistent")
+	_, err := RetryTask(tmp, "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for missing task")
 	}
@@ -140,7 +139,7 @@ func TestRetryTask_DestinationCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := RetryTask(tmp, "task")
+	_, err := RetryTask(tmp, "task")
 	if err == nil {
 		t.Fatal("expected error for destination collision")
 	}
@@ -178,7 +177,8 @@ func TestRetryTask_ConcurrentReservationAllowsSingleWinner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			results <- RetryTask(tmp, "task")
+			_, retryErr := RetryTask(tmp, "task")
+			results <- retryErr
 		}()
 	}
 	close(start)
@@ -220,7 +220,7 @@ func TestRetryTask_TempFileFailureLeavesNoPlaceholder(t *testing.T) {
 		return nil, io.ErrUnexpectedEOF
 	})
 
-	err := RetryTask(tmp, "task")
+	_, err := RetryTask(tmp, "task")
 	if err == nil || !strings.Contains(err.Error(), "create temp file in backlog") {
 		t.Fatalf("err = %v, want create temp file in backlog error", err)
 	}
@@ -245,7 +245,7 @@ func TestRetryTask_AppendsMdExtension(t *testing.T) {
 	}
 
 	// Call with stem only (no .md extension).
-	if err := RetryTask(tmp, "my-task"); err != nil {
+	if _, err := RetryTask(tmp, "my-task"); err != nil {
 		t.Fatalf("RetryTask() error: %v", err)
 	}
 
@@ -269,7 +269,7 @@ func TestRetryTask_ExplicitIDResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RetryTask(tmp, "explicit-id"); err != nil {
+	if _, err := RetryTask(tmp, "explicit-id"); err != nil {
 		t.Fatalf("RetryTask() error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(backlogDir, "filename.md")); err != nil {
@@ -292,7 +292,7 @@ func TestRetryTask_ExplicitIDWithSlash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RetryTask(tmp, "group/explicit-id"); err != nil {
+	if _, err := RetryTask(tmp, "group/explicit-id"); err != nil {
 		t.Fatalf("RetryTask() error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(backlogDir, "filename.md")); err != nil {
@@ -309,7 +309,7 @@ func TestRetryTask_RejectsPathTraversal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := RetryTask(tmp, "../../README")
+	_, err := RetryTask(tmp, "../../README")
 	if err == nil {
 		t.Fatal("expected error for path traversal name")
 	}
@@ -331,26 +331,25 @@ func TestRetryTask_DependencyBlockedWarnsAndReconcileMovesToWaiting(t *testing.T
 		t.Fatal(err)
 	}
 
-	oldStderr := os.Stderr
-	r, w, err := os.Pipe()
+	result, err := RetryTask(tmp, "blocked")
 	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stderr = w
-	defer func() { os.Stderr = oldStderr }()
-
-	if err := RetryTask(tmp, "blocked"); err != nil {
 		t.Fatalf("RetryTask() error: %v", err)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("close stderr pipe: %v", err)
+	if !result.DependencyBlocked {
+		t.Fatal("DependencyBlocked = false, want true")
 	}
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, r); err != nil {
-		t.Fatalf("read stderr: %v", err)
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected at least one warning about dependency block")
 	}
-	if !strings.Contains(buf.String(), "next reconcile will move it to waiting/") {
-		t.Fatalf("stderr = %q, want warning about waiting/ demotion", buf.String())
+	found := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "next reconcile will move it to waiting/") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Warnings = %v, want warning about waiting/ demotion", result.Warnings)
 	}
 
 	if got := ReconcileReadyQueue(tmp, nil); !got {
@@ -511,7 +510,7 @@ func TestRetryTask_CleansRuntimeState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RetryTask(tmp, "cleanup-task"); err != nil {
+	if _, err := RetryTask(tmp, "cleanup-task"); err != nil {
 		t.Fatalf("RetryTask() error: %v", err)
 	}
 
@@ -562,7 +561,7 @@ func TestRetryTask_NoEmptyPlaceholderDuringWrite(t *testing.T) {
 	}
 	t.Cleanup(func() { createRetryTempFileFn = origCreate })
 
-	if err := RetryTask(tmp, "race-check"); err != nil {
+	if _, err := RetryTask(tmp, "race-check"); err != nil {
 		t.Fatalf("RetryTask() error: %v", err)
 	}
 

@@ -6,27 +6,22 @@ import (
 	"io"
 	"strings"
 
-	"github.com/fatih/color"
+	"mato/internal/ui"
 )
 
-var (
-	greenSprint  = color.New(color.FgGreen).SprintFunc()
-	redSprint    = color.New(color.FgRed).SprintFunc()
-	yellowSprint = color.New(color.FgYellow).SprintFunc()
-	faintSprint  = color.New(color.Faint).SprintFunc()
-)
+var colors = ui.NewColorSet()
 
 // colorIndicator wraps a plain-text category indicator with ANSI color.
 func colorIndicator(indicator string) string {
 	switch indicator {
 	case "[OK]":
-		return greenSprint(indicator)
+		return colors.Green(indicator)
 	case "[ERROR]":
-		return redSprint(indicator)
+		return colors.Red(indicator)
 	case "[WARN]":
-		return yellowSprint(indicator)
+		return colors.Yellow(indicator)
 	case "[SKIP]":
-		return faintSprint(indicator)
+		return colors.Dim(indicator)
 	default:
 		return indicator
 	}

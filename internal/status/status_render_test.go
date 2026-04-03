@@ -5,10 +5,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
+	"mato/internal/ui"
 )
 
 // plainColorSet returns a colorSet with no ANSI formatting.
@@ -29,7 +31,7 @@ func plainColorSet() colorSet {
 		}
 		return buf.String()
 	}
-	return colorSet{bold: plain, green: plain, red: plain, yellow: plain, cyan: plain, dim: plain}
+	return colorSet{Bold: plain, Green: plain, Red: plain, Yellow: plain, Cyan: plain, Dim: plain}
 }
 
 func intToStr(n int) string {
@@ -1075,5 +1077,710 @@ func TestRenderFailedTasks_TerminalAndCycleFailure(t *testing.T) {
 	}
 	if !strings.Contains(output, "circular dependency") {
 		t.Errorf("output should also mention cycle failure, got:\n%s", output)
+	}
+}
+
+// Narrow-terminal tests for compact sections.
+
+func TestRenderCompactAgents_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 60 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+		presenceMap: map[string]messaging.PresenceInfo{
+			"abc12345": {
+				Task:   "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+				Branch: "task/implement-very-long-feature-name-that-exceeds-terminal-width",
+			},
+		},
+	}
+
+	renderCompactAgents(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow compact agents, got:\n%s", output)
+	}
+}
+
+func TestRenderCompactAgents_NarrowTerminalWithStageAgeFitsWidth(t *testing.T) {
+	const termW = 40
+	prev := ui.SetTermWidthFunc(func() int { return termW })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+		presenceMap: map[string]messaging.PresenceInfo{
+			"abc12345": {
+				Task:   "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+				Branch: "task/implement-very-long-feature-name-that-exceeds-terminal-width",
+			},
+		},
+		activeProgress: []progressEntry{{
+			displayID: "abc12345",
+			body:      "Step: WORK",
+			task:      "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+			ago:       "5m",
+		}},
+	}
+
+	renderCompactAgents(&buf, c, data)
+
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if strings.HasPrefix(line, "  ") && utf8.RuneCountInString(line) > termW {
+			t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
+		}
+	}
+}
+
+func TestRenderCompactAgents_VeryNarrowTerminalTruncatesAgentID(t *testing.T) {
+	tests := []struct {
+		name  string
+		termW int
+	}{
+		{"width 12", 12},
+		{"width 6", 6},
+		{"width 4", 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := ui.SetTermWidthFunc(func() int { return tt.termW })
+			defer ui.SetTermWidthFunc(prev)
+
+			var buf bytes.Buffer
+			c := plainColorSet()
+			data := statusData{
+				agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+				presenceMap: map[string]messaging.PresenceInfo{
+					"abc12345": {
+						Task:   "some-task.md",
+						Branch: "task/some-task",
+					},
+				},
+			}
+
+			renderCompactAgents(&buf, c, data)
+
+			for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+				if strings.HasPrefix(line, "  ") && utf8.RuneCountInString(line) > tt.termW {
+					t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q", tt.termW, utf8.RuneCountInString(line), line)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderCompactAgents_ExtremelyNarrowTerminal(t *testing.T) {
+	tests := []struct {
+		name  string
+		termW int
+	}{
+		{"width 1", 1},
+		{"width 2", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := ui.SetTermWidthFunc(func() int { return tt.termW })
+			defer ui.SetTermWidthFunc(prev)
+
+			var buf bytes.Buffer
+			c := plainColorSet()
+			data := statusData{
+				agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+				presenceMap: map[string]messaging.PresenceInfo{
+					"abc12345": {
+						Task:   "some-task.md",
+						Branch: "task/some-task",
+					},
+				},
+			}
+
+			renderCompactAgents(&buf, c, data)
+
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			for i, line := range lines {
+				if i == 0 {
+					continue // skip header "Agents (N)"
+				}
+				if utf8.RuneCountInString(line) > tt.termW {
+					t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q",
+						tt.termW, utf8.RuneCountInString(line), line)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderCompactAgents_OverflowSummaryBoundedOnTinyTerminals(t *testing.T) {
+	tests := []struct {
+		name  string
+		termW int
+	}{
+		{"width 1", 1},
+		{"width 2", 2},
+		{"width 4", 4},
+		{"width 10", 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := ui.SetTermWidthFunc(func() int { return tt.termW })
+			defer ui.SetTermWidthFunc(prev)
+
+			var buf bytes.Buffer
+			c := plainColorSet()
+
+			// Create more agents than compactListLimit to trigger the overflow summary row.
+			agents := make([]statusAgent, 0, compactListLimit+3)
+			for i := range compactListLimit + 3 {
+				agents = append(agents, statusAgent{ID: "agent-" + intToStr(i), PID: 1000 + i})
+			}
+
+			renderCompactAgents(&buf, c, statusData{agents: agents})
+
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			wantLines := compactListLimit + 2 // header + compact rows + summary
+			if len(lines) != wantLines {
+				t.Fatalf("expected %d lines including overflow summary row, got %d lines:\n%s", wantLines, len(lines), buf.String())
+			}
+			summaryLine := lines[len(lines)-1]
+			if utf8.RuneCountInString(summaryLine) == 0 {
+				t.Fatalf("expected non-empty overflow summary row, got final line %q", summaryLine)
+			}
+			if tt.termW >= 4 && !strings.Contains(summaryLine, "…") {
+				t.Fatalf("expected truncated overflow summary marker in final line %q", summaryLine)
+			}
+			for i, line := range lines {
+				if i == 0 {
+					continue // skip header "Agents (N)"
+				}
+				if utf8.RuneCountInString(line) > tt.termW {
+					t.Errorf("line exceeds terminal width %d: runes=%d, line=%q",
+						tt.termW, utf8.RuneCountInString(line), line)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderCompactNextUp_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 40 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		runnableBacklog: []taskEntry{{
+			name:  "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+			title: "A very long title that makes the line overflow",
+		}},
+	}
+
+	renderCompactNextUp(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow compact next up, got:\n%s", output)
+	}
+}
+
+func TestRenderRecentMessages_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 60 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		recentMessages: []messaging.Message{{
+			From:   "abcd1234",
+			Type:   "progress",
+			Body:   "This is a very long progress message that should be truncated on narrow terminals to prevent overflow",
+			SentAt: time.Now().UTC(),
+		}},
+	}
+
+	renderRecentMessages(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow messages, got:\n%s", output)
+	}
+}
+
+// Narrow-terminal tests for verbose sections.
+
+func TestRenderActiveAgents_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 60 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+		presenceMap: map[string]messaging.PresenceInfo{
+			"abc12345": {
+				Task:   "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+				Branch: "task/implement-very-long-feature-name-that-exceeds-terminal-width",
+			},
+		},
+	}
+
+	renderActiveAgents(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow active agents, got:\n%s", output)
+	}
+}
+
+func TestRenderRunnableBacklog_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 50 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		runnableBacklog: []taskEntry{{
+			name:     "implement-very-long-feature-name-exceeds-width.md",
+			title:    "This is a very long task title that must be truncated",
+			priority: 100,
+		}},
+	}
+
+	renderRunnableBacklog(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow runnable backlog, got:\n%s", output)
+	}
+}
+
+func TestRenderReadyForReview_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 50 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		readyForReview: []taskEntry{{
+			name:   "implement-very-long-feature-name.md",
+			title:  "An extremely long title that will overflow narrow terminals easily",
+			branch: "task/implement-very-long-feature-name",
+		}},
+	}
+
+	renderReadyForReview(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow ready-for-review, got:\n%s", output)
+	}
+}
+
+func TestRenderRecentCompletions_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 60 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		completions: []messaging.CompletionDetail{{
+			TaskFile:     "very-long-task-name-with-many-words.md",
+			Title:        "An extremely long title that will overflow narrow terminals easily",
+			CommitSHA:    "abc1234567890",
+			FilesChanged: []string{"a.go", "b.go"},
+			MergedAt:     time.Now().UTC().Add(-5 * time.Minute),
+		}},
+	}
+
+	renderRecentCompletions(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow completions, got:\n%s", output)
+	}
+}
+
+// Very-narrow-terminal tests (width=20) where the budget goes non-positive.
+// Ensures truncation still happens instead of printing unbounded text.
+
+func TestRenderActiveAgents_VeryNarrowTerminalTruncates(t *testing.T) {
+	const termW = 20
+	prev := ui.SetTermWidthFunc(func() int { return termW })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "agent-abcd1234", PID: 9999}},
+		presenceMap: map[string]messaging.PresenceInfo{
+			"agent-abcd1234": {
+				Task:   "implement-very-long-feature-name-that-exceeds-any-reasonable-width.md",
+				Branch: "task/implement-very-long-feature-name-that-exceeds-any-reasonable-width",
+			},
+		},
+	}
+
+	renderActiveAgents(&buf, c, data)
+	output := buf.String()
+
+	// At width=20, the fixed prefix (indent + name + PID) already exceeds
+	// the budget, so both task and branch are dropped entirely.
+	if strings.Contains(output, "implement-very-long") {
+		t.Errorf("task should be dropped at very narrow width, got:\n%s", output)
+	}
+	if strings.Contains(output, "task/implement") {
+		t.Errorf("branch should be dropped at very narrow width, got:\n%s", output)
+	}
+
+	// Verify every data line fits within the configured terminal width.
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.HasPrefix(line, "  ") && utf8.RuneCountInString(line) > termW {
+			t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
+		}
+	}
+}
+
+func TestRenderRunnableBacklog_VeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		runnableBacklog: []taskEntry{{
+			name:     "implement-very-long-feature-name-exceeds-width.md",
+			title:    "Very long task title that must be truncated",
+			priority: 100,
+		}},
+	}
+
+	renderRunnableBacklog(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+}
+
+func TestRenderActiveAgents_NarrowTerminalFitsWidth(t *testing.T) {
+	const termW = 50
+	prev := ui.SetTermWidthFunc(func() int { return termW })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "agent-ab12", PID: 42}},
+		presenceMap: map[string]messaging.PresenceInfo{
+			"agent-ab12": {
+				Task:   "implement-very-long-feature-name-that-exceeds-any-reasonable-width.md",
+				Branch: "task/implement-very-long-feature-name-that-exceeds-any-reasonable-width",
+			},
+		},
+	}
+
+	renderActiveAgents(&buf, c, data)
+	output := buf.String()
+
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "  (") && utf8.RuneCountInString(line) > termW {
+			t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
+		}
+	}
+}
+
+func TestRenderAgentProgress_VeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		activeProgress: []progressEntry{{
+			displayID: "agent-abcd1234",
+			body:      "Building the entire application from scratch and running all tests",
+			task:      "very-long-task.md",
+			ago:       "5m",
+		}},
+	}
+
+	renderAgentProgress(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+}
+
+func TestRenderRecentMessages_VeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		recentMessages: []messaging.Message{{
+			From:   "abcd1234",
+			Type:   "progress",
+			Body:   "This is a very long progress message that exceeds any narrow terminal",
+			SentAt: time.Now().UTC(),
+		}},
+	}
+
+	renderRecentMessages(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+}
+
+func TestRenderRecentCompletions_VeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		completions: []messaging.CompletionDetail{{
+			TaskFile:     "very-long-task-name-with-many-words.md",
+			Title:        "An extremely long title that overflows",
+			CommitSHA:    "abc1234567890",
+			FilesChanged: []string{"a.go", "b.go"},
+			MergedAt:     time.Now().UTC().Add(-5 * time.Minute),
+		}},
+	}
+
+	renderRecentCompletions(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+}
+
+func TestRenderReadyForReview_VeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		readyForReview: []taskEntry{{
+			name:   "implement-very-long-feature-name.md",
+			title:  "An extremely long title that will overflow",
+			branch: "task/implement-very-long-feature-name",
+		}},
+	}
+
+	renderReadyForReview(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+}
+
+func TestRenderCompactNextUp_VeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		runnableBacklog: []taskEntry{{
+			name:  "implement-very-long-feature-name-exceeds-width.md",
+			title: "A title too long for twenty columns",
+		}},
+	}
+
+	renderCompactNextUp(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+}
+
+// Narrow-terminal tests for the remaining verbose sections.
+
+func TestRenderInProgressTasks_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 50 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		inProgressTasks: []taskEntry{{
+			name:      "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+			title:     "An extremely long title that overflows any narrow terminal",
+			claimedBy: "abc12345",
+			claimedAt: time.Now().UTC().Add(-10 * time.Minute),
+		}},
+	}
+
+	renderInProgressTasks(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow in-progress tasks, got:\n%s", output)
+	}
+	if !strings.Contains(output, "agent abc12345") {
+		t.Errorf("should still contain agent info, got:\n%s", output)
+	}
+}
+
+func TestRenderReadyToMerge_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 50 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		readyToMerge: []taskEntry{{
+			name:     "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+			title:    "An extremely long title that overflows narrow terminals easily",
+			priority: 100,
+		}},
+	}
+
+	renderReadyToMerge(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow ready-to-merge, got:\n%s", output)
+	}
+	if !strings.Contains(output, "priority 100") {
+		t.Errorf("should still contain priority suffix, got:\n%s", output)
+	}
+}
+
+func TestRenderDependencyBlocked_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 50 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		waitingTasks: []waitingTaskSummary{{
+			Name:  "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+			Title: "An extremely long title",
+			State: queue.DirWaiting,
+			Dependencies: []waitingDep{
+				{ID: "very-long-dependency-task-name-that-also-overflows", Status: "backlog"},
+			},
+		}},
+	}
+
+	renderDependencyBlocked(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow dependency-blocked, got:\n%s", output)
+	}
+}
+
+func TestRenderConflictDeferred_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 50 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		deferredDetail: map[string]queue.DeferralInfo{
+			"my-deferred-task.md": {
+				BlockedBy:          "some-very-long-blocking-task-name-that-exceeds-terminal-width.md",
+				BlockedByDir:       "in-progress",
+				ConflictingAffects: []string{"internal/very/long/path/to/file.go", "internal/another/very/long/path/to/file.go", "internal/yet/another/long/path.go"},
+			},
+		},
+	}
+
+	renderConflictDeferred(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow conflict-deferred, got:\n%s", output)
+	}
+}
+
+func TestRenderFailedTasks_NarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 50 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		failedTasks: []taskEntry{{
+			name:              "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+			title:             "An extremely long title that overflows narrow terminals easily",
+			failureCount:      3,
+			maxRetries:        5,
+			lastFailureReason: "build failed with a very long error description that goes on and on",
+		}},
+	}
+
+	renderFailedTasks(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow failed tasks, got:\n%s", output)
+	}
+	if !strings.Contains(output, "retries") {
+		t.Errorf("should still contain retry info, got:\n%s", output)
+	}
+}
+
+// Very-narrow tests (width=20) for the remaining verbose sections.
+
+func TestRenderInProgressTasks_VeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		inProgressTasks: []taskEntry{{
+			name:      "implement-very-long-feature-name.md",
+			title:     "A very long title",
+			claimedBy: "abc12345",
+			claimedAt: time.Now().UTC().Add(-5 * time.Minute),
+		}},
+	}
+
+	renderInProgressTasks(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+}
+
+func TestRenderFailedTasks_VeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		failedTasks: []taskEntry{{
+			name:              "implement-very-long-feature-name.md",
+			title:             "Very long title here",
+			failureCount:      2,
+			maxRetries:        3,
+			lastFailureReason: "build failed",
+		}},
+	}
+
+	renderFailedTasks(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
 	}
 }

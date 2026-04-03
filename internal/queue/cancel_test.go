@@ -333,7 +333,7 @@ func TestRetryTask_StrippedCancelledMarker(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	writeTask(t, tasksDir, DirFailed, "task.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: task\n---\n# Task\n")
 
-	if err := RetryTask(tasksDir, "task"); err != nil {
+	if _, err := RetryTask(tasksDir, "task"); err != nil {
 		t.Fatalf("RetryTask: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(tasksDir, DirBacklog, "task.md"))
