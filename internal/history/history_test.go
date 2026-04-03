@@ -617,3 +617,77 @@ func TestShowTo_VerdictFallbackNotUsedWhenMarkersExist(t *testing.T) {
 		t.Fatalf("expected exactly 1 REJECTED event from durable marker, got %d", rejectedCount)
 	}
 }
+
+func TestShowTo_VerdictFallbackClearedAfterRetry(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	filename := "retry-clears-log-verdict.md"
+
+	// Task in failed/ with no durable rejection marker, plus stale verdict.
+	writeTask(t, tasksDir, queue.DirFailed, filename,
+		"# Retry Clears Log Verdict\n\n<!-- failure: abc at 2026-03-20T10:00:00Z step=WORK error=build -->\n")
+	writeVerdictFile(t, tasksDir, filename, map[string]string{
+		"verdict": "reject",
+		"reason":  "stale log reason",
+	})
+
+	// Before retry: history should include a REJECTED event from verdict.
+	var beforeBuf bytes.Buffer
+	if err := ShowTo(&beforeBuf, repoRoot, 100, "text"); err != nil {
+		t.Fatalf("ShowTo before retry: %v", err)
+	}
+	if !strings.Contains(beforeBuf.String(), "stale log reason") {
+		t.Fatalf("before retry: expected verdict reason in log output:\n%s", beforeBuf.String())
+	}
+
+	// Perform retry (reset transition).
+	if _, err := queue.RetryTask(tasksDir, filename); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+
+	// After retry: history must not surface the stale verdict reason.
+	var afterBuf bytes.Buffer
+	if err := ShowTo(&afterBuf, repoRoot, 100, "text"); err != nil {
+		t.Fatalf("ShowTo after retry: %v", err)
+	}
+	if strings.Contains(afterBuf.String(), "stale log reason") {
+		t.Fatalf("after retry: stale verdict reason should not appear in log:\n%s", afterBuf.String())
+	}
+}
+
+func TestShowTo_VerdictFallbackClearedAfterCancel(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	filename := "cancel-clears-log-verdict.md"
+
+	// Task in backlog/ with no durable rejection marker, plus stale verdict.
+	writeTask(t, tasksDir, queue.DirBacklog, filename,
+		"# Cancel Clears Log Verdict\n")
+	writeVerdictFile(t, tasksDir, filename, map[string]string{
+		"verdict": "reject",
+		"reason":  "terminal log reason",
+	})
+
+	// Before cancel: history should include a REJECTED event from verdict.
+	var beforeBuf bytes.Buffer
+	if err := ShowTo(&beforeBuf, repoRoot, 100, "text"); err != nil {
+		t.Fatalf("ShowTo before cancel: %v", err)
+	}
+	if !strings.Contains(beforeBuf.String(), "terminal log reason") {
+		t.Fatalf("before cancel: expected verdict reason in log output:\n%s", beforeBuf.String())
+	}
+
+	// Cancel the task (terminal transition).
+	if _, err := queue.CancelTask(tasksDir, filename); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+
+	// After cancel: history must not surface the stale verdict reason.
+	var afterBuf bytes.Buffer
+	if err := ShowTo(&afterBuf, repoRoot, 100, "text"); err != nil {
+		t.Fatalf("ShowTo after cancel: %v", err)
+	}
+	if strings.Contains(afterBuf.String(), "terminal log reason") {
+		t.Fatalf("after cancel: stale verdict reason should not appear in log:\n%s", afterBuf.String())
+	}
+}
