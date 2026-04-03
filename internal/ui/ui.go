@@ -112,6 +112,35 @@ func Truncate(s string, maxLen int) string {
 	return string(runes[:maxLen-1]) + "…"
 }
 
+// termWidthFn is the function used by TermWidth to detect the
+// terminal width. It can be replaced in tests via SetTermWidthFunc.
+var termWidthFn = defaultTermWidth
+
+func defaultTermWidth() int {
+	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || w <= 0 {
+		return 0
+	}
+	return w
+}
+
+// TermWidth returns the current terminal width in columns.
+// Returns 0 when stdout is not a terminal, signaling callers to
+// skip width-based truncation so piped and test output stays
+// deterministic.
+func TermWidth() int {
+	return termWidthFn()
+}
+
+// SetTermWidthFunc replaces the terminal width detection function
+// and returns the previous value so callers (typically tests) can
+// restore it with defer.
+func SetTermWidthFunc(fn func() int) func() int {
+	prev := termWidthFn
+	termWidthFn = fn
+	return prev
+}
+
 // RequireTasksDir checks that tasksDir exists and is a directory.
 func RequireTasksDir(tasksDir string) error {
 	info, err := os.Stat(tasksDir)
