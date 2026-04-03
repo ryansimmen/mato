@@ -618,17 +618,18 @@ func TestShowTo_VerdictFallbackNotUsedWhenMarkersExist(t *testing.T) {
 	}
 }
 
-func TestShowTo_VerdictFallbackClearedAfterRetry(t *testing.T) {
+func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	filename := "retry-clears-log-verdict.md"
+	filename := "retry-keeps-log-verdict.md"
 
-	// Task in failed/ with no durable rejection marker, plus stale verdict.
+	// Task in failed/ with no durable rejection marker, plus verdict file
+	// that should survive retry.
 	writeTask(t, tasksDir, queue.DirFailed, filename,
-		"# Retry Clears Log Verdict\n\n<!-- failure: abc at 2026-03-20T10:00:00Z step=WORK error=build -->\n")
+		"# Retry Keeps Log Verdict\n\n<!-- failure: abc at 2026-03-20T10:00:00Z step=WORK error=build -->\n")
 	writeVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",
-		"reason":  "stale log reason",
+		"reason":  "preserved log reason",
 	})
 
 	// Before retry: history should include a REJECTED event from verdict.
@@ -636,22 +637,22 @@ func TestShowTo_VerdictFallbackClearedAfterRetry(t *testing.T) {
 	if err := ShowTo(&beforeBuf, repoRoot, 100, "text"); err != nil {
 		t.Fatalf("ShowTo before retry: %v", err)
 	}
-	if !strings.Contains(beforeBuf.String(), "stale log reason") {
+	if !strings.Contains(beforeBuf.String(), "preserved log reason") {
 		t.Fatalf("before retry: expected verdict reason in log output:\n%s", beforeBuf.String())
 	}
 
-	// Perform retry (reset transition).
+	// Perform retry (reset transition — verdict fallback is preserved).
 	if _, err := queue.RetryTask(tasksDir, filename); err != nil {
 		t.Fatalf("RetryTask: %v", err)
 	}
 
-	// After retry: history must not surface the stale verdict reason.
+	// After retry: history must still surface the preserved verdict reason.
 	var afterBuf bytes.Buffer
 	if err := ShowTo(&afterBuf, repoRoot, 100, "text"); err != nil {
 		t.Fatalf("ShowTo after retry: %v", err)
 	}
-	if strings.Contains(afterBuf.String(), "stale log reason") {
-		t.Fatalf("after retry: stale verdict reason should not appear in log:\n%s", afterBuf.String())
+	if !strings.Contains(afterBuf.String(), "preserved log reason") {
+		t.Fatalf("after retry: preserved verdict reason should still appear in log:\n%s", afterBuf.String())
 	}
 }
 

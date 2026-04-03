@@ -358,7 +358,7 @@ inputs.
 | `MATO_FILE_CLAIMS` | none | Path to the file-claims JSON index inside the container (e.g. `/workspace/.mato/messages/file-claims.json`). The host writes this index before agent launch via `messaging.BuildAndWriteFileClaims(...)`. It maps active `affects:` entries to `{task, status}` objects; keys ending with `/` are directory-prefix claims that apply to all files underneath, and keys containing glob metacharacters (`*`, `?`, `[`, `{`) are glob-pattern claims that apply to any matching file. |
 | `MATO_PREVIOUS_FAILURES` | none | Injected when the task file contains previous `<!-- failure: ... -->` records. Contains newline-separated failure lines extracted by `extractFailureLines(...)`. Agents can read this during `VERIFY_CLAIM` to understand why earlier attempts failed and avoid repeating the same mistakes. |
 | `MATO_REVIEW_MODE` | none | Set to `1` inside review agent containers. Indicates the container is running a review agent, not a task agent. Not user-configurable. |
-| `MATO_REVIEW_FEEDBACK` | none | Injected when the task file contains previous `<!-- review-rejection: ... -->` records. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
+| `MATO_REVIEW_FEEDBACK` | none | Injected when prior review feedback is available — either from durable `<!-- review-rejection: ... -->` records in the task file or from a preserved verdict fallback file. Contains newline-separated review rejection records from prior review attempts. The implementing agent can read this during `VERIFY_CLAIM` to address the reviewer's feedback. |
 | `MATO_REVIEW_VERDICT_PATH` | none | Path to the JSON verdict file where the review agent writes its verdict (e.g. `/workspace/.mato/messages/verdict-my-task.md.json`). Set per-run by the host when launching a review agent. The verdict structure is `{"verdict":"approve\|reject\|error","reason":"..."}`. Not set for task agents. |
 
 `MATO_DEPENDENCY_CONTEXT` is conditionally injected only when the claimed task has
@@ -369,8 +369,13 @@ path (not inline JSON) to avoid shell ARG_MAX limits with many dependencies.
 failure records from prior attempts.
 `MATO_REVIEW_MODE` is injected only inside review agent containers.
 `MATO_REVIEW_VERDICT_PATH` is injected only inside review agent containers.
-`MATO_REVIEW_FEEDBACK` is conditionally injected only when the task file contains
-review rejection records from prior review attempts.
+`MATO_REVIEW_FEEDBACK` is conditionally injected when prior review feedback is
+available. The host checks two sources in priority order: durable
+`<!-- review-rejection: ... -->` records in the task file, and a preserved verdict
+fallback file (`.mato/messages/verdict-<filename>.json`). The verdict fallback
+survives `mato retry` and retry-exhausted transitions, so review feedback remains
+accessible across retryable cycles. Only truly terminal transitions (cancel,
+merge/completion) clear the verdict fallback.
 
 ## Docker Configuration
 Each agent run uses `docker run --rm --init` with either `-it` (when stdin is a terminal) or
