@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/fatih/color"
 	"golang.org/x/term"
@@ -62,14 +63,26 @@ func SetWarningWriter(w io.Writer) io.Writer {
 }
 
 // ValidateFormat checks that format is one of the allowed values and
-// returns a descriptive error if it is not.
+// returns a user-facing error if it is not.
 func ValidateFormat(format string, allowed []string) error {
 	for _, a := range allowed {
 		if format == a {
 			return nil
 		}
 	}
-	return fmt.Errorf("unsupported format %q", format)
+	if len(allowed) == 0 {
+		return fmt.Errorf("--format is not supported")
+	}
+	if len(allowed) == 1 {
+		return fmt.Errorf("--format must be %s, got %s", allowed[0], format)
+	}
+	if len(allowed) == 2 {
+		return fmt.Errorf("--format must be %s or %s, got %s", allowed[0], allowed[1], format)
+	}
+	if len(allowed) == 3 {
+		return fmt.Errorf("--format must be %s, %s, or %s, got %s", allowed[0], allowed[1], allowed[2], format)
+	}
+	return fmt.Errorf("--format must be one of %s, got %s", strings.Join(allowed, ", "), format)
 }
 
 // TerminalWidth returns the width of the terminal attached to fd. If

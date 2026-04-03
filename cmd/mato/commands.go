@@ -40,7 +40,7 @@ var inspectShowFn = inspect.Show
 
 // logShowFn is the function used to render durable task history.
 // Tests replace it to verify CLI flag parsing and delegation.
-var logShowFn = history.Show
+var logShowFn = history.ShowTo
 
 var cancelTaskFn = queue.CancelTask
 
@@ -63,7 +63,7 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -93,7 +93,7 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 				return err
 			}
 			if format == "json" {
-				return writeJSON(os.Stdout, result)
+				return writeJSON(cmd.OutOrStdout(), result)
 			}
 			printInitResult(result)
 			return nil
@@ -154,7 +154,7 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -170,7 +170,7 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 				if verbose {
 					return newUsageError(cmd, fmt.Errorf("--verbose can only be used with text output"))
 				}
-				return status.ShowJSON(os.Stdout, repo)
+				return status.ShowJSON(cmd.OutOrStdout(), repo)
 			}
 			if watch {
 				if interval <= 0 {
@@ -184,9 +184,9 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 				return status.Watch(ctx, repo, interval)
 			}
 			if verbose {
-				return status.ShowVerbose(repo)
+				return status.ShowVerboseTo(cmd.OutOrStdout(), repo)
 			}
-			return status.Show(repo)
+			return status.ShowTo(cmd.OutOrStdout(), repo)
 		},
 	}
 	configureCommand(cmd)
@@ -222,7 +222,7 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 
 			repoInput, err := resolveRepo(*repoFlag)
@@ -276,11 +276,11 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 			}
 
 			if format == "json" {
-				if renderErr := doctor.RenderJSON(os.Stdout, report); renderErr != nil {
+				if renderErr := doctor.RenderJSON(cmd.OutOrStdout(), report); renderErr != nil {
 					return renderErr
 				}
 			} else {
-				doctor.RenderText(os.Stdout, report)
+				doctor.RenderText(cmd.OutOrStdout(), report)
 			}
 
 			if report.ExitCode != 0 {
@@ -308,7 +308,7 @@ func newLogCmd(repoFlag *string) *cobra.Command {
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			if limit < 0 {
 				return newUsageError(cmd, fmt.Errorf("--limit must be >= 0, got %d", limit))
@@ -320,7 +320,7 @@ func newLogCmd(repoFlag *string) *cobra.Command {
 			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
-			return logShowFn(repo, limit, format)
+			return logShowFn(cmd.OutOrStdout(), repo, limit, format)
 		},
 	}
 	configureCommand(cmd)
@@ -341,7 +341,7 @@ func newGraphCmd(repoFlag *string) *cobra.Command {
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "dot", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text, dot, or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -370,7 +370,7 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 		Args:  usageExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -399,7 +399,7 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 		Args:  usageMinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -459,7 +459,7 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 				}
 			}
 			if format == "json" {
-				if err := writeJSON(os.Stdout, items); err != nil {
+				if err := writeJSON(cmd.OutOrStdout(), items); err != nil {
 					return err
 				}
 			}
@@ -486,7 +486,7 @@ func newPauseCmd(repoFlag *string) *cobra.Command {
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -508,7 +508,7 @@ func newPauseCmd(repoFlag *string) *cobra.Command {
 				return err
 			}
 			if format == "json" {
-				return writeJSON(os.Stdout, result)
+				return writeJSON(cmd.OutOrStdout(), result)
 			}
 			since := result.Since.Format(time.RFC3339)
 			switch {
@@ -538,7 +538,7 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -560,7 +560,7 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 				return err
 			}
 			if format == "json" {
-				return writeJSON(os.Stdout, result)
+				return writeJSON(cmd.OutOrStdout(), result)
 			}
 			if result.WasActive {
 				fmt.Println("Resumed")
@@ -587,7 +587,7 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 		Args:  usageMinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -635,9 +635,9 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 					fmt.Println("The following tasks will be cancelled:")
 					for _, ti := range resolved {
 						if ti.agent != "" {
-							fmt.Printf("  %-20s (%s, agent %s)\n", ti.stem, ti.state, ti.agent)
+							fmt.Printf("  %s (%s, agent %s)\n", ti.stem, ti.state, ti.agent)
 						} else {
-							fmt.Printf("  %-20s (%s)\n", ti.stem, ti.state)
+							fmt.Printf("  %s (%s)\n", ti.stem, ti.state)
 						}
 					}
 					fmt.Println()
@@ -704,7 +704,7 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 				}
 			}
 			if format == "json" {
-				if err := writeJSON(os.Stdout, items); err != nil {
+				if err := writeJSON(cmd.OutOrStdout(), items); err != nil {
 					return err
 				}
 			}
@@ -803,7 +803,7 @@ func confirmCancel(r io.Reader) bool {
 }
 
 // writeJSON encodes v as indented JSON to w.
-func writeJSON(w *os.File, v any) error {
+func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
@@ -818,12 +818,10 @@ func newVersionCmd() *cobra.Command {
 		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
-				return newUsageError(cmd, fmt.Errorf("--format must be text or json, got %s", format))
+				return newUsageError(cmd, err)
 			}
 			if format == "json" {
-				enc := json.NewEncoder(cmd.OutOrStdout())
-				enc.SetIndent("", "  ")
-				return enc.Encode(map[string]string{"version": version})
+				return writeJSON(cmd.OutOrStdout(), map[string]string{"version": version})
 			}
 			return printVersion(cmd.OutOrStdout())
 		},
