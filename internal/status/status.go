@@ -16,6 +16,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/timeutil"
+	"mato/internal/ui"
 
 	"github.com/fatih/color"
 
@@ -63,6 +64,10 @@ func showToMode(w io.Writer, repoRoot string, mode textViewMode) error {
 		return err
 	}
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
+
+	if err := ui.RequireTasksDir(tasksDir); err != nil {
+		return err
+	}
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {

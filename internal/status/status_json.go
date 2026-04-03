@@ -11,6 +11,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/pause"
 	"mato/internal/queue"
+	"mato/internal/ui"
 )
 
 // StatusJSON is the top-level JSON output for the status command.
@@ -107,6 +108,10 @@ func ShowJSON(w io.Writer, repoRoot string) error {
 		return err
 	}
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
+
+	if err := ui.RequireTasksDir(tasksDir); err != nil {
+		return err
+	}
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {

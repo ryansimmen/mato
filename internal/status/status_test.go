@@ -2006,3 +2006,29 @@ func TestShow_CancelledParseFailure(t *testing.T) {
 		t.Fatalf("expected cancelled parse failure in output, got:\n%s", output)
 	}
 }
+
+func TestShow_UninitializedRepo(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	var buf bytes.Buffer
+	err := ShowTo(&buf, repoRoot)
+	if err == nil {
+		t.Fatal("expected error for uninitialized repo, got nil")
+	}
+	if !strings.Contains(err.Error(), "mato init") {
+		t.Fatalf("expected error to mention 'mato init', got: %v", err)
+	}
+}
+
+func TestShowJSON_UninitializedRepo(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	var buf bytes.Buffer
+	err := ShowJSON(&buf, repoRoot)
+	if err == nil {
+		t.Fatal("expected error for uninitialized repo, got nil")
+	}
+	if !strings.Contains(err.Error(), "mato init") {
+		t.Fatalf("expected error to mention 'mato init', got: %v", err)
+	}
+}
