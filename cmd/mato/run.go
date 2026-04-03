@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"mato/internal/config"
+	"mato/internal/configresolve"
 	"mato/internal/runner"
 
 	"github.com/spf13/cobra"
@@ -23,7 +25,7 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 	var dryRun bool
 	var once bool
 	var untilIdle bool
-	var flags runFlags
+	var flags configresolve.RunFlags
 
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -39,6 +41,9 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 			if once && untilIdle {
 				return newUsageError(cmd, fmt.Errorf("--once and --until-idle are mutually exclusive"))
 			}
+			if branch != "" && strings.TrimSpace(branch) == "" {
+				return newUsageError(cmd, fmt.Errorf("--branch must not be whitespace-only"))
+			}
 
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -51,21 +56,22 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fileCfg, err := config.Load(repoRoot)
+			load, err := config.Load(repoRoot)
 			if err != nil {
 				return err
 			}
-			resolvedBranch, err := resolveConfigBranch(fileCfg, branch)
+			resolvedBranch, err := configresolve.ResolveBranch(load, branch)
 			if err != nil {
 				return err
 			}
-			if err := validateBranch(resolvedBranch); err != nil {
+			if err := validateBranch(resolvedBranch.Value); err != nil {
 				return err
 			}
-			opts, err := resolveRunOptions(flags, fileCfg)
+			runCfg, err := configresolve.ResolveRunConfig(flags, load)
 			if err != nil {
 				return err
 			}
+			opts := runCfg.RunOptions()
 			switch {
 			case once:
 				opts.Mode = runner.RunModeOnce
@@ -75,9 +81,9 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 				opts.Mode = runner.RunModeDaemon
 			}
 			if dryRun {
-				return dryRunFn(os.Stdout, repoRoot, resolvedBranch, opts)
+				return dryRunFn(os.Stdout, repoRoot, resolvedBranch.Value, opts)
 			}
-			return runFn(repoRoot, resolvedBranch, opts)
+			return runFn(repoRoot, resolvedBranch.Value, opts)
 		},
 	}
 	configureCommand(cmd)

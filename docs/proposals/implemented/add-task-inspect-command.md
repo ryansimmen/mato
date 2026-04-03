@@ -1,23 +1,8 @@
----
-id: add-task-inspect-command
-priority: 24
-affects:
-   - cmd/mato/main.go
-   - cmd/mato/main_test.go
-   - internal/inspect/
-   - internal/queue/index.go
-   - internal/queue/index_test.go
-   - internal/taskfile/metadata.go
-   - internal/taskfile/metadata_test.go
-   - README.md
-   - docs/architecture.md
----
+# Add `mato inspect` for single-task root-cause explanation
 
 > **Status: Implemented** — This proposal has been fully implemented.
 > The text below describes the original design; see the source code for the
 > current implementation.
-
-# Add `mato inspect` for single-task root-cause explanation
 
 ## Goal
 

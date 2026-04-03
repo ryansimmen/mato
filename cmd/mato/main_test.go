@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"mato/internal/config"
+	"mato/internal/configresolve"
 	"mato/internal/doctor"
 	"mato/internal/git"
 	"mato/internal/queue"
@@ -53,47 +54,161 @@ func TestResolveRepo(t *testing.T) {
 	}
 }
 
-func TestResolveEnvBranch(t *testing.T) {
+func TestResolveBranch_EnvOnly(t *testing.T) {
 	t.Run("unset", func(t *testing.T) {
 		t.Setenv("MATO_BRANCH", "")
-		branch, ok, err := resolveEnvBranch()
+		resolved, err := configresolve.ResolveBranch(config.LoadResult{}, "")
 		if err != nil {
-			t.Fatalf("resolveEnvBranch: %v", err)
+			t.Fatalf("ResolveBranch: %v", err)
 		}
-		if ok || branch != "" {
-			t.Fatalf("got (%q, %v), want (empty, false)", branch, ok)
+		if resolved.Source != configresolve.SourceDefault || resolved.Value != "mato" {
+			t.Fatalf("resolved = %+v, want default mato", resolved)
 		}
 	})
 
 	t.Run("set", func(t *testing.T) {
 		t.Setenv("MATO_BRANCH", "main")
-		branch, ok, err := resolveEnvBranch()
+		resolved, err := configresolve.ResolveBranch(config.LoadResult{}, "")
 		if err != nil {
-			t.Fatalf("resolveEnvBranch: %v", err)
+			t.Fatalf("ResolveBranch: %v", err)
 		}
-		if !ok || branch != "main" {
-			t.Fatalf("got (%q, %v), want (%q, true)", branch, ok, "main")
+		if resolved.Source != configresolve.SourceEnv || resolved.Value != "main" || resolved.EnvVar != "MATO_BRANCH" {
+			t.Fatalf("resolved = %+v, want env main", resolved)
 		}
 	})
 
 	t.Run("empty treated as unset", func(t *testing.T) {
 		t.Setenv("MATO_BRANCH", "")
-		branch, ok, err := resolveEnvBranch()
+		resolved, err := configresolve.ResolveBranch(config.LoadResult{}, "")
 		if err != nil {
-			t.Fatalf("resolveEnvBranch: %v", err)
+			t.Fatalf("ResolveBranch: %v", err)
 		}
-		if ok || branch != "" {
-			t.Fatalf("got (%q, %v), want (empty, false)", branch, ok)
+		if resolved.Source != configresolve.SourceDefault || resolved.Value != "mato" {
+			t.Fatalf("resolved = %+v, want default mato", resolved)
 		}
 	})
 
 	t.Run("whitespace rejected", func(t *testing.T) {
 		t.Setenv("MATO_BRANCH", "   ")
-		_, _, err := resolveEnvBranch()
+		_, err := configresolve.ResolveBranch(config.LoadResult{}, "")
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
 	})
+}
+
+func TestConfigCmd_SubcommandRegistered(t *testing.T) {
+	cmd := newRootCmd()
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "config" {
+			return
+		}
+	}
+	t.Fatal("config subcommand not registered")
+}
+
+func TestConfigCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"config", "--format=yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	if err.Error() != "--format must be text or json, got yaml" {
+		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+func TestConfigCmd_DelegatesToConfigShow(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	var gotRepo, gotFormat string
+	orig := configShowFn
+	defer func() { configShowFn = orig }()
+	configShowFn = func(w io.Writer, repoRootArg, format string) error {
+		gotRepo = repoRootArg
+		gotFormat = format
+		_, _ = io.WriteString(w, "ok")
+		return nil
+	}
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"config", "--repo", repoRoot, "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if gotRepo != repoRoot || gotFormat != "json" {
+		t.Fatalf("delegation = repo %q format %q", gotRepo, gotFormat)
+	}
+	if out.String() != "ok" {
+		t.Fatalf("output = %q, want ok", out.String())
+	}
+}
+
+func TestConfigCmd_JSONOutput(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
+	writeRepoConfig(t, repoRoot, "branch: main\n")
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"config", "--repo", repoRoot, "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var result struct {
+		RepoRoot string `json:"repo_root"`
+		Branch   struct {
+			Value  string `json:"value"`
+			Source string `json:"source"`
+		} `json:"branch"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json.Unmarshal: %v\n%s", err, out.String())
+	}
+	if result.RepoRoot != repoRoot || result.Branch.Value != "main" || result.Branch.Source != "config" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestConfigCmd_ResolverErrorPropagated(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "branch: [\n")
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"config", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "parse config file") {
+		t.Fatalf("err = %v, want parse config file error", err)
+	}
+}
+
+func TestConfigCmd_InvalidEffectiveBranchRejected(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	t.Setenv("MATO_BRANCH", "")
+	writeRepoConfig(t, repoRoot, "branch: foo..bar\n")
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"config", "--repo", repoRoot})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "invalid branch name") {
+		t.Fatalf("err = %v, want invalid branch name", err)
+	}
+}
+
+func TestConfigCmd_WorksWithoutMatoDir(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"config", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out.String(), "Config file: none") {
+		t.Fatalf("output = %q, want config file none", out.String())
+	}
 }
 
 func TestRootCmd_Help(t *testing.T) {
@@ -1078,6 +1193,29 @@ func TestDoctorCmd_EnvImageWithValidConfigSucceeds(t *testing.T) {
 
 	if capturedOpts.DockerImage != "from-env:2.0" {
 		t.Errorf("DockerImage = %q, want %q", capturedOpts.DockerImage, "from-env:2.0")
+	}
+}
+
+func TestDoctorCmd_IgnoresUnrelatedInvalidRunSettings(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "task_reasoning_effort: nope\nagent_timeout: bad\n")
+
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedOpts.DockerImage != runner.DefaultDockerImage {
+		t.Fatalf("DockerImage = %q, want %q", capturedOpts.DockerImage, runner.DefaultDockerImage)
 	}
 }
 
@@ -2304,12 +2442,12 @@ func TestResolveConfigBranch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("MATO_BRANCH", tt.env)
-			got, err := resolveConfigBranch(configFixture(tt.cfg), tt.flag)
+			got, err := configresolve.ResolveBranch(config.LoadResult{Config: configFixture(tt.cfg)}, tt.flag)
 			if err != nil {
 				t.Fatalf("resolveConfigBranch: %v", err)
 			}
-			if got != tt.want {
-				t.Fatalf("resolveConfigBranch(...) = %q, want %q", got, tt.want)
+			if got.Value != tt.want {
+				t.Fatalf("resolveConfigBranch(...) = %q, want %q", got.Value, tt.want)
 			}
 		})
 	}
@@ -2317,7 +2455,7 @@ func TestResolveConfigBranch(t *testing.T) {
 
 func TestResolveConfigBranch_WhitespaceEnvRejected(t *testing.T) {
 	t.Setenv("MATO_BRANCH", "  ")
-	_, err := resolveConfigBranch(configFixture(nil), "")
+	_, err := configresolve.ResolveBranch(config.LoadResult{Config: configFixture(nil)}, "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -2328,10 +2466,11 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("uses config values when env unset", func(t *testing.T) {
 		resumeDisabled := false
-		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("gpt-5.4"), &resumeDisabled, stringPtr("medium"), stringPtr("xhigh"), stringPtr("45m"), stringPtr("5m")))
+		resolved, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("gpt-5.4"), &resumeDisabled, stringPtr("medium"), stringPtr("xhigh"), stringPtr("45m"), stringPtr("5m"))})
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
+		opts := resolved.RunOptions()
 		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
@@ -2339,10 +2478,11 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("whitespace-only docker image env falls back to config", func(t *testing.T) {
 		t.Setenv("MATO_DOCKER_IMAGE", "  \t ")
-		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("from-config:1.0"), nil, nil, nil, nil, nil, nil, nil))
+		resolved, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixtureWithValues(stringPtr("from-config:1.0"), nil, nil, nil, nil, nil, nil, nil)})
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
+		opts := resolved.RunOptions()
 		if opts.DockerImage != "from-config:1.0" {
 			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-config:1.0")
 		}
@@ -2350,10 +2490,11 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("real docker image env still overrides config", func(t *testing.T) {
 		t.Setenv("MATO_DOCKER_IMAGE", "from-env:2.0")
-		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(stringPtr("from-config:1.0"), nil, nil, nil, nil, nil, nil, nil))
+		resolved, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixtureWithValues(stringPtr("from-config:1.0"), nil, nil, nil, nil, nil, nil, nil)})
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
+		opts := resolved.RunOptions()
 		if opts.DockerImage != "from-env:2.0" {
 			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-env:2.0")
 		}
@@ -2362,27 +2503,29 @@ func TestResolveRunOptions(t *testing.T) {
 	t.Run("env overrides invalid config", func(t *testing.T) {
 		t.Setenv("MATO_AGENT_TIMEOUT", "1h")
 		t.Setenv("MATO_RETRY_COOLDOWN", "90s")
-		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, nil, nil, nil, stringPtr("bad"), stringPtr("also-bad")))
+		resolved, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixtureWithValues(nil, nil, nil, nil, nil, nil, stringPtr("bad"), stringPtr("also-bad"))})
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
+		opts := resolved.RunOptions()
 		if opts.AgentTimeout != time.Hour || opts.RetryCooldown != 90*time.Second {
 			t.Fatalf("opts = %+v", opts)
 		}
 	})
 
 	t.Run("invalid effective config errors", func(t *testing.T) {
-		_, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, nil, nil, nil, stringPtr("bad"), nil))
+		_, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixtureWithValues(nil, nil, nil, nil, nil, nil, stringPtr("bad"), nil)})
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
 	})
 
 	t.Run("review session resume defaults to enabled", func(t *testing.T) {
-		opts, err := resolveRunOptions(runFlags{}, configFixture(nil))
+		resolved, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixture(nil)})
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
+		opts := resolved.RunOptions()
 		if !opts.ReviewSessionResumeEnabled {
 			t.Fatal("ReviewSessionResumeEnabled should default to true")
 		}
@@ -2391,10 +2534,11 @@ func TestResolveRunOptions(t *testing.T) {
 	t.Run("review session resume env overrides config", func(t *testing.T) {
 		resumeEnabled := true
 		t.Setenv("MATO_REVIEW_SESSION_RESUME_ENABLED", "false")
-		opts, err := resolveRunOptions(runFlags{}, configFixtureWithValues(nil, nil, nil, &resumeEnabled, nil, nil, nil, nil))
+		resolved, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixtureWithValues(nil, nil, nil, &resumeEnabled, nil, nil, nil, nil)})
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
+		opts := resolved.RunOptions()
 		if opts.ReviewSessionResumeEnabled {
 			t.Fatal("ReviewSessionResumeEnabled should respect env override")
 		}
@@ -2402,7 +2546,7 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("invalid review session resume env errors", func(t *testing.T) {
 		t.Setenv("MATO_REVIEW_SESSION_RESUME_ENABLED", "maybe")
-		_, err := resolveRunOptions(runFlags{}, configFixture(nil))
+		_, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixture(nil)})
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -2413,7 +2557,7 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("invalid effective env timeout errors", func(t *testing.T) {
 		t.Setenv("MATO_AGENT_TIMEOUT", "bad")
-		_, err := resolveRunOptions(runFlags{}, configFixture(nil))
+		_, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixture(nil)})
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -2421,7 +2565,7 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("invalid env cooldown rejected", func(t *testing.T) {
 		t.Setenv("MATO_RETRY_COOLDOWN", "bad")
-		_, err := resolveRunOptions(runFlags{}, configFixture(nil))
+		_, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixture(nil)})
 		if err == nil {
 			t.Fatal("expected error for invalid MATO_RETRY_COOLDOWN, got nil")
 		}
@@ -2432,7 +2576,7 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("non-positive env cooldown rejected", func(t *testing.T) {
 		t.Setenv("MATO_RETRY_COOLDOWN", "-5m")
-		_, err := resolveRunOptions(runFlags{}, configFixture(nil))
+		_, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixture(nil)})
 		if err == nil {
 			t.Fatal("expected error for non-positive MATO_RETRY_COOLDOWN, got nil")
 		}
@@ -2442,7 +2586,7 @@ func TestResolveRunOptions(t *testing.T) {
 	})
 
 	t.Run("reasoning effort validation", func(t *testing.T) {
-		_, err := resolveRunOptions(runFlags{TaskReasoningEffort: "invalid"}, configFixture(nil))
+		_, err := configresolve.ResolveRunConfig(configresolve.RunFlags{TaskReasoningEffort: "invalid"}, config.LoadResult{Config: configFixture(nil)})
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -2452,29 +2596,41 @@ func TestResolveRunOptions(t *testing.T) {
 	})
 }
 
-func TestValidateReasoningEffort(t *testing.T) {
-	for _, value := range []string{"low", "medium", "high", "xhigh"} {
-		if err := validateReasoningEffort(value, "task-reasoning-effort"); err != nil {
-			t.Fatalf("validateReasoningEffort(%q): %v", value, err)
-		}
-	}
-	if err := validateReasoningEffort("invalid", "review-reasoning-effort"); err == nil {
-		t.Fatal("expected error, got nil")
-	}
-}
-
-func TestResolveStringOption(t *testing.T) {
+func TestResolveRunConfig_StringPrecedence(t *testing.T) {
 	configVal := "from-config"
 	t.Setenv("MATO_TASK_MODEL", "from-env")
-	if got := resolveStringOption(" from-flag ", "MATO_TASK_MODEL", &configVal); got != "from-flag" {
-		t.Fatalf("got %q, want from-flag", got)
+	resolved, err := configresolve.ResolveRunConfig(
+		configresolve.RunFlags{TaskModel: " from-flag "},
+		config.LoadResult{Config: config.Config{TaskModel: &configVal}},
+	)
+	if err != nil {
+		t.Fatalf("ResolveRunConfig: %v", err)
 	}
-	if got := resolveStringOption("  ", "MATO_TASK_MODEL", &configVal); got != "from-env" {
-		t.Fatalf("got %q, want from-env", got)
+	if resolved.TaskModel.Value != "from-flag" || resolved.TaskModel.Source != configresolve.SourceFlag {
+		t.Fatalf("TaskModel = %+v, want flag precedence", resolved.TaskModel)
 	}
+
+	resolved, err = configresolve.ResolveRunConfig(
+		configresolve.RunFlags{TaskModel: "  "},
+		config.LoadResult{Config: config.Config{TaskModel: &configVal}},
+	)
+	if err != nil {
+		t.Fatalf("ResolveRunConfig: %v", err)
+	}
+	if resolved.TaskModel.Value != "from-env" || resolved.TaskModel.Source != configresolve.SourceEnv {
+		t.Fatalf("TaskModel = %+v, want env precedence", resolved.TaskModel)
+	}
+
 	t.Setenv("MATO_TASK_MODEL", "  ")
-	if got := resolveStringOption("", "MATO_TASK_MODEL", &configVal); got != "from-config" {
-		t.Fatalf("got %q, want from-config", got)
+	resolved, err = configresolve.ResolveRunConfig(
+		configresolve.RunFlags{},
+		config.LoadResult{Config: config.Config{TaskModel: &configVal}},
+	)
+	if err != nil {
+		t.Fatalf("ResolveRunConfig: %v", err)
+	}
+	if resolved.TaskModel.Value != "from-config" || resolved.TaskModel.Source != configresolve.SourceConfig {
+		t.Fatalf("TaskModel = %+v, want config precedence", resolved.TaskModel)
 	}
 }
 
@@ -2873,6 +3029,16 @@ func TestConfigFile_WhitespaceEnvBranchRejected(t *testing.T) {
 	}
 }
 
+func TestRunCmd_WhitespaceOnlyBranchFlagRejected(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--branch", "   "})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--branch must not be whitespace-only") {
+		t.Fatalf("err = %v, want whitespace-only branch error", err)
+	}
+}
+
 func TestConfigFile_InitUsesConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	t.Setenv("MATO_BRANCH", "")
@@ -2890,6 +3056,16 @@ func TestConfigFile_InitUsesConfig(t *testing.T) {
 	}
 	if strings.TrimSpace(branchOut) != "main" {
 		t.Fatalf("current branch = %q, want %q", strings.TrimSpace(branchOut), "main")
+	}
+}
+
+func TestInitCmd_WhitespaceOnlyBranchFlagRejected(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--repo", repoRoot, "--branch", "   "})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--branch must not be whitespace-only") {
+		t.Fatalf("err = %v, want whitespace-only branch error", err)
 	}
 }
 
@@ -2918,11 +3094,14 @@ func configFixture(branch *string) config.Config {
 
 func defaultResolvedRunOptions() runner.RunOptions {
 	return runner.RunOptions{
+		DockerImage:                runner.DefaultDockerImage,
 		TaskModel:                  runner.DefaultTaskModel,
 		ReviewModel:                runner.DefaultReviewModel,
 		ReviewSessionResumeEnabled: true,
 		TaskReasoningEffort:        runner.DefaultReasoningEffort,
 		ReviewReasoningEffort:      runner.DefaultReasoningEffort,
+		AgentTimeout:               runner.DefaultAgentTimeout,
+		RetryCooldown:              queue.DefaultRetryCooldown,
 	}
 }
 

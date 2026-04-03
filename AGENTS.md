@@ -41,6 +41,7 @@ cmd/mato/          CLI entrypoint (cobra root command)
 internal/          All library packages:
   atomicwrite/     Atomic file write utilities
   config/          Repository-local .mato.yaml loading
+  configresolve/   Repo config resolution + source attribution
   dag/             Dependency graph analysis (Kahn + Tarjan)
   doctor/          Health checks for repo and task queue
   frontmatter/     YAML frontmatter parser

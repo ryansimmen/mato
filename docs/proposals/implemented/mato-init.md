@@ -1,6 +1,8 @@
 # `mato init` — Implementation Plan
 
-> **Status: Implemented.** This proposal has been fully implemented.
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for the
+> current implementation.
 
 ## 1. Goal
 
