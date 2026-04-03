@@ -799,6 +799,66 @@ func TestExtractReviewRejections_NonexistentFile(t *testing.T) {
 	}
 }
 
+func TestExtractReviewRejectionsWithVerdictFallback_MarkersPresent(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	taskFile := "with-markers.md"
+	taskPath := filepath.Join(tasksDir, taskFile)
+	os.WriteFile(taskPath, []byte("# Task\n<!-- review-rejection: agent at 2026-01-01T00:00:00Z — add tests -->\n"), 0o644)
+
+	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
+	if !strings.Contains(got, "add tests") {
+		t.Fatalf("expected marker feedback, got %q", got)
+	}
+}
+
+func TestExtractReviewRejectionsWithVerdictFallback_NoMarkersVerdictFallback(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	taskFile := "no-markers.md"
+	taskPath := filepath.Join(tasksDir, taskFile)
+	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+
+	// Write a verdict file as fallback.
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"coverage too low"}`), 0o644)
+
+	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
+	if !strings.Contains(got, "coverage too low") {
+		t.Fatalf("expected verdict fallback feedback, got %q", got)
+	}
+}
+
+func TestExtractReviewRejectionsWithVerdictFallback_NoMarkersNoVerdict(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	taskFile := "no-markers-no-verdict.md"
+	taskPath := filepath.Join(tasksDir, taskFile)
+	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+
+	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
+func TestExtractReviewRejectionsWithVerdictFallback_ApproveVerdictIgnored(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	taskFile := "approve-verdict.md"
+	taskPath := filepath.Join(tasksDir, taskFile)
+	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+
+	// An approve verdict should not produce feedback.
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
+
+	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
+	if got != "" {
+		t.Fatalf("expected empty string for approve verdict, got %q", got)
+	}
+}
+
 func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
@@ -2017,10 +2077,10 @@ func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 		postReviewAction(tasksDir, "host-agent", task)
 	})
 
-	// The task should still be moved to backlog/ (marker write is non-fatal
-	// after a successful move).
+	// The primary append fails but the fallback write (read-modify-write)
+	// should succeed, so the marker ends up in the task file.
 	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err != nil {
-		t.Fatal("task should be moved to backlog/ even when marker write fails after move")
+		t.Fatal("task should be moved to backlog/")
 	}
 	if _, err := os.Stat(reviewPath); err == nil {
 		t.Fatal("task should not remain in ready-for-review/ after successful move")
@@ -2028,9 +2088,17 @@ func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 	if !strings.Contains(stderr, "could not write verdict marker") {
 		t.Fatalf("expected marker write warning in stderr, got:\n%s", stderr)
 	}
-	// Verdict file should be cleaned up since the handoff succeeded.
+	// Fallback write should have written the marker, so review feedback
+	// must be available to the next work agent.
+	dstPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	feedback := extractReviewRejections(dstPath)
+	if feedback == "" {
+		dstData, _ := os.ReadFile(dstPath)
+		t.Fatalf("review feedback should be available after fallback write, file content:\n%s", string(dstData))
+	}
+	// Verdict file should be cleaned up since feedback was durably written.
 	if _, err := os.Stat(verdictPath); err == nil {
-		t.Fatal("verdict file should be cleaned up after successful handoff")
+		t.Fatal("verdict file should be cleaned up after successful fallback marker write")
 	}
 }
 

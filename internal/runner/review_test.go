@@ -1960,6 +1960,201 @@ func TestMoveReviewedTask_MoveFails_RecordsReviewFailure(t *testing.T) {
 	}
 }
 
+func TestMoveReviewedTask_RejectionMarkerAppendFails_FallbackSucceeds(t *testing.T) {
+	tasksDir := t.TempDir()
+	srcDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	dstDir := filepath.Join(tasksDir, queue.DirBacklog)
+	msgDir := filepath.Join(tasksDir, "messages", "events")
+	for _, d := range []string{srcDir, dstDir, msgDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	taskFile := "reject-marker-fallback.md"
+	srcPath := filepath.Join(srcDir, taskFile)
+	os.WriteFile(srcPath, []byte("# Reject Marker Fallback\n"), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/reject-marker-fallback",
+		Title:    "Reject Marker Fallback",
+		TaskPath: srcPath,
+	}
+
+	// Stub appendToFileFn to fail — the fallback (read-modify-write) should
+	// still succeed since it uses atomicwrite.WriteFile directly.
+	origAppend := appendToFileFn
+	t.Cleanup(func() { appendToFileFn = origAppend })
+	appendToFileFn = func(path, text string) error {
+		return fmt.Errorf("simulated append failure")
+	}
+
+	marker := "\n<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — tests missing -->\n"
+	_, stderr := captureStdoutStderr(t, func() {
+		ok := moveReviewedTask(tasksDir, "agent1", task, rejectDisposition, marker)
+		if !ok {
+			t.Fatal("moveReviewedTask should return true when fallback write succeeds")
+		}
+	})
+
+	if !strings.Contains(stderr, "could not write verdict marker") {
+		t.Fatalf("expected primary write warning, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "rejection marker written via fallback") {
+		t.Fatalf("expected fallback success message, got:\n%s", stderr)
+	}
+	// The marker must be in the file so extractReviewRejections can read it.
+	dstPath := filepath.Join(dstDir, taskFile)
+	feedback := extractReviewRejections(dstPath)
+	if !strings.Contains(feedback, "tests missing") {
+		dstData, _ := os.ReadFile(dstPath)
+		t.Fatalf("review feedback should be available via extractReviewRejections, got %q; file:\n%s", feedback, string(dstData))
+	}
+}
+
+func TestMoveReviewedTask_RejectionMarkerBothWritesFail_ReturnsFalse(t *testing.T) {
+	tasksDir := t.TempDir()
+	srcDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	dstDir := filepath.Join(tasksDir, queue.DirBacklog)
+	msgDir := filepath.Join(tasksDir, "messages", "events")
+	for _, d := range []string{srcDir, dstDir, msgDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	taskFile := "reject-marker-both-fail.md"
+	srcPath := filepath.Join(srcDir, taskFile)
+	os.WriteFile(srcPath, []byte("# Reject Both Fail\n"), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/reject-marker-both-fail",
+		Title:    "Reject Both Fail",
+		TaskPath: srcPath,
+	}
+
+	origAppend := appendToFileFn
+	origFallback := fallbackMarkerWrite
+	t.Cleanup(func() {
+		appendToFileFn = origAppend
+		fallbackMarkerWrite = origFallback
+	})
+	appendToFileFn = func(path, text string) error {
+		return fmt.Errorf("simulated append failure")
+	}
+	fallbackMarkerWrite = func(dst, marker string) error {
+		return fmt.Errorf("simulated fallback failure")
+	}
+
+	marker := "\n<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — tests missing -->\n"
+	_, stderr := captureStdoutStderr(t, func() {
+		ok := moveReviewedTask(tasksDir, "agent1", task, rejectDisposition, marker)
+		if ok {
+			t.Fatal("moveReviewedTask should return false when both writes fail")
+		}
+	})
+
+	if !strings.Contains(stderr, "could not write verdict marker") {
+		t.Fatalf("expected primary write warning, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "fallback marker write also failed") {
+		t.Fatalf("expected fallback failure warning, got:\n%s", stderr)
+	}
+}
+
+func TestMoveReviewedTask_ApprovalMarkerWriteFails_ReturnsTrue(t *testing.T) {
+	tasksDir := t.TempDir()
+	srcDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	dstDir := filepath.Join(tasksDir, queue.DirReadyMerge)
+	msgDir := filepath.Join(tasksDir, "messages", "events")
+	for _, d := range []string{srcDir, dstDir, msgDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	taskFile := "approve-marker-fail.md"
+	srcPath := filepath.Join(srcDir, taskFile)
+	os.WriteFile(srcPath, []byte("# Approve Marker Fail\n"), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/approve-marker-fail",
+		Title:    "Approve Marker Fail",
+		TaskPath: srcPath,
+	}
+
+	origAppend := appendToFileFn
+	t.Cleanup(func() { appendToFileFn = origAppend })
+	appendToFileFn = func(path, text string) error {
+		return fmt.Errorf("simulated approval write failure")
+	}
+
+	marker := "\n<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved -->\n"
+	_, stderr := captureStdoutStderr(t, func() {
+		ok := moveReviewedTask(tasksDir, "agent1", task, approveDisposition, marker)
+		if !ok {
+			t.Fatal("moveReviewedTask should return true for approval even when marker write fails")
+		}
+	})
+
+	if _, err := os.Stat(filepath.Join(dstDir, taskFile)); err != nil {
+		t.Fatal("task should be in ready-to-merge/ after successful move")
+	}
+	if !strings.Contains(stderr, "could not write verdict marker") {
+		t.Fatalf("expected marker write warning in stderr, got:\n%s", stderr)
+	}
+}
+
+func TestPostReviewAction_RejectionBothWritesFail_VerdictFallback(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "rejection-verdict-fallback.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	os.WriteFile(reviewPath, []byte("# Rejection Verdict Fallback\n"), 0o644)
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"missing tests and docs"}`), 0o644)
+
+	origAppend := appendToFileFn
+	origFallback := fallbackMarkerWrite
+	t.Cleanup(func() {
+		appendToFileFn = origAppend
+		fallbackMarkerWrite = origFallback
+	})
+	appendToFileFn = func(path, text string) error {
+		return fmt.Errorf("simulated append failure")
+	}
+	fallbackMarkerWrite = func(dst, marker string) error {
+		return fmt.Errorf("simulated fallback failure")
+	}
+
+	task := &queue.ClaimedTask{Filename: taskFile, Branch: "task/rejection-feedback", Title: "Rejection Verdict Fallback", TaskPath: reviewPath}
+	captureStdoutStderr(t, func() {
+		postReviewAction(tasksDir, "host-agent", task)
+	})
+
+	// Task is in backlog/ (move succeeded).
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err != nil {
+		t.Fatal("task should be moved to backlog/")
+	}
+	// Verdict file must be preserved — both write methods failed.
+	if _, err := os.Stat(verdictPath); err != nil {
+		t.Fatal("verdict file must be preserved when both marker writes fail")
+	}
+	// The task file should NOT have the rejection marker.
+	dstData, _ := os.ReadFile(filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	if strings.Contains(string(dstData), "<!-- review-rejection:") {
+		t.Fatal("rejection marker should not be present when both writes failed")
+	}
+	// extractReviewRejectionsWithVerdictFallback should still find the
+	// feedback via the preserved verdict file — proving the next work
+	// agent can consume it via MATO_REVIEW_FEEDBACK.
+	dstPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	feedback := extractReviewRejectionsWithVerdictFallback(dstPath, tasksDir, taskFile)
+	if !strings.Contains(feedback, "missing tests and docs") {
+		t.Fatalf("review feedback should be available via verdict fallback, got %q", feedback)
+	}
+}
+
 func TestStripLastTerminalMarker_Approval(t *testing.T) {
 	tests := []struct {
 		name     string

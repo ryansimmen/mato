@@ -565,6 +565,17 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 	if marker != "" {
 		if err := appendToFileFn(dst, marker); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: task %s moved to %s/ but could not write verdict marker: %v\n", task.Filename, disp.dir, err)
+			// On the rejection path the marker is the durable record of
+			// reviewer feedback that feeds MATO_REVIEW_FEEDBACK. Try a
+			// fallback write (read-modify-write) using a different I/O
+			// path before giving up.
+			if disp.dir == queue.DirBacklog {
+				if fallbackErr := fallbackMarkerWrite(dst, marker); fallbackErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: fallback marker write also failed for %s: %v\n", task.Filename, fallbackErr)
+					return false
+				}
+				fmt.Fprintf(os.Stderr, "info: rejection marker written via fallback for %s\n", task.Filename)
+			}
 		}
 	}
 	outcome := "review-rejected"
@@ -586,6 +597,17 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 	})
 	fmt.Printf("%s: moved %s to %s/\n", disp.logPrefix, task.Filename, disp.dir)
 	return true
+}
+
+// fallbackMarkerWrite attempts a read-modify-write using atomicwrite.WriteFile
+// as an alternative I/O path when appendToFileFn fails. This covers cases
+// where O_APPEND is broken but temp-file-rename still works.
+var fallbackMarkerWrite = func(dst, marker string) error {
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		return fmt.Errorf("fallback read %s: %w", dst, err)
+	}
+	return atomicwrite.WriteFile(dst, append(data, []byte(marker)...))
 }
 
 // appendReviewFailure writes a review-failure comment to the task file.
@@ -622,6 +644,31 @@ func extractReviewRejections(taskPath string) string {
 		return ""
 	}
 	return taskfile.ExtractReviewRejections(data)
+}
+
+// extractReviewRejectionsWithVerdictFallback first checks the task file for
+// review-rejection markers. If none are found, it checks for a preserved
+// verdict JSON file (messages/verdict-FILENAME.json) and extracts the
+// rejection reason from it. This handles the case where the marker could
+// not be written to the task file but the verdict file was preserved.
+func extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, filename string) string {
+	result := extractReviewRejections(taskPath)
+	if result != "" {
+		return result
+	}
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+filename+".json")
+	data, err := os.ReadFile(verdictPath)
+	if err != nil {
+		return ""
+	}
+	var verdict reviewVerdict
+	if err := json.Unmarshal(data, &verdict); err != nil {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(verdict.Verdict), "reject") && strings.TrimSpace(verdict.Reason) != "" {
+		return verdict.Reason
+	}
+	return ""
 }
 
 func loadTaskStateForReview(tasksDir, filename string) *taskstate.TaskState {
