@@ -3605,33 +3605,26 @@ func TestCompleteTaskNames_CancelExcludesCompletedAndFailed(t *testing.T) {
 		}
 	}
 
-	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge}
+	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirFailed}
 	repo := repoRoot
 	fn := completeTaskNames(&repo, cancelDirs)
 	completions, _ := fn(nil, nil, "")
 
 	for _, c := range completions {
-		if c == "done" || c == "already-bad" {
-			t.Errorf("cancel completions should not include %q from completed/failed", c)
+		if c == "done" {
+			t.Errorf("cancel completions should not include %q from completed/", c)
 		}
 	}
-	found := false
+	wantPresent := map[string]bool{"cancel-me": false, "active": false, "already-bad": false}
 	for _, c := range completions {
-		if c == "cancel-me" {
-			found = true
+		if _, ok := wantPresent[c]; ok {
+			wantPresent[c] = true
 		}
 	}
-	if !found {
-		t.Errorf("completions missing cancel-me, got %v", completions)
-	}
-	found = false
-	for _, c := range completions {
-		if c == "active" {
-			found = true
+	for name, found := range wantPresent {
+		if !found {
+			t.Errorf("completions missing %q, got %v", name, completions)
 		}
-	}
-	if !found {
-		t.Errorf("completions missing active, got %v", completions)
 	}
 }
 
@@ -3856,13 +3849,13 @@ func TestCompleteTaskNames_CancelExcludesParseFailureInTerminalStates(t *testing
 		}
 	}
 
-	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge}
+	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirFailed}
 	repo := repoRoot
 	fn := completeTaskNames(&repo, cancelDirs)
 	completions, _ := fn(nil, nil, "")
 
-	// Parse failure in backlog should appear with both stem and filename.
-	wantPresent := []string{"bad-backlog", "bad-backlog.md"}
+	// Parse failures in backlog and failed should appear with both stem and filename.
+	wantPresent := []string{"bad-backlog", "bad-backlog.md", "bad-failed", "bad-failed.md"}
 	for _, w := range wantPresent {
 		found := false
 		for _, c := range completions {
@@ -3872,14 +3865,14 @@ func TestCompleteTaskNames_CancelExcludesParseFailureInTerminalStates(t *testing
 			}
 		}
 		if !found {
-			t.Errorf("completions missing %q (parse failure in backlog), got %v", w, completions)
+			t.Errorf("completions missing %q (parse failure in cancellable state), got %v", w, completions)
 		}
 	}
 
-	// Parse failures in terminal states should NOT appear (stem or filename).
+	// Parse failures in completed/ should NOT appear (stem or filename).
 	for _, c := range completions {
-		if c == "bad-failed" || c == "bad-failed.md" || c == "bad-completed" || c == "bad-completed.md" {
-			t.Errorf("cancel completions should not include %q from terminal state, got %v", c, completions)
+		if c == "bad-completed" || c == "bad-completed.md" {
+			t.Errorf("cancel completions should not include %q from completed/, got %v", c, completions)
 		}
 	}
 }
