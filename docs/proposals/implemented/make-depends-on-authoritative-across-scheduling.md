@@ -1,26 +1,3 @@
----
-id: make-depends-on-authoritative-across-scheduling
-priority: 22
-affects:
-  - internal/queue/claim.go
-  - internal/queue/diagnostics.go
-  - internal/queue/index.go
-  - internal/queue/manifest.go
-  - internal/queue/queue.go
-  - internal/queue/queue_test.go
-  - internal/queue/reconcile.go
-  - internal/queue/claim_test.go
-  - internal/queue/reconcile_test.go
-  - internal/queue/retry.go
-  - internal/queue/retry_test.go
-  - internal/doctor/checks.go
-  - internal/status/
-  - internal/runner/runner.go
-  - README.md
-  - docs/task-format.md
-  - docs/architecture.md
-  - docs/configuration.md
----
 # Make `depends_on` Authoritative Across Scheduling
 
 > **Status: Implemented** — This proposal has been fully implemented.
