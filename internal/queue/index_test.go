@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1249,5 +1250,75 @@ func TestActiveBranches_DefensiveCopy(t *testing.T) {
 	}
 	if _, ok := branches2["injected"]; ok {
 		t.Error("ActiveBranches was corrupted by caller mutation: injected key present")
+	}
+}
+
+func writeVerdictFile(t *testing.T, tasksDir, filename string, verdict map[string]string) {
+	t.Helper()
+	msgDir := filepath.Join(tasksDir, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := json.Marshal(verdict)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(msgDir, "verdict-"+filename+".json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestBuildIndex_ReviewRejectionFromVerdictFallback(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	// Task has no review-rejection markers in the file.
+	writeTask(t, tasksDir, DirBacklog, "needs-rework.md", "---\npriority: 5\n---\n# Needs Rework\n")
+	// But a preserved verdict file exists.
+	writeVerdictFile(t, tasksDir, "needs-rework.md", map[string]string{
+		"verdict": "reject",
+		"reason":  "missing test coverage",
+	})
+
+	idx := BuildIndex(tasksDir)
+	snap := idx.Snapshot(DirBacklog, "needs-rework.md")
+	if snap == nil {
+		t.Fatal("expected snapshot, got nil")
+	}
+	if snap.LastReviewRejectionReason != "missing test coverage" {
+		t.Fatalf("LastReviewRejectionReason = %q, want %q", snap.LastReviewRejectionReason, "missing test coverage")
+	}
+}
+
+func TestBuildIndex_ReviewRejectionPrefersDurableMarker(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	// Task has a durable marker in the file.
+	writeTask(t, tasksDir, DirBacklog, "has-marker.md",
+		"---\npriority: 5\n---\n# Has Marker\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — durable reason -->\n")
+	// And also a verdict file with a different reason.
+	writeVerdictFile(t, tasksDir, "has-marker.md", map[string]string{
+		"verdict": "reject",
+		"reason":  "verdict reason should not appear",
+	})
+
+	idx := BuildIndex(tasksDir)
+	snap := idx.Snapshot(DirBacklog, "has-marker.md")
+	if snap == nil {
+		t.Fatal("expected snapshot, got nil")
+	}
+	if snap.LastReviewRejectionReason != "durable reason" {
+		t.Fatalf("LastReviewRejectionReason = %q, want %q (durable marker should take priority)", snap.LastReviewRejectionReason, "durable reason")
+	}
+}
+
+func TestBuildIndex_NoVerdictFile_NoRejectionReason(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, DirBacklog, "clean.md", "---\npriority: 5\n---\n# Clean\n")
+
+	idx := BuildIndex(tasksDir)
+	snap := idx.Snapshot(DirBacklog, "clean.md")
+	if snap == nil {
+		t.Fatal("expected snapshot, got nil")
+	}
+	if snap.LastReviewRejectionReason != "" {
+		t.Fatalf("LastReviewRejectionReason = %q, want empty", snap.LastReviewRejectionReason)
 	}
 }

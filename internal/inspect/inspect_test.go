@@ -497,6 +497,92 @@ func writeTask(t *testing.T, tasksDir, dir, name, content string) {
 	}
 }
 
+func writeVerdictFile(t *testing.T, tasksDir, filename string, verdict map[string]string) {
+	t.Helper()
+	msgDir := filepath.Join(tasksDir, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := json.Marshal(verdict)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(msgDir, "verdict-"+filename+".json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestShowTo_VerdictFallbackShowsRejectionReason(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, dir := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	// Task with no review-rejection marker in the file.
+	writeTask(t, tasksDir, queue.DirBacklog, "rework.md",
+		"---\nid: rework\npriority: 5\n---\n# Needs Rework\n")
+	// Preserved verdict file with rejection reason.
+	writeVerdictFile(t, tasksDir, "rework.md", map[string]string{
+		"verdict": "reject",
+		"reason":  "missing integration tests",
+	})
+
+	// Text output should show the rejection reason.
+	var textBuf bytes.Buffer
+	if err := ShowTo(&textBuf, repoRoot, "rework", "text"); err != nil {
+		t.Fatalf("ShowTo text: %v", err)
+	}
+	if !strings.Contains(textBuf.String(), "previously rejected: missing integration tests") {
+		t.Fatalf("text output missing verdict rejection reason:\n%s", textBuf.String())
+	}
+
+	// JSON output should include the rejection reason.
+	var jsonBuf bytes.Buffer
+	if err := ShowTo(&jsonBuf, repoRoot, "rework", "json"); err != nil {
+		t.Fatalf("ShowTo json: %v", err)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(jsonBuf.Bytes(), &result); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if reason, ok := result["review_rejection_reason"]; !ok || reason != "missing integration tests" {
+		t.Fatalf("json review_rejection_reason = %v, want %q", reason, "missing integration tests")
+	}
+}
+
+func TestShowTo_VerdictFallbackPrefersDurableMarker(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, dir := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	// Task with a durable marker.
+	writeTask(t, tasksDir, queue.DirBacklog, "marked.md",
+		"---\nid: marked\npriority: 5\n---\n# Marked\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — durable marker reason -->\n")
+	// And a verdict file with a different reason.
+	writeVerdictFile(t, tasksDir, "marked.md", map[string]string{
+		"verdict": "reject",
+		"reason":  "verdict reason should not appear",
+	})
+
+	var textBuf bytes.Buffer
+	if err := ShowTo(&textBuf, repoRoot, "marked", "text"); err != nil {
+		t.Fatalf("ShowTo text: %v", err)
+	}
+	if !strings.Contains(textBuf.String(), "durable marker reason") {
+		t.Fatalf("expected durable marker reason in output:\n%s", textBuf.String())
+	}
+	if strings.Contains(textBuf.String(), "verdict reason should not appear") {
+		t.Fatalf("verdict fallback reason should not appear when durable marker exists:\n%s", textBuf.String())
+	}
+}
+
 func TestShowTo_MissingMatoDir(t *testing.T) {
 	repoDir := testutil.SetupRepo(t)
 	// Do NOT create .mato/ — the repo is uninitialized.

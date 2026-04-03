@@ -207,6 +207,11 @@ func BuildIndex(tasksDir string) *PollIndex {
 			lastCycleFailureReason := taskfile.LastCycleFailureReason(data)
 			lastTerminalFailureReason := taskfile.LastTerminalFailureReason(data)
 			lastReviewRejectionReason := taskfile.LastReviewRejectionReason(data)
+			if lastReviewRejectionReason == "" {
+				if vr, ok := taskfile.ReadVerdictRejection(tasksDir, name); ok {
+					lastReviewRejectionReason = vr.Reason
+				}
+			}
 
 			meta, body, err := frontmatter.ParseTaskData(data, path)
 			if err != nil {

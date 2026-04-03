@@ -212,7 +212,8 @@ func collectTaskEvents(tasksDir string) ([]Event, sourceStatus, error) {
 					AgentID:   record.AgentID,
 				})
 			}
-			for _, record := range taskfile.ParseReviewRejectionMarkers(data) {
+			rejections := taskfile.ParseReviewRejectionMarkers(data)
+			for _, record := range rejections {
 				events = append(events, Event{
 					Timestamp: record.Timestamp,
 					Type:      "REJECTED",
@@ -221,6 +222,21 @@ func collectTaskEvents(tasksDir string) ([]Event, sourceStatus, error) {
 					Reason:    record.Reason,
 					AgentID:   record.AgentID,
 				})
+			}
+			// When no durable rejection markers exist in the task file,
+			// fall back to the preserved verdict JSON file. This covers
+			// the case where both marker write paths failed after a
+			// successful move to backlog/.
+			if len(rejections) == 0 {
+				if vr, ok := taskfile.ReadVerdictRejection(tasksDir, name); ok {
+					events = append(events, Event{
+						Timestamp: vr.Timestamp,
+						Type:      "REJECTED",
+						TaskFile:  name,
+						Title:     title,
+						Reason:    vr.Reason,
+					})
+				}
 			}
 		}
 	}
