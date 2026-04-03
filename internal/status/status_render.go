@@ -124,26 +124,46 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 				visibleLen += 2 + len(row.age)
 			}
 			if visibleLen > termWidth {
-				budgetForFields := termWidth - 2 - len(row.agentID)
-				if row.age != "" {
-					budgetForFields -= 2 + len(row.age)
+				budget := termWidth - 2 - len(row.agentID)
+
+				// Reserve space for stage and age; drop the
+				// least important suffix fields first when there
+				// is not enough room.
+				showAge := row.age != ""
+				showStage := row.stage != ""
+
+				reserved := 0
+				if showAge {
+					reserved += 2 + len(row.age)
 				}
-				if row.stage != "" {
-					budgetForFields -= 2 + len(row.stage)
+				if showStage {
+					reserved += 2 + len(row.stage)
 				}
-				taskBudget := budgetForFields
+				budgetForTB := budget - reserved
+				if budgetForTB < 0 && showAge {
+					showAge = false
+					reserved -= 2 + len(row.age)
+					budgetForTB = budget - reserved
+				}
+				if budgetForTB < 0 && showStage {
+					showStage = false
+					reserved -= 2 + len(row.stage)
+					budgetForTB = budget - reserved
+				}
+
+				taskBudget := budgetForTB
 				branchBudget := 0
 				if row.task != "" && row.branch != "" {
-					taskBudget = (budgetForFields - 4) * 2 / 3
-					branchBudget = budgetForFields - 4 - taskBudget
+					taskBudget = (budgetForTB - 4) * 2 / 3
+					branchBudget = budgetForTB - 4 - taskBudget
 					if branchBudget < minTruncWidth {
 						// Not enough room for branch; drop it and
 						// give all remaining space to task.
 						branchBudget = 0
-						taskBudget = budgetForFields - 2
+						taskBudget = budgetForTB - 2
 					}
 				} else if row.task != "" {
-					taskBudget = budgetForFields - 2
+					taskBudget = budgetForTB - 2
 				}
 				if taskBudget < 0 {
 					taskBudget = 0
@@ -155,10 +175,10 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 				if row.branch != "" && branchBudget > 0 {
 					parts = append(parts, c.Dim(ui.Truncate(row.branch, branchBudget)))
 				}
-				if row.stage != "" {
+				if showStage {
 					parts = append(parts, c.Cyan(row.stage))
 				}
-				if row.age != "" {
+				if showAge {
 					parts = append(parts, c.Dim(row.age))
 				}
 				line = strings.Join(parts, "  ")
@@ -387,11 +407,11 @@ func renderActiveAgents(w io.Writer, c colorSet, data statusData) {
 	}
 	termWidth := ui.TermWidth()
 	for _, agent := range data.agents {
+		name := agent.displayName()
 		if p, ok := data.presenceMap[agent.ID]; ok {
 			task := p.Task
 			branch := p.Branch
 			if termWidth > 0 {
-				name := agent.displayName()
 				pidStr := fmt.Sprintf("%d", agent.PID)
 				// Fixed prefix: "  " + name + " (PID " + pid + "): "
 				fixedPrefix := 2 + len(name) + 6 + len(pidStr) + 3
@@ -422,16 +442,61 @@ func renderActiveAgents(w io.Writer, c colorSet, data statusData) {
 						}
 					}
 				}
+
+				// When task and branch are dropped, the identity
+				// line itself may still overflow. Truncate the
+				// display name so the line fits within termWidth.
+				if task == "" && branch == "" {
+					// "  name (PID pid)" = 2 + name + 6 + pidStr + 1
+					identLen := 2 + len(name) + 6 + len(pidStr) + 1
+					if identLen > termWidth {
+						nameBudget := termWidth - 2 - 6 - len(pidStr) - 1
+						if nameBudget > 0 {
+							name = ui.Truncate(name, nameBudget)
+						} else {
+							// Not even PID fits; truncate name to
+							// fill remaining width after indent.
+							nb := termWidth - 2
+							if nb > 0 {
+								name = ui.Truncate(name, nb)
+							} else {
+								name = ""
+							}
+							fmt.Fprintf(w, "  %s\n", c.Yellow(name))
+							continue
+						}
+					}
+				}
 			}
 			if branch != "" {
-				fmt.Fprintf(w, "  %s (PID %d): %s on %s\n", c.Yellow(agent.displayName()), agent.PID, task, c.Cyan(branch))
+				fmt.Fprintf(w, "  %s (PID %d): %s on %s\n", c.Yellow(name), agent.PID, task, c.Cyan(branch))
 			} else if task != "" {
-				fmt.Fprintf(w, "  %s (PID %d): %s\n", c.Yellow(agent.displayName()), agent.PID, task)
+				fmt.Fprintf(w, "  %s (PID %d): %s\n", c.Yellow(name), agent.PID, task)
 			} else {
-				fmt.Fprintf(w, "  %s (PID %d)\n", c.Yellow(agent.displayName()), agent.PID)
+				fmt.Fprintf(w, "  %s (PID %d)\n", c.Yellow(name), agent.PID)
 			}
 		} else {
-			fmt.Fprintf(w, "  %s (PID %d)\n", c.Yellow(agent.displayName()), agent.PID)
+			// No presence info; show identity only.
+			if termWidth > 0 {
+				pidStr := fmt.Sprintf("%d", agent.PID)
+				identLen := 2 + len(name) + 6 + len(pidStr) + 1
+				if identLen > termWidth {
+					nameBudget := termWidth - 2 - 6 - len(pidStr) - 1
+					if nameBudget > 0 {
+						name = ui.Truncate(name, nameBudget)
+					} else {
+						nb := termWidth - 2
+						if nb > 0 {
+							name = ui.Truncate(name, nb)
+						} else {
+							name = ""
+						}
+						fmt.Fprintf(w, "  %s\n", c.Yellow(name))
+						continue
+					}
+				}
+			}
+			fmt.Fprintf(w, "  %s (PID %d)\n", c.Yellow(name), agent.PID)
 		}
 	}
 }

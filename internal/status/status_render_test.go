@@ -1106,6 +1106,38 @@ func TestRenderCompactAgents_NarrowTerminalTruncates(t *testing.T) {
 	}
 }
 
+func TestRenderCompactAgents_NarrowTerminalWithStageAgeFitsWidth(t *testing.T) {
+	const termW = 40
+	prev := ui.SetTermWidthFunc(func() int { return termW })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+		presenceMap: map[string]messaging.PresenceInfo{
+			"abc12345": {
+				Task:   "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+				Branch: "task/implement-very-long-feature-name-that-exceeds-terminal-width",
+			},
+		},
+		activeProgress: []progressEntry{{
+			displayID: "abc12345",
+			body:      "Step: WORK",
+			task:      "implement-very-long-feature-name-that-exceeds-terminal-width.md",
+			ago:       "5m",
+		}},
+	}
+
+	renderCompactAgents(&buf, c, data)
+
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if strings.HasPrefix(line, "  ") && utf8.RuneCountInString(line) > termW {
+			t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
+		}
+	}
+}
+
 func TestRenderCompactNextUp_NarrowTerminalTruncates(t *testing.T) {
 	prev := ui.SetTermWidthFunc(func() int { return 40 })
 	defer ui.SetTermWidthFunc(prev)
@@ -1248,7 +1280,8 @@ func TestRenderRecentCompletions_NarrowTerminalTruncates(t *testing.T) {
 // Ensures truncation still happens instead of printing unbounded text.
 
 func TestRenderActiveAgents_VeryNarrowTerminalTruncates(t *testing.T) {
-	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	const termW = 20
+	prev := ui.SetTermWidthFunc(func() int { return termW })
 	defer ui.SetTermWidthFunc(prev)
 
 	var buf bytes.Buffer
@@ -1275,17 +1308,10 @@ func TestRenderActiveAgents_VeryNarrowTerminalTruncates(t *testing.T) {
 		t.Errorf("branch should be dropped at very narrow width, got:\n%s", output)
 	}
 
-	// The output should still show the agent identity.
-	if !strings.Contains(output, "agent-abcd1234") {
-		t.Errorf("agent name should still be present, got:\n%s", output)
-	}
-
-	// Verify content lines (skip header/separator) fit within a
-	// reasonable bound — no secondary fields inflate the line.
+	// Verify every data line fits within the configured terminal width.
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		// Header lines may use unicode; only check data lines.
-		if strings.HasPrefix(line, "  ") && len(line) > 35 {
-			t.Errorf("data line too wide for width=20: len=%d, line=%q", len(line), line)
+		if strings.HasPrefix(line, "  ") && utf8.RuneCountInString(line) > termW {
+			t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
 		}
 	}
 }
