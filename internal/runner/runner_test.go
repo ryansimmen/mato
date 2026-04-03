@@ -799,6 +799,66 @@ func TestExtractReviewRejections_NonexistentFile(t *testing.T) {
 	}
 }
 
+func TestExtractReviewRejectionsWithVerdictFallback_MarkersPresent(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	taskFile := "with-markers.md"
+	taskPath := filepath.Join(tasksDir, taskFile)
+	os.WriteFile(taskPath, []byte("# Task\n<!-- review-rejection: agent at 2026-01-01T00:00:00Z — add tests -->\n"), 0o644)
+
+	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
+	if !strings.Contains(got, "add tests") {
+		t.Fatalf("expected marker feedback, got %q", got)
+	}
+}
+
+func TestExtractReviewRejectionsWithVerdictFallback_NoMarkersVerdictFallback(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	taskFile := "no-markers.md"
+	taskPath := filepath.Join(tasksDir, taskFile)
+	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+
+	// Write a verdict file as fallback.
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"coverage too low"}`), 0o644)
+
+	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
+	if !strings.Contains(got, "coverage too low") {
+		t.Fatalf("expected verdict fallback feedback, got %q", got)
+	}
+}
+
+func TestExtractReviewRejectionsWithVerdictFallback_NoMarkersNoVerdict(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	taskFile := "no-markers-no-verdict.md"
+	taskPath := filepath.Join(tasksDir, taskFile)
+	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+
+	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
+func TestExtractReviewRejectionsWithVerdictFallback_ApproveVerdictIgnored(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	taskFile := "approve-verdict.md"
+	taskPath := filepath.Join(tasksDir, taskFile)
+	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+
+	// An approve verdict should not produce feedback.
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
+
+	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
+	if got != "" {
+		t.Fatalf("expected empty string for approve verdict, got %q", got)
+	}
+}
+
 func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
@@ -1973,20 +2033,24 @@ func TestPostReviewAction_ApprovalMarkerWriteFailure(t *testing.T) {
 	}
 
 	task := &queue.ClaimedTask{Filename: taskFile, Branch: "task/review-task", Title: "Review Task", TaskPath: reviewPath}
-	postReviewAction(tasksDir, "host-agent", task)
+	_, stderr := captureStdoutStderr(t, func() {
+		postReviewAction(tasksDir, "host-agent", task)
+	})
 
-	if _, err := os.Stat(reviewPath); err != nil {
-		t.Fatal("task should stay in ready-for-review/ when approval marker write fails")
+	// The task should still be moved to ready-to-merge/ (marker write is non-fatal
+	// after a successful move).
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)); err != nil {
+		t.Fatal("task should be moved to ready-to-merge/ even when marker write fails after move")
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)); err == nil {
-		t.Fatal("task should not move to ready-to-merge/ when approval marker write fails")
+	if _, err := os.Stat(reviewPath); err == nil {
+		t.Fatal("task should not remain in ready-for-review/ after successful move")
 	}
-	data, _ := os.ReadFile(reviewPath)
-	if !strings.Contains(string(data), "<!-- review-failure:") {
-		t.Fatalf("review-failure should be recorded after approval marker write failure:\n%s", string(data))
+	if !strings.Contains(stderr, "could not write verdict marker") {
+		t.Fatalf("expected marker write warning in stderr, got:\n%s", stderr)
 	}
-	if !strings.Contains(string(data), "could not write approval marker") {
-		t.Fatalf("review-failure should mention approval marker write failure:\n%s", string(data))
+	// Verdict file should be cleaned up since the handoff succeeded.
+	if _, err := os.Stat(verdictPath); err == nil {
+		t.Fatal("verdict file should be cleaned up after successful handoff")
 	}
 }
 
@@ -2009,20 +2073,32 @@ func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 	}
 
 	task := &queue.ClaimedTask{Filename: taskFile, Branch: "task/review-task", Title: "Review Task", TaskPath: reviewPath}
-	postReviewAction(tasksDir, "host-agent", task)
+	_, stderr := captureStdoutStderr(t, func() {
+		postReviewAction(tasksDir, "host-agent", task)
+	})
 
-	if _, err := os.Stat(reviewPath); err != nil {
-		t.Fatal("task should stay in ready-for-review/ when rejection marker write fails")
+	// The primary append fails but the fallback write (read-modify-write)
+	// should succeed, so the marker ends up in the task file.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err != nil {
+		t.Fatal("task should be moved to backlog/")
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err == nil {
-		t.Fatal("task should not move to backlog/ when rejection marker write fails")
+	if _, err := os.Stat(reviewPath); err == nil {
+		t.Fatal("task should not remain in ready-for-review/ after successful move")
 	}
-	data, _ := os.ReadFile(reviewPath)
-	if !strings.Contains(string(data), "<!-- review-failure:") {
-		t.Fatalf("review-failure should be recorded after rejection marker write failure:\n%s", string(data))
+	if !strings.Contains(stderr, "could not write verdict marker") {
+		t.Fatalf("expected marker write warning in stderr, got:\n%s", stderr)
 	}
-	if !strings.Contains(string(data), "could not write rejection marker") {
-		t.Fatalf("review-failure should mention rejection marker write failure:\n%s", string(data))
+	// Fallback write should have written the marker, so review feedback
+	// must be available to the next work agent.
+	dstPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	feedback := extractReviewRejections(dstPath)
+	if feedback == "" {
+		dstData, _ := os.ReadFile(dstPath)
+		t.Fatalf("review feedback should be available after fallback write, file content:\n%s", string(dstData))
+	}
+	// Verdict file should be cleaned up since feedback was durably written.
+	if _, err := os.Stat(verdictPath); err == nil {
+		t.Fatal("verdict file should be cleaned up after successful fallback marker write")
 	}
 }
 
@@ -2034,27 +2110,28 @@ func TestPostReviewAction_ApprovalMarkerAndReviewFailureWriteFailure(t *testing.
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o444)
-	t.Cleanup(func() { _ = os.Chmod(reviewPath, 0o644) })
+	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
 	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
 
+	origAppend := appendToFileFn
+	t.Cleanup(func() { appendToFileFn = origAppend })
+	appendToFileFn = func(path, text string) error {
+		return fmt.Errorf("simulated write failure")
+	}
+
 	task := &queue.ClaimedTask{Filename: taskFile, Branch: "task/review-task", Title: "Review Task", TaskPath: reviewPath}
-	stdout, stderr := captureStdoutStderr(t, func() {
+	_, stderr := captureStdoutStderr(t, func() {
 		postReviewAction(tasksDir, "host-agent", task)
 	})
 
-	if !strings.Contains(stdout, "Review incomplete: could not record review-failure for review-task.md") {
-		t.Fatalf("expected stdout to report failed review-failure recording, got:\n%s", stdout)
+	// The move succeeds, but the marker write (to destination) fails.
+	// The handoff is still considered successful.
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)); err != nil {
+		t.Fatal("task should be moved to ready-to-merge/ even when marker write fails")
 	}
-	if strings.Contains(stdout, "recorded review-failure") {
-		t.Fatalf("stdout should not claim review-failure was recorded:\n%s", stdout)
-	}
-	if !strings.Contains(stderr, "could not write approval marker") {
-		t.Fatalf("expected approval marker warning in stderr, got:\n%s", stderr)
-	}
-	if !strings.Contains(stderr, "for append:") {
-		t.Fatalf("expected review-failure append warning in stderr, got:\n%s", stderr)
+	if !strings.Contains(stderr, "could not write verdict marker") {
+		t.Fatalf("expected marker write warning in stderr, got:\n%s", stderr)
 	}
 }
 
@@ -2385,20 +2462,27 @@ func TestMoveReviewedTask_Success(t *testing.T) {
 		TaskPath: srcPath,
 	}
 
-	moveReviewedTask(tasksDir, "agent1", task, reviewDisposition{
+	ok := moveReviewedTask(tasksDir, "agent1", task, reviewDisposition{
 		dir:         queue.DirReadyMerge,
 		messageBody: "approved",
 		logPrefix:   "review",
-	})
+	}, "\n<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved -->\n")
 
+	if !ok {
+		t.Fatal("moveReviewedTask should return true on success")
+	}
 	// Source should be removed
 	if _, err := os.Stat(srcPath); err == nil {
 		t.Fatal("source file should have been removed after move")
 	}
-	// Destination should exist
+	// Destination should exist with marker
 	dstPath := filepath.Join(dstDir, taskFile)
-	if _, err := os.Stat(dstPath); err != nil {
+	data, err := os.ReadFile(dstPath)
+	if err != nil {
 		t.Fatalf("destination file should exist: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- reviewed: agent1") {
+		t.Fatalf("marker should be written to destination, got: %s", string(data))
 	}
 }
 
@@ -2426,12 +2510,15 @@ func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 		TaskPath: srcPath,
 	}
 
-	moveReviewedTask(tasksDir, "agent1", task, reviewDisposition{
+	ok := moveReviewedTask(tasksDir, "agent1", task, reviewDisposition{
 		dir:         queue.DirBacklog,
 		messageBody: "rejected",
 		logPrefix:   "review",
-	})
+	}, "\n<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — tests missing -->\n")
 
+	if ok {
+		t.Fatal("moveReviewedTask should return false when destination exists")
+	}
 	// Source should still exist (move was skipped)
 	if _, err := os.Stat(srcPath); err != nil {
 		t.Fatalf("source file should still exist when destination already exists: %v", err)
@@ -2440,6 +2527,15 @@ func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 	data, _ := os.ReadFile(dstPath)
 	if string(data) != "# Existing\n" {
 		t.Fatalf("destination file should not have been overwritten, got: %s", string(data))
+	}
+	// No marker should be written to source
+	srcData, _ := os.ReadFile(srcPath)
+	if strings.Contains(string(srcData), "review-rejection") {
+		t.Fatal("rejection marker should not be written when move fails")
+	}
+	// Review-failure should be recorded in the source task file
+	if !strings.Contains(string(srcData), "<!-- review-failure:") {
+		t.Fatalf("review-failure should be recorded when move fails:\n%s", string(srcData))
 	}
 }
 
@@ -4865,6 +4961,11 @@ func TestResumeRejected(t *testing.T) {
 		{name: "copilot failed to resume", output: "failed to resume session 123", want: true},
 		{name: "normal discussion text", output: "the review session discussed an invalid task state", want: false},
 		{name: "keywords across lines", output: "session\nnot found", want: false},
+		{name: "session not found without error keyword", output: "session not found", want: true},
+		{name: "unknown session without error keyword", output: "unknown session abc-123", want: true},
+		{name: "session expired without error keyword", output: "session expired, please retry", want: true},
+		{name: "session not found uppercase", output: "Session Not Found", want: true},
+		{name: "session mentioned without stale phrase", output: "session started successfully", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

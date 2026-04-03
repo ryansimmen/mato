@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"mato/internal/atomicwrite"
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
@@ -32,6 +33,12 @@ var reviewedRe = regexp.MustCompile(`<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+app
 // reviewRejectionRe matches the rejection marker written by the review agent.
 // Requires the em-dash separator, a non-empty reason, and the closing -->.
 var reviewRejectionRe = regexp.MustCompile(`<!-- review-rejection:\s+\S+\s+at\s+\S+\s+—\s+.+\s*-->`)
+
+// approvalMarkerRe matches only the approval marker for targeted stripping.
+var approvalMarkerRe = regexp.MustCompile(`\n?<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+approved\s*-->\n?`)
+
+// rejectionMarkerRe matches only the rejection marker for targeted stripping.
+var rejectionMarkerRe = regexp.MustCompile(`\n?<!-- review-rejection:\s+\S+\s+at\s+\S+\s+—\s+.+?\s*-->\n?`)
 
 // reviewVerdict is the JSON structure written by the review agent to
 // communicate its verdict to the host without using shell expansion.
@@ -96,7 +103,7 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				if moveErr := queue.AtomicMove(snap.Path, filepath.Join(failedDir, snap.Filename)); moveErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
 				} else {
-					deleteTaskState(tasksDir, snap.Filename)
+					runtimecleanup.DeleteAllPreservingVerdict(tasksDir, snap.Filename)
 					fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
 						snap.Filename, failures, maxRetries)
 				}
@@ -173,7 +180,7 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				if moveErr := queue.AtomicMove(path, dst); moveErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", name, moveErr)
 				} else {
-					deleteTaskState(tasksDir, name)
+					runtimecleanup.DeleteAllPreservingVerdict(tasksDir, name)
 					fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
 						name, failures, maxRetries)
 				}
@@ -384,6 +391,31 @@ func resolveReviewVerdict(task *queue.ClaimedTask) string {
 	return ""
 }
 
+// stripLastTerminalMarker removes only the last occurrence of a terminal
+// verdict marker matching re from the task file at taskPath. This preserves
+// older review-rejection markers from prior review cycles (which feed into
+// MATO_REVIEW_FEEDBACK) while rolling back only the consumed terminal marker
+// from the current failed handoff.
+func stripLastTerminalMarker(taskPath string, re *regexp.Regexp) {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read task file %s for marker rollback: %v\n", taskPath, err)
+		return
+	}
+	locs := re.FindAllIndex(data, -1)
+	if len(locs) == 0 {
+		return
+	}
+	last := locs[len(locs)-1]
+	cleaned := make([]byte, 0, len(data)-(last[1]-last[0])+1)
+	cleaned = append(cleaned, data[:last[0]]...)
+	cleaned = append(cleaned, '\n')
+	cleaned = append(cleaned, data[last[1]:]...)
+	if err := atomicwrite.WriteFile(taskPath, cleaned); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not strip terminal review marker from %s: %v\n", taskPath, err)
+	}
+}
+
 // VerifyReviewBranch checks whether the task branch exists in the host repo
 // before launching a review agent. If the branch is missing it records a
 // review-failure marker and returns false. Returns true when the branch
@@ -409,9 +441,16 @@ func PostReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 }
 
 // postReviewAction reads the verdict file written by the review agent and
-// handles the result. If approved, the host writes the approval marker and
-// moves the task to ready-to-merge/. If rejected, writes rejection marker
-// and moves to backlog/. If no verdict file exists, writes a review-failure.
+// handles the result. If approved, the host moves the task to ready-to-merge/
+// and writes the approval marker. If rejected, moves to backlog/ and writes
+// the rejection marker. If no verdict file exists, writes a review-failure.
+//
+// The handoff is rollback-safe: the verdict marker is written only after the
+// task file has been successfully moved to its destination directory, and the
+// verdict file is preserved on disk until the move succeeds. This prevents
+// leaving the task in ready-for-review/ with a terminal marker when the move
+// fails, and allows a subsequent review cycle to retry using the preserved
+// verdict.
 func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	// Task must still be in ready-for-review/ (agent no longer moves files).
 	if _, err := os.Stat(task.TaskPath); err != nil {
@@ -424,17 +463,22 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	}
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+task.Filename+".json")
-	defer os.Remove(verdictPath) // clean up regardless of outcome
 
 	data, err := os.ReadFile(verdictPath)
 	if err != nil {
 		// No verdict file: review agent crashed or failed to write verdict.
 		// Fall back to checking the task file for markers (backward compat).
+		// If the move fails, strip the pre-existing terminal marker so the
+		// task is not left in ready-for-review/ with a consumed verdict.
 		switch resolveReviewVerdict(task) {
 		case "approve":
-			moveReviewedTask(tasksDir, agentID, task, approveDisposition)
+			if !moveReviewedTask(tasksDir, agentID, task, approveDisposition, "") {
+				stripLastTerminalMarker(task.TaskPath, approvalMarkerRe)
+			}
 		case "reject":
-			moveReviewedTask(tasksDir, agentID, task, rejectDisposition)
+			if !moveReviewedTask(tasksDir, agentID, task, rejectDisposition, "") {
+				stripLastTerminalMarker(task.TaskPath, rejectionMarkerRe)
+			}
 		default:
 			recorded := appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
 			recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
@@ -452,6 +496,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 			state.LastOutcome = "review-incomplete"
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "malformed verdict file")
+		os.Remove(verdictPath)
 		return
 	}
 
@@ -459,33 +504,20 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 
 	switch strings.ToLower(strings.TrimSpace(verdict.Verdict)) {
 	case "approve":
-		// Write approval marker to task file.
-		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now)); err != nil {
-			recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not write approval marker: %v", err))
-			recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-				state.LastOutcome = "review-incomplete"
-			})
-			fmt.Fprintf(os.Stderr, "warning: could not write approval marker: %v\n", err)
-			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
-			return
+		marker := fmt.Sprintf("\n<!-- reviewed: %s at %s — approved -->\n", agentID, now)
+		if moveReviewedTask(tasksDir, agentID, task, approveDisposition, marker) {
+			os.Remove(verdictPath)
 		}
-		moveReviewedTask(tasksDir, agentID, task, approveDisposition)
 
 	case "reject":
 		reason := taskfile.SanitizeCommentText(verdict.Reason)
 		if reason == "" {
 			reason = "no reason provided"
 		}
-		if err := appendToFileFn(task.TaskPath, fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason)); err != nil {
-			recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not write rejection marker: %v", err))
-			recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-				state.LastOutcome = "review-incomplete"
-			})
-			fmt.Fprintf(os.Stderr, "warning: could not write rejection marker: %v\n", err)
-			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
-			return
+		marker := fmt.Sprintf("\n<!-- review-rejection: %s at %s — %s -->\n", agentID, now, reason)
+		if moveReviewedTask(tasksDir, agentID, task, rejectDisposition, marker) {
+			os.Remove(verdictPath)
 		}
-		moveReviewedTask(tasksDir, agentID, task, rejectDisposition)
 
 	case "error":
 		reason := taskfile.SanitizeCommentText(verdict.Reason)
@@ -497,6 +529,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 			state.LastOutcome = "review-error"
 		})
 		logReviewFailureOutcome("Review error", task.Filename, recorded, reason)
+		os.Remove(verdictPath)
 
 	default:
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
@@ -504,18 +537,46 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 			state.LastOutcome = "review-incomplete"
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, fmt.Sprintf("unknown verdict %q", verdict.Verdict))
+		os.Remove(verdictPath)
 	}
 }
 
 // moveReviewedTask moves a reviewed task to the destination directory specified
-// by the disposition and sends a completion message. It uses queue.AtomicMove
-// (os.Link + os.Remove) to prevent silently overwriting an existing file at
-// the destination (TOCTOU race defense).
-func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp reviewDisposition) {
+// by the disposition, writes the verdict marker to the destination file, and
+// sends a completion message. It uses queue.AtomicMove (os.Link + os.Remove)
+// to prevent silently overwriting an existing file at the destination (TOCTOU
+// race defense).
+//
+// The marker is written only after the move succeeds, so the task is never
+// left in ready-for-review/ with a terminal verdict marker when the move
+// fails. If the move fails, a review-failure is recorded and false is
+// returned so the caller can preserve the verdict file for retry.
+func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp reviewDisposition, marker string) bool {
 	dst := filepath.Join(tasksDir, disp.dir, task.Filename)
 	if err := queue.AtomicMove(task.TaskPath, dst); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, disp.dir, err)
-		return
+		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not move task to %s: %v", disp.dir, err))
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
+			state.LastOutcome = "review-move-failed"
+		})
+		logReviewFailureOutcome("Review move failed", task.Filename, recorded, err.Error())
+		return false
+	}
+	if marker != "" {
+		if err := appendToFileFn(dst, marker); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: task %s moved to %s/ but could not write verdict marker: %v\n", task.Filename, disp.dir, err)
+			// On the rejection path the marker is the durable record of
+			// reviewer feedback that feeds MATO_REVIEW_FEEDBACK. Try a
+			// fallback write (read-modify-write) using a different I/O
+			// path before giving up.
+			if disp.dir == queue.DirBacklog {
+				if fallbackErr := fallbackMarkerWrite(dst, marker); fallbackErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: fallback marker write also failed for %s: %v\n", task.Filename, fallbackErr)
+					return false
+				}
+				fmt.Fprintf(os.Stderr, "info: rejection marker written via fallback for %s\n", task.Filename)
+			}
+		}
 	}
 	outcome := "review-rejected"
 	if disp.dir == queue.DirReadyMerge {
@@ -535,6 +596,18 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 		Body:   disp.messageBody,
 	})
 	fmt.Printf("%s: moved %s to %s/\n", disp.logPrefix, task.Filename, disp.dir)
+	return true
+}
+
+// fallbackMarkerWrite attempts a read-modify-write using atomicwrite.WriteFile
+// as an alternative I/O path when appendToFileFn fails. This covers cases
+// where O_APPEND is broken but temp-file-rename still works.
+var fallbackMarkerWrite = func(dst, marker string) error {
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		return fmt.Errorf("fallback read %s: %w", dst, err)
+	}
+	return atomicwrite.WriteFile(dst, append(data, []byte(marker)...))
 }
 
 // appendReviewFailure writes a review-failure comment to the task file.
@@ -571,6 +644,22 @@ func extractReviewRejections(taskPath string) string {
 		return ""
 	}
 	return taskfile.ExtractReviewRejections(data)
+}
+
+// extractReviewRejectionsWithVerdictFallback first checks the task file for
+// review-rejection markers. If none are found, it checks for a preserved
+// verdict JSON file (messages/verdict-FILENAME.json) and extracts the
+// rejection reason from it. This handles the case where the marker could
+// not be written to the task file but the verdict file was preserved.
+func extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, filename string) string {
+	result := extractReviewRejections(taskPath)
+	if result != "" {
+		return result
+	}
+	if vr, ok := taskfile.ReadVerdictRejection(tasksDir, filename); ok {
+		return vr.Reason
+	}
+	return ""
 }
 
 func loadTaskStateForReview(tasksDir, filename string) *taskstate.TaskState {

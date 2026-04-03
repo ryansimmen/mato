@@ -3324,6 +3324,121 @@ func TestReadLatestProgressForAgents_MalformedFileWarning(t *testing.T) {
 	}
 }
 
+// TestReadLatestProgressForAgents_AgentStyleFilenames verifies that progress
+// messages written with agent-style filenames (e.g. nonce-agent-work.json)
+// are found by the fallback scan, even though these names do not contain
+// the "-progress-" substring that WriteMessage-generated names include.
+func TestReadLatestProgressForAgents_AgentStyleFilenames(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+
+	// Write agent-style progress files directly (no "-progress-" in name).
+	agentFiles := []struct {
+		filename string
+		msg      Message
+	}{
+		{
+			filename: base.Format("20060102T150405.000000000Z") + "-agent-7-verify-claim.json",
+			msg: Message{
+				ID: "vc1", From: "agent-7", Type: "progress",
+				Task: "task-7.md", Body: "Step: VERIFY_CLAIM", SentAt: base,
+			},
+		},
+		{
+			filename: base.Add(time.Second).Format("20060102T150405.000000000Z") + "-agent-7-work.json",
+			msg: Message{
+				ID: "w1", From: "agent-7", Type: "progress",
+				Task: "task-7.md", Body: "Step: WORK", SentAt: base.Add(time.Second),
+			},
+		},
+		{
+			filename: base.Add(2 * time.Second).Format("20060102T150405.000000000Z") + "-agent-7-commit.json",
+			msg: Message{
+				ID: "c1", From: "agent-7", Type: "progress",
+				Task: "task-7.md", Body: "Step: COMMIT", SentAt: base.Add(2 * time.Second),
+			},
+		},
+	}
+	for _, af := range agentFiles {
+		data, err := json.Marshal(af.msg)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(eventsDir, af.filename), data, 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", af.filename, err)
+		}
+	}
+
+	got, warnings, err := ReadLatestProgressForAgents(tasksDir, []string{"agent-7"}, 0)
+	if err != nil {
+		t.Fatalf("ReadLatestProgressForAgents: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", warnings)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d agents, want 1", len(got))
+	}
+	if got["agent-7"].Body != "Step: COMMIT" {
+		t.Errorf("agent-7 body = %q, want %q", got["agent-7"].Body, "Step: COMMIT")
+	}
+}
+
+// TestReadLatestProgressForAgents_MixedFilenameStyles verifies that a mix
+// of WriteMessage-generated filenames (containing "-progress-") and
+// agent-style filenames (e.g. nonce-agent-work.json) are both found.
+func TestReadLatestProgressForAgents_MixedFilenameStyles(t *testing.T) {
+	tasksDir := t.TempDir()
+	setupMessagingDirs(t, tasksDir)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+
+	// Agent-a uses WriteMessage (produces "-progress-" filenames).
+	if err := WriteMessage(tasksDir, Message{
+		ID: "a-prog", From: "agent-a", Type: "progress",
+		Task: "task-a.md", Body: "Step: WORK via WriteMessage",
+		SentAt: base,
+	}); err != nil {
+		t.Fatalf("WriteMessage(a): %v", err)
+	}
+
+	// Agent-b writes directly with agent-style filename.
+	agentBMsg := Message{
+		ID: "b-prog", From: "agent-b", Type: "progress",
+		Task: "task-b.md", Body: "Step: WORK via agent shell",
+		SentAt: base.Add(time.Second),
+	}
+	data, err := json.Marshal(agentBMsg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	fname := base.Add(time.Second).Format("20060102T150405.000000000Z") + "-agent-b-work.json"
+	if err := os.WriteFile(filepath.Join(eventsDir, fname), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, warnings, readErr := ReadLatestProgressForAgents(tasksDir, []string{"agent-a", "agent-b"}, 0)
+	if readErr != nil {
+		t.Fatalf("ReadLatestProgressForAgents: %v", readErr)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", warnings)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d agents, want 2", len(got))
+	}
+	if got["agent-a"].Body != "Step: WORK via WriteMessage" {
+		t.Errorf("agent-a body = %q, want %q", got["agent-a"].Body, "Step: WORK via WriteMessage")
+	}
+	if got["agent-b"].Body != "Step: WORK via agent shell" {
+		t.Errorf("agent-b body = %q, want %q", got["agent-b"].Body, "Step: WORK via agent shell")
+	}
+}
+
 func TestWritePresence_CollisionResistance(t *testing.T) {
 	tasksDir := t.TempDir()
 	if err := Init(tasksDir); err != nil {

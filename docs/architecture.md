@@ -446,7 +446,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `internal/history/`
 - `mato log` durable outcome timeline — `Show`, `ShowTo` (`history.go`).
-- Reads only durable history sources in phase 1: `.mato/messages/completions/*.json`, `<!-- failure: ... -->` task markers, and `<!-- review-rejection: ... -->` task markers.
+- Reads durable history sources plus preserved verdict fallback files: `.mato/messages/completions/*.json`, `<!-- failure: ... -->` task markers, `<!-- review-rejection: ... -->` task markers, and `.mato/messages/verdict-<filename>.json` verdict fallback files (used when no durable review-rejection markers exist).
 - Sorts events newest first and renders either compact text or JSON for scripting.
 
 ### `internal/inspect/`
@@ -517,7 +517,7 @@ Concrete examples:
 - **Failure context**: When an agent fails, it appends a `<!-- failure: ... -->` comment to the task file. On the next attempt, the host reads these lines via `extractFailureLines(...)` and injects them as `MATO_PREVIOUS_FAILURES`, so the new agent can learn from prior mistakes without parsing the task file itself.
 - **File claims**: The host scans `affects:` metadata across active tasks and writes a `file-claims.json` index. Entries are stored as the literal `affects:` keys, including directory prefixes ending with `/`. Each new agent receives `MATO_FILE_CLAIMS` pointing to this index, enabling it to detect file-level conflicts with other running tasks.
 - **Dependency context**: After merging a task, the host writes a `CompletionDetail` record. When a dependent task launches, the host reads these records, writes them to a file, and injects the file path as `MATO_DEPENDENCY_CONTEXT`, giving the agent full knowledge of what its prerequisites changed.
-- **Review feedback**: When the review agent rejects a task, it appends `<!-- review-rejection: ... -->` to the task file. On the next attempt, the host reads these lines and injects them as `MATO_REVIEW_FEEDBACK`, so the implementing agent can address the reviewer's concerns.
+- **Review feedback**: When the review agent rejects a task, the host writes a durable `<!-- review-rejection: ... -->` marker to the task file and preserves the verdict fallback file (`.mato/messages/verdict-<filename>.json`). On the next attempt, the host resolves review feedback from durable markers first, falling back to the preserved verdict file when no markers exist. This combined result is injected as `MATO_REVIEW_FEEDBACK`. The verdict fallback survives `mato retry` and retry-exhausted transitions into `failed/`, so review feedback remains available across retryable cycles. Only truly terminal transitions (cancel, merge/completion) clear the verdict fallback.
 - **Review continuity metadata**: The host stores lightweight runtime metadata in `.mato/runtime/taskstate/` and injects an explicit review-context block into review prompts. This keeps follow-up reviews auditable and complements durable Copilot session resume rather than relying on it as the only source of continuity.
 
 This pattern keeps agents stateless and single-task-focused while the host provides the coordination intelligence. No agent needs to query other agents directly — the host curates and delivers the relevant context at launch time.

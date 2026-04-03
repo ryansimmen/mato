@@ -243,7 +243,7 @@ func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
 		// host does not immediately re-claim and livelock.
 		return &FailedDirUnavailableError{TaskFilename: name, MoveErr: err}
 	}
-	runtimecleanup.DeleteAll(filepath.Dir(failedDir), name)
+	runtimecleanup.DeleteAllPreservingVerdict(filepath.Dir(failedDir), name)
 	return nil
 }
 

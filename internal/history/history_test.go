@@ -522,3 +522,173 @@ func TestShowTo_TextNarrowTerminalFitsWidth(t *testing.T) {
 		}
 	}
 }
+
+func writeVerdictFile(t *testing.T, tasksDir, filename string, verdict map[string]string) {
+	t.Helper()
+	msgDir := filepath.Join(tasksDir, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := json.Marshal(verdict)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(msgDir, "verdict-"+filename+".json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestShowTo_VerdictFallbackShowsRejectedEvent(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Task with no review-rejection markers.
+	writeTask(t, tasksDir, queue.DirBacklog, "rework.md", "# Needs Rework\n")
+	// Preserved verdict file.
+	writeVerdictFile(t, tasksDir, "rework.md", map[string]string{
+		"verdict": "reject",
+		"reason":  "missing test coverage",
+	})
+
+	var textBuf bytes.Buffer
+	if err := ShowTo(&textBuf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo text: %v", err)
+	}
+	if !strings.Contains(textBuf.String(), "REJECTED") {
+		t.Fatalf("expected REJECTED event in text output:\n%s", textBuf.String())
+	}
+	if !strings.Contains(textBuf.String(), "missing test coverage") {
+		t.Fatalf("expected rejection reason in text output:\n%s", textBuf.String())
+	}
+
+	var jsonBuf bytes.Buffer
+	if err := ShowTo(&jsonBuf, repoRoot, 20, "json"); err != nil {
+		t.Fatalf("ShowTo json: %v", err)
+	}
+	var events []Event
+	if err := json.Unmarshal(jsonBuf.Bytes(), &events); err != nil {
+		t.Fatalf("json.Unmarshal: %v\n%s", err, jsonBuf.String())
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Type == "REJECTED" && ev.Reason == "missing test coverage" && ev.TaskFile == "rework.md" {
+			found = true
+			if ev.Timestamp.IsZero() {
+				t.Error("expected non-zero timestamp from verdict file mod time")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected REJECTED event with verdict reason, got events: %+v", events)
+	}
+}
+
+func TestShowTo_VerdictFallbackNotUsedWhenMarkersExist(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Task with a durable rejection marker.
+	writeTask(t, tasksDir, queue.DirBacklog, "marked.md",
+		"# Marked\n\n<!-- review-rejection: reviewer at 2026-03-20T10:00:00Z — durable reason -->\n")
+	// Verdict file with different reason.
+	writeVerdictFile(t, tasksDir, "marked.md", map[string]string{
+		"verdict": "reject",
+		"reason":  "verdict only reason",
+	})
+
+	var jsonBuf bytes.Buffer
+	if err := ShowTo(&jsonBuf, repoRoot, 20, "json"); err != nil {
+		t.Fatalf("ShowTo json: %v", err)
+	}
+	var events []Event
+	if err := json.Unmarshal(jsonBuf.Bytes(), &events); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	rejectedCount := 0
+	for _, ev := range events {
+		if ev.Type == "REJECTED" {
+			rejectedCount++
+			if ev.Reason != "durable reason" {
+				t.Errorf("expected durable marker reason, got %q", ev.Reason)
+			}
+		}
+	}
+	if rejectedCount != 1 {
+		t.Fatalf("expected exactly 1 REJECTED event from durable marker, got %d", rejectedCount)
+	}
+}
+
+func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	filename := "retry-keeps-log-verdict.md"
+
+	// Task in failed/ with no durable rejection marker, plus verdict file
+	// that should survive retry.
+	writeTask(t, tasksDir, queue.DirFailed, filename,
+		"# Retry Keeps Log Verdict\n\n<!-- failure: abc at 2026-03-20T10:00:00Z step=WORK error=build -->\n")
+	writeVerdictFile(t, tasksDir, filename, map[string]string{
+		"verdict": "reject",
+		"reason":  "preserved log reason",
+	})
+
+	// Before retry: history should include a REJECTED event from verdict.
+	var beforeBuf bytes.Buffer
+	if err := ShowTo(&beforeBuf, repoRoot, 100, "text"); err != nil {
+		t.Fatalf("ShowTo before retry: %v", err)
+	}
+	if !strings.Contains(beforeBuf.String(), "preserved log reason") {
+		t.Fatalf("before retry: expected verdict reason in log output:\n%s", beforeBuf.String())
+	}
+
+	// Perform retry (reset transition — verdict fallback is preserved).
+	if _, err := queue.RetryTask(tasksDir, filename); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+
+	// After retry: history must still surface the preserved verdict reason.
+	var afterBuf bytes.Buffer
+	if err := ShowTo(&afterBuf, repoRoot, 100, "text"); err != nil {
+		t.Fatalf("ShowTo after retry: %v", err)
+	}
+	if !strings.Contains(afterBuf.String(), "preserved log reason") {
+		t.Fatalf("after retry: preserved verdict reason should still appear in log:\n%s", afterBuf.String())
+	}
+}
+
+func TestShowTo_VerdictFallbackClearedAfterCancel(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	filename := "cancel-clears-log-verdict.md"
+
+	// Task in backlog/ with no durable rejection marker, plus stale verdict.
+	writeTask(t, tasksDir, queue.DirBacklog, filename,
+		"# Cancel Clears Log Verdict\n")
+	writeVerdictFile(t, tasksDir, filename, map[string]string{
+		"verdict": "reject",
+		"reason":  "terminal log reason",
+	})
+
+	// Before cancel: history should include a REJECTED event from verdict.
+	var beforeBuf bytes.Buffer
+	if err := ShowTo(&beforeBuf, repoRoot, 100, "text"); err != nil {
+		t.Fatalf("ShowTo before cancel: %v", err)
+	}
+	if !strings.Contains(beforeBuf.String(), "terminal log reason") {
+		t.Fatalf("before cancel: expected verdict reason in log output:\n%s", beforeBuf.String())
+	}
+
+	// Cancel the task (terminal transition).
+	if _, err := queue.CancelTask(tasksDir, filename); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+
+	// After cancel: history must not surface the stale verdict reason.
+	var afterBuf bytes.Buffer
+	if err := ShowTo(&afterBuf, repoRoot, 100, "text"); err != nil {
+		t.Fatalf("ShowTo after cancel: %v", err)
+	}
+	if strings.Contains(afterBuf.String(), "terminal log reason") {
+		t.Fatalf("after cancel: stale verdict reason should not appear in log:\n%s", afterBuf.String())
+	}
+}
