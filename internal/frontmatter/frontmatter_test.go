@@ -653,6 +653,100 @@ Body.
 	}
 }
 
+func TestParseTaskFile_UserCommentBeforeFrontmatter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "user-comment-before-fm.md")
+	content := `<!-- TODO: revisit after v2 -->
+---
+id: my-task
+priority: 5
+---
+# Title
+Body.
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	// User comment stops frontmatter detection; defaults used for meta.
+	wantMeta := TaskMeta{ID: "user-comment-before-fm", Priority: 50, MaxRetries: 3}
+	if !reflect.DeepEqual(meta, wantMeta) {
+		t.Fatalf("meta = %#v, want %#v", meta, wantMeta)
+	}
+	// User comment is preserved in the body.
+	if !strings.Contains(body, "<!-- TODO: revisit after v2 -->") {
+		t.Fatalf("body should contain user comment, got %q", body)
+	}
+}
+
+func TestParseTaskFile_ManagedCommentSkippedUserCommentPreserved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed-then-user.md")
+	content := `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
+<!-- branch: task/managed-then-user -->
+# Simple task with user comment below
+<!-- my custom note -->
+Details here.
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	// No frontmatter, so defaults are used.
+	wantMeta := TaskMeta{ID: "managed-then-user", Priority: 50, MaxRetries: 3}
+	if !reflect.DeepEqual(meta, wantMeta) {
+		t.Fatalf("meta = %#v, want %#v", meta, wantMeta)
+	}
+	// Managed comments stripped, user comment preserved.
+	if !strings.Contains(body, "<!-- my custom note -->") {
+		t.Fatalf("body should contain user comment, got %q", body)
+	}
+	if strings.Contains(body, "claimed-by") {
+		t.Fatalf("body should not contain managed comment, got %q", body)
+	}
+}
+
+func TestParseTaskFile_ManagedCommentsStillSkippedBeforeFrontmatter(t *testing.T) {
+	// Verify managed comments are still correctly skipped before frontmatter.
+	path := filepath.Join(t.TempDir(), "managed-before-fm.md")
+	content := `<!-- claimed-by: abc123  claimed-at: 2026-01-01T00:00:00Z -->
+<!-- failure: xyz at 2026-01-01T01:00:00Z step=WORK error=build files_changed=none -->
+<!-- branch: task/managed-before-fm -->
+---
+id: managed-task
+priority: 7
+---
+# Title
+Body.
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	meta, body, err := ParseTaskFile(path)
+	if err != nil {
+		t.Fatalf("ParseTaskFile: %v", err)
+	}
+
+	if meta.ID != "managed-task" {
+		t.Fatalf("meta.ID = %q, want %q", meta.ID, "managed-task")
+	}
+	if meta.Priority != 7 {
+		t.Fatalf("meta.Priority = %d, want 7", meta.Priority)
+	}
+	if body != "# Title\nBody.\n" {
+		t.Fatalf("body = %q, want %q", body, "# Title\nBody.\n")
+	}
+}
+
 func TestParseTaskFile_InvalidPriority(t *testing.T) {
 	tests := []struct {
 		name    string

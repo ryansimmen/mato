@@ -66,6 +66,10 @@ closing the database connection, leaking connections under load.
 2. Add a test that triggers a parse error and verifies the connection is released.
 ```
 
+**Parsing notes:**
+- If present, frontmatter must be closed by a second `---` line. The parser skips leading empty lines and scheduler-managed HTML comments (e.g. `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`) before looking for the opening `---`, since claim metadata may be prepended above the frontmatter block. User-authored HTML comments are **not** skipped; if one appears before the opening `---`, frontmatter is not detected and the entire file is treated as a plain markdown body.
+- Only scheduler-managed HTML comment lines are stripped from the returned body. All other HTML comments are preserved so task authors can use them freely in instructions.
+
 ### Frontmatter Fields
 
 Most tasks only need the markdown body plus a few common scheduler fields
