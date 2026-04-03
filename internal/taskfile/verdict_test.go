@@ -110,3 +110,38 @@ func TestReadVerdictRejection_CaseInsensitiveVerdict(t *testing.T) {
 		t.Fatalf("Reason = %q, want %q", vr.Reason, "bad code")
 	}
 }
+
+func TestDeleteVerdict_ExistingFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	msgDir := filepath.Join(tasksDir, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	verdict := map[string]string{"verdict": "reject", "reason": "stale"}
+	data, _ := json.Marshal(verdict)
+	if err := os.WriteFile(VerdictPath(tasksDir, "task.md"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := DeleteVerdict(tasksDir, "task.md"); err != nil {
+		t.Fatalf("DeleteVerdict: %v", err)
+	}
+
+	if _, err := os.Stat(VerdictPath(tasksDir, "task.md")); !os.IsNotExist(err) {
+		t.Fatal("verdict file should have been deleted")
+	}
+}
+
+func TestDeleteVerdict_MissingFile(t *testing.T) {
+	if err := DeleteVerdict(t.TempDir(), "task.md"); err != nil {
+		t.Fatalf("DeleteVerdict should not error on missing file: %v", err)
+	}
+}
+
+func TestVerdictPath(t *testing.T) {
+	got := VerdictPath("/tmp/tasks", "my-task.md")
+	want := "/tmp/tasks/messages/verdict-my-task.md.json"
+	if got != want {
+		t.Fatalf("VerdictPath = %q, want %q", got, want)
+	}
+}

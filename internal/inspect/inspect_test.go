@@ -989,3 +989,103 @@ func TestShowTo_TextRelativeTimeInReasonAndClaimedAt(t *testing.T) {
 		t.Errorf("JSON claimed_at = %q, want %q", claimedAtJSON, claimedAt)
 	}
 }
+
+func TestShowTo_VerdictFallbackClearedAfterRetry(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, dir := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	filename := "retry-clears-verdict.md"
+
+	// Start with task in failed/ (required for retry) with no durable
+	// rejection marker, plus a stale verdict file.
+	writeTask(t, tasksDir, queue.DirFailed, filename,
+		"---\nid: retry-clears-verdict\npriority: 10\n---\n# Retry Clears Verdict\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=build -->\n")
+	writeVerdictFile(t, tasksDir, filename, map[string]string{
+		"verdict": "reject",
+		"reason":  "stale reason should vanish",
+	})
+
+	// Before retry: inspect should surface the verdict fallback reason.
+	var beforeBuf bytes.Buffer
+	if err := ShowTo(&beforeBuf, repoRoot, "retry-clears-verdict", "text"); err != nil {
+		t.Fatalf("ShowTo before retry: %v", err)
+	}
+	if !strings.Contains(beforeBuf.String(), "stale reason should vanish") {
+		t.Fatalf("before retry: expected verdict reason in inspect output:\n%s", beforeBuf.String())
+	}
+
+	// Perform retry (reset transition).
+	if _, err := queue.RetryTask(tasksDir, "retry-clears-verdict"); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+
+	// After retry: inspect must not surface the stale verdict reason.
+	var afterBuf bytes.Buffer
+	if err := ShowTo(&afterBuf, repoRoot, "retry-clears-verdict", "text"); err != nil {
+		t.Fatalf("ShowTo after retry: %v", err)
+	}
+	if strings.Contains(afterBuf.String(), "stale reason should vanish") {
+		t.Fatalf("after retry: stale verdict reason should not appear in inspect:\n%s", afterBuf.String())
+	}
+
+	// Also verify JSON output.
+	var jsonBuf bytes.Buffer
+	if err := ShowTo(&jsonBuf, repoRoot, "retry-clears-verdict", "json"); err != nil {
+		t.Fatalf("ShowTo json after retry: %v", err)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(jsonBuf.Bytes(), &result); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if reason, ok := result["review_rejection_reason"]; ok && reason != "" {
+		t.Fatalf("after retry: JSON review_rejection_reason = %v, want empty", reason)
+	}
+}
+
+func TestShowTo_VerdictFallbackClearedAfterCancel(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, dir := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	filename := "cancel-clears-verdict.md"
+
+	// Task in backlog/ with a stale verdict file (no durable marker).
+	writeTask(t, tasksDir, queue.DirBacklog, filename,
+		"---\nid: cancel-clears-verdict\npriority: 10\n---\n# Cancel Clears Verdict\n")
+	writeVerdictFile(t, tasksDir, filename, map[string]string{
+		"verdict": "reject",
+		"reason":  "terminal stale reason",
+	})
+
+	// Before cancel: inspect should surface the verdict reason.
+	var beforeBuf bytes.Buffer
+	if err := ShowTo(&beforeBuf, repoRoot, "cancel-clears-verdict", "text"); err != nil {
+		t.Fatalf("ShowTo before cancel: %v", err)
+	}
+	if !strings.Contains(beforeBuf.String(), "terminal stale reason") {
+		t.Fatalf("before cancel: expected verdict reason in inspect output:\n%s", beforeBuf.String())
+	}
+
+	// Cancel the task (terminal transition).
+	if _, err := queue.CancelTask(tasksDir, "cancel-clears-verdict"); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+
+	// After cancel: inspect must not surface the stale verdict reason.
+	var afterBuf bytes.Buffer
+	if err := ShowTo(&afterBuf, repoRoot, "cancel-clears-verdict", "text"); err != nil {
+		t.Fatalf("ShowTo after cancel: %v", err)
+	}
+	if strings.Contains(afterBuf.String(), "terminal stale reason") {
+		t.Fatalf("after cancel: stale verdict reason should not appear in inspect:\n%s", afterBuf.String())
+	}
+}

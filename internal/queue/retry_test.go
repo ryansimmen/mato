@@ -1,12 +1,15 @@
 package queue
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"mato/internal/taskfile"
 )
 
 func withCreateRetryTempFileFn(t *testing.T, fn func(string, string) (*os.File, error)) {
@@ -578,5 +581,64 @@ func TestRetryTask_NoEmptyPlaceholderDuringWrite(t *testing.T) {
 	}
 	if strings.Contains(string(data), "<!-- failure:") {
 		t.Errorf("backlog file still contains failure marker; got:\n%s", string(data))
+	}
+}
+
+func TestRetryTask_CleansVerdictAndIndexNoLongerSurfacesRejection(t *testing.T) {
+	tmp := t.TempDir()
+	for _, dir := range AllDirs {
+		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	filename := "stale-verdict-retry.md"
+	content := "---\nid: stale-verdict-retry\npriority: 10\n---\n# Stale verdict retry\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(tmp, DirFailed, filename), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed a stale verdict file with a reject reason.
+	msgDir := filepath.Join(tmp, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	verdict := map[string]string{"verdict": "reject", "reason": "stale from prior cycle"}
+	vdata, _ := json.Marshal(verdict)
+	verdictPath := taskfile.VerdictPath(tmp, filename)
+	if err := os.WriteFile(verdictPath, vdata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before retry: BuildIndex should surface the verdict rejection reason.
+	idx := BuildIndex(tmp)
+	snap := idx.Snapshot(DirFailed, filename)
+	if snap == nil {
+		t.Fatal("expected snapshot in failed/ before retry")
+	}
+	if snap.LastReviewRejectionReason != "stale from prior cycle" {
+		t.Fatalf("before retry: LastReviewRejectionReason = %q, want %q",
+			snap.LastReviewRejectionReason, "stale from prior cycle")
+	}
+
+	// Perform retry.
+	if _, err := RetryTask(tmp, "stale-verdict-retry"); err != nil {
+		t.Fatalf("RetryTask() error: %v", err)
+	}
+
+	// Verdict file must be gone.
+	if _, err := os.Stat(verdictPath); !os.IsNotExist(err) {
+		t.Fatal("verdict file should be deleted after retry")
+	}
+
+	// After retry: BuildIndex must not surface a stale rejection reason.
+	idx2 := BuildIndex(tmp)
+	snap2 := idx2.Snapshot(DirBacklog, filename)
+	if snap2 == nil {
+		t.Fatal("expected snapshot in backlog/ after retry")
+	}
+	if snap2.LastReviewRejectionReason != "" {
+		t.Fatalf("after retry: LastReviewRejectionReason = %q, want empty",
+			snap2.LastReviewRejectionReason)
 	}
 }

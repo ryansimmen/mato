@@ -21,13 +21,28 @@ type VerdictRejection struct {
 	Timestamp time.Time
 }
 
+// VerdictPath returns the filesystem path for the preserved verdict JSON file
+// for the given task filename.
+func VerdictPath(tasksDir, filename string) string {
+	return filepath.Join(tasksDir, "messages", "verdict-"+filename+".json")
+}
+
+// DeleteVerdict removes the preserved verdict JSON file for a task. Missing
+// files are silently ignored; other errors are returned.
+func DeleteVerdict(tasksDir, filename string) error {
+	if err := os.Remove(VerdictPath(tasksDir, filename)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // ReadVerdictRejection reads the preserved verdict JSON file for the given
 // task filename and returns the rejection details. The timestamp is derived
 // from the file's modification time since the verdict JSON does not contain
 // one. Returns ok=false if the file does not exist, is not a rejection, or
 // cannot be parsed.
 func ReadVerdictRejection(tasksDir, filename string) (VerdictRejection, bool) {
-	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+filename+".json")
+	verdictPath := VerdictPath(tasksDir, filename)
 	info, err := os.Stat(verdictPath)
 	if err != nil {
 		return VerdictRejection{}, false
