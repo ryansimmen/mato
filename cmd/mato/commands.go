@@ -716,7 +716,7 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
-	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge}
+	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirFailed}
 	cmd.ValidArgsFunction = completeTaskNames(repoFlag, cancelDirs)
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
