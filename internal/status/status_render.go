@@ -87,6 +87,19 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 	}
 
 	termWidth := ui.TermWidth()
+
+	// On extremely narrow terminals where even the fixed two-space
+	// indent would overflow, shrink the indent so data lines stay
+	// within termWidth.
+	indentN := 2
+	if termWidth > 0 && termWidth <= 2 {
+		indentN = termWidth - 1
+		if indentN < 0 {
+			indentN = 0
+		}
+	}
+	indent := strings.Repeat(" ", indentN)
+
 	rows := compactAgentRows(data)
 	show := rows
 	if len(show) > compactListLimit {
@@ -109,8 +122,8 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 		line := strings.Join(parts, "  ")
 
 		if termWidth > 0 {
-			// Visible width: 2 (indent) + agentID + separators + fields.
-			visibleLen := 2 + len(row.agentID)
+			// Visible width: indent + agentID + separators + fields.
+			visibleLen := indentN + len(row.agentID)
 			if row.task != "" {
 				visibleLen += 2 + len(row.task)
 			}
@@ -124,13 +137,13 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 				visibleLen += 2 + len(row.age)
 			}
 			if visibleLen > termWidth {
-				budget := termWidth - 2 - len(row.agentID)
+				budget := termWidth - indentN - len(row.agentID)
 
 				// Truncate the agent ID itself when it alone
 				// overflows the terminal width.
 				displayID := row.agentID
 				if budget < 0 {
-					idBudget := termWidth - 2
+					idBudget := termWidth - indentN
 					if idBudget < 1 {
 						idBudget = 1
 					}
@@ -196,10 +209,10 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 				line = strings.Join(parts, "  ")
 			}
 		}
-		fmt.Fprintf(w, "  %s\n", line)
+		fmt.Fprintf(w, "%s%s\n", indent, line)
 	}
 	if len(rows) > compactListLimit {
-		fmt.Fprintf(w, "  %s\n", c.Dim(fmt.Sprintf("... +%d more", len(rows)-compactListLimit)))
+		fmt.Fprintf(w, "%s%s\n", indent, c.Dim(fmt.Sprintf("... +%d more", len(rows)-compactListLimit)))
 	}
 }
 
