@@ -269,3 +269,58 @@ func TestDeleteAll_StaleVerdictCleanedOnReset(t *testing.T) {
 		t.Fatal("stale verdict should not be readable after cleanup")
 	}
 }
+
+func TestDeleteAllPreservingVerdict_KeepsVerdictFile(t *testing.T) {
+	tasksDir := t.TempDir()
+	filename := "task.md"
+
+	// Seed taskstate.
+	if err := taskstate.Update(tasksDir, filename, func(s *taskstate.TaskState) {
+		s.LastOutcome = "test"
+	}); err != nil {
+		t.Fatalf("setup taskstate: %v", err)
+	}
+
+	// Seed sessionmeta (both work and review).
+	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
+		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, filename, "task/task"); err != nil {
+			t.Fatalf("setup %s session: %v", kind, err)
+		}
+	}
+
+	// Seed preserved verdict file.
+	seedVerdict(t, tasksDir, filename)
+
+	output := captureStderr(t, func() {
+		DeleteAllPreservingVerdict(tasksDir, filename)
+	})
+
+	if output != "" {
+		t.Fatalf("expected no stderr output, got: %q", output)
+	}
+
+	// Verify taskstate is gone.
+	state, err := taskstate.Load(tasksDir, filename)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state != nil {
+		t.Fatal("taskstate should have been deleted")
+	}
+
+	// Verify both session files are gone.
+	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
+		session, err := sessionmeta.Load(tasksDir, kind, filename)
+		if err != nil {
+			t.Fatalf("Load %s session: %v", kind, err)
+		}
+		if session != nil {
+			t.Fatalf("%s session should have been deleted", kind)
+		}
+	}
+
+	// Verdict file must still exist.
+	if _, ok := taskfile.ReadVerdictRejection(tasksDir, filename); !ok {
+		t.Fatal("verdict file should be preserved by DeleteAllPreservingVerdict")
+	}
+}
