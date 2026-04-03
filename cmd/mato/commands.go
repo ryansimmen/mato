@@ -48,6 +48,10 @@ var cancelTaskFn = queue.CancelTask
 // Tests replace it to simulate user input.
 var confirmCancelFn = confirmCancel
 
+// stdinIsTerminalFn returns true when stdin is a TTY. Tests replace it
+// to exercise the interactive confirmation path.
+var stdinIsTerminalFn = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
 func newInitCmd(repoFlag *string) *cobra.Command {
 	var initBranch string
 	var format string
@@ -600,7 +604,7 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 
 			// Interactive confirmation when stdin is a TTY,
 			// --yes is not set, and output is not JSON.
-			if !yes && format != "json" && term.IsTerminal(int(os.Stdin.Fd())) {
+			if !yes && format != "json" && stdinIsTerminalFn() {
 				idx := queue.BuildIndex(tasksDir)
 				type taskInfo struct {
 					stem  string
@@ -611,8 +615,10 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 				for _, ref := range args {
 					match, err := queue.ResolveTask(idx, ref)
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
-						return &SilentError{Err: err, Code: 1}
+						// Silently skip unresolved refs during prompt
+						// preparation so errors are only reported once
+						// by the cancel loop after confirmation.
+						continue
 					}
 					stem := strings.TrimSuffix(match.Filename, ".md")
 					agent := ""
@@ -622,19 +628,21 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 					resolved = append(resolved, taskInfo{stem: stem, state: match.State, agent: agent})
 				}
 
-				fmt.Println("The following tasks will be cancelled:")
-				for _, ti := range resolved {
-					if ti.agent != "" {
-						fmt.Printf("  %-20s (%s, agent %s)\n", ti.stem, ti.state, ti.agent)
-					} else {
-						fmt.Printf("  %-20s (%s)\n", ti.stem, ti.state)
+				if len(resolved) > 0 {
+					fmt.Println("The following tasks will be cancelled:")
+					for _, ti := range resolved {
+						if ti.agent != "" {
+							fmt.Printf("  %-20s (%s, agent %s)\n", ti.stem, ti.state, ti.agent)
+						} else {
+							fmt.Printf("  %-20s (%s)\n", ti.stem, ti.state)
+						}
 					}
-				}
-				fmt.Println()
-				fmt.Printf("Cancel %d task(s)? [y/N]: ", len(resolved))
-				if !confirmCancelFn(os.Stdin) {
-					fmt.Println("Cancelled. No tasks were modified.")
-					return nil
+					fmt.Println()
+					fmt.Printf("Cancel %d task(s)? [y/N]: ", len(resolved))
+					if !confirmCancelFn(os.Stdin) {
+						fmt.Println("Cancelled. No tasks were modified.")
+						return nil
+					}
 				}
 			}
 
