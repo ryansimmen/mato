@@ -15,6 +15,7 @@ import (
 	"mato/internal/config"
 	"mato/internal/dirs"
 	"mato/internal/doctor"
+	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/graph"
 	"mato/internal/history"
@@ -383,6 +384,7 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
+	cmd.ValidArgsFunction = completeTaskNames(repoFlag, queue.AllDirs)
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd
@@ -469,6 +471,7 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
+	cmd.ValidArgsFunction = completeTaskNames(repoFlag, []string{queue.DirFailed})
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd
@@ -713,10 +716,52 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
+	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge}
+	cmd.ValidArgsFunction = completeTaskNames(repoFlag, cancelDirs)
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
 
 	return cmd
+}
+
+// completeTaskNames returns a cobra ValidArgsFunction that completes task
+// names from the given queue directories. Both filename stems and explicit
+// frontmatter IDs are offered as completions.
+func completeTaskNames(repoFlag *string, queueDirs []string) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		repo, err := resolveRepo(*repoFlag)
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveError
+		}
+		repoRoot, err := resolveRepoRoot(repo)
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveError
+		}
+		tasksDir := filepath.Join(repoRoot, dirs.Root)
+		if _, err := os.Stat(tasksDir); err != nil {
+			return nil, cobra.ShellCompDirectiveError
+		}
+		idx := queue.BuildIndex(tasksDir)
+
+		seen := make(map[string]struct{})
+		var completions []string
+		for _, dir := range queueDirs {
+			for _, snap := range idx.TasksByState(dir) {
+				stem := frontmatter.TaskFileStem(snap.Filename)
+				if _, ok := seen[stem]; !ok && strings.HasPrefix(stem, toComplete) {
+					seen[stem] = struct{}{}
+					completions = append(completions, stem)
+				}
+				if id := snap.Meta.ID; id != "" && id != stem {
+					if _, ok := seen[id]; !ok && strings.HasPrefix(id, toComplete) {
+						seen[id] = struct{}{}
+						completions = append(completions, id)
+					}
+				}
+			}
+		}
+		return completions, cobra.ShellCompDirectiveNoFileComp
+	}
 }
 
 // confirmCancel reads a line from r and returns true if the user confirmed
