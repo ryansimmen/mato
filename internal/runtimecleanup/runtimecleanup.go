@@ -24,3 +24,16 @@ func DeleteAll(tasksDir, filename string) {
 		fmt.Fprintf(os.Stderr, "warning: could not delete verdict for %s: %v\n", filename, err)
 	}
 }
+
+// DeleteAllPreservingVerdict removes taskstate and sessionmeta but keeps the
+// preserved review verdict file. Use this for retry-exhausted transitions into
+// failed/ where the verdict fallback may still be needed by a subsequent
+// mato retry cycle.
+func DeleteAllPreservingVerdict(tasksDir, filename string) {
+	if err := taskstate.Delete(tasksDir, filename); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not delete taskstate for %s: %v\n", filename, err)
+	}
+	if err := sessionmeta.DeleteAll(tasksDir, filename); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not delete sessionmeta for %s: %v\n", filename, err)
+	}
+}
