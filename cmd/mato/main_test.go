@@ -3404,6 +3404,85 @@ func TestCancelCmd_YesShortFlag(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_InteractiveMixedRefs(t *testing.T) {
+	// Simulate interactive TTY mode with mixed valid and invalid refs.
+	// The valid task should still be cancelled (partial-failure semantics)
+	// even though an invalid ref also appears in the batch.
+	// Errors for unresolved refs must appear exactly once — from the cancel
+	// loop after confirmation, not during prompt preparation.
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origTermFn := stdinIsTerminalFn
+	stdinIsTerminalFn = func() bool { return true }
+	defer func() { stdinIsTerminalFn = origTermFn }()
+
+	origConfirmFn := confirmCancelFn
+	confirmCancelFn = func(_ io.Reader) bool { return true }
+	defer func() { confirmCancelFn = origConfirmFn }()
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "good", "missing"})
+
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+
+	if !strings.Contains(stderr, "mato error: task not found: missing") {
+		t.Fatalf("expected error about missing ref on stderr, got %q", stderr)
+	}
+	if strings.Count(stderr, "task not found: missing") != 1 {
+		t.Fatalf("expected exactly one 'task not found' error, got stderr: %q", stderr)
+	}
+
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError for partial failure, got %T: %v", execErr, execErr)
+	}
+
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "good.md")); err != nil {
+		t.Fatalf("valid task should be in failed/ after interactive partial cancel: %v", err)
+	}
+}
+
+func TestCancelCmd_InteractiveRejectMixedRefs(t *testing.T) {
+	// When the user rejects the confirmation prompt with mixed refs,
+	// no task-not-found errors should be emitted and no tasks cancelled.
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origTermFn := stdinIsTerminalFn
+	stdinIsTerminalFn = func() bool { return true }
+	defer func() { stdinIsTerminalFn = origTermFn }()
+
+	origConfirmFn := confirmCancelFn
+	confirmCancelFn = func(_ io.Reader) bool { return false }
+	defer func() { confirmCancelFn = origConfirmFn }()
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "good", "missing"})
+
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+
+	if execErr != nil {
+		t.Fatalf("expected no error when prompt rejected, got %v", execErr)
+	}
+	if strings.Contains(stderr, "task not found") {
+		t.Fatalf("rejecting prompt should not emit task-not-found errors, got stderr %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "good.md")); err != nil {
+		t.Fatalf("task should remain in backlog after rejected prompt: %v", err)
+	}
+}
+
 func TestRetryCmd_FormatJSON_DependencyBlockedWarnings(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	content := "---\nid: blocked\ndepends_on: [missing-dep]\n---\n# Blocked\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
