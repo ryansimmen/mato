@@ -126,6 +126,18 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 			if visibleLen > termWidth {
 				budget := termWidth - 2 - len(row.agentID)
 
+				// Truncate the agent ID itself when it alone
+				// overflows the terminal width.
+				displayID := row.agentID
+				if budget < 0 {
+					idBudget := termWidth - 2
+					if idBudget < 1 {
+						idBudget = 1
+					}
+					displayID = ui.Truncate(row.agentID, idBudget)
+					budget = 0
+				}
+
 				// Reserve space for stage and age; drop the
 				// least important suffix fields first when there
 				// is not enough room.
@@ -168,7 +180,7 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 				if taskBudget < 0 {
 					taskBudget = 0
 				}
-				parts = []string{c.Yellow(row.agentID)}
+				parts = []string{c.Yellow(displayID)}
 				if row.task != "" && taskBudget > 0 {
 					parts = append(parts, ui.Truncate(row.task, taskBudget))
 				}

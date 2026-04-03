@@ -1138,6 +1138,43 @@ func TestRenderCompactAgents_NarrowTerminalWithStageAgeFitsWidth(t *testing.T) {
 	}
 }
 
+func TestRenderCompactAgents_VeryNarrowTerminalTruncatesAgentID(t *testing.T) {
+	tests := []struct {
+		name  string
+		termW int
+	}{
+		{"width 12", 12},
+		{"width 6", 6},
+		{"width 4", 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := ui.SetTermWidthFunc(func() int { return tt.termW })
+			defer ui.SetTermWidthFunc(prev)
+
+			var buf bytes.Buffer
+			c := plainColorSet()
+			data := statusData{
+				agents: []statusAgent{{ID: "abc12345", PID: 1234}},
+				presenceMap: map[string]messaging.PresenceInfo{
+					"abc12345": {
+						Task:   "some-task.md",
+						Branch: "task/some-task",
+					},
+				},
+			}
+
+			renderCompactAgents(&buf, c, data)
+
+			for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+				if strings.HasPrefix(line, "  ") && utf8.RuneCountInString(line) > tt.termW {
+					t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q", tt.termW, utf8.RuneCountInString(line), line)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderCompactNextUp_NarrowTerminalTruncates(t *testing.T) {
 	prev := ui.SetTermWidthFunc(func() int { return 40 })
 	defer ui.SetTermWidthFunc(prev)
