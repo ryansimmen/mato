@@ -62,12 +62,14 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 
 	lines := strings.Split(content, "\n")
 
-	// Skip leading HTML comment lines (e.g. <!-- claimed-by: ... -->) before
-	// checking for frontmatter, since claim.go prepends these before the --- delimiter.
+	// Skip leading scheduler-managed HTML comment lines (e.g. <!-- claimed-by: ... -->)
+	// and blank lines before checking for frontmatter, since claim.go prepends
+	// these before the --- delimiter. User-authored HTML comments are NOT skipped
+	// so they are preserved in the returned body.
 	startLine := 0
 	for startLine < len(lines) {
 		trimmed := strings.TrimSpace(lines[startLine])
-		if trimmed == "" || (strings.HasPrefix(trimmed, "<!--") && strings.HasSuffix(trimmed, "-->")) {
+		if trimmed == "" || isManagedComment(trimmed) {
 			startLine++
 			continue
 		}

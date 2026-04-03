@@ -31,7 +31,7 @@ Implement retry handling for transient 5xx responses.
 ```
 
 Notes:
-- If present, frontmatter must be closed by a second `---` line. The parser skips leading empty lines and full-line HTML comments (e.g. `<!-- claimed-by: ... -->`) before looking for the opening `---`, since claim metadata may be prepended above the frontmatter block.
+- If present, frontmatter must be closed by a second `---` line. The parser skips leading empty lines and scheduler-managed HTML comments (e.g. `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`) before looking for the opening `---`, since claim metadata may be prepended above the frontmatter block. User-authored HTML comments are **not** skipped; if one appears before the opening `---`, frontmatter is not detected and the entire file is treated as a plain markdown body.
 - Runtime metadata is stored as full-line HTML comments and is auto-managed.
 - The markdown body starts after the frontmatter block.
 - Agents are instructed to ignore frontmatter and these HTML comments when reading the task.
