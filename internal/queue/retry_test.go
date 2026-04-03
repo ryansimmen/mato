@@ -584,7 +584,7 @@ func TestRetryTask_NoEmptyPlaceholderDuringWrite(t *testing.T) {
 	}
 }
 
-func TestRetryTask_CleansVerdictAndIndexNoLongerSurfacesRejection(t *testing.T) {
+func TestRetryTask_PreservesVerdictForNextWorkAgent(t *testing.T) {
 	tmp := t.TempDir()
 	for _, dir := range AllDirs {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
@@ -598,7 +598,7 @@ func TestRetryTask_CleansVerdictAndIndexNoLongerSurfacesRejection(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	// Seed a stale verdict file with a reject reason.
+	// Seed a verdict file with a reject reason.
 	msgDir := filepath.Join(tmp, "messages")
 	if err := os.MkdirAll(msgDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -626,19 +626,77 @@ func TestRetryTask_CleansVerdictAndIndexNoLongerSurfacesRejection(t *testing.T) 
 		t.Fatalf("RetryTask() error: %v", err)
 	}
 
-	// Verdict file must be gone.
-	if _, err := os.Stat(verdictPath); !os.IsNotExist(err) {
-		t.Fatal("verdict file should be deleted after retry")
+	// Verdict file must survive so the next work agent gets MATO_REVIEW_FEEDBACK.
+	if _, err := os.Stat(verdictPath); err != nil {
+		t.Fatalf("verdict file should be preserved after retry, stat err = %v", err)
 	}
 
-	// After retry: BuildIndex must not surface a stale rejection reason.
+	// After retry: BuildIndex should still surface the rejection reason.
 	idx2 := BuildIndex(tmp)
 	snap2 := idx2.Snapshot(DirBacklog, filename)
 	if snap2 == nil {
 		t.Fatal("expected snapshot in backlog/ after retry")
 	}
-	if snap2.LastReviewRejectionReason != "" {
-		t.Fatalf("after retry: LastReviewRejectionReason = %q, want empty",
-			snap2.LastReviewRejectionReason)
+	if snap2.LastReviewRejectionReason != "stale from prior cycle" {
+		t.Fatalf("after retry: LastReviewRejectionReason = %q, want %q",
+			snap2.LastReviewRejectionReason, "stale from prior cycle")
+	}
+}
+
+func TestRetryTask_VerdictFallbackRoundTrip(t *testing.T) {
+	tmp := t.TempDir()
+	for _, dir := range AllDirs {
+		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	filename := "verdict-roundtrip.md"
+	// Task in failed/ with NO durable review-rejection markers — only a verdict file.
+	content := "---\nid: verdict-roundtrip\npriority: 10\n---\n# Verdict roundtrip\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(tmp, DirFailed, filename), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed a verdict file as the sole source of rejection feedback.
+	msgDir := filepath.Join(tmp, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	verdict := map[string]string{"verdict": "reject", "reason": "tests do not cover edge case X"}
+	vdata, _ := json.Marshal(verdict)
+	verdictPath := taskfile.VerdictPath(tmp, filename)
+	if err := os.WriteFile(verdictPath, vdata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Retry the task: moves from failed/ → backlog/.
+	if _, err := RetryTask(tmp, "verdict-roundtrip"); err != nil {
+		t.Fatalf("RetryTask() error: %v", err)
+	}
+
+	// Verify the verdict file survived.
+	vr, ok := taskfile.ReadVerdictRejection(tmp, filename)
+	if !ok {
+		t.Fatal("ReadVerdictRejection returned false after retry; verdict file should be preserved")
+	}
+	if vr.Reason != "tests do not cover edge case X" {
+		t.Fatalf("ReadVerdictRejection reason = %q, want %q", vr.Reason, "tests do not cover edge case X")
+	}
+
+	// Verify the task is in backlog/ and the backlog snapshot surfaces the rejection.
+	idx := BuildIndex(tmp)
+	snap := idx.Snapshot(DirBacklog, filename)
+	if snap == nil {
+		t.Fatal("expected snapshot in backlog/ after retry")
+	}
+	if snap.LastReviewRejectionReason != "tests do not cover edge case X" {
+		t.Fatalf("backlog snapshot LastReviewRejectionReason = %q, want %q",
+			snap.LastReviewRejectionReason, "tests do not cover edge case X")
+	}
+
+	// Verify the verdict path still exists on disk.
+	if _, err := os.Stat(verdictPath); err != nil {
+		t.Fatalf("verdict file should exist after retry, stat err = %v", err)
 	}
 }
