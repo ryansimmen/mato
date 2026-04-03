@@ -990,7 +990,7 @@ func TestShowTo_TextRelativeTimeInReasonAndClaimedAt(t *testing.T) {
 	}
 }
 
-func TestShowTo_VerdictFallbackClearedAfterRetry(t *testing.T) {
+func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, dir := range queue.AllDirs {
@@ -999,51 +999,55 @@ func TestShowTo_VerdictFallbackClearedAfterRetry(t *testing.T) {
 		}
 	}
 
-	filename := "retry-clears-verdict.md"
+	filename := "retry-keeps-verdict.md"
 
 	// Start with task in failed/ (required for retry) with no durable
-	// rejection marker, plus a stale verdict file.
+	// rejection marker, plus a verdict file that should survive retry.
 	writeTask(t, tasksDir, queue.DirFailed, filename,
-		"---\nid: retry-clears-verdict\npriority: 10\n---\n# Retry Clears Verdict\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=build -->\n")
+		"---\nid: retry-keeps-verdict\npriority: 10\n---\n# Retry Keeps Verdict\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=build -->\n")
 	writeVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",
-		"reason":  "stale reason should vanish",
+		"reason":  "preserved rejection reason",
 	})
 
 	// Before retry: inspect should surface the verdict fallback reason.
 	var beforeBuf bytes.Buffer
-	if err := ShowTo(&beforeBuf, repoRoot, "retry-clears-verdict", "text"); err != nil {
+	if err := ShowTo(&beforeBuf, repoRoot, "retry-keeps-verdict", "text"); err != nil {
 		t.Fatalf("ShowTo before retry: %v", err)
 	}
-	if !strings.Contains(beforeBuf.String(), "stale reason should vanish") {
+	if !strings.Contains(beforeBuf.String(), "preserved rejection reason") {
 		t.Fatalf("before retry: expected verdict reason in inspect output:\n%s", beforeBuf.String())
 	}
 
-	// Perform retry (reset transition).
-	if _, err := queue.RetryTask(tasksDir, "retry-clears-verdict"); err != nil {
+	// Perform retry (reset transition — verdict fallback is preserved).
+	if _, err := queue.RetryTask(tasksDir, "retry-keeps-verdict"); err != nil {
 		t.Fatalf("RetryTask: %v", err)
 	}
 
-	// After retry: inspect must not surface the stale verdict reason.
+	// After retry: inspect must still surface the preserved verdict reason.
 	var afterBuf bytes.Buffer
-	if err := ShowTo(&afterBuf, repoRoot, "retry-clears-verdict", "text"); err != nil {
+	if err := ShowTo(&afterBuf, repoRoot, "retry-keeps-verdict", "text"); err != nil {
 		t.Fatalf("ShowTo after retry: %v", err)
 	}
-	if strings.Contains(afterBuf.String(), "stale reason should vanish") {
-		t.Fatalf("after retry: stale verdict reason should not appear in inspect:\n%s", afterBuf.String())
+	if !strings.Contains(afterBuf.String(), "preserved rejection reason") {
+		t.Fatalf("after retry: preserved verdict reason should still appear in inspect:\n%s", afterBuf.String())
 	}
 
-	// Also verify JSON output.
+	// Also verify JSON output includes the preserved reason.
 	var jsonBuf bytes.Buffer
-	if err := ShowTo(&jsonBuf, repoRoot, "retry-clears-verdict", "json"); err != nil {
+	if err := ShowTo(&jsonBuf, repoRoot, "retry-keeps-verdict", "json"); err != nil {
 		t.Fatalf("ShowTo json after retry: %v", err)
 	}
 	var result map[string]interface{}
 	if err := json.Unmarshal(jsonBuf.Bytes(), &result); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	if reason, ok := result["review_rejection_reason"]; ok && reason != "" {
-		t.Fatalf("after retry: JSON review_rejection_reason = %v, want empty", reason)
+	reason, _ := result["review_rejection_reason"].(string)
+	if reason == "" {
+		t.Fatalf("after retry: JSON review_rejection_reason should contain preserved reason, got empty")
+	}
+	if reason != "preserved rejection reason" {
+		t.Fatalf("after retry: JSON review_rejection_reason = %q, want %q", reason, "preserved rejection reason")
 	}
 }
 
