@@ -927,6 +927,74 @@ func TestPromptVerifyClaimReviewFeedback(t *testing.T) {
 	}
 }
 
+func TestPromptVerifyClaimReviewFeedbackAfterRetryFromVerdictFallback(t *testing.T) {
+	// End-to-end guardrail for the preserved verdict lifecycle:
+	// reject -> failed -> retry -> claim -> MATO_REVIEW_FEEDBACK.
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	filename := "retry-review-feedback.md"
+
+	writeTask(t, tasksDir, queue.DirFailed, filename, strings.Join([]string{
+		"---",
+		"id: retry-review-feedback",
+		"priority: 10",
+		"---",
+		"# Retry Review Feedback",
+		"Address the prior review feedback.",
+		"",
+		"<!-- failure: work-agent at 2026-01-01T00:00:00Z step=WORK error=build failed -->",
+		"",
+	}, "\n"))
+	writeVerdict(t, tasksDir, filename, map[string]string{
+		"verdict": "reject",
+		"reason":  "missing integration test for retry flow",
+	})
+
+	if _, err := queue.RetryTask(tasksDir, "retry-review-feedback"); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+
+	claimed, err := queue.SelectAndClaimTask(tasksDir, "retry-agent", []string{filename}, 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("expected task to be claimed after retry")
+	}
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
+
+	script := strings.Join([]string{
+		promptPreamble(t),
+		promptStateBlock(t, "VERIFY_CLAIM"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, "mato")
+
+	env := []string{
+		"MATO_AGENT_ID=retry-agent",
+		"MATO_TASK_FILE=" + claimed.Filename,
+		"MATO_TASK_BRANCH=" + claimed.Branch,
+		"MATO_TASK_TITLE=" + claimed.Title,
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirInProgress, claimed.Filename),
+		"MATO_REVIEW_FEEDBACK=missing integration test for retry flow",
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash verify claim after retry with verdict fallback: %v\noutput:\n%s", err, out)
+	}
+
+	if !strings.Contains(out, "Previous review rejection feedback") {
+		t.Fatalf("output should contain review feedback header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "missing integration test for retry flow") {
+		t.Fatalf("output should contain preserved verdict feedback, got:\n%s", out)
+	}
+
+	if _, err := os.Stat(verdictPath(tasksDir, filename)); err != nil {
+		t.Fatalf("verdict fallback should still exist after retry and claim: %v", err)
+	}
+}
+
 func TestPromptFullLifecycleWithMerge(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, queue.DirBacklog, "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
