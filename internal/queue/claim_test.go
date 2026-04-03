@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/taskfile"
 	"mato/internal/testutil"
 )
 
@@ -101,6 +103,59 @@ func TestSelectAndClaimTask_RetryExhausted(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, DirBacklog, "retry.md")); !os.IsNotExist(err) {
 		t.Fatal("task still in backlog after retry exhaustion")
+	}
+}
+
+func TestSelectAndClaimTask_RetryExhausted_PreservesVerdictFallback(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	filename := "verdict-retry.md"
+	testutil.WriteFile(t, filepath.Join(dir, DirBacklog, filename), strings.Join([]string{
+		"# Verdict retry task",
+		"<!-- failure: a1 at 2026-01-01T00:00:00Z step=WORK error=oops -->",
+		"<!-- failure: a2 at 2026-01-02T00:00:00Z step=WORK error=oops -->",
+		"<!-- failure: a3 at 2026-01-03T00:00:00Z step=WORK error=oops -->",
+		"",
+	}, "\n"))
+
+	// Seed a preserved verdict file with a reject reason — this is the only
+	// review context for this task.
+	msgDir := filepath.Join(dir, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	verdict := map[string]string{"verdict": "reject", "reason": "needs tests"}
+	vdata, _ := json.Marshal(verdict)
+	verdictPath := taskfile.VerdictPath(dir, filename)
+	if err := os.WriteFile(verdictPath, vdata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify verdict is readable before claim.
+	if _, ok := taskfile.ReadVerdictRejection(dir, filename); !ok {
+		t.Fatal("expected verdict to be readable before claim")
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-v", candidates(filename), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected nil (retry exhausted), got %+v", task)
+	}
+
+	// Task should be in failed/.
+	if _, err := os.Stat(filepath.Join(dir, DirFailed, filename)); err != nil {
+		t.Fatalf("task not in failed: %v", err)
+	}
+
+	// Verdict file must still exist so a subsequent mato retry can surface
+	// the rejection reason as MATO_REVIEW_FEEDBACK.
+	vr, ok := taskfile.ReadVerdictRejection(dir, filename)
+	if !ok {
+		t.Fatal("verdict file should be preserved after retry-exhausted move to failed/")
+	}
+	if vr.Reason != "needs tests" {
+		t.Fatalf("verdict reason = %q, want %q", vr.Reason, "needs tests")
 	}
 }
 

@@ -121,7 +121,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		if failures := extractFailureLines(claimed.TaskPath); failures != "" {
 			extraEnvs = append(extraEnvs, "MATO_PREVIOUS_FAILURES="+failures)
 		}
-		if reviewFeedback := extractReviewRejections(claimed.TaskPath); reviewFeedback != "" {
+		if reviewFeedback := extractReviewRejectionsWithVerdictFallback(claimed.TaskPath, env.tasksDir, claimed.Filename); reviewFeedback != "" {
 			extraEnvs = append(extraEnvs, "MATO_REVIEW_FEEDBACK="+reviewFeedback)
 		}
 	}

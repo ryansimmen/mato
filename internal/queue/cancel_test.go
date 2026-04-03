@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -342,5 +343,57 @@ func TestRetryTask_StrippedCancelledMarker(t *testing.T) {
 	}
 	if taskfile.ContainsCancelledMarker(data) {
 		t.Fatalf("cancelled marker should be stripped on retry: %s", data)
+	}
+}
+
+func TestCancelTask_CleansVerdictAndIndexNoLongerSurfacesRejection(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	filename := "stale-verdict-cancel.md"
+
+	writeTask(t, tasksDir, DirBacklog, filename,
+		"---\nid: stale-verdict-cancel\npriority: 10\n---\n# Stale verdict cancel\n")
+
+	// Seed a stale verdict file with a reject reason.
+	msgDir := filepath.Join(tasksDir, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	verdict := map[string]string{"verdict": "reject", "reason": "stale cancel reason"}
+	vdata, _ := json.Marshal(verdict)
+	verdictPath := taskfile.VerdictPath(tasksDir, filename)
+	if err := os.WriteFile(verdictPath, vdata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before cancel: BuildIndex should surface the verdict rejection reason.
+	idx := BuildIndex(tasksDir)
+	snap := idx.Snapshot(DirBacklog, filename)
+	if snap == nil {
+		t.Fatal("expected snapshot in backlog/ before cancel")
+	}
+	if snap.LastReviewRejectionReason != "stale cancel reason" {
+		t.Fatalf("before cancel: LastReviewRejectionReason = %q, want %q",
+			snap.LastReviewRejectionReason, "stale cancel reason")
+	}
+
+	// Cancel the task (terminal transition).
+	if _, err := CancelTask(tasksDir, "stale-verdict-cancel"); err != nil {
+		t.Fatalf("CancelTask() error: %v", err)
+	}
+
+	// Verdict file must be gone.
+	if _, err := os.Stat(verdictPath); !os.IsNotExist(err) {
+		t.Fatal("verdict file should be deleted after cancel")
+	}
+
+	// After cancel: BuildIndex must not surface a stale rejection reason.
+	idx2 := BuildIndex(tasksDir)
+	snap2 := idx2.Snapshot(DirFailed, filename)
+	if snap2 == nil {
+		t.Fatal("expected snapshot in failed/ after cancel")
+	}
+	if snap2.LastReviewRejectionReason != "" {
+		t.Fatalf("after cancel: LastReviewRejectionReason = %q, want empty",
+			snap2.LastReviewRejectionReason)
 	}
 }

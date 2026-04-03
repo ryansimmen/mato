@@ -183,14 +183,12 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 			stem := frontmatter.TaskFileStem(snap.Filename)
 
 			if dir == queue.DirWaiting {
-				// For waiting tasks, alias map entries point to the
-				// retained file only when duplicates exist.
+				// For waiting tasks, only use meta.ID as the alias key —
+				// NOT the filename stem. This matches the runtime DAG
+				// which resolves waiting-to-waiting dependencies by
+				// meta.ID only (see dag.Analyze).
 				if retainedFilename, ok := retainedWaitingIDs[snap.Meta.ID]; ok && retainedFilename == snap.Filename {
-					// This is the retained file for this ID.
 					aliasMap[snap.Meta.ID] = appendUnique(aliasMap[snap.Meta.ID], key)
-					if stem != snap.Meta.ID {
-						aliasMap[stem] = appendUnique(aliasMap[stem], key)
-					}
 					seenWaitingIDs[snap.Meta.ID] = snap.Filename
 				} else if _, exists := seenWaitingIDs[snap.Meta.ID]; exists {
 					// Duplicate waiting file — emit warning.
@@ -205,9 +203,6 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 				} else {
 					// First time seeing this ID in waiting (retained).
 					aliasMap[snap.Meta.ID] = appendUnique(aliasMap[snap.Meta.ID], key)
-					if stem != snap.Meta.ID {
-						aliasMap[stem] = appendUnique(aliasMap[stem], key)
-					}
 					seenWaitingIDs[snap.Meta.ID] = snap.Filename
 				}
 			} else {
