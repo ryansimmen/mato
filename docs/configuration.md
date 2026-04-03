@@ -16,6 +16,7 @@ the host and bind-mounts those executables into agent containers.
 ## CLI Usage
 ```text
 mato [--version] [--repo <path>]
+mato config [--repo <path>] [--format text|json]
 mato run [--repo <path>] [--branch <name>] [--dry-run | --once | --until-idle] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
 mato init [--repo <path>] [--branch <name>]
 mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json] [--verbose]
@@ -91,6 +92,8 @@ task-specific scheduling metadata.
 ## Precedence
 Settings resolve in this order: CLI flag > environment variable > `.mato.yaml` > hardcoded default.
 
+`mato config` reports the standing repository defaults after env/config/default resolution and intentionally does not try to model one-shot flags from other subcommands such as `mato run --task-model`.
+
 For user-facing CLI defaults, treat command help as canonical: `mato --help`,
 `mato run --help`, and each subcommand's `--help` output reflect the built-in
 fallbacks documented here.
@@ -113,6 +116,16 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 | review reasoning effort | `mato run --review-reasoning-effort` | `MATO_REVIEW_REASONING_EFFORT` | `review_reasoning_effort` | `high` |
 | agent timeout | — | `MATO_AGENT_TIMEOUT` | `agent_timeout` | `30m` |
 | retry cooldown | — | `MATO_RETRY_COOLDOWN` | `retry_cooldown` | `2m` |
+
+### `mato config`
+`mato config` shows the effective repository-level configuration and the source of each resolved setting.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--format` | `text` | Output format: `text` or `json`. |
+
+The command is read-only and does not require an existing `.mato/` directory. It works in any git repository, reports which config file was loaded (`.mato.yaml`, `.mato.yml`, or none), and annotates env-sourced values with the exact variable name in text output, for example `env: MATO_DOCKER_IMAGE`.
 
 ## CLI Flags
 Long flags support both `--flag value` and `--flag=value` forms.

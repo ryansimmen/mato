@@ -66,9 +66,11 @@ var taskInstructions string
 //go:embed review-instructions.md
 var reviewInstructions string
 
-// defaultAgentTimeout is the default execution timeout for Docker agent
+// DefaultAgentTimeout is the default execution timeout for Docker agent
 // containers.
-const defaultAgentTimeout = 30 * time.Minute
+const DefaultAgentTimeout = 30 * time.Minute
+
+const defaultAgentTimeout = DefaultAgentTimeout
 
 const DefaultTaskModel = "claude-opus-4.6"
 const DefaultReviewModel = "gpt-5.4"

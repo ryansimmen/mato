@@ -129,6 +129,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&repoFlag, "repo", "", "Path to the git repository (default: current directory)")
 
 	root.AddCommand(newRunCmd(&repoFlag))
+	root.AddCommand(newConfigCmd(&repoFlag))
 	root.AddCommand(newStatusCmd(&repoFlag))
 	root.AddCommand(newLogCmd(&repoFlag))
 	root.AddCommand(newDoctorCmd(&repoFlag))

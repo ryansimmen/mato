@@ -85,9 +85,11 @@ func immediatelyClaimableTask(path string, depLookup dependencyLookup, cooldown 
 	return retryExhausted || cooledDown
 }
 
-// defaultRetryCooldown is the default time to wait after a task failure before
+// DefaultRetryCooldown is the default time to wait after a task failure before
 // the task becomes eligible for claiming again.
-const defaultRetryCooldown = 2 * time.Minute
+const DefaultRetryCooldown = 2 * time.Minute
+
+const defaultRetryCooldown = DefaultRetryCooldown
 
 // Testing hooks for the claim path. Default to real implementations.
 // Tests can override these to inject failures without filesystem permission
