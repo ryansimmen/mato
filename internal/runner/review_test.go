@@ -1695,3 +1695,366 @@ func TestReviewCandidates_ExplicitBranchUnchanged(t *testing.T) {
 		t.Fatalf("explicit branch changed to %q, want %q", explicit.Branch, "task/add-feature")
 	}
 }
+
+func TestPostReviewAction_ApproveMoveFails_NoMarkerVerdictPreserved(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "move-fail-approve.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	os.WriteFile(reviewPath, []byte("# Move Fail Approve\n"), 0o644)
+
+	// Pre-create a file at the destination to cause the move to fail.
+	dstPath := filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)
+	os.WriteFile(dstPath, []byte("# Existing\n"), 0o644)
+
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/move-fail-approve",
+		Title:    "Move Fail Approve",
+		TaskPath: reviewPath,
+	}
+
+	captureStdoutStderr(t, func() {
+		postReviewAction(tasksDir, "host-agent", task)
+	})
+
+	// Task should stay in ready-for-review/.
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("task should stay in ready-for-review/ when move fails")
+	}
+	// No approval marker should be written.
+	srcData, _ := os.ReadFile(reviewPath)
+	if strings.Contains(string(srcData), "<!-- reviewed:") {
+		t.Fatal("approval marker should NOT be written when move fails")
+	}
+	// Review-failure should be recorded.
+	if !strings.Contains(string(srcData), "<!-- review-failure:") {
+		t.Fatalf("review-failure should be recorded when move fails:\n%s", string(srcData))
+	}
+	// Verdict file should be preserved for retry.
+	if _, err := os.Stat(verdictPath); err != nil {
+		t.Fatal("verdict file should be preserved when move fails")
+	}
+	// TaskState should reflect the move failure.
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "review-move-failed" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=review-move-failed", state)
+	}
+}
+
+func TestPostReviewAction_RejectMoveFails_NoMarkerVerdictPreserved(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "move-fail-reject.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	os.WriteFile(reviewPath, []byte("# Move Fail Reject\n"), 0o644)
+
+	// Pre-create a file at the destination to cause the move to fail.
+	dstPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	os.WriteFile(dstPath, []byte("# Existing\n"), 0o644)
+
+	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
+	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"missing tests"}`), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/move-fail-reject",
+		Title:    "Move Fail Reject",
+		TaskPath: reviewPath,
+	}
+
+	captureStdoutStderr(t, func() {
+		postReviewAction(tasksDir, "host-agent", task)
+	})
+
+	// Task should stay in ready-for-review/.
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("task should stay in ready-for-review/ when move fails")
+	}
+	// No rejection marker should be written.
+	srcData, _ := os.ReadFile(reviewPath)
+	if strings.Contains(string(srcData), "<!-- review-rejection:") {
+		t.Fatal("rejection marker should NOT be written when move fails")
+	}
+	// Review-failure should be recorded.
+	if !strings.Contains(string(srcData), "<!-- review-failure:") {
+		t.Fatalf("review-failure should be recorded when move fails:\n%s", string(srcData))
+	}
+	// Verdict file should be preserved for retry.
+	if _, err := os.Stat(verdictPath); err != nil {
+		t.Fatal("verdict file should be preserved when move fails")
+	}
+	// TaskState should reflect the move failure.
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "review-move-failed" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=review-move-failed", state)
+	}
+}
+
+func TestPostReviewAction_FallbackApproveMoveFails_VerdictNotLost(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "fallback-move-fail.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	os.WriteFile(reviewPath, []byte("# Fallback\n<!-- reviewed: review-agent at 2026-01-01T00:00:00Z — approved -->\n"), 0o644)
+
+	// Pre-create destination to cause move failure.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile), []byte("# Existing\n"), 0o644)
+
+	// No verdict file — backward compat path.
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/fallback-move-fail",
+		Title:    "Fallback Move Fail",
+		TaskPath: reviewPath,
+	}
+
+	captureStdoutStderr(t, func() {
+		postReviewAction(tasksDir, "host-agent", task)
+	})
+
+	// Task should remain in ready-for-review/.
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("task should stay in ready-for-review/ when move fails")
+	}
+	srcData, _ := os.ReadFile(reviewPath)
+	// Review-failure should be recorded.
+	if !strings.Contains(string(srcData), "<!-- review-failure:") {
+		t.Fatalf("review-failure should be recorded when backward-compat move fails:\n%s", string(srcData))
+	}
+	// Terminal approval marker should be stripped (rollback-safe).
+	if reviewedRe.Match(srcData) {
+		t.Fatalf("terminal approval marker should be stripped when move fails:\n%s", string(srcData))
+	}
+	// TaskState should reflect the move failure.
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "review-move-failed" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=review-move-failed", state)
+	}
+}
+
+func TestPostReviewAction_FallbackRejectMoveFails_MarkerStripped(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{queue.DirReadyReview, queue.DirBacklog, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "fallback-reject-move-fail.md"
+	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	// Include an older rejection from a prior cycle, then the terminal one.
+	os.WriteFile(reviewPath, []byte("# Fallback Reject\n"+
+		"<!-- review-rejection: old-agent at 2025-12-01T00:00:00Z — older feedback -->\n"+
+		"<!-- review-rejection: review-agent at 2026-01-01T00:00:00Z — tests missing -->\n"), 0o644)
+
+	// Pre-create destination to cause move failure.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, taskFile), []byte("# Existing\n"), 0o644)
+
+	// No verdict file — backward compat path.
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/fallback-reject-move-fail",
+		Title:    "Fallback Reject Move Fail",
+		TaskPath: reviewPath,
+	}
+
+	captureStdoutStderr(t, func() {
+		postReviewAction(tasksDir, "host-agent", task)
+	})
+
+	// Task should remain in ready-for-review/.
+	if _, err := os.Stat(reviewPath); err != nil {
+		t.Fatal("task should stay in ready-for-review/ when move fails")
+	}
+	srcData, _ := os.ReadFile(reviewPath)
+	content := string(srcData)
+	// Review-failure should be recorded.
+	if !strings.Contains(content, "<!-- review-failure:") {
+		t.Fatalf("review-failure should be recorded when backward-compat move fails:\n%s", content)
+	}
+	// The terminal (last) rejection marker should be stripped.
+	if strings.Contains(content, "tests missing") {
+		t.Fatalf("terminal rejection marker should be stripped when move fails:\n%s", content)
+	}
+	// The older rejection marker must be preserved for MATO_REVIEW_FEEDBACK.
+	if !strings.Contains(content, "older feedback") {
+		t.Fatalf("older rejection marker should be preserved:\n%s", content)
+	}
+	// TaskState should reflect the move failure.
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "review-move-failed" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=review-move-failed", state)
+	}
+}
+
+func TestMoveReviewedTask_MoveFails_RecordsReviewFailure(t *testing.T) {
+	tasksDir := t.TempDir()
+	srcDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	dstDir := filepath.Join(tasksDir, queue.DirReadyMerge)
+	msgDir := filepath.Join(tasksDir, "messages", "events")
+	for _, d := range []string{srcDir, dstDir, msgDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	taskFile := "fail-move.md"
+	srcPath := filepath.Join(srcDir, taskFile)
+	os.WriteFile(srcPath, []byte("# Fail Move\n"), 0o644)
+
+	// Pre-create destination.
+	os.WriteFile(filepath.Join(dstDir, taskFile), []byte("# Existing\n"), 0o644)
+
+	task := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/fail-move",
+		Title:    "Fail Move",
+		TaskPath: srcPath,
+	}
+
+	marker := "\n<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved -->\n"
+	captureStdoutStderr(t, func() {
+		ok := moveReviewedTask(tasksDir, "agent1", task, approveDisposition, marker)
+		if ok {
+			t.Fatal("moveReviewedTask should return false when move fails")
+		}
+	})
+
+	// Source should still exist without the marker.
+	srcData, _ := os.ReadFile(srcPath)
+	if strings.Contains(string(srcData), "<!-- reviewed:") {
+		t.Fatal("marker should not be written when move fails")
+	}
+	// Review-failure should be recorded in the source file.
+	if !strings.Contains(string(srcData), "<!-- review-failure:") {
+		t.Fatalf("review-failure should be recorded when move fails:\n%s", string(srcData))
+	}
+	// TaskState should reflect the move failure.
+	state, err := taskstate.Load(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != "review-move-failed" {
+		t.Fatalf("taskstate = %+v, want LastOutcome=review-move-failed", state)
+	}
+}
+
+func TestStripLastTerminalMarker_Approval(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantGone []string
+		wantKept []string
+	}{
+		{
+			name:     "strips single approval marker",
+			input:    "# Task\n<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved -->\nsome body\n",
+			wantGone: []string{"<!-- reviewed:"},
+			wantKept: []string{"# Task", "some body"},
+		},
+		{
+			name:     "preserves review-failure markers",
+			input:    "# Task\n<!-- review-failure: agent1 at 2026-01-01T00:00:00Z — move failed -->\n<!-- reviewed: agent1 at 2026-02-01T00:00:00Z — approved -->\n",
+			wantGone: []string{"<!-- reviewed:"},
+			wantKept: []string{"# Task", "<!-- review-failure:"},
+		},
+		{
+			name:     "preserves rejection markers when stripping approval",
+			input:    "# Task\n<!-- review-rejection: a1 at 2026-01-01T00:00:00Z — old feedback -->\n<!-- reviewed: a2 at 2026-02-01T00:00:00Z — approved -->\n",
+			wantGone: []string{"<!-- reviewed:"},
+			wantKept: []string{"# Task", "<!-- review-rejection:", "old feedback"},
+		},
+		{
+			name:     "no markers leaves file unchanged",
+			input:    "# Task\nsome body\n",
+			wantGone: nil,
+			wantKept: []string{"# Task", "some body"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "task.md")
+			os.WriteFile(path, []byte(tt.input), 0o644)
+
+			stripLastTerminalMarker(path, approvalMarkerRe)
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			content := string(data)
+			for _, s := range tt.wantGone {
+				if strings.Contains(content, s) {
+					t.Errorf("marker %q should have been stripped from:\n%s", s, content)
+				}
+			}
+			for _, s := range tt.wantKept {
+				if !strings.Contains(content, s) {
+					t.Errorf("content %q should be preserved in:\n%s", s, content)
+				}
+			}
+		})
+	}
+}
+
+func TestStripLastTerminalMarker_Rejection_PreservesOlderRejections(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	input := "# Task\n<!-- review-rejection: a1 at 2026-01-01T00:00:00Z — first feedback -->\n<!-- review-rejection: a2 at 2026-02-01T00:00:00Z — second feedback -->\n"
+	os.WriteFile(path, []byte(input), 0o644)
+
+	stripLastTerminalMarker(path, rejectionMarkerRe)
+
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	// The last (second) rejection marker should be removed.
+	if strings.Contains(content, "second feedback") {
+		t.Fatalf("last rejection marker should be stripped, got:\n%s", content)
+	}
+	// The first (older) rejection marker must be preserved.
+	if !strings.Contains(content, "first feedback") {
+		t.Fatalf("older rejection marker should be preserved, got:\n%s", content)
+	}
+}
+
+func TestStripLastTerminalMarker_Rejection_SingleMarker(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	input := "# Task\n<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — tests missing -->\nsome body\n"
+	os.WriteFile(path, []byte(input), 0o644)
+
+	stripLastTerminalMarker(path, rejectionMarkerRe)
+
+	data, _ := os.ReadFile(path)
+	content := string(data)
+	if strings.Contains(content, "<!-- review-rejection:") {
+		t.Fatalf("rejection marker should be stripped, got:\n%s", content)
+	}
+	if !strings.Contains(content, "# Task") || !strings.Contains(content, "some body") {
+		t.Fatalf("non-marker content should be preserved, got:\n%s", content)
+	}
+}
