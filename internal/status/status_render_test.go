@@ -1216,6 +1216,46 @@ func TestRenderCompactAgents_ExtremelyNarrowTerminal(t *testing.T) {
 	}
 }
 
+func TestRenderCompactAgents_OverflowSummaryBoundedOnTinyTerminals(t *testing.T) {
+	tests := []struct {
+		name  string
+		termW int
+	}{
+		{"width 1", 1},
+		{"width 2", 2},
+		{"width 4", 4},
+		{"width 10", 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prev := ui.SetTermWidthFunc(func() int { return tt.termW })
+			defer ui.SetTermWidthFunc(prev)
+
+			var buf bytes.Buffer
+			c := plainColorSet()
+
+			// Create more agents than compactListLimit to trigger the overflow summary row.
+			agents := make([]statusAgent, 0, compactListLimit+3)
+			for i := range compactListLimit + 3 {
+				agents = append(agents, statusAgent{ID: "agent-" + intToStr(i), PID: 1000 + i})
+			}
+
+			renderCompactAgents(&buf, c, statusData{agents: agents})
+
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			for i, line := range lines {
+				if i == 0 {
+					continue // skip header "Agents (N)"
+				}
+				if utf8.RuneCountInString(line) > tt.termW {
+					t.Errorf("line exceeds terminal width %d: runes=%d, line=%q",
+						tt.termW, utf8.RuneCountInString(line), line)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderCompactNextUp_NarrowTerminalTruncates(t *testing.T) {
 	prev := ui.SetTermWidthFunc(func() int { return 40 })
 	defer ui.SetTermWidthFunc(prev)
