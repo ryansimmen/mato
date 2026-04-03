@@ -3758,3 +3758,128 @@ func TestCompleteTaskNames_GitRepoWithoutMato(t *testing.T) {
 		t.Errorf("directive = %v, want ShellCompDirectiveError", directive)
 	}
 }
+
+func TestCompleteTaskNames_ParseFailureInAllDirs(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"backlog/good-task.md":   "---\nid: good-task\n---\n# Good task\n",
+		"backlog/malformed.md":   "---\nbad yaml: [unmatched\n---\n# Malformed\n",
+		"failed/broken-yaml.md":  "---\nalso bad: {{{\n---\n# Broken\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repo := repoRoot
+	fn := completeTaskNames(&repo, queue.AllDirs)
+	completions, directive := fn(nil, nil, "")
+
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+
+	// Stems and filenames for parse-failure entries should both appear.
+	want := []string{"good-task", "malformed", "malformed.md", "broken-yaml", "broken-yaml.md"}
+	for _, w := range want {
+		found := false
+		for _, c := range completions {
+			if c == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("completions missing %q, got %v", w, completions)
+		}
+	}
+}
+
+func TestCompleteTaskNames_RetryParseFailureInFailed(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"backlog/not-failed.md":       "---\nid: not-failed\n---\n# Not failed\n",
+		"failed/retry-me.md":          "---\nid: retry-me\n---\n# Retry me\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+		"failed/bad-frontmatter.md":   "---\nbad: {{{\n---\n# Bad\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+		"backlog/also-malformed.md":   "---\nbad: [[[[\n---\n# Also bad\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repo := repoRoot
+	fn := completeTaskNames(&repo, []string{queue.DirFailed})
+	completions, _ := fn(nil, nil, "")
+
+	// Both stem and filename should be offered for the parse-failure entry.
+	wantPresent := map[string]bool{
+		"retry-me":            false,
+		"bad-frontmatter":     false,
+		"bad-frontmatter.md":  false,
+	}
+	for _, c := range completions {
+		if _, ok := wantPresent[c]; ok {
+			wantPresent[c] = true
+		}
+	}
+	for name, found := range wantPresent {
+		if !found {
+			t.Errorf("completions missing %q, got %v", name, completions)
+		}
+	}
+
+	// Parse failure in backlog and its filename should NOT appear in retry.
+	for _, c := range completions {
+		if c == "also-malformed" || c == "also-malformed.md" || c == "not-failed" {
+			t.Errorf("retry completions should not include %q, got %v", c, completions)
+		}
+	}
+}
+
+func TestCompleteTaskNames_CancelExcludesParseFailureInTerminalStates(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"backlog/cancel-me.md":       "---\nid: cancel-me\n---\n# Cancel me\n",
+		"backlog/bad-backlog.md":     "---\nbad: [unmatched\n---\n# Bad backlog\n",
+		"failed/bad-failed.md":       "---\nbad: {{{\n---\n# Bad failed\n",
+		"completed/bad-completed.md": "---\nbad: [[[[\n---\n# Bad completed\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge}
+	repo := repoRoot
+	fn := completeTaskNames(&repo, cancelDirs)
+	completions, _ := fn(nil, nil, "")
+
+	// Parse failure in backlog should appear with both stem and filename.
+	wantPresent := []string{"bad-backlog", "bad-backlog.md"}
+	for _, w := range wantPresent {
+		found := false
+		for _, c := range completions {
+			if c == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("completions missing %q (parse failure in backlog), got %v", w, completions)
+		}
+	}
+
+	// Parse failures in terminal states should NOT appear (stem or filename).
+	for _, c := range completions {
+		if c == "bad-failed" || c == "bad-failed.md" || c == "bad-completed" || c == "bad-completed.md" {
+			t.Errorf("cancel completions should not include %q from terminal state, got %v", c, completions)
+		}
+	}
+}

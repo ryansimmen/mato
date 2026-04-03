@@ -726,7 +726,10 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 
 // completeTaskNames returns a cobra ValidArgsFunction that completes task
 // names from the given queue directories. Both filename stems and explicit
-// frontmatter IDs are offered as completions.
+// frontmatter IDs are offered for successfully parsed tasks. For parse-failure
+// entries, the filename stem and full filename are offered as completions
+// since those are the valid refs for resolution (frontmatter IDs are omitted
+// because malformed files may not have trustworthy metadata).
 func completeTaskNames(repoFlag *string, queueDirs []string) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		repo, err := resolveRepo(*repoFlag)
@@ -743,6 +746,11 @@ func completeTaskNames(repoFlag *string, queueDirs []string) func(*cobra.Command
 		}
 		idx := queue.BuildIndex(tasksDir)
 
+		dirSet := make(map[string]struct{}, len(queueDirs))
+		for _, d := range queueDirs {
+			dirSet[d] = struct{}{}
+		}
+
 		seen := make(map[string]struct{})
 		var completions []string
 		for _, dir := range queueDirs {
@@ -758,6 +766,20 @@ func completeTaskNames(repoFlag *string, queueDirs []string) func(*cobra.Command
 						completions = append(completions, id)
 					}
 				}
+			}
+		}
+		for _, pf := range idx.ParseFailures() {
+			if _, ok := dirSet[pf.State]; !ok {
+				continue
+			}
+			stem := frontmatter.TaskFileStem(pf.Filename)
+			if _, ok := seen[stem]; !ok && strings.HasPrefix(stem, toComplete) {
+				seen[stem] = struct{}{}
+				completions = append(completions, stem)
+			}
+			if _, ok := seen[pf.Filename]; !ok && strings.HasPrefix(pf.Filename, toComplete) {
+				seen[pf.Filename] = struct{}{}
+				completions = append(completions, pf.Filename)
 			}
 		}
 		return completions, cobra.ShellCompDirectiveNoFileComp
