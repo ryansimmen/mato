@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"mato/internal/messaging"
 	"mato/internal/pause"
@@ -1265,8 +1266,27 @@ func TestRenderActiveAgents_VeryNarrowTerminalTruncates(t *testing.T) {
 	renderActiveAgents(&buf, c, data)
 	output := buf.String()
 
-	if !strings.Contains(output, "…") {
-		t.Errorf("expected truncation marker even at very narrow width, got:\n%s", output)
+	// At width=20, the fixed prefix (indent + name + PID) already exceeds
+	// the budget, so both task and branch are dropped entirely.
+	if strings.Contains(output, "implement-very-long") {
+		t.Errorf("task should be dropped at very narrow width, got:\n%s", output)
+	}
+	if strings.Contains(output, "task/implement") {
+		t.Errorf("branch should be dropped at very narrow width, got:\n%s", output)
+	}
+
+	// The output should still show the agent identity.
+	if !strings.Contains(output, "agent-abcd1234") {
+		t.Errorf("agent name should still be present, got:\n%s", output)
+	}
+
+	// Verify content lines (skip header/separator) fit within a
+	// reasonable bound — no secondary fields inflate the line.
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		// Header lines may use unicode; only check data lines.
+		if strings.HasPrefix(line, "  ") && len(line) > 35 {
+			t.Errorf("data line too wide for width=20: len=%d, line=%q", len(line), line)
+		}
 	}
 }
 
@@ -1289,6 +1309,33 @@ func TestRenderRunnableBacklog_VeryNarrowTerminalTruncates(t *testing.T) {
 
 	if !strings.Contains(output, "…") {
 		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+}
+
+func TestRenderActiveAgents_NarrowTerminalFitsWidth(t *testing.T) {
+	const termW = 50
+	prev := ui.SetTermWidthFunc(func() int { return termW })
+	defer ui.SetTermWidthFunc(prev)
+
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		agents: []statusAgent{{ID: "agent-ab12", PID: 42}},
+		presenceMap: map[string]messaging.PresenceInfo{
+			"agent-ab12": {
+				Task:   "implement-very-long-feature-name-that-exceeds-any-reasonable-width.md",
+				Branch: "task/implement-very-long-feature-name-that-exceeds-any-reasonable-width",
+			},
+		},
+	}
+
+	renderActiveAgents(&buf, c, data)
+	output := buf.String()
+
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "  (") && utf8.RuneCountInString(line) > termW {
+			t.Errorf("data line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
+		}
 	}
 }
 

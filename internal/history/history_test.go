@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"mato/internal/messaging"
 	"mato/internal/queue"
@@ -473,11 +474,55 @@ func TestShowTo_TextVeryNarrowTerminalTruncates(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d:\n%s", len(lines), output)
 	}
 
-	// At width=20 the budget goes non-positive; verify truncation still happens.
-	if !strings.Contains(output, "…") {
-		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
-	}
 	if !strings.Contains(output, "MERGED") {
 		t.Errorf("missing MERGED type in very narrow output:\n%s", output)
+	}
+
+	// At width=20, the fixed prefix (timestamp + type) exceeds the budget,
+	// so secondary fields (task name, detail) must be dropped entirely.
+	if strings.Contains(output, "very-long-task") {
+		t.Errorf("task name should be dropped at very narrow width, got:\n%s", output)
+	}
+	if strings.Contains(output, "abc1234") {
+		t.Errorf("detail (SHA) should be dropped at very narrow width, got:\n%s", output)
+	}
+
+	// Verify the line length does not exceed the fixed prefix
+	// (timestamp + "  " + type = 28 chars when type padding is trimmed).
+	for _, line := range lines {
+		if len(line) > 30 {
+			t.Errorf("line exceeds fixed prefix bound at width=20: len=%d, line=%q", len(line), line)
+		}
+	}
+}
+
+func TestShowTo_TextNarrowTerminalFitsWidth(t *testing.T) {
+	const termW = 40
+	prev := ui.SetTermWidthFunc(func() int { return termW })
+	defer ui.SetTermWidthFunc(prev)
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "long-task-name-for-narrow-test",
+		TaskFile:  "long-task-name-for-narrow-test.md",
+		Branch:    "task/long-task-name-for-narrow-test",
+		CommitSHA: "abc1234567890",
+		Title:     "Long task title",
+		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
+	})
+	writeTask(t, tasksDir, queue.DirFailed, "another-long-named-task.md",
+		"# Another long named task\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed_with_long_reason -->\n")
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	for _, line := range lines {
+		if utf8.RuneCountInString(line) > termW {
+			t.Errorf("line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
+		}
 	}
 }

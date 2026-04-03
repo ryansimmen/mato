@@ -136,17 +136,20 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 				if row.task != "" && row.branch != "" {
 					taskBudget = (budgetForFields - 4) * 2 / 3
 					branchBudget = budgetForFields - 4 - taskBudget
+					if branchBudget < minTruncWidth {
+						// Not enough room for branch; drop it and
+						// give all remaining space to task.
+						branchBudget = 0
+						taskBudget = budgetForFields - 2
+					}
 				} else if row.task != "" {
 					taskBudget = budgetForFields - 2
 				}
-				if taskBudget < minTruncWidth {
-					taskBudget = minTruncWidth
-				}
-				if branchBudget > 0 && branchBudget < minTruncWidth {
-					branchBudget = minTruncWidth
+				if taskBudget < 0 {
+					taskBudget = 0
 				}
 				parts = []string{c.Yellow(row.agentID)}
-				if row.task != "" {
+				if row.task != "" && taskBudget > 0 {
 					parts = append(parts, ui.Truncate(row.task, taskBudget))
 				}
 				if row.branch != "" && branchBudget > 0 {
@@ -390,23 +393,43 @@ func renderActiveAgents(w io.Writer, c colorSet, data statusData) {
 			if termWidth > 0 {
 				name := agent.displayName()
 				pidStr := fmt.Sprintf("%d", agent.PID)
-				fixedLen := 2 + len(name) + 6 + len(pidStr) + 2 + 4
-				avail := termWidth - fixedLen
-				if avail < minTruncWidth*2 {
-					avail = minTruncWidth * 2
+				// Fixed prefix: "  " + name + " (PID " + pid + "): "
+				fixedPrefix := 2 + len(name) + 6 + len(pidStr) + 3
+				avail := termWidth - fixedPrefix
+
+				if avail < minTruncWidth {
+					// Not enough room for both fields; drop branch.
+					if avail > 0 {
+						task = ui.Truncate(task, avail)
+					} else {
+						task = ""
+					}
+					branch = ""
+				} else {
+					needed := len(task) + 4 + len(branch)
+					if needed > avail {
+						// " on " costs 4 chars.
+						branchBudget := (avail - 4) / 3
+						taskBudget := avail - 4 - branchBudget
+						if branchBudget < minTruncWidth {
+							// Drop branch, give all space to task.
+							taskBudget = avail
+							task = ui.Truncate(task, taskBudget)
+							branch = ""
+						} else {
+							task = ui.Truncate(task, taskBudget)
+							branch = ui.Truncate(branch, branchBudget)
+						}
+					}
 				}
-				taskBudget := avail * 2 / 3
-				branchBudget := avail - taskBudget
-				if taskBudget < minTruncWidth {
-					taskBudget = minTruncWidth
-				}
-				if branchBudget < minTruncWidth {
-					branchBudget = minTruncWidth
-				}
-				task = ui.Truncate(task, taskBudget)
-				branch = ui.Truncate(branch, branchBudget)
 			}
-			fmt.Fprintf(w, "  %s (PID %d): %s on %s\n", c.Yellow(agent.displayName()), agent.PID, task, c.Cyan(branch))
+			if branch != "" {
+				fmt.Fprintf(w, "  %s (PID %d): %s on %s\n", c.Yellow(agent.displayName()), agent.PID, task, c.Cyan(branch))
+			} else if task != "" {
+				fmt.Fprintf(w, "  %s (PID %d): %s\n", c.Yellow(agent.displayName()), agent.PID, task)
+			} else {
+				fmt.Fprintf(w, "  %s (PID %d)\n", c.Yellow(agent.displayName()), agent.PID)
+			}
 		} else {
 			fmt.Fprintf(w, "  %s (PID %d)\n", c.Yellow(agent.displayName()), agent.PID)
 		}
