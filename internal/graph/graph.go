@@ -17,6 +17,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/queue"
+	"mato/internal/ui"
 )
 
 // NodeState classifies a task's current queue position. Values match
@@ -360,8 +361,8 @@ func Show(repoRoot, format string, showAll bool) error {
 // ShowTo resolves the tasks directory, builds the dependency graph, and
 // writes it to w in the requested format.
 func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
-	if format != "text" && format != "dot" && format != "json" {
-		return fmt.Errorf("unsupported format %q", format)
+	if err := ui.ValidateFormat(format, []string{"text", "dot", "json"}); err != nil {
+		return err
 	}
 
 	repoRoot, err := git.ResolveRepoRoot(repoRoot)
@@ -370,7 +371,7 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 	}
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
-	if err := requireTasksDir(tasksDir); err != nil {
+	if err := ui.RequireTasksDir(tasksDir); err != nil {
 		return err
 	}
 
@@ -395,20 +396,6 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 		RenderText(w, data)
 		return nil
 	}
-}
-
-func requireTasksDir(tasksDir string) error {
-	info, err := os.Stat(tasksDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
-		}
-		return fmt.Errorf("stat %s: %w", tasksDir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s exists but is not a directory", tasksDir)
-	}
-	return nil
 }
 
 // isGlobWarning returns true if the build warning is a glob/affects

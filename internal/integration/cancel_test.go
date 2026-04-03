@@ -44,7 +44,7 @@ func TestCancelRetryLifecycle(t *testing.T) {
 		t.Fatalf("inspect failure_kind = %v, want cancelled", inspectResult["failure_kind"])
 	}
 
-	if err := queue.RetryTask(tasksDir, "task"); err != nil {
+	if _, err := queue.RetryTask(tasksDir, "task"); err != nil {
 		t.Fatalf("RetryTask: %v", err)
 	}
 	if _, err := queue.ResolveTask(queue.BuildIndex(tasksDir), "task"); err != nil {

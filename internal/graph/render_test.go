@@ -689,3 +689,55 @@ func TestRenderText_AllStates(t *testing.T) {
 		t.Errorf("waiting should appear before backlog:\n%s", got)
 	}
 }
+
+func TestRenderText_NoColorFallback(t *testing.T) {
+	tests := []struct {
+		name  string
+		data  GraphData
+		want  []string
+	}{
+		{
+			name: "header and state groups readable",
+			data: simpleGraph(),
+			want: []string{"mato graph", "2 tasks, 1 edges, 0 cycles", "backlog/", "in-progress/"},
+		},
+		{
+			name: "cycle annotation readable",
+			data: cycleGraph(),
+			want: []string{"cycle ⚠", "1 cycles"},
+		},
+		{
+			name: "blocked annotation readable",
+			data: blockedGraph(),
+			want: []string{"blocked"},
+		},
+		{
+			name: "hidden dep symbols readable",
+			data: hiddenDepsGraph(),
+			want: []string{"completed ✓", "external ✗", "ambiguous ⚠", "unknown ?"},
+		},
+		{
+			name: "duplicate warning readable",
+			data: duplicateWarningGraph(),
+			want: []string{"warning: dup.md is a duplicate of my-task.md"},
+		},
+		{
+			name: "parse failure warning readable",
+			data: parseFailureGraph(),
+			want: []string{"warning: failed to parse backlog/bad-task.md: invalid frontmatter"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			RenderText(&buf, tt.data)
+			got := buf.String()
+			for _, w := range tt.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("output missing %q:\n%s", w, got)
+				}
+			}
+		})
+	}
+}

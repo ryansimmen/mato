@@ -761,3 +761,72 @@ func TestMergeReadyTask_EmptyCommitSHA(t *testing.T) {
 		t.Errorf("stderr = %q, want warning about commit SHA", stderr.String())
 	}
 }
+
+func TestMergeReadyTask_MultiCommitUsesFirstCommitSubject(t *testing.T) {
+	repoRoot := setupMergeRepo(t)
+
+	// Create a task branch with two commits: the first is the primary task
+	// intent, the second is a narrow review-fix commit.
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/multi-commit", "mato"); err != nil {
+		t.Fatalf("git checkout -b task/multi-commit: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "feature.go"), []byte("package feature\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile feature.go: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "feature.go"); err != nil {
+		t.Fatalf("git add feature.go: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "feat: implement dark mode toggle\n\nAdds theme switching support."); err != nil {
+		t.Fatalf("git commit (primary): %v", err)
+	}
+
+	// Second commit: a narrow review fix.
+	if err := os.WriteFile(filepath.Join(repoRoot, "feature_test.go"), []byte("package feature\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile feature_test.go: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "feature_test.go"); err != nil {
+		t.Fatalf("git add feature_test.go: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "fix: add missing test for edge case"); err != nil {
+		t.Fatalf("git commit (review fix): %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	task := mergeQueueTask{
+		name:    "multi-commit.md",
+		branch:  "task/multi-commit",
+		title:   "Dark mode toggle",
+		id:      "multi-commit",
+		affects: []string{"feature.go", "feature_test.go"},
+	}
+
+	result, err := mergeReadyTask(repoRoot, "mato", task)
+	if err != nil {
+		t.Fatalf("mergeReadyTask() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("mergeReadyTask() returned nil result")
+	}
+
+	// The squash commit message should use the first (earliest) commit's
+	// subject — the primary task intent — not the later review fix.
+	commitMsg, err := git.Output(repoRoot, "log", "-1", "--format=%B", "mato")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+
+	if !strings.HasPrefix(strings.TrimSpace(commitMsg), "feat: implement dark mode toggle") {
+		t.Errorf("squash commit subject should come from the first task-branch commit, got:\n%s", commitMsg)
+	}
+	if strings.Contains(commitMsg, "fix: add missing test for edge case") {
+		t.Errorf("squash commit subject should not use the later review-fix commit:\n%s", commitMsg)
+	}
+	if !strings.Contains(commitMsg, "Task-ID: multi-commit") {
+		t.Errorf("commit message missing Task-ID trailer:\n%s", commitMsg)
+	}
+	if !strings.Contains(commitMsg, "Affects: feature.go, feature_test.go") {
+		t.Errorf("commit message missing Affects trailer:\n%s", commitMsg)
+	}
+}

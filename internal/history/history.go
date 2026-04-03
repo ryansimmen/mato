@@ -17,6 +17,8 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/taskfile"
+	"mato/internal/timeutil"
+	"mato/internal/ui"
 )
 
 // Event is a durable task outcome shown by mato log.
@@ -40,8 +42,6 @@ const (
 	sourceFailed sourceStatus = "failed"
 )
 
-var warningWriter io.Writer = os.Stderr
-
 // Show writes durable task history to stdout.
 func Show(repo string, limit int, format string) error {
 	return ShowTo(os.Stdout, repo, limit, format)
@@ -49,8 +49,8 @@ func Show(repo string, limit int, format string) error {
 
 // ShowTo writes durable task history to w.
 func ShowTo(w io.Writer, repo string, limit int, format string) error {
-	if format != "text" && format != "json" {
-		return fmt.Errorf("unsupported format %q", format)
+	if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
+		return err
 	}
 
 	repoRoot, err := git.ResolveRepoRoot(repo)
@@ -59,7 +59,7 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 	}
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
-	if err := requireTasksDir(tasksDir); err != nil {
+	if err := ui.RequireTasksDir(tasksDir); err != nil {
 		return err
 	}
 
@@ -76,20 +76,6 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 		return renderJSON(w, events)
 	}
 	renderText(w, events)
-	return nil
-}
-
-func requireTasksDir(tasksDir string) error {
-	info, err := os.Stat(tasksDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
-		}
-		return fmt.Errorf("stat %s: %w", tasksDir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s exists but is not a directory", tasksDir)
-	}
 	return nil
 }
 
@@ -110,10 +96,10 @@ func collectEvents(tasksDir string) ([]Event, error) {
 
 	// Surface partial failures: one source failed but the other succeeded.
 	if completionStatus == sourceFailed && taskStatus == sourceRead && completionErr != nil {
-		warnf("warning: %v\n", completionErr)
+		ui.Warnf("warning: %v\n", completionErr)
 	}
 	if taskStatus == sourceFailed && completionStatus == sourceRead && taskErr != nil {
-		warnf("warning: %v\n", taskErr)
+		ui.Warnf("warning: %v\n", taskErr)
 	}
 
 	return events, nil
@@ -140,17 +126,17 @@ func collectCompletionEvents(tasksDir string) ([]Event, sourceStatus, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			warnf("warning: could not read completion detail %s: %v\n", entry.Name(), err)
+			ui.Warnf("warning: could not read completion detail %s: %v\n", entry.Name(), err)
 			continue
 		}
 
 		var detail messaging.CompletionDetail
 		if err := json.Unmarshal(data, &detail); err != nil {
-			warnf("warning: could not parse completion detail %s: %v\n", entry.Name(), err)
+			ui.Warnf("warning: could not parse completion detail %s: %v\n", entry.Name(), err)
 			continue
 		}
 		if err := validateCompletionDetail(detail); err != nil {
-			warnf("warning: could not parse completion detail %s: %v\n", entry.Name(), err)
+			ui.Warnf("warning: could not parse completion detail %s: %v\n", entry.Name(), err)
 			continue
 		}
 
@@ -196,7 +182,7 @@ func collectTaskEvents(tasksDir string) ([]Event, sourceStatus, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			warnf("warning: could not read queue directory %s: %v\n", dir, err)
+			ui.Warnf("warning: could not read queue directory %s: %v\n", dir, err)
 			if failedErr == nil {
 				failedErr = fmt.Errorf("read queue directory %s: %w", dir, err)
 			}
@@ -211,7 +197,7 @@ func collectTaskEvents(tasksDir string) ([]Event, sourceStatus, error) {
 				if os.IsNotExist(err) {
 					continue
 				}
-				warnf("warning: could not read task file %s/%s: %v\n", dir, name, err)
+				ui.Warnf("warning: could not read task file %s/%s: %v\n", dir, name, err)
 				continue
 			}
 
@@ -268,11 +254,36 @@ func sortEvents(events []Event) {
 	})
 }
 
+var colors = ui.NewColorSet()
+
+// colorEventType applies semantic color to a pre-padded event type
+// string. Padding must happen before coloring so ANSI escape sequences
+// do not count toward the visible column width.
+func colorEventType(padded string) string {
+	trimmed := strings.TrimRight(padded, " ")
+	switch trimmed {
+	case "MERGED":
+		return colors.Green(trimmed) + padded[len(trimmed):]
+	case "FAILED":
+		return colors.Red(trimmed) + padded[len(trimmed):]
+	case "REJECTED":
+		return colors.Yellow(trimmed) + padded[len(trimmed):]
+	default:
+		return padded
+	}
+}
+
+// minTruncWidth is the smallest budget allowed when clamping
+// width-based truncation on very narrow terminals.
+const minTruncWidth = 6
+
 func renderText(w io.Writer, events []Event) {
 	if len(events) == 0 {
 		fmt.Fprintln(w, "(no history)")
 		return
 	}
+
+	termWidth := ui.TermWidth()
 
 	taskWidth := len("task")
 	for _, event := range events {
@@ -281,11 +292,104 @@ func renderText(w io.Writer, events []Event) {
 		}
 	}
 
+	if termWidth > 0 {
+		// Fixed prefix: absolute timestamp (20) + "  " + type (8) + "  " = 32.
+		const fixedPrefix = 32
+		maxTaskWidth := termWidth - fixedPrefix
+		if maxTaskWidth < 0 {
+			maxTaskWidth = 0
+		}
+		if taskWidth > maxTaskWidth {
+			taskWidth = maxTaskWidth
+		}
+	}
+
+	now := time.Now().UTC()
 	for _, event := range events {
-		fmt.Fprintf(w, "%s  %-8s  %-*s", event.Timestamp.UTC().Format(time.RFC3339), event.Type, taskWidth, event.TaskFile)
+		padded := fmt.Sprintf("%-8s", event.Type)
+		absTS := event.Timestamp.UTC().Format(time.RFC3339)
+		ts := absTS
+		rel := timeutil.RelativeTime(event.Timestamp.UTC(), now)
+		if rel != "" {
+			ts = absTS + "  " + rel
+		}
+
+		taskName := event.TaskFile
 		detail := textDetail(event)
-		if detail != "" {
-			fmt.Fprintf(w, "  %s", detail)
+		showDetail := detail != ""
+		eventTaskWidth := taskWidth
+
+		if termWidth > 0 {
+			// Visible line: ts + "  " + type(8) + "  " + task [+ "  " + detail].
+			prefixLen := len([]rune(ts)) + 12
+			lineLen := prefixLen + eventTaskWidth
+			if showDetail {
+				lineLen += 2 + len([]rune(detail))
+			}
+
+			// Step 1: drop detail if it causes overflow.
+			if lineLen > termWidth && showDetail {
+				showDetail = false
+				lineLen = prefixLen + eventTaskWidth
+			}
+
+			// Step 2: drop relative time if still overflowing.
+			if lineLen > termWidth && rel != "" {
+				ts = absTS
+				prefixLen = len([]rune(ts)) + 12
+				lineLen = prefixLen + eventTaskWidth
+			}
+
+			// Step 3: shrink task column to fit remaining space.
+			if lineLen > termWidth {
+				eventTaskWidth = termWidth - prefixLen
+				if eventTaskWidth < 0 {
+					eventTaskWidth = 0
+				}
+			}
+
+			if eventTaskWidth > 0 && len(taskName) > eventTaskWidth {
+				taskName = ui.Truncate(taskName, eventTaskWidth)
+			}
+
+			// Step 4: if even the prefix overflows, truncate the
+			// timestamp so the line fits within the terminal width.
+			if eventTaskWidth == 0 {
+				barePrefix := len([]rune(ts)) + 2 + len([]rune(event.Type))
+				if barePrefix > termWidth {
+					tsBudget := termWidth - 2 - len([]rune(event.Type))
+					if tsBudget > 0 {
+						ts = ui.Truncate(ts, tsBudget)
+					} else {
+						// Not even room for type; truncate ts to fill.
+						ts = ui.Truncate(ts, termWidth)
+					}
+				}
+			}
+		}
+
+		if eventTaskWidth > 0 {
+			fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
+		} else if termWidth > 0 && len([]rune(ts))+2+len([]rune(event.Type)) > termWidth {
+			// Timestamp was truncated so tightly that adding "  TYPE"
+			// would still overflow; print only the truncated timestamp.
+			fmt.Fprint(w, colors.Dim(ts))
+		} else {
+			// No room for task column; omit trailing type padding.
+			fmt.Fprintf(w, "%s  %s", colors.Dim(ts), colorEventType(event.Type))
+		}
+
+		if showDetail && detail != "" {
+			if termWidth > 0 {
+				usedWidth := len([]rune(ts)) + 12 + eventTaskWidth + 2
+				maxDetail := termWidth - usedWidth
+				if maxDetail > 0 {
+					detail = ui.Truncate(detail, maxDetail)
+					fmt.Fprintf(w, "  %s", detail)
+				}
+			} else {
+				fmt.Fprintf(w, "  %s", detail)
+			}
 		}
 		fmt.Fprintln(w)
 	}
@@ -323,11 +427,4 @@ func shortSHA(sha string) string {
 		return sha
 	}
 	return sha[:7]
-}
-
-func warnf(format string, args ...any) {
-	if warningWriter == nil {
-		return
-	}
-	fmt.Fprintf(warningWriter, format, args...)
 }

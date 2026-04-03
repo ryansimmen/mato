@@ -1,4 +1,4 @@
-// Package config loads repository-local .mato.yaml settings.
+// Package config loads repository-local .mato.yaml (or .mato.yml) settings.
 package config
 
 import (
@@ -12,7 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const configFileName = ".mato.yaml"
+var configFileNames = []string{".mato.yaml", ".mato.yml"}
 
 // Config represents the settings from a .mato.yaml file.
 // All fields are pointers to distinguish "not set" from "zero value".
@@ -28,10 +28,29 @@ type Config struct {
 	RetryCooldown         *string `yaml:"retry_cooldown"`
 }
 
-// Load reads .mato.yaml from dir. Returns a zero Config when the file does not
-// exist.
+// Load reads .mato.yaml or .mato.yml from dir. It checks for both filenames
+// and returns an error if both exist. Returns a zero Config when neither file
+// exists.
 func Load(dir string) (Config, error) {
-	return LoadFile(filepath.Join(dir, configFileName))
+	var found []string
+	for _, name := range configFileNames {
+		path := filepath.Join(dir, name)
+		_, err := os.Stat(path)
+		if err == nil {
+			found = append(found, path)
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return Config{}, fmt.Errorf("stat config file %s: %w", path, err)
+		}
+	}
+	if len(found) > 1 {
+		return Config{}, fmt.Errorf("found both .mato.yaml and .mato.yml; remove one to avoid ambiguity")
+	}
+	if len(found) == 0 {
+		return Config{}, nil
+	}
+	return LoadFile(found[0])
 }
 
 // LoadFile parses a specific config file path. Returns a zero Config when the

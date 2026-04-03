@@ -10,6 +10,7 @@ import (
 	"mato/internal/config"
 	"mato/internal/git"
 	"mato/internal/runner"
+	"mato/internal/ui"
 )
 
 type runFlags struct {
@@ -235,15 +236,5 @@ func validateRepoPath(dir string) error {
 }
 
 func requireTasksDir(tasksDir string) error {
-	info, err := os.Stat(tasksDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
-		}
-		return fmt.Errorf("stat %s: %w", tasksDir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s exists but is not a directory", tasksDir)
-	}
-	return nil
+	return ui.RequireTasksDir(tasksDir)
 }
