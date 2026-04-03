@@ -1,15 +1,3 @@
----
-id: add-preflight-validation-command
-priority: 26
-affects:
-  - cmd/mato/main.go
-  - cmd/mato/main_test.go
-  - internal/doctor/
-  - README.md
-  - docs/architecture.md
-  - docs/configuration.md
-  - docs/task-format.md
----
 # Add Queue-Only Preflight Validation to `mato doctor`
 
 > **Status: Implemented** — This proposal has been fully implemented.

@@ -1,21 +1,8 @@
----
-id: compact-status-dashboard
-priority: 30
-affects:
-  - cmd/mato/main.go
-  - cmd/mato/main_test.go
-  - internal/status/
-  - internal/integration/
-  - docs/configuration.md
-  - docs/architecture.md
-  - README.md
----
+# Compact `mato status` Dashboard
 
 > **Status: Implemented** — This proposal has been fully implemented.
-> The text below describes the original design; see the source code for
-> the current implementation.
-
-# Compact `mato status` Dashboard
+> The text below describes the original design; see the source code for the
+> current implementation.
 
 ## 1. Goal
 

@@ -3355,7 +3355,7 @@ func TestReadLatestProgressForAgents_AgentStyleFilenames(t *testing.T) {
 			},
 		},
 		{
-			filename: base.Add(2 * time.Second).Format("20060102T150405.000000000Z") + "-agent-7-commit.json",
+			filename: base.Add(2*time.Second).Format("20060102T150405.000000000Z") + "-agent-7-commit.json",
 			msg: Message{
 				ID: "c1", From: "agent-7", Type: "progress",
 				Task: "task-7.md", Body: "Step: COMMIT", SentAt: base.Add(2 * time.Second),
