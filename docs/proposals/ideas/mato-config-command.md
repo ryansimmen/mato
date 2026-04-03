@@ -290,6 +290,11 @@ func (c RunConfig) RunOptions() runner.RunOptions
 This avoids duplicating the same data in two representations and ensures
 provenance cannot silently drift from the concrete values `runner` consumes.
 
+`RunFlags` should reflect the flags that actually exist on `mato run` today.
+Do not introduce synthetic flag precedence for settings that do not currently
+have run-command flags, such as `docker_image`,
+`review_session_resume_enabled`, `agent_timeout`, or `retry_cooldown`.
+
 The command layer should keep command-specific validation such as mutually
 exclusive flags, but config-source precedence and parsing should move out of
 `cmd/mato/resolve.go`.
@@ -354,6 +359,10 @@ new shared package in a focused way:
 - `mato doctor`
   - use the shared resolver only for Docker-image and config-loading behavior
   - do not broaden this into a larger doctor refactor
+  - preserve current fallback behavior: if repo-root resolution fails, Docker
+    image resolution still falls back to env/default; if repo root is known,
+    config load/parse errors remain fatal; an env override must not hide a
+    malformed committed config file
 
 Other helpers in `cmd/mato/resolve.go` that are unrelated to config resolution,
 such as repo path and git validation, can stay where they are.
