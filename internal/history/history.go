@@ -273,16 +273,34 @@ func colorEventType(padded string) string {
 	}
 }
 
+// minTruncWidth is the smallest budget allowed when clamping
+// width-based truncation on very narrow terminals.
+const minTruncWidth = 6
+
 func renderText(w io.Writer, events []Event) {
 	if len(events) == 0 {
 		fmt.Fprintln(w, "(no history)")
 		return
 	}
 
+	termWidth := ui.TermWidth()
+
 	taskWidth := len("task")
 	for _, event := range events {
 		if len(event.TaskFile) > taskWidth {
 			taskWidth = len(event.TaskFile)
+		}
+	}
+
+	if termWidth > 0 {
+		// Fixed columns: timestamp (20) + "  " + type (8) + "  " + "  " (detail sep) = 34
+		const fixedCols = 34
+		maxTaskWidth := termWidth - fixedCols - 10
+		if maxTaskWidth < 10 {
+			maxTaskWidth = 10
+		}
+		if taskWidth > maxTaskWidth {
+			taskWidth = maxTaskWidth
 		}
 	}
 
@@ -294,9 +312,23 @@ func renderText(w io.Writer, events []Event) {
 		if rel != "" {
 			ts += "  " + rel
 		}
-		fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), taskWidth, event.TaskFile)
+
+		taskName := event.TaskFile
+		if termWidth > 0 && len(taskName) > taskWidth {
+			taskName = ui.Truncate(taskName, taskWidth)
+		}
+		fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), taskWidth, taskName)
+
 		detail := textDetail(event)
 		if detail != "" {
+			if termWidth > 0 {
+				prefixWidth := len(ts) + 2 + 8 + 2 + taskWidth + 2
+				maxDetail := termWidth - prefixWidth
+				if maxDetail < minTruncWidth {
+					maxDetail = minTruncWidth
+				}
+				detail = ui.Truncate(detail, maxDetail)
+			}
 			fmt.Fprintf(w, "  %s", detail)
 		}
 		fmt.Fprintln(w)

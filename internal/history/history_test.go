@@ -412,3 +412,72 @@ func TestRenderText_NoColorFallback(t *testing.T) {
 		t.Errorf("missing rejection reason in output:\n%s", output)
 	}
 }
+
+func TestShowTo_TextNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 60 })
+	defer ui.SetTermWidthFunc(prev)
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "very-long-task-name-that-exceeds-normal-width",
+		TaskFile:  "very-long-task-name-that-exceeds-normal-width.md",
+		Branch:    "task/very-long-task-name-that-exceeds-normal-width",
+		CommitSHA: "abc1234567890",
+		Title:     "A task with a very long name",
+		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
+	})
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d:\n%s", len(lines), output)
+	}
+
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker in narrow output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "MERGED") {
+		t.Errorf("missing MERGED type in narrow output:\n%s", output)
+	}
+}
+
+func TestShowTo_TextVeryNarrowTerminalTruncates(t *testing.T) {
+	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	defer ui.SetTermWidthFunc(prev)
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	writeCompletion(t, tasksDir, messaging.CompletionDetail{
+		TaskID:    "very-long-task-name-that-exceeds-normal-width",
+		TaskFile:  "very-long-task-name-that-exceeds-normal-width.md",
+		Branch:    "task/very-long-task-name-that-exceeds-normal-width",
+		CommitSHA: "abc1234567890",
+		Title:     "A task with a very long name",
+		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
+	})
+
+	var buf bytes.Buffer
+	if err := ShowTo(&buf, repoRoot, 20, "text"); err != nil {
+		t.Fatalf("ShowTo: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d:\n%s", len(lines), output)
+	}
+
+	// At width=20 the budget goes non-positive; verify truncation still happens.
+	if !strings.Contains(output, "…") {
+		t.Errorf("expected truncation marker at very narrow width, got:\n%s", output)
+	}
+	if !strings.Contains(output, "MERGED") {
+		t.Errorf("missing MERGED type in very narrow output:\n%s", output)
+	}
+}

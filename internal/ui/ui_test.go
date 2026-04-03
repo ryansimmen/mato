@@ -242,3 +242,32 @@ func TestWriterWidth_FileWriter(t *testing.T) {
 		t.Errorf("WriterWidth(os.Stdout, 90) = %d, want 90 (non-TTY in test)", got)
 	}
 }
+
+func TestTermWidth_NonTTY(t *testing.T) {
+	// In tests stdout is not a TTY, so TermWidth returns 0.
+	got := TermWidth()
+	if got != 0 {
+		t.Errorf("TermWidth() = %d, want 0 (non-TTY)", got)
+	}
+}
+
+func TestSetTermWidthFunc(t *testing.T) {
+	prev := SetTermWidthFunc(func() int { return 42 })
+	defer SetTermWidthFunc(prev)
+
+	got := TermWidth()
+	if got != 42 {
+		t.Errorf("TermWidth() = %d, want 42 after SetTermWidthFunc", got)
+	}
+}
+
+func TestSetTermWidthFunc_RestoresPrevious(t *testing.T) {
+	original := TermWidth()
+	prev := SetTermWidthFunc(func() int { return 99 })
+	SetTermWidthFunc(prev)
+
+	got := TermWidth()
+	if got != original {
+		t.Errorf("TermWidth() = %d after restore, want %d", got, original)
+	}
+}
