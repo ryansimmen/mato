@@ -656,17 +656,8 @@ func extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, filename str
 	if result != "" {
 		return result
 	}
-	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+filename+".json")
-	data, err := os.ReadFile(verdictPath)
-	if err != nil {
-		return ""
-	}
-	var verdict reviewVerdict
-	if err := json.Unmarshal(data, &verdict); err != nil {
-		return ""
-	}
-	if strings.EqualFold(strings.TrimSpace(verdict.Verdict), "reject") && strings.TrimSpace(verdict.Reason) != "" {
-		return verdict.Reason
+	if vr, ok := taskfile.ReadVerdictRejection(tasksDir, filename); ok {
+		return vr.Reason
 	}
 	return ""
 }
