@@ -351,10 +351,29 @@ func renderText(w io.Writer, events []Event) {
 			if eventTaskWidth > 0 && len(taskName) > eventTaskWidth {
 				taskName = ui.Truncate(taskName, eventTaskWidth)
 			}
+
+			// Step 4: if even the prefix overflows, truncate the
+			// timestamp so the line fits within the terminal width.
+			if eventTaskWidth == 0 {
+				barePrefix := len([]rune(ts)) + 2 + len([]rune(event.Type))
+				if barePrefix > termWidth {
+					tsBudget := termWidth - 2 - len([]rune(event.Type))
+					if tsBudget > 0 {
+						ts = ui.Truncate(ts, tsBudget)
+					} else {
+						// Not even room for type; truncate ts to fill.
+						ts = ui.Truncate(ts, termWidth)
+					}
+				}
+			}
 		}
 
 		if eventTaskWidth > 0 {
 			fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
+		} else if termWidth > 0 && len([]rune(ts))+2+len([]rune(event.Type)) > termWidth {
+			// Timestamp was truncated so tightly that adding "  TYPE"
+			// would still overflow; print only the truncated timestamp.
+			fmt.Fprint(w, colors.Dim(ts))
 		} else {
 			// No room for task column; omit trailing type padding.
 			fmt.Fprintf(w, "%s  %s", colors.Dim(ts), colorEventType(event.Type))

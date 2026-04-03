@@ -449,7 +449,8 @@ func TestShowTo_TextNarrowTerminalTruncates(t *testing.T) {
 }
 
 func TestShowTo_TextVeryNarrowTerminalTruncates(t *testing.T) {
-	prev := ui.SetTermWidthFunc(func() int { return 20 })
+	const termW = 20
+	prev := ui.SetTermWidthFunc(func() int { return termW })
 	defer ui.SetTermWidthFunc(prev)
 
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -474,10 +475,6 @@ func TestShowTo_TextVeryNarrowTerminalTruncates(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d:\n%s", len(lines), output)
 	}
 
-	if !strings.Contains(output, "MERGED") {
-		t.Errorf("missing MERGED type in very narrow output:\n%s", output)
-	}
-
 	// At width=20, the fixed prefix (timestamp + type) exceeds the budget,
 	// so secondary fields (task name, detail) must be dropped entirely.
 	if strings.Contains(output, "very-long-task") {
@@ -487,11 +484,10 @@ func TestShowTo_TextVeryNarrowTerminalTruncates(t *testing.T) {
 		t.Errorf("detail (SHA) should be dropped at very narrow width, got:\n%s", output)
 	}
 
-	// Verify the line length does not exceed the fixed prefix
-	// (timestamp + "  " + type = 28 chars when type padding is trimmed).
+	// Verify every data line fits within the configured terminal width.
 	for _, line := range lines {
-		if len(line) > 30 {
-			t.Errorf("line exceeds fixed prefix bound at width=20: len=%d, line=%q", len(line), line)
+		if utf8.RuneCountInString(line) > termW {
+			t.Errorf("line exceeds terminal width %d: runes=%d, line=%q", termW, utf8.RuneCountInString(line), line)
 		}
 	}
 }
