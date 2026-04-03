@@ -4893,6 +4893,11 @@ func TestResumeRejected(t *testing.T) {
 		{name: "copilot failed to resume", output: "failed to resume session 123", want: true},
 		{name: "normal discussion text", output: "the review session discussed an invalid task state", want: false},
 		{name: "keywords across lines", output: "session\nnot found", want: false},
+		{name: "session not found without error keyword", output: "session not found", want: true},
+		{name: "unknown session without error keyword", output: "unknown session abc-123", want: true},
+		{name: "session expired without error keyword", output: "session expired, please retry", want: true},
+		{name: "session not found uppercase", output: "Session Not Found", want: true},
+		{name: "session mentioned without stale phrase", output: "session started successfully", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
