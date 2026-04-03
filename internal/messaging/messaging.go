@@ -237,8 +237,7 @@ const filenameTimestampPrefix = len("20060102T150405.000000000Z")
 // ReadLatestProgressForAgents scans event messages older than the newest
 // skip entries to find the latest progress message for each of the given
 // agent IDs. It walks backwards through entries, avoiding a full scan when
-// possible. Filenames that do not contain "-progress-" are skipped without
-// parsing.
+// possible.
 //
 // Per-file read failures are collected as structured warnings (the second
 // return value) instead of aborting, so callers can surface them in
@@ -326,11 +325,7 @@ func ReadLatestProgressForAgents(tasksDir string, agentIDs []string, skip int) (
 			}
 		}
 
-		// Quick filename filter: skip entries that are not progress messages.
-		if !strings.Contains(name, "-progress-") {
-			continue
-		}
-
+		// Read and decode the file to check the message type.
 		data, err := osReadFile(filepath.Join(eventsDir, name))
 		if err != nil {
 			if os.IsNotExist(err) {

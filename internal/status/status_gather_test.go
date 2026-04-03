@@ -1,6 +1,7 @@
 package status
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1534,5 +1535,78 @@ func TestGatherStatus_OlderProgressUnreadableWarning(t *testing.T) {
 	}
 	if !foundWarning {
 		t.Errorf("expected warning about unreadable older progress message, got warnings: %v", data.warnings)
+	}
+}
+
+// TestGatherStatus_AgentStyleFilenameProgressRecovery verifies that the
+// fallback progress recovery finds progress messages written with agent-style
+// filenames (e.g. nonce-agent-work.json) that do not contain "-progress-".
+func TestGatherStatus_AgentStyleFilenameProgressRecovery(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	// Register an active agent.
+	cleanup, err := queue.RegisterAgent(tasksDir, "shellagent")
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	defer cleanup()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Write a progress message with an agent-style filename (no "-progress-").
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	agentMsg := messaging.Message{
+		ID: "sa-work", From: "shellagent", Type: "progress",
+		Task: "shell-task.md", Body: "Step: WORK",
+		SentAt: base,
+	}
+	data, marshalErr := json.Marshal(agentMsg)
+	if marshalErr != nil {
+		t.Fatalf("Marshal: %v", marshalErr)
+	}
+	fname := base.Format("20060102T150405.000000000Z") + "-shellagent-work.json"
+	if err := os.WriteFile(filepath.Join(eventsDir, fname), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Flood with newer messages to push shellagent's progress outside the window.
+	for i := 0; i < statusMessageLimit+10; i++ {
+		if err := messaging.WriteMessage(tasksDir, messaging.Message{
+			ID:     fmt.Sprintf("flood-%d", i),
+			From:   "otheragent",
+			Type:   "progress",
+			Task:   "other-task.md",
+			Body:   fmt.Sprintf("flood %d", i),
+			SentAt: base.Add(time.Duration(1+i) * time.Second),
+		}); err != nil {
+			t.Fatalf("WriteMessage(flood %d): %v", i, err)
+		}
+	}
+
+	gathered, gatherErr := gatherStatus(tasksDir)
+	if gatherErr != nil {
+		t.Fatalf("gatherStatus: %v", gatherErr)
+	}
+
+	// shellagent should appear in activeProgress despite its agent-style filename.
+	found := false
+	for _, p := range gathered.activeProgress {
+		if p.displayID == "agent-shellagent" {
+			found = true
+			if p.body != "Step: WORK" {
+				t.Errorf("shellagent body = %q, want %q", p.body, "Step: WORK")
+			}
+			if p.task != "shell-task.md" {
+				t.Errorf("shellagent task = %q, want %q", p.task, "shell-task.md")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("shellagent not found in activeProgress; got %d entries: %v",
+			len(gathered.activeProgress), gathered.activeProgress)
 	}
 }
