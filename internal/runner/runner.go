@@ -1378,6 +1378,21 @@ func resumeRejectedLine(rawLine []byte) bool {
 	if !bytes.Contains(lower, []byte("resume")) && !bytes.Contains(lower, []byte("session")) {
 		return false
 	}
+
+	// Phrases that are unambiguous stale-session indicators on their own,
+	// even without an accompanying "error"/"failed"/"invalid" keyword.
+	for _, phrase := range [][]byte{
+		[]byte("unknown session"),
+		[]byte("session not found"),
+		[]byte("session expired"),
+	} {
+		if bytes.Contains(lower, phrase) {
+			return true
+		}
+	}
+
+	// For all other markers, require an error-class keyword to avoid
+	// false positives on unrelated output that mentions "session".
 	if !bytes.Contains(lower, []byte("error")) && !bytes.Contains(lower, []byte("failed")) && !bytes.Contains(lower, []byte("invalid")) {
 		return false
 	}
@@ -1387,8 +1402,6 @@ func resumeRejectedLine(rawLine []byte) bool {
 		[]byte("cannot resume"),
 		[]byte("failed to resume"),
 		[]byte("invalid session"),
-		[]byte("unknown session"),
-		[]byte("session not found"),
 		[]byte("resume rejected"),
 		[]byte("invalid value for '--resume'"),
 		[]byte("unknown option '--resume'"),
