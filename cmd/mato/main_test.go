@@ -3547,3 +3547,214 @@ func TestRetryCmd_TextMode_DependencyBlockedWarningOnStderr(t *testing.T) {
 		t.Errorf("stderr = %q, want warning about dependency block", stderr)
 	}
 }
+
+func TestCompleteTaskNames_InspectAllDirs(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Place tasks in various directories.
+	tasks := map[string]string{
+		"backlog/add-feature.md":            "---\nid: add-feature\n---\n# Add feature\n",
+		"in-progress/fix-login.md":          "---\nid: fix-login\n---\n# Fix login\n",
+		"completed/old-task.md":             "---\nid: old-task\n---\n# Old task\n",
+		"failed/broken-build.md":            "---\nid: broken-build\n---\n# Broken build\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+		"ready-for-review/review-me.md":     "---\nid: review-me\n---\n# Review me\n",
+		"waiting/blocked-task.md":           "---\nid: blocked-task\ndepends_on: [add-feature]\n---\n# Blocked task\n",
+		"ready-to-merge/merge-ready.md":     "---\nid: merge-ready\n---\n# Merge ready\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repo := repoRoot
+	fn := completeTaskNames(&repo, queue.AllDirs)
+	completions, directive := fn(nil, nil, "")
+
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+	// Should include tasks from all directories.
+	want := []string{"add-feature", "fix-login", "old-task", "broken-build", "review-me", "blocked-task", "merge-ready"}
+	for _, w := range want {
+		found := false
+		for _, c := range completions {
+			if c == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("completions missing %q, got %v", w, completions)
+		}
+	}
+}
+
+func TestCompleteTaskNames_CancelExcludesCompletedAndFailed(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"backlog/cancel-me.md":   "---\nid: cancel-me\n---\n# Cancel me\n",
+		"completed/done.md":      "---\nid: done\n---\n# Done\n",
+		"failed/already-bad.md":  "---\nid: already-bad\n---\n# Already bad\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+		"in-progress/active.md":  "---\nid: active\n---\n# Active\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge}
+	repo := repoRoot
+	fn := completeTaskNames(&repo, cancelDirs)
+	completions, _ := fn(nil, nil, "")
+
+	for _, c := range completions {
+		if c == "done" || c == "already-bad" {
+			t.Errorf("cancel completions should not include %q from completed/failed", c)
+		}
+	}
+	found := false
+	for _, c := range completions {
+		if c == "cancel-me" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("completions missing cancel-me, got %v", completions)
+	}
+	found = false
+	for _, c := range completions {
+		if c == "active" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("completions missing active, got %v", completions)
+	}
+}
+
+func TestCompleteTaskNames_RetryOnlyFailed(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"backlog/not-failed.md": "---\nid: not-failed\n---\n# Not failed\n",
+		"failed/retry-me.md":    "---\nid: retry-me\n---\n# Retry me\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repo := repoRoot
+	fn := completeTaskNames(&repo, []string{queue.DirFailed})
+	completions, _ := fn(nil, nil, "")
+
+	if len(completions) != 1 || completions[0] != "retry-me" {
+		t.Errorf("retry completions = %v, want [retry-me]", completions)
+	}
+}
+
+func TestCompleteTaskNames_PrefixFiltering(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"backlog/add-dark-mode.md": "---\nid: add-dark-mode\n---\n# Add dark mode\n",
+		"backlog/add-search.md":    "---\nid: add-search\n---\n# Add search\n",
+		"backlog/fix-login.md":     "---\nid: fix-login\n---\n# Fix login\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repo := repoRoot
+	fn := completeTaskNames(&repo, queue.AllDirs)
+	completions, _ := fn(nil, nil, "add-")
+
+	for _, c := range completions {
+		if !strings.HasPrefix(c, "add-") {
+			t.Errorf("completion %q does not have prefix add-", c)
+		}
+	}
+	if len(completions) != 2 {
+		t.Errorf("expected 2 completions with prefix add-, got %v", completions)
+	}
+}
+
+func TestCompleteTaskNames_FrontmatterIDDiffersFromStem(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	// Frontmatter id differs from filename stem.
+	content := "---\nid: my-custom-id\n---\n# Custom ID task\n"
+	if err := os.WriteFile(filepath.Join(tasksDir, "backlog", "different-name.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := repoRoot
+	fn := completeTaskNames(&repo, queue.AllDirs)
+	completions, _ := fn(nil, nil, "")
+
+	hasStem := false
+	hasID := false
+	for _, c := range completions {
+		if c == "different-name" {
+			hasStem = true
+		}
+		if c == "my-custom-id" {
+			hasID = true
+		}
+	}
+	if !hasStem {
+		t.Errorf("completions missing filename stem different-name, got %v", completions)
+	}
+	if !hasID {
+		t.Errorf("completions missing frontmatter id my-custom-id, got %v", completions)
+	}
+}
+
+func TestCompleteTaskNames_EmptyQueue(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+
+	repo := repoRoot
+	fn := completeTaskNames(&repo, queue.AllDirs)
+	completions, directive := fn(nil, nil, "")
+
+	if len(completions) != 0 {
+		t.Errorf("expected no completions for empty queue, got %v", completions)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %v, want ShellCompDirectiveNoFileComp", directive)
+	}
+}
+
+func TestCompleteTaskNames_InvalidRepo(t *testing.T) {
+	badPath := t.TempDir()
+	fn := completeTaskNames(&badPath, queue.AllDirs)
+	completions, directive := fn(nil, nil, "")
+
+	if len(completions) != 0 {
+		t.Errorf("expected no completions for invalid repo, got %v", completions)
+	}
+	if directive != cobra.ShellCompDirectiveError {
+		t.Errorf("directive = %v, want ShellCompDirectiveError", directive)
+	}
+}
+
+func TestCompleteTaskNames_GitRepoWithoutMato(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	repo := repoRoot
+	fn := completeTaskNames(&repo, queue.AllDirs)
+	completions, directive := fn(nil, nil, "")
+
+	if len(completions) != 0 {
+		t.Errorf("expected no completions for repo without .mato, got %v", completions)
+	}
+	if directive != cobra.ShellCompDirectiveError {
+		t.Errorf("directive = %v, want ShellCompDirectiveError", directive)
+	}
+}
