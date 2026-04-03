@@ -132,7 +132,7 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 
 	// Clean up stale runtime state (taskstate, sessionmeta) from the
 	// previous failed attempt so a fresh agent run starts clean.
-	runtimecleanup.DeleteAll(tasksDir, match.Filename)
+	runtimecleanup.DeleteAllPreservingVerdict(tasksDir, match.Filename)
 
 	result := RetryResult{Filename: match.Filename}
 	if removeWarning != "" {
