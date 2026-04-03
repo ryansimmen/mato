@@ -1218,13 +1218,14 @@ func TestRenderCompactAgents_ExtremelyNarrowTerminal(t *testing.T) {
 
 func TestRenderCompactAgents_OverflowSummaryBoundedOnTinyTerminals(t *testing.T) {
 	tests := []struct {
-		name  string
-		termW int
+		name        string
+		termW       int
+		wantSummary string
 	}{
-		{"width 1", 1},
-		{"width 2", 2},
-		{"width 4", 4},
-		{"width 10", 10},
+		{"width 1", 1, "... +3 more"},
+		{"width 2", 2, "... +3 more"},
+		{"width 4", 4, "... +3 more"},
+		{"width 10", 10, "... +3 more"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1243,6 +1244,20 @@ func TestRenderCompactAgents_OverflowSummaryBoundedOnTinyTerminals(t *testing.T)
 			renderCompactAgents(&buf, c, statusData{agents: agents})
 
 			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			wantLines := compactListLimit + 2 // header + compact rows + summary
+			if len(lines) != wantLines {
+				t.Fatalf("expected %d lines including overflow summary row, got %d lines:\n%s", wantLines, len(lines), buf.String())
+			}
+			summaryLine := lines[len(lines)-1]
+			if utf8.RuneCountInString(summaryLine) == 0 {
+				t.Fatalf("expected non-empty overflow summary row, got final line %q", summaryLine)
+			}
+			if tt.termW >= 4 && !strings.Contains(summaryLine, "…") {
+				t.Fatalf("expected truncated overflow summary marker in final line %q", summaryLine)
+			}
+			if tt.termW >= utf8.RuneCountInString(tt.wantSummary) && !strings.Contains(summaryLine, tt.wantSummary) {
+				t.Fatalf("expected full overflow summary %q, got final line %q", tt.wantSummary, summaryLine)
+			}
 			for i, line := range lines {
 				if i == 0 {
 					continue // skip header "Agents (N)"
