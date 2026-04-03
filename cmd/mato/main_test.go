@@ -1425,7 +1425,7 @@ func TestLogCmd_DelegatesToLogShow(t *testing.T) {
 	orig := logShowFn
 	defer func() { logShowFn = orig }()
 
-	logShowFn = func(repo string, limit int, format string) error {
+	logShowFn = func(w io.Writer, repo string, limit int, format string) error {
 		gotRepo = repo
 		gotLimit = limit
 		gotFormat = format
@@ -3553,13 +3553,13 @@ func TestCompleteTaskNames_InspectAllDirs(t *testing.T) {
 
 	// Place tasks in various directories.
 	tasks := map[string]string{
-		"backlog/add-feature.md":            "---\nid: add-feature\n---\n# Add feature\n",
-		"in-progress/fix-login.md":          "---\nid: fix-login\n---\n# Fix login\n",
-		"completed/old-task.md":             "---\nid: old-task\n---\n# Old task\n",
-		"failed/broken-build.md":            "---\nid: broken-build\n---\n# Broken build\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
-		"ready-for-review/review-me.md":     "---\nid: review-me\n---\n# Review me\n",
-		"waiting/blocked-task.md":           "---\nid: blocked-task\ndepends_on: [add-feature]\n---\n# Blocked task\n",
-		"ready-to-merge/merge-ready.md":     "---\nid: merge-ready\n---\n# Merge ready\n",
+		"backlog/add-feature.md":        "---\nid: add-feature\n---\n# Add feature\n",
+		"in-progress/fix-login.md":      "---\nid: fix-login\n---\n# Fix login\n",
+		"completed/old-task.md":         "---\nid: old-task\n---\n# Old task\n",
+		"failed/broken-build.md":        "---\nid: broken-build\n---\n# Broken build\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+		"ready-for-review/review-me.md": "---\nid: review-me\n---\n# Review me\n",
+		"waiting/blocked-task.md":       "---\nid: blocked-task\ndepends_on: [add-feature]\n---\n# Blocked task\n",
+		"ready-to-merge/merge-ready.md": "---\nid: merge-ready\n---\n# Merge ready\n",
 	}
 	for relPath, content := range tasks {
 		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
@@ -3594,10 +3594,10 @@ func TestCompleteTaskNames_CancelExcludesCompletedAndFailed(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	tasks := map[string]string{
-		"backlog/cancel-me.md":   "---\nid: cancel-me\n---\n# Cancel me\n",
-		"completed/done.md":      "---\nid: done\n---\n# Done\n",
-		"failed/already-bad.md":  "---\nid: already-bad\n---\n# Already bad\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
-		"in-progress/active.md":  "---\nid: active\n---\n# Active\n",
+		"backlog/cancel-me.md":  "---\nid: cancel-me\n---\n# Cancel me\n",
+		"completed/done.md":     "---\nid: done\n---\n# Done\n",
+		"failed/already-bad.md": "---\nid: already-bad\n---\n# Already bad\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+		"in-progress/active.md": "---\nid: active\n---\n# Active\n",
 	}
 	for relPath, content := range tasks {
 		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
@@ -3763,9 +3763,9 @@ func TestCompleteTaskNames_ParseFailureInAllDirs(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	tasks := map[string]string{
-		"backlog/good-task.md":   "---\nid: good-task\n---\n# Good task\n",
-		"backlog/malformed.md":   "---\nbad yaml: [unmatched\n---\n# Malformed\n",
-		"failed/broken-yaml.md":  "---\nalso bad: {{{\n---\n# Broken\n",
+		"backlog/good-task.md":  "---\nid: good-task\n---\n# Good task\n",
+		"backlog/malformed.md":  "---\nbad yaml: [unmatched\n---\n# Malformed\n",
+		"failed/broken-yaml.md": "---\nalso bad: {{{\n---\n# Broken\n",
 	}
 	for relPath, content := range tasks {
 		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
@@ -3801,10 +3801,10 @@ func TestCompleteTaskNames_RetryParseFailureInFailed(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	tasks := map[string]string{
-		"backlog/not-failed.md":       "---\nid: not-failed\n---\n# Not failed\n",
-		"failed/retry-me.md":          "---\nid: retry-me\n---\n# Retry me\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
-		"failed/bad-frontmatter.md":   "---\nbad: {{{\n---\n# Bad\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
-		"backlog/also-malformed.md":   "---\nbad: [[[[\n---\n# Also bad\n",
+		"backlog/not-failed.md":     "---\nid: not-failed\n---\n# Not failed\n",
+		"failed/retry-me.md":        "---\nid: retry-me\n---\n# Retry me\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+		"failed/bad-frontmatter.md": "---\nbad: {{{\n---\n# Bad\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n",
+		"backlog/also-malformed.md": "---\nbad: [[[[\n---\n# Also bad\n",
 	}
 	for relPath, content := range tasks {
 		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
@@ -3818,9 +3818,9 @@ func TestCompleteTaskNames_RetryParseFailureInFailed(t *testing.T) {
 
 	// Both stem and filename should be offered for the parse-failure entry.
 	wantPresent := map[string]bool{
-		"retry-me":            false,
-		"bad-frontmatter":     false,
-		"bad-frontmatter.md":  false,
+		"retry-me":           false,
+		"bad-frontmatter":    false,
+		"bad-frontmatter.md": false,
 	}
 	for _, c := range completions {
 		if _, ok := wantPresent[c]; ok {

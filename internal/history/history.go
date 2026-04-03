@@ -321,10 +321,10 @@ func renderText(w io.Writer, events []Event) {
 
 		if termWidth > 0 {
 			// Visible line: ts + "  " + type(8) + "  " + task [+ "  " + detail].
-			prefixLen := len(ts) + 12
+			prefixLen := len([]rune(ts)) + 12
 			lineLen := prefixLen + eventTaskWidth
 			if showDetail {
-				lineLen += 2 + len(detail)
+				lineLen += 2 + len([]rune(detail))
 			}
 
 			// Step 1: drop detail if it causes overflow.
@@ -336,7 +336,7 @@ func renderText(w io.Writer, events []Event) {
 			// Step 2: drop relative time if still overflowing.
 			if lineLen > termWidth && rel != "" {
 				ts = absTS
-				prefixLen = len(ts) + 12
+				prefixLen = len([]rune(ts)) + 12
 				lineLen = prefixLen + eventTaskWidth
 			}
 
@@ -351,8 +351,6 @@ func renderText(w io.Writer, events []Event) {
 			if eventTaskWidth > 0 && len(taskName) > eventTaskWidth {
 				taskName = ui.Truncate(taskName, eventTaskWidth)
 			}
-		} else if len(taskName) > eventTaskWidth {
-			taskName = ui.Truncate(taskName, eventTaskWidth)
 		}
 
 		if eventTaskWidth > 0 {
@@ -364,7 +362,7 @@ func renderText(w io.Writer, events []Event) {
 
 		if showDetail && detail != "" {
 			if termWidth > 0 {
-				usedWidth := len(ts) + 12 + eventTaskWidth + 2
+				usedWidth := len([]rune(ts)) + 12 + eventTaskWidth + 2
 				maxDetail := termWidth - usedWidth
 				if maxDetail > 0 {
 					detail = ui.Truncate(detail, maxDetail)

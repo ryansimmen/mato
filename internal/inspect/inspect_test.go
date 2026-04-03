@@ -775,10 +775,10 @@ func TestShowTo_InvalidFormat(t *testing.T) {
 	var buf bytes.Buffer
 	err := ShowTo(&buf, repoRoot, "sample", "yaml")
 	if err == nil {
-		t.Fatal("expected error for unsupported format, got nil")
+		t.Fatal("expected error for invalid format, got nil")
 	}
-	if !strings.Contains(err.Error(), "unsupported format") {
-		t.Fatalf("error = %q, want unsupported format", err.Error())
+	if !strings.Contains(err.Error(), "--format must be text or json") {
+		t.Fatalf("error = %q, want shared format validation message", err.Error())
 	}
 	if !strings.Contains(err.Error(), "yaml") {
 		t.Fatalf("error = %q, should mention the invalid format name", err.Error())
