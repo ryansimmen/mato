@@ -42,32 +42,6 @@ const (
 	sourceFailed sourceStatus = "failed"
 )
 
-type textWriter struct {
-	w   io.Writer
-	err error
-}
-
-func (tw *textWriter) print(args ...any) {
-	if tw.err != nil {
-		return
-	}
-	_, tw.err = fmt.Fprint(tw.w, args...)
-}
-
-func (tw *textWriter) printf(format string, args ...any) {
-	if tw.err != nil {
-		return
-	}
-	_, tw.err = fmt.Fprintf(tw.w, format, args...)
-}
-
-func (tw *textWriter) println(args ...any) {
-	if tw.err != nil {
-		return
-	}
-	_, tw.err = fmt.Fprintln(tw.w, args...)
-}
-
 // Show writes durable task history to stdout.
 func Show(repo string, limit int, format string) error {
 	return ShowTo(os.Stdout, repo, limit, format)
@@ -319,10 +293,10 @@ func colorEventType(padded string) string {
 const minTruncWidth = 6
 
 func renderText(w io.Writer, events []Event) error {
-	tw := textWriter{w: w}
+	tw := ui.NewTextWriter(w)
 	if len(events) == 0 {
-		tw.println("(no history)")
-		return tw.err
+		tw.Println("(no history)")
+		return tw.Err()
 	}
 
 	termWidth := ui.TermWidth()
@@ -411,14 +385,14 @@ func renderText(w io.Writer, events []Event) error {
 		}
 
 		if eventTaskWidth > 0 {
-			tw.printf("%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
+			tw.Printf("%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
 		} else if termWidth > 0 && len([]rune(ts))+2+len([]rune(event.Type)) > termWidth {
 			// Timestamp was truncated so tightly that adding "  TYPE"
 			// would still overflow; print only the truncated timestamp.
-			tw.print(colors.Dim(ts))
+			tw.Print(colors.Dim(ts))
 		} else {
 			// No room for task column; omit trailing type padding.
-			tw.printf("%s  %s", colors.Dim(ts), colorEventType(event.Type))
+			tw.Printf("%s  %s", colors.Dim(ts), colorEventType(event.Type))
 		}
 
 		if showDetail && detail != "" {
@@ -427,15 +401,15 @@ func renderText(w io.Writer, events []Event) error {
 				maxDetail := termWidth - usedWidth
 				if maxDetail > 0 {
 					detail = ui.Truncate(detail, maxDetail)
-					tw.printf("  %s", detail)
+					tw.Printf("  %s", detail)
 				}
 			} else {
-				tw.printf("  %s", detail)
+				tw.Printf("  %s", detail)
 			}
 		}
-		tw.println()
+		tw.Println()
 	}
-	return tw.err
+	return tw.Err()
 }
 
 func renderJSON(w io.Writer, events []Event) error {
