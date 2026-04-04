@@ -136,6 +136,10 @@ That yields the desired ownership split:
 - `mato doctor --only config` on a non-repo can emit `config.no_repo` instead of
   failing in Cobra setup
 
+`--only` input order should not matter. Execution order is defined by the doctor
+check registration list, not by the order of names passed to `--only`, so
+`--only docker,config` and `--only config,docker` should behave identically.
+
 When the `config` check is selected, config loading and validation should happen
 inside `doctor.Run()`. If full-config validation succeeds, the resolved Docker
 image should be stored in shared doctor context for `checkDocker` to reuse. A
@@ -158,6 +162,22 @@ Important distinction:
 - only skip image-availability inspection when config load/parse failures prevent
   trustworthy Docker-image resolution
 
+Recommended shared context fields:
+
+- `resolvedDockerImage string`
+- `dockerImageResolved bool`
+- `configValidationFatal bool`
+
+Decision table for Docker-image resolution:
+
+| Selected checks | Config runs? | Docker runs? | Image source for `checkDocker` | Image inspection? |
+| --- | --- | --- | --- | --- |
+| all checks | yes | yes | cached image from `checkConfig` when resolvable | yes, unless config load/parse failed fatally |
+| `config` | yes | no | none | not applicable |
+| `docker` | no | yes | existing narrow Docker-only path via command setup / `cc.opts.DockerImage` | yes |
+| `config,docker` | yes | yes | cached image from `checkConfig` when resolvable | yes, unless config load/parse failed fatally |
+| `queue,tasks,deps` | no | no | none | not applicable |
+
 ### 3. Add a validation-oriented helper in `internal/configresolve`
 
 Add a helper such as `ValidateRepoDefaults(repoRoot string)` that:
@@ -172,7 +192,7 @@ Add a helper such as `ValidateRepoDefaults(repoRoot string)` that:
   - `task_reasoning_effort`
   - `review_reasoning_effort`
   - `agent_timeout`
-- `retry_cooldown`
+  - `retry_cooldown`
 - validates those resolved values
 - returns both the resolved effective values and structured findings with source
   attribution instead of only returning the first error
@@ -239,6 +259,10 @@ The exact shape can vary, but it should support doctor output like:
 - `config.invalid_duration`
 - `config.invalid_bool`
 - `config.parse_error`
+
+`docker_image` itself should not gain new syntax validation here. The config
+check should resolve and attribute the effective value, while image-reference
+usability remains the `docker` check's responsibility through Docker probing.
 
 The helper should carry enough metadata for the doctor check to render clear
 messages without duplicating precedence logic, and it should also carry back the
@@ -315,6 +339,9 @@ Recommended order:
 Add a new check implementation that:
 
 - returns early with a `config.no_repo` error finding if repo root is not known
+  and the `git` check is not selected
+- skips emitting `config.no_repo` when `git` is also selected, since repo
+  resolution failure is already reported there
 - calls the new `configresolve` validation helper when `cc.repoRoot` is present
 - converts fatal helper errors into a `config.parse_error` finding
 - converts validation issues into normal `doctor.Finding` entries
@@ -322,7 +349,8 @@ Add a new check implementation that:
   config loading succeeds and `docker_image` is resolvable, even if other config
   findings exist, so the later `docker` check uses the same effective value
 
-This check should be read-only and should not participate in `--fix`.
+This check should be read-only and should not participate in `--fix`. No config
+finding should ever be marked `Fixable: true`.
 
 ### 4. Add shared branch validation
 
@@ -343,7 +371,8 @@ Implement the validation helper with these rules:
 - branch: resolve with `ResolveBranch(...)`, then validate using the shared
   branch validator
 - reasoning effort: reuse current allowed set `low|medium|high|xhigh`
-- durations: parse and require positive values
+- durations: parse and require positive values for both `agent_timeout` and
+  `retry_cooldown`
 - env bools: parse accepted true/false spellings and reject malformed values
 - config-load ambiguity and YAML/unknown-key parse failures: return fatal helper
   error
@@ -404,11 +433,13 @@ Changes:
 
 Add unit tests covering:
 
+- valid effective config produces no validation issues
 - invalid branch from `.mato.yaml`
 - invalid branch from `MATO_BRANCH`
 - invalid env bool for `MATO_REVIEW_SESSION_RESUME_ENABLED`
 - invalid env duration for `MATO_AGENT_TIMEOUT`
 - invalid config duration for `agent_timeout`
+- invalid env or config duration for `retry_cooldown`
 - invalid task/review reasoning effort values
 - multiple invalid settings reported together in one validation result
 - fatal ambiguity/parse errors returned when both config filenames exist or YAML
@@ -419,6 +450,7 @@ Add unit tests covering:
 
 Add unit tests covering:
 
+- valid config produces no `config` error findings
 - full `Run()` includes `config` in the check list
 - `--only config` runs only `config`
 - invalid branch from `.mato.yaml` appears as `config.invalid_branch`
@@ -433,6 +465,8 @@ Add unit tests covering:
 - JSON output includes a `config` check entry
 - bad repo with `--only config` reports a config-specific error finding rather
   than crashing
+- bad repo in a full run does not duplicate both `git.not_a_repo` and
+  `config.no_repo`
 - fatal config parse failure in a full `mato doctor` run becomes a
   `config.parse_error` finding instead of a command error
 
@@ -441,6 +475,7 @@ Add unit tests covering:
 Add or update tests covering:
 
 - doctor `--only` help text now includes `config`
+- `--only docker,config` and `--only config,docker` take the same resolution path
 - the new Docker pre-resolution helper returns false for `[]string{"config"}`
 - the new Docker pre-resolution helper returns true for
   `[]string{"docker"}` and false for full runs that include `config`
