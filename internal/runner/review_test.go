@@ -14,7 +14,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/queue"
 	"mato/internal/sessionmeta"
@@ -423,7 +422,7 @@ func TestReviewCandidates_FilesystemFallback_SingleTask(t *testing.T) {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	taskContent := "---\npriority: 10\nmax_retries: 3\n---\n# Test Task\n"
+	taskContent := "<!-- branch: task/test-task -->\n---\npriority: 10\nmax_retries: 3\n---\n# Test Task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "test-task.md"), []byte(taskContent), 0o644)
 
 	// Pass nil index to use filesystem fallback.
@@ -443,9 +442,9 @@ func TestReviewCandidates_FilesystemFallback_PrioritySort(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "low-pri.md"),
-		[]byte("---\npriority: 50\nmax_retries: 3\n---\n# Low Priority\n"), 0o644)
+		[]byte("<!-- branch: task/low-pri -->\n---\npriority: 50\nmax_retries: 3\n---\n# Low Priority\n"), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "high-pri.md"),
-		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# High Priority\n"), 0o644)
+		[]byte("<!-- branch: task/high-pri -->\n---\npriority: 10\nmax_retries: 3\n---\n# High Priority\n"), 0o644)
 
 	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 2 {
@@ -715,7 +714,7 @@ func TestReviewCandidates_FilesystemFallback_MalformedQuarantined(t *testing.T) 
 
 	// Write a valid task to verify it's still returned.
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "good.md"),
-		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
+		[]byte("<!-- branch: task/good -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
 
 	stdout, stderr := captureStdoutStderr(t, func() {
 		candidates := reviewCandidates(tasksDir, nil)
@@ -1012,7 +1011,7 @@ func TestReviewCandidates_Indexed_BranchFromSnapshot(t *testing.T) {
 	}
 }
 
-func TestReviewCandidates_Indexed_BranchGeneratedWhenMissing(t *testing.T) {
+func TestReviewCandidates_Indexed_MissingBranchMarkerRecordsFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -1022,13 +1021,24 @@ func TestReviewCandidates_Indexed_BranchGeneratedWhenMissing(t *testing.T) {
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# No Branch\n"), 0o644)
 
 	idx := queue.BuildIndex(tasksDir)
-	candidates := reviewCandidates(tasksDir, idx)
-	if len(candidates) != 1 {
-		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	stdout, stderr := captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, idx)
+		if len(candidates) != 0 {
+			t.Fatalf("expected 0 candidates, got %d", len(candidates))
+		}
+	})
+	if !strings.Contains(stderr, "missing a required branch marker") {
+		t.Fatalf("expected missing marker warning, got:\n%s", stderr)
 	}
-	expected := "task/" + frontmatter.SanitizeBranchName("no-branch.md")
-	if candidates[0].Branch != expected {
-		t.Fatalf("expected generated branch %q, got %q", expected, candidates[0].Branch)
+	if !strings.Contains(stdout, "recorded review-failure for no-branch.md") {
+		t.Fatalf("expected review-failure log, got:\n%s", stdout)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyReview, "no-branch.md"))
+	if err != nil {
+		t.Fatalf("ReadFile no-branch.md: %v", err)
+	}
+	if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "ready-for-review") {
+		t.Fatalf("expected review-failure marker, got:\n%s", string(data))
 	}
 }
 
@@ -1136,7 +1146,7 @@ func TestReviewCandidates_Indexed_MalformedQuarantined(t *testing.T) {
 
 	// Write a valid task.
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "good.md"),
-		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
+		[]byte("<!-- branch: task/good -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
 
 	idx := queue.BuildIndex(tasksDir)
 
@@ -1612,62 +1622,65 @@ func TestLoadTaskStateForReview_CorruptFallsBackToNil(t *testing.T) {
 	}
 }
 
-func TestReviewCandidates_FilesystemFallback_DedupsSynthesizedBranches(t *testing.T) {
+func TestReviewCandidates_FilesystemFallback_MissingBranchMarkersAreSkipped(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirReadyReview, queue.DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	// Two filenames that sanitize to the same branch name: "add_feature" and "add-feature".
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Underscore\n"), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Dash\n"), 0o644)
 
-	candidates := reviewCandidates(tasksDir, nil)
-	if len(candidates) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	stdout, _ := captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, nil)
+		if len(candidates) != 0 {
+			t.Fatalf("expected 0 candidates, got %d", len(candidates))
+		}
+	})
+	if strings.Count(stdout, "recorded review-failure for") != 2 {
+		t.Fatalf("expected review-failure logs for both tasks, got:\n%s", stdout)
 	}
-
-	// Both should have the same sanitized base ("add-feature") but the
-	// second one in filename order must be disambiguated.
-	if candidates[0].Branch == candidates[1].Branch {
-		t.Fatalf("two candidates share the same synthesized branch %q; batch dedup should have prevented this", candidates[0].Branch)
-	}
-
-	// Verify both start with the expected prefix.
-	for i, c := range candidates {
-		if !strings.HasPrefix(c.Branch, "task/add-feature") {
-			t.Fatalf("candidate[%d] branch %q does not start with expected prefix", i, c.Branch)
+	for _, name := range []string{"add_feature.md", "add-feature.md"} {
+		data, err := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyReview, name))
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", name, err)
+		}
+		if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "ready-for-review") {
+			t.Fatalf("expected review-failure marker for %s, got:\n%s", name, string(data))
 		}
 	}
 }
 
-func TestReviewCandidates_Indexed_DedupsSynthesizedBranches(t *testing.T) {
+func TestReviewCandidates_Indexed_MissingBranchMarkersAreSkipped(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range queue.AllDirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	// Two filenames that sanitize to the same branch name.
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Underscore\n"), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Dash\n"), 0o644)
 
 	idx := queue.BuildIndex(tasksDir)
-	candidates := reviewCandidates(tasksDir, idx)
-	if len(candidates) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	stdout, _ := captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, idx)
+		if len(candidates) != 0 {
+			t.Fatalf("expected 0 candidates, got %d", len(candidates))
+		}
+	})
+	if strings.Count(stdout, "recorded review-failure for") != 2 {
+		t.Fatalf("expected review-failure logs for both tasks, got:\n%s", stdout)
 	}
-
-	if candidates[0].Branch == candidates[1].Branch {
-		t.Fatalf("two candidates share the same synthesized branch %q; batch dedup should have prevented this", candidates[0].Branch)
-	}
-
-	for i, c := range candidates {
-		if !strings.HasPrefix(c.Branch, "task/add-feature") {
-			t.Fatalf("candidate[%d] branch %q does not start with expected prefix", i, c.Branch)
+	for _, name := range []string{"add_feature.md", "add-feature.md"} {
+		data, err := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyReview, name))
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", name, err)
+		}
+		if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "ready-for-review") {
+			t.Fatalf("expected review-failure marker for %s, got:\n%s", name, string(data))
 		}
 	}
 }
@@ -1678,7 +1691,7 @@ func TestReviewCandidates_ExplicitBranchUnchanged(t *testing.T) {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	// One task with an explicit branch, one without (same sanitized base).
+	// One task with an explicit branch, one without.
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add-feature.md"),
 		[]byte("<!-- branch: task/add-feature -->\n---\npriority: 10\nmax_retries: 3\n---\n# Explicit\n"), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"),
@@ -1686,8 +1699,8 @@ func TestReviewCandidates_ExplicitBranchUnchanged(t *testing.T) {
 
 	idx := queue.BuildIndex(tasksDir)
 	candidates := reviewCandidates(tasksDir, idx)
-	if len(candidates) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
 	}
 
 	// The explicit branch must remain exactly as written.
@@ -1702,6 +1715,13 @@ func TestReviewCandidates_ExplicitBranchUnchanged(t *testing.T) {
 	}
 	if explicit.Branch != "task/add-feature" {
 		t.Fatalf("explicit branch changed to %q, want %q", explicit.Branch, "task/add-feature")
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"))
+	if err != nil {
+		t.Fatalf("ReadFile add_feature.md: %v", err)
+	}
+	if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "ready-for-review") {
+		t.Fatalf("expected review-failure marker on markerless task, got:\n%s", string(data))
 	}
 }
 

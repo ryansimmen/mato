@@ -2,11 +2,9 @@ package merge
 
 import (
 	"fmt"
+	"mato/internal/git"
 	"os"
 	"strings"
-
-	"mato/internal/frontmatter"
-	"mato/internal/git"
 )
 
 var gitOutput = git.Output
@@ -257,13 +255,13 @@ func configureMergeCloneIdentity(repoRoot, cloneDir string) error {
 }
 
 func taskBranchName(task mergeQueueTask) string {
-	if task.branch != "" {
-		return task.branch
-	}
-	return "task/" + frontmatter.SanitizeBranchName(task.name)
+	return strings.TrimSpace(task.branch)
 }
 
 func cleanupTaskBranch(repoRoot, branchName string) {
+	if strings.TrimSpace(branchName) == "" {
+		return
+	}
 	// Clean up the stale task branch so the next agent can push a fresh one.
 	// Cleanup is best-effort: log warnings but never abort the merge flow.
 	if _, err := gitOutput(repoRoot, "branch", "-D", branchName); err != nil {

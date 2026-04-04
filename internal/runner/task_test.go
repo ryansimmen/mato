@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
@@ -1055,9 +1054,9 @@ func TestSelectTaskForReview_ReturnsHighestPriority(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "low.md"),
-		[]byte("---\npriority: 50\nmax_retries: 3\n---\n# Low\n"), 0o644)
+		[]byte("<!-- branch: task/low -->\n---\npriority: 50\nmax_retries: 3\n---\n# Low\n"), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "high.md"),
-		[]byte("---\npriority: 5\nmax_retries: 3\n---\n# High\n"), 0o644)
+		[]byte("<!-- branch: task/high -->\n---\npriority: 5\nmax_retries: 3\n---\n# High\n"), 0o644)
 
 	task := selectTaskForReview(tasksDir, nil)
 	if task == nil {
@@ -1088,7 +1087,7 @@ func TestReviewCandidates_FilesystemFallback_SkipsParseErrors(t *testing.T) {
 
 	// Valid task.
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "good.md"),
-		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Good\n"), 0o644)
+		[]byte("<!-- branch: task/good -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good\n"), 0o644)
 	// Invalid frontmatter task.
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "bad.md"),
 		[]byte("---\n: invalid\n---\n# Bad\n"), 0o644)
@@ -1692,7 +1691,7 @@ func TestRunOnce_UsesEnsureBranchForRecordedResume(t *testing.T) {
 	}
 }
 
-func TestReviewCandidates_FilesystemFallback_BranchGeneratedWhenMissing(t *testing.T) {
+func TestReviewCandidates_FilesystemFallback_MissingBranchMarkerRecordsFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirReadyReview, queue.DirFailed} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
@@ -1702,13 +1701,20 @@ func TestReviewCandidates_FilesystemFallback_BranchGeneratedWhenMissing(t *testi
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "no-branch.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# No Branch\n"), 0o644)
 
-	candidates := reviewCandidates(tasksDir, nil)
-	if len(candidates) != 1 {
-		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	stdout, _ := captureStdoutStderr(t, func() {
+		candidates := reviewCandidates(tasksDir, nil)
+		if len(candidates) != 0 {
+			t.Fatalf("expected 0 candidates, got %d", len(candidates))
+		}
+	})
+	if !strings.Contains(stdout, "recorded review-failure for no-branch.md") {
+		t.Fatalf("expected review-failure log, got:\n%s", stdout)
 	}
-
-	expected := "task/" + frontmatter.SanitizeBranchName("no-branch.md")
-	if candidates[0].Branch != expected {
-		t.Fatalf("expected generated branch %q, got %q", expected, candidates[0].Branch)
+	data, err := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyReview, "no-branch.md"))
+	if err != nil {
+		t.Fatalf("ReadFile no-branch.md: %v", err)
+	}
+	if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "ready-for-review") {
+		t.Fatalf("expected review-failure marker, got:\n%s", string(data))
 	}
 }

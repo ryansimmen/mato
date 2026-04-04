@@ -36,6 +36,9 @@ type reviewVerdict struct {
 // reviewCandidates scans ready-for-review/ and returns all review candidates
 // sorted by priority (ascending) then filename. Tasks whose review retry
 // budget is exhausted are moved to failed/ and excluded from the result.
+// Tasks missing the required <!-- branch: ... --> marker are recorded as
+// review failures and skipped instead of falling back to a filename-derived
+// branch name.
 //
 // When idx is non-nil, pre-parsed metadata from the index is used instead of
 // re-parsing each file from disk.
@@ -48,11 +51,6 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 	}
 
 	var candidates []candidate
-
-	// reservedBranches tracks synthesized branch names across the candidate
-	// batch so that two markerless tasks whose sanitized names collapse to the
-	// same base branch receive distinct synthesized names.
-	reservedBranches := make(map[string]struct{})
 
 	// Use index if available; otherwise fall back to filesystem scan.
 	if idx != nil {
@@ -96,17 +94,10 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				continue
 			}
 
-			branch := snap.Branch
+			branch := strings.TrimSpace(snap.Branch)
 			if branch == "" {
-				branch = "task/" + frontmatter.SanitizeBranchName(snap.Filename)
-				activeBranches := idx.ActiveBranches()
-				if _, taken := activeBranches[branch]; taken {
-					branch = branch + "-" + frontmatter.BranchDisambiguator(snap.Filename)
-				}
-				if _, taken := reservedBranches[branch]; taken {
-					branch = branch + "-" + frontmatter.BranchDisambiguator(snap.Filename)
-				}
-				reservedBranches[branch] = struct{}{}
+				recordMissingReviewBranchMarker(tasksDir, snap.Path, snap.Filename)
+				continue
 			}
 			title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
 			candidates = append(candidates, candidate{
@@ -173,16 +164,10 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 				continue
 			}
 
-			branch := taskfile.ParseBranch(path)
+			branch := strings.TrimSpace(taskfile.ParseBranch(path))
 			if branch == "" {
-				branch = "task/" + frontmatter.SanitizeBranchName(name)
-				if _, taken := queue.CollectActiveBranches(tasksDir, nil)[branch]; taken {
-					branch = branch + "-" + frontmatter.BranchDisambiguator(name)
-				}
-				if _, taken := reservedBranches[branch]; taken {
-					branch = branch + "-" + frontmatter.BranchDisambiguator(name)
-				}
-				reservedBranches[branch] = struct{}{}
+				recordMissingReviewBranchMarker(tasksDir, path, name)
+				continue
 			}
 			title := frontmatter.ExtractTitle(name, body)
 			candidates = append(candidates, candidate{
@@ -209,6 +194,17 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 		result[i] = c.task
 	}
 	return result
+}
+
+func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
+	const reason = "missing required <!-- branch: ... --> marker in ready-for-review"
+
+	fmt.Fprintf(os.Stderr, "warning: review candidate %s is missing a required branch marker\n", filename)
+	recorded := appendReviewFailure(taskPath, "mato", reason)
+	recordTaskStateUpdate(tasksDir, filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
+		state.LastOutcome = "review-branch-marker-missing"
+	})
+	logReviewFailureOutcome("Review incomplete", filename, recorded, "missing required branch marker")
 }
 
 // hasReviewCandidates reports whether ready-for-review/ currently contains at

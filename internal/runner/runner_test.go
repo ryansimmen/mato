@@ -1005,21 +1005,25 @@ func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 	}
 }
 
-func TestSelectTaskForReview_BranchFallback(t *testing.T) {
+func TestSelectTaskForReview_RequiresBranchMarker(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
-	// No branch comment — should fall back to task/<sanitized-name>
+	// No branch comment — should be skipped and recorded as a review failure.
 	os.WriteFile(filepath.Join(reviewDir, "my-task.md"), []byte(
 		"---\npriority: 5\n---\n# My Task\nNo branch comment here.\n"), 0o644)
 
 	got := selectTaskForReview(tasksDir, nil)
-	if got == nil {
-		t.Fatal("expected non-nil result")
+	if got != nil {
+		t.Fatalf("expected nil result, got %+v", got)
 	}
-	if got.Branch != "task/my-task" {
-		t.Fatalf("Branch = %q, want %q (fallback)", got.Branch, "task/my-task")
+	data, err := os.ReadFile(filepath.Join(reviewDir, "my-task.md"))
+	if err != nil {
+		t.Fatalf("ReadFile my-task.md: %v", err)
+	}
+	if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "ready-for-review") {
+		t.Fatalf("expected review-failure marker, got:\n%s", string(data))
 	}
 }
 
@@ -1217,11 +1221,11 @@ func TestReviewCandidates_SortedByPriority(t *testing.T) {
 	os.MkdirAll(reviewDir, 0o755)
 
 	os.WriteFile(filepath.Join(reviewDir, "low.md"), []byte(
-		"---\npriority: 20\n---\n# Low\n"), 0o644)
+		"<!-- branch: task/low -->\n---\npriority: 20\n---\n# Low\n"), 0o644)
 	os.WriteFile(filepath.Join(reviewDir, "high.md"), []byte(
-		"---\npriority: 5\n---\n# High\n"), 0o644)
+		"<!-- branch: task/high -->\n---\npriority: 5\n---\n# High\n"), 0o644)
 	os.WriteFile(filepath.Join(reviewDir, "mid.md"), []byte(
-		"---\npriority: 10\n---\n# Mid\n"), 0o644)
+		"<!-- branch: task/mid -->\n---\npriority: 10\n---\n# Mid\n"), 0o644)
 
 	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 3 {

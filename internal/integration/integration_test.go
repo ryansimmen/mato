@@ -139,6 +139,9 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 
 	readyTask := filepath.Join(tasksDir, queue.DirReadyMerge, "add-hello.md")
 	mustRename(t, inProgressTask, readyTask)
+	if err := queue.WriteBranchMarker(readyTask, "task/add-hello"); err != nil {
+		t.Fatalf("queue.WriteBranchMarker(%s): %v", readyTask, err)
+	}
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
@@ -292,8 +295,8 @@ func TestMergeConflictHandling(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"README.md": "beta\n"}, "beta change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "---\npriority: 10\n---\n# Beta\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
@@ -419,7 +422,7 @@ func TestStatusWithPopulatedQueue(t *testing.T) {
 	writeTask(t, tasksDir, queue.DirWaiting, "waiting.md", "---\nid: waiting\ndepends_on: [done]\n---\n# Waiting\n")
 	writeTask(t, tasksDir, queue.DirBacklog, "backlog.md", "# Backlog\n")
 	writeTask(t, tasksDir, queue.DirInProgress, "working.md", "<!-- claimed-by: status-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Working\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "ready.md", "# Ready\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "ready.md", "<!-- branch: task/ready -->\n# Ready\n")
 	writeTask(t, tasksDir, queue.DirCompleted, "done.md", "---\nid: done\n---\n# Done\n")
 	writeTask(t, tasksDir, queue.DirFailed, "failed.md", "# Failed\n")
 

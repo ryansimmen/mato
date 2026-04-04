@@ -130,7 +130,7 @@ Expected comment patterns:
 
 What they mean:
 - `claimed-by` records which agent owns an in-progress task.
-- `branch:` records the task branch identity selected by the host. On claim, mato reuses an existing standalone branch marker when safe; otherwise it derives a sanitized branch name from the filename and may append a disambiguation suffix when another active task already uses that branch. The merge queue reads this marker first and falls back to the filename-derived branch when absent. Only complete markers with the closing `-->` are recognized; unterminated or malformed branch comments are ignored.
+- `branch:` records the task branch identity selected by the host. On claim, mato reuses an existing standalone branch marker when safe; otherwise it derives a sanitized branch name from the filename and may append a disambiguation suffix when another active task already uses that branch. Once the host has pushed work and handed the task off to `ready-for-review/`, this marker becomes authoritative and required for all later phases. Review and merge do **not** fall back to the filename anymore: if a `ready-for-review/` or `ready-to-merge/` task is missing or has a malformed marker, the host records a failure/requeue instead of guessing. Only complete markers with the closing `-->` are recognized; unterminated or malformed branch comments are ignored.
 - `failure:` records a failed task agent attempt; failure records are counted against the task's `max_retries` budget. Recovery and merge logic may also append `failure:` records (e.g. `mato-recovery` or `merge-queue`).
 - `review-failure:` records a review infrastructure failure (e.g. network blip during `git fetch`, diff timeout). These are tracked separately from task failure records and do **not** count against the task's `max_retries` budget. Only review-failure records are counted for the review retry budget.
 - `review-rejection:` records feedback from the review agent when rejecting a task. Format: `<!-- review-rejection: <agent-id> at <timestamp> — <feedback> -->`. Review rejections do **not** count against `max_retries`. The feedback is passed to the implementing agent via the `MATO_REVIEW_FEEDBACK` environment variable on the next attempt.
@@ -200,7 +200,7 @@ Each task gets a stable git branch identity managed by the host. When a task alr
 | `--leading-dashes--.md` | `task/leading-dashes` |
 | `___.md` | `task/unnamed` |
 
-Users don't need to do anything special — just pick a descriptive kebab-case filename and mato handles the rest. The `<!-- branch: ... -->` runtime comment records the authoritative branch name for future retries and review cycles. When no marker exists yet, the initial branch is still derived deterministically from the filename (with a collision suffix when needed).
+Users don't need to do anything special — just pick a descriptive kebab-case filename and mato handles the rest. The `<!-- branch: ... -->` runtime comment records the authoritative branch name for future retries and review cycles. When no marker exists yet, the initial branch is still derived deterministically from the filename (with a collision suffix when needed). After the host moves a task out of `in-progress/`, that recorded marker must remain attached to the file; review and merge treat its absence as an incomplete/corrupted handoff rather than reconstructing the branch name.
 
 ## Backward Compatibility
 Plain markdown task files work fine. If frontmatter is missing, mato applies these defaults:
