@@ -1,3 +1,4 @@
+// Package frontmatter parses YAML frontmatter and task metadata from markdown files.
 package frontmatter
 
 import (

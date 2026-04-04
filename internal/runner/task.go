@@ -20,6 +20,7 @@ import (
 	"mato/internal/sessionmeta"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
+	"mato/internal/ui"
 )
 
 var createCloneFn = git.CreateClone
@@ -40,7 +41,7 @@ const debugMarkerFile = ".mato-debug-clone"
 func writeDebugMarker(dir string) {
 	path := filepath.Join(dir, debugMarkerFile)
 	if err := os.WriteFile(path, []byte("preserved after post-agent push failure\n"), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write debug marker in %s: %v\n", dir, err)
+		ui.Warnf("warning: could not write debug marker in %s: %v\n", dir, err)
 	}
 }
 
@@ -66,7 +67,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 	}()
 
 	if err := configureReceiveDeny(env.repoRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
+		ui.Warnf("warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
 	}
 
 	run.cloneDir = cloneDir
@@ -175,7 +176,7 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 	// If a stale file exists (e.g., from a prior incomplete cycle), skip the
 	// push to avoid corrupting its metadata.
 	if _, err := os.Stat(filepath.Join(env.tasksDir, queue.DirReadyReview, claimed.Filename)); err == nil {
-		fmt.Fprintf(os.Stderr, "warning: %s already exists in ready-for-review/; skipping push (task is likely already being reviewed)\n", claimed.Filename)
+		ui.Warnf("warning: %s already exists in ready-for-review/; skipping push (task is likely already being reviewed)\n", claimed.Filename)
 		return fmt.Errorf("ready-for-review/%s already exists: skipping push to avoid overwriting", claimed.Filename)
 	}
 
@@ -218,10 +219,10 @@ func finalizePushedTask(tasksDir, targetBranch, agentID, filename, branch, curre
 		state.TaskBranch = branch
 		state.TargetBranch = targetBranch
 		state.LastHeadSHA = currentTip
-		state.LastOutcome = "work-pushed"
+		state.LastOutcome = taskstate.OutcomeWorkPushed
 	})
 	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not rebuild file claims after pushing %s: %v\n", filename, err)
+		ui.Warnf("warning: could not rebuild file claims after pushing %s: %v\n", filename, err)
 	}
 
 	// Send conflict-warning with changed files.
@@ -292,7 +293,7 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 
 	dst := filepath.Join(tasksDir, queue.DirBacklog, claimed.Filename)
 	if err := queue.AtomicMove(claimed.TaskPath, dst); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
+		ui.Warnf("warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
 		return
 	}
 
@@ -302,7 +303,7 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 		content := fmt.Sprintf("\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
 			agentID, time.Now().UTC().Format(time.RFC3339))
 		if err := atomicwrite.AppendToFile(dst, content); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", claimed.Filename, err)
+			ui.Warnf("warning: could not write failure record for %s: %v\n", claimed.Filename, err)
 		}
 	}
 
@@ -312,7 +313,7 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (bool, string, string, []string) {
 	state, err := taskstate.Load(tasksDir, claimed.Filename)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not load taskstate for %s during pushed-task recovery: %v\n", claimed.Filename, err)
+		ui.Warnf("warning: could not load taskstate for %s during pushed-task recovery: %v\n", claimed.Filename, err)
 		return false, "", "", nil
 	}
 	if state == nil || state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
@@ -324,11 +325,11 @@ func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (boo
 		branch = claimed.Branch
 	}
 	if strings.TrimSpace(branch) == "" {
-		fmt.Fprintf(os.Stderr, "warning: pushed task %s is missing task branch metadata; leaving it in in-progress/\n", claimed.Filename)
+		ui.Warnf("warning: pushed task %s is missing task branch metadata; leaving it in in-progress/\n", claimed.Filename)
 		return true, "", "", nil
 	}
 	if err := moveTaskToReviewWithMarker(tasksDir, claimed, branch); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not recover pushed task %s to ready-for-review: %v\n", claimed.Filename, err)
+		ui.Warnf("warning: could not recover pushed task %s to ready-for-review: %v\n", claimed.Filename, err)
 		return true, "", "", nil
 	}
 	fmt.Printf("Recovered pushed task %s to ready-for-review/\n", claimed.Filename)
@@ -384,7 +385,7 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "warning: could not read completion detail for dependency %s of task %s: %v\n", dep, claimed.Filename, err)
+			ui.Warnf("warning: could not read completion detail for dependency %s of task %s: %v\n", dep, claimed.Filename, err)
 			continue
 		}
 		details = append(details, *detail)
@@ -399,7 +400,7 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 
 	depCtxPath := filepath.Join(tasksDir, "messages", "dependency-context-"+claimed.Filename+".json")
 	if err := atomicwrite.WriteFile(depCtxPath, data); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write dependency context file: %v\n", err)
+		ui.Warnf("warning: could not write dependency context file: %v\n", err)
 		return ""
 	}
 	return depCtxPath
@@ -410,7 +411,7 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 func removeDependencyContextFile(tasksDir string, filename string) {
 	p := filepath.Join(tasksDir, "messages", "dependency-context-"+filename+".json")
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "warning: could not remove dependency context file %s: %v\n", p, err)
+		ui.Warnf("warning: could not remove dependency context file %s: %v\n", p, err)
 	}
 }
 

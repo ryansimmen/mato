@@ -2,7 +2,6 @@ package queue
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -105,10 +104,8 @@ func HasClaimableBacklogTask(tasksDir string, exclude map[string]struct{}, coold
 	idx = ensureIndex(tasksDir, idx)
 	view := ComputeRunnableBacklogView(tasksDir, idx)
 	depLookup := newDependencyLookup(idx)
-	backlogDir := filepath.Join(tasksDir, DirBacklog)
-	for _, name := range OrderedRunnableFilenames(view, exclude) {
-		path := filepath.Join(backlogDir, name)
-		if immediatelyClaimableTask(path, depLookup, cooldown) {
+	for _, snap := range sortSnapshotsByPriority(view.Runnable, exclude) {
+		if immediatelyClaimableTask(snap, depLookup, cooldown) {
 			return true
 		}
 	}

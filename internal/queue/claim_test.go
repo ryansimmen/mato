@@ -13,6 +13,7 @@ import (
 
 	"mato/internal/taskfile"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func setupClaimTestDir(t *testing.T) string {
@@ -331,6 +332,54 @@ func TestOrderedRunnableFilenames_UsesRunnableViewOrder(t *testing.T) {
 		if got[i] != name {
 			t.Fatalf("runnableCandidates[%d] = %q, want %q", i, got[i], name)
 		}
+	}
+}
+
+func TestClaimSelection_IndexedMatchesFilesystemFallback(t *testing.T) {
+	setup := func(t *testing.T, dir string) {
+		t.Helper()
+		testutil.WriteFile(t, filepath.Join(dir, DirInProgress, "active.md"), "<!-- branch: task/add-feature -->\n# Active\n")
+		testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "add feature.md"), "---\npriority: 5\n---\n# Add Feature\n")
+		testutil.WriteFile(t, filepath.Join(dir, DirBacklog, "later.md"), "---\npriority: 20\n---\n# Later\n")
+	}
+
+	dirNoIndex := setupClaimTestDir(t)
+	setup(t, dirNoIndex)
+	dirIndexed := setupClaimTestDir(t)
+	setup(t, dirIndexed)
+
+	noIndexOrder := runnableCandidates(t, dirNoIndex, nil, nil)
+	idx := BuildIndex(dirIndexed)
+	indexedOrder := runnableCandidates(t, dirIndexed, nil, idx)
+
+	if len(noIndexOrder) != len(indexedOrder) {
+		t.Fatalf("len(order) mismatch: no-index=%d indexed=%d", len(noIndexOrder), len(indexedOrder))
+	}
+	for i := range noIndexOrder {
+		if noIndexOrder[i] != indexedOrder[i] {
+			t.Fatalf("order[%d]: no-index=%q indexed=%q", i, noIndexOrder[i], indexedOrder[i])
+		}
+	}
+
+	noIndexTask, err := SelectAndClaimTask(dirNoIndex, "agent-noidx", noIndexOrder, 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask(no index): %v", err)
+	}
+	indexedTask, err := SelectAndClaimTask(dirIndexed, "agent-idx", indexedOrder, 0, idx)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask(indexed): %v", err)
+	}
+	if noIndexTask == nil || indexedTask == nil {
+		t.Fatalf("expected both selection paths to claim a task, got no-index=%+v indexed=%+v", noIndexTask, indexedTask)
+	}
+	if noIndexTask.Filename != indexedTask.Filename {
+		t.Fatalf("Filename mismatch: no-index=%q indexed=%q", noIndexTask.Filename, indexedTask.Filename)
+	}
+	if noIndexTask.Branch != indexedTask.Branch {
+		t.Fatalf("Branch mismatch: no-index=%q indexed=%q", noIndexTask.Branch, indexedTask.Branch)
+	}
+	if noIndexTask.Title != indexedTask.Title {
+		t.Fatalf("Title mismatch: no-index=%q indexed=%q", noIndexTask.Title, indexedTask.Title)
 	}
 }
 
@@ -807,9 +856,11 @@ func TestSelectAndClaimTask_InvalidYAML_Skipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	task, claimErr := SelectAndClaimTask(dir, "agent-warn", candidates("bad-yaml.md"), 0, nil)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	captured, readErr := io.ReadAll(r)
 	os.Stderr = origStderr
@@ -852,9 +903,11 @@ func TestSelectAndClaimTask_InvalidYAML_ExhaustedRetries_Skipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	task, claimErr := SelectAndClaimTask(dir, "agent-exhaust", candidates("bad-exhausted.md"), 0, nil)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	r.Close()
 	os.Stderr = origStderr
@@ -1025,9 +1078,11 @@ func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	task, err := SelectAndClaimTask(dir, "agent-x", candidates("unreadable.md", "readable.md"), 0, nil)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	stderrBytes, _ := io.ReadAll(r)
 	os.Stderr = oldStderr
@@ -1876,6 +1931,12 @@ func TestHasClaimableBacklogTask(t *testing.T) {
 			got := HasClaimableBacklogTask(dir, exclude, tt.cooldown, nil)
 			if got != tt.want {
 				t.Fatalf("HasClaimableBacklogTask() = %v, want %v", got, tt.want)
+			}
+
+			idx := BuildIndex(dir)
+			gotWithIndex := HasClaimableBacklogTask(dir, exclude, tt.cooldown, idx)
+			if gotWithIndex != got {
+				t.Fatalf("HasClaimableBacklogTask(indexed) = %v, want %v", gotWithIndex, got)
 			}
 		})
 	}

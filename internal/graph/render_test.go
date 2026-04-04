@@ -163,7 +163,9 @@ func parseFailureGraph() GraphData {
 
 func TestRenderText_EmptyGraph(t *testing.T) {
 	var buf bytes.Buffer
-	RenderText(&buf, emptyGraph())
+	if err := RenderText(&buf, emptyGraph()); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	expected := "mato graph — 0 tasks, 0 edges, 0 cycles\n"
@@ -174,7 +176,9 @@ func TestRenderText_EmptyGraph(t *testing.T) {
 
 func TestRenderText_SimpleGraph(t *testing.T) {
 	var buf bytes.Buffer
-	RenderText(&buf, simpleGraph())
+	if err := RenderText(&buf, simpleGraph()); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, "2 tasks, 1 edges, 0 cycles") {
@@ -196,7 +200,9 @@ func TestRenderText_SimpleGraph(t *testing.T) {
 
 func TestRenderText_CycleGraph(t *testing.T) {
 	var buf bytes.Buffer
-	RenderText(&buf, cycleGraph())
+	if err := RenderText(&buf, cycleGraph()); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, "1 cycle") {
@@ -209,7 +215,9 @@ func TestRenderText_CycleGraph(t *testing.T) {
 
 func TestRenderText_BlockedTasks(t *testing.T) {
 	var buf bytes.Buffer
-	RenderText(&buf, blockedGraph())
+	if err := RenderText(&buf, blockedGraph()); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, "blocked") {
@@ -219,7 +227,9 @@ func TestRenderText_BlockedTasks(t *testing.T) {
 
 func TestRenderText_HiddenDeps(t *testing.T) {
 	var buf bytes.Buffer
-	RenderText(&buf, hiddenDepsGraph())
+	if err := RenderText(&buf, hiddenDepsGraph()); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	checks := []string{
@@ -237,7 +247,9 @@ func TestRenderText_HiddenDeps(t *testing.T) {
 
 func TestRenderText_DuplicateWarning(t *testing.T) {
 	var buf bytes.Buffer
-	RenderText(&buf, duplicateWarningGraph())
+	if err := RenderText(&buf, duplicateWarningGraph()); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, "warning: dup.md is a duplicate of my-task.md") {
@@ -247,7 +259,9 @@ func TestRenderText_DuplicateWarning(t *testing.T) {
 
 func TestRenderText_ParseFailure(t *testing.T) {
 	var buf bytes.Buffer
-	RenderText(&buf, parseFailureGraph())
+	if err := RenderText(&buf, parseFailureGraph()); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, "warning: failed to parse backlog/bad-task.md: invalid frontmatter") {
@@ -285,7 +299,9 @@ func TestRenderText_RecursiveDepTree(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, g)
+	if err := RenderText(&buf, g); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	// Under task-c, task-b should appear, and under task-b, task-a should
@@ -597,8 +613,12 @@ func TestRenderJSON_Indented(t *testing.T) {
 func TestRenderText_Deterministic(t *testing.T) {
 	data := simpleGraph()
 	var buf1, buf2 bytes.Buffer
-	RenderText(&buf1, data)
-	RenderText(&buf2, data)
+	if err := RenderText(&buf1, data); err != nil {
+		t.Fatalf("first RenderText: %v", err)
+	}
+	if err := RenderText(&buf2, data); err != nil {
+		t.Fatalf("second RenderText: %v", err)
+	}
 	if buf1.String() != buf2.String() {
 		t.Errorf("text output is not deterministic:\nfirst:  %q\nsecond: %q", buf1.String(), buf2.String())
 	}
@@ -650,7 +670,9 @@ func TestRenderText_SelfDependency(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, data)
+	if err := RenderText(&buf, data); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, "self-dependency") {
@@ -672,7 +694,9 @@ func TestRenderText_AllStates(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, data)
+	if err := RenderText(&buf, data); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	got := buf.String()
 
 	states := []string{"waiting/", "backlog/", "in-progress/", "ready-for-review/", "ready-to-merge/"}
@@ -731,7 +755,9 @@ func TestRenderText_NoColorFallback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			RenderText(&buf, tt.data)
+			if err := RenderText(&buf, tt.data); err != nil {
+				t.Fatalf("RenderText: %v", err)
+			}
 			got := buf.String()
 			for _, w := range tt.want {
 				if !strings.Contains(got, w) {

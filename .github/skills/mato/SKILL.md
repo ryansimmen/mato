@@ -16,6 +16,11 @@ Runtime HTML comments such as `<!-- claimed-by: -->`, `<!-- branch: -->`,
 `<!-- terminal-failure: -->`, and `<!-- merged: -->` are queue-managed metadata,
 not task instructions.
 
+After the host hands work off to `ready-for-review/` or `ready-to-merge/`,
+the `<!-- branch: ... -->` marker is required queue metadata. If a post-work
+task is missing that marker, treat it as corrupted handoff state rather than
+normal input.
+
 ## Workflow
 
 ### 1. Discover the Project

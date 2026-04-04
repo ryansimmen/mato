@@ -12,6 +12,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
+	"mato/internal/ui"
 )
 
 // errFailedDirUnavailable is the sentinel wrapped by FailedDirUnavailableError.
@@ -54,34 +55,25 @@ func normalizeClaimCandidate(name string) (string, bool) {
 	return name, true
 }
 
-func retryClaimability(path string, failures, maxRetries int, cooldown time.Duration) (retryExhausted bool, cooledDown bool) {
+func retryClaimability(failures, maxRetries int, lastFailureAt time.Time, cooldown time.Duration) (retryExhausted bool, cooledDown bool) {
 	retryExhausted = failures >= maxRetries
 	if failures == 0 || retryExhausted {
 		return retryExhausted, true
 	}
-	rawData, err := os.ReadFile(path)
-	if err != nil {
-		return false, true
-	}
-	if lastFail, ok := lastFailureTime(rawData); ok {
-		return false, timeNowFn().Sub(lastFail) >= retryCooldown(cooldown)
+	if !lastFailureAt.IsZero() {
+		return false, timeNowFn().Sub(lastFailureAt) >= retryCooldown(cooldown)
 	}
 	return false, true
 }
 
-func immediatelyClaimableTask(path string, depLookup dependencyLookup, cooldown time.Duration) bool {
-	meta, _, parseErr := frontmatter.ParseTaskFile(path)
-	if parseErr != nil {
+func immediatelyClaimableTask(snap *TaskSnapshot, depLookup dependencyLookup, cooldown time.Duration) bool {
+	if snap == nil {
 		return false
 	}
-	if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
+	if blocks := depLookup.blockedDependencies(snap.Meta.DependsOn); len(blocks) > 0 {
 		return false
 	}
-	failures, failErr := CountFailureLines(path)
-	if failErr != nil {
-		return false
-	}
-	retryExhausted, cooledDown := retryClaimability(path, failures, meta.MaxRetries, cooldown)
+	retryExhausted, cooledDown := retryClaimability(snap.FailureCount, snap.Meta.MaxRetries, snap.LastFailureAt, cooldown)
 	return retryExhausted || cooledDown
 }
 
@@ -234,7 +226,7 @@ func chooseClaimBranch(name string, activeBranches map[string]struct{}, existing
 // when the task was successfully moved to failed/.
 func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
 	if err := retryExhaustedMoveFn(dst, filepath.Join(failedDir, name)); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not move retry-exhausted task %s to failed: %v\n", name, err)
+		ui.Warnf("warning: could not move retry-exhausted task %s to failed: %v\n", name, err)
 		// Move back to backlog so the task is not left orphaned
 		// in in-progress/ without a claimed-by marker.
 		if rbErr := retryExhaustedRollback(dst, src); rbErr != nil {
@@ -288,25 +280,22 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		// Always re-read the candidate file before claiming so manual edits made
 		// after index construction cannot bypass dependency enforcement.
-		meta, body, parseErr := frontmatter.ParseTaskFile(src)
-		if parseErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, parseErr)
+		snap, snapErr := loadTaskSnapshot(tasksDir, DirBacklog, name, src)
+		if snapErr != nil {
+			ui.Warnf("warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, snapErr)
 			continue
 		}
-		failures, failErr := CountFailureLines(src)
-		if failErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not count failures for %s, skipping: %v\n", name, failErr)
-			continue
-		}
-		retryExhausted, cooledDown := retryClaimability(src, failures, meta.MaxRetries, cooldown)
+		meta := snap.Meta
+		title := frontmatter.ExtractTitle(name, snap.Body)
+		retryExhausted, cooledDown := retryClaimability(snap.FailureCount, meta.MaxRetries, snap.LastFailureAt, cooldown)
 
 		if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
 			waitingPath := filepath.Join(tasksDir, DirWaiting, name)
 			if err := AtomicMove(src, waitingPath); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
+				ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, FormatDependencyBlocks(blocks))
+			ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, FormatDependencyBlocks(blocks))
 			continue
 		}
 
@@ -314,7 +303,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		// prevent rapid retry churn after immediate agent crashes. Tasks that
 		// already exhausted their retry budget should still move straight to
 		// failed/ without waiting for cooldown.
-		if failures > 0 && !retryExhausted && !cooledDown {
+		if snap.FailureCount > 0 && !retryExhausted && !cooledDown {
 			continue
 		}
 
@@ -333,18 +322,19 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		originalData, err := claimReadFileFn(dst)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read claimed task %s before stamping claim metadata: %v\n", name, err)
+			ui.Warnf("warning: could not read claimed task %s before stamping claim metadata: %v\n", name, err)
 			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
 				return nil, rbErr
 			}
 			continue
 		}
 
-		existingBranchBeforeClaim, hadRecordedBranchMark := taskfile.ParseBranchMarkerLine(originalData)
+		existingBranchBeforeClaim := snap.Branch
+		hadRecordedBranchMark := existingBranchBeforeClaim != ""
 
 		claimedAt := time.Now().UTC().Format(time.RFC3339)
 		if err := claimPrependFn(dst, agentID, claimedAt); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write claimed-by header for %s: %v\n", name, err)
+			ui.Warnf("warning: could not write claimed-by header for %s: %v\n", name, err)
 			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
 				return nil, rbErr
 			}
@@ -353,7 +343,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		claimedData, err := claimReadFileFn(dst)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read claimed task %s for branch marker: %v\n", name, err)
+			ui.Warnf("warning: could not read claimed task %s for branch marker: %v\n", name, err)
 			if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
 				return nil, fmt.Errorf("read claimed task for branch marker: %w (also failed to restore task contents: %v)", err, restoreErr)
 			}
@@ -368,11 +358,10 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			existingBranch = existingBranchBeforeClaim
 		}
 		branch := chooseClaimBranch(name, activeBranches, existingBranch)
-		title := frontmatter.ExtractTitle(name, body)
 
 		if existingBranch != branch {
 			if err := WriteBranchMarker(dst, branch); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write branch marker for %s: %v\n", name, err)
+				ui.Warnf("warning: could not write branch marker for %s: %v\n", name, err)
 				if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
 					return nil, fmt.Errorf("write branch marker for %s: %w (also failed to restore task contents: %v)", name, err, restoreErr)
 				}

@@ -36,12 +36,16 @@ import (
 var doctorRunFn = doctor.Run
 
 // inspectShowFn is the function used to render task inspection results.
-// Tests replace it to verify CLI flag parsing and delegation.
-var inspectShowFn = inspect.Show
+// Tests replace it to verify CLI flag parsing, delegation, and writer errors.
+var inspectShowFn = inspect.ShowTo
 
 // logShowFn is the function used to render durable task history.
 // Tests replace it to verify CLI flag parsing and delegation.
 var logShowFn = history.ShowTo
+
+// graphShowFn is the function used to render dependency graphs.
+// Tests replace it to verify CLI flag parsing, delegation, and writer errors.
+var graphShowFn = graph.ShowTo
 
 // configShowFn is the function used to render resolved repository config.
 // Tests replace it to verify CLI flag parsing and delegation.
@@ -103,8 +107,7 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 			if format == "json" {
 				return writeJSON(cmd.OutOrStdout(), result)
 			}
-			printInitResult(result)
-			return nil
+			return printInitResult(cmd.OutOrStdout(), result)
 		},
 	}
 	configureCommand(cmd)
@@ -115,35 +118,48 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 	return cmd
 }
 
-func printInitResult(result *setup.InitResult) {
+func printInitResult(w io.Writer, result *setup.InitResult) error {
 	if len(result.DirsCreated) > 0 {
 		for _, rel := range result.DirsCreated {
-			fmt.Printf("Created %s/\n", rel)
+			if err := writef(w, "Created %s/\n", rel); err != nil {
+				return err
+			}
 		}
 	} else {
-		fmt.Printf("%s/ directory structure already exists\n", dirs.Root)
+		if err := writef(w, "%s/ directory structure already exists\n", dirs.Root); err != nil {
+			return err
+		}
 	}
 
 	if result.GitignoreUpdated {
-		fmt.Printf("Added %s to .gitignore\n", result.IgnorePattern)
+		if err := writef(w, "Added %s to .gitignore\n", result.IgnorePattern); err != nil {
+			return err
+		}
 	} else {
-		fmt.Printf(".gitignore already contains %s\n", result.IgnorePattern)
+		if err := writef(w, ".gitignore already contains %s\n", result.IgnorePattern); err != nil {
+			return err
+		}
 	}
 
 	switch {
 	case result.AlreadyOnBranch:
-		fmt.Printf("Already on branch: %s (%s)\n", result.BranchName, branchSourceDescription(result))
+		if err := writef(w, "Already on branch: %s (%s)\n", result.BranchName, branchSourceDescription(result)); err != nil {
+			return err
+		}
 	case result.LocalBranchExisted || result.BranchSource == git.BranchSourceRemote || result.BranchSource == git.BranchSourceRemoteCached:
-		fmt.Printf("Switched to branch: %s (%s)\n", result.BranchName, branchSourceDescription(result))
+		if err := writef(w, "Switched to branch: %s (%s)\n", result.BranchName, branchSourceDescription(result)); err != nil {
+			return err
+		}
 	default:
-		fmt.Printf("Created branch: %s from %s\n", result.BranchName, branchSourceDescription(result))
+		if err := writef(w, "Created branch: %s from %s\n", result.BranchName, branchSourceDescription(result)); err != nil {
+			return err
+		}
 	}
 
 	if len(result.DirsCreated) == 0 && !result.GitignoreUpdated && result.AlreadyOnBranch {
-		fmt.Println("Nothing to do - already initialized.")
-		return
+		return writeln(w, "Nothing to do - already initialized.")
 	}
-	fmt.Printf("Ready to add tasks to %s\n", filepath.Join(result.TasksDir, "backlog")+string(filepath.Separator))
+	return writef(w, "Ready to add tasks to %s\n", filepath.Join(result.TasksDir, "backlog")+string(filepath.Separator))
 }
 
 func branchSourceDescription(result *setup.InitResult) string {
@@ -391,7 +407,7 @@ func newGraphCmd(repoFlag *string) *cobra.Command {
 			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
-			return graph.Show(repo, format, showAll)
+			return graphShowFn(cmd.OutOrStdout(), repo, format, showAll)
 		},
 	}
 	configureCommand(cmd)
@@ -420,7 +436,7 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
-			return inspectShowFn(repo, args[0], format)
+			return inspectShowFn(cmd.OutOrStdout(), repo, args[0], format)
 		},
 	}
 	configureCommand(cmd)
@@ -457,6 +473,8 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 			if err := requireTasksDir(tasksDir); err != nil {
 				return err
 			}
+			out := cmd.OutOrStdout()
+			errOut := cmd.ErrOrStderr()
 
 			type retryItemResult struct {
 				Task              string   `json:"task"`
@@ -477,7 +495,9 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 							Error: err.Error(),
 						})
 					} else {
-						fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+						if err := writef(errOut, "mato error: %v\n", err); err != nil {
+							return err
+						}
 					}
 					if firstErr == nil {
 						firstErr = err
@@ -493,9 +513,13 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 						Warnings:          result.Warnings,
 					})
 				} else {
-					fmt.Printf("Requeued %s to backlog\n", stem)
-					for _, w := range result.Warnings {
-						ui.Warnf("warning: %s\n", w)
+					if err := writef(out, "Requeued %s to backlog\n", stem); err != nil {
+						return err
+					}
+					for _, warning := range result.Warnings {
+						if err := ui.WarnTo(errOut, "warning: %s\n", warning); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -551,16 +575,16 @@ func newPauseCmd(repoFlag *string) *cobra.Command {
 			if format == "json" {
 				return writeJSON(cmd.OutOrStdout(), result)
 			}
+			out := cmd.OutOrStdout()
 			since := result.Since.Format(time.RFC3339)
 			switch {
 			case result.AlreadyPaused:
-				fmt.Printf("Already paused since %s\n", since)
+				return writef(out, "Already paused since %s\n", since)
 			case result.Repaired:
-				fmt.Printf("Repaired pause sentinel. Paused since %s\n", since)
+				return writef(out, "Repaired pause sentinel. Paused since %s\n", since)
 			default:
-				fmt.Printf("Paused since %s\n", since)
+				return writef(out, "Paused since %s\n", since)
 			}
-			return nil
 		},
 	}
 	configureCommand(cmd)
@@ -603,12 +627,11 @@ func newResumeCmd(repoFlag *string) *cobra.Command {
 			if format == "json" {
 				return writeJSON(cmd.OutOrStdout(), result)
 			}
+			out := cmd.OutOrStdout()
 			if result.WasActive {
-				fmt.Println("Resumed")
-			} else {
-				fmt.Println("Not paused")
+				return writeln(out, "Resumed")
 			}
-			return nil
+			return writeln(out, "Not paused")
 		},
 	}
 	configureCommand(cmd)
@@ -645,6 +668,8 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 			if err := requireTasksDir(tasksDir); err != nil {
 				return err
 			}
+			out := cmd.OutOrStdout()
+			errOut := cmd.ErrOrStderr()
 
 			// Interactive confirmation when stdin is a TTY,
 			// --yes is not set, and output is not JSON.
@@ -673,19 +698,28 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 				}
 
 				if len(resolved) > 0 {
-					fmt.Println("The following tasks will be cancelled:")
+					if err := writeln(out, "The following tasks will be cancelled:"); err != nil {
+						return err
+					}
 					for _, ti := range resolved {
 						if ti.agent != "" {
-							fmt.Printf("  %s (%s, agent %s)\n", ti.stem, ti.state, ti.agent)
+							if err := writef(out, "  %s (%s, agent %s)\n", ti.stem, ti.state, ti.agent); err != nil {
+								return err
+							}
 						} else {
-							fmt.Printf("  %s (%s)\n", ti.stem, ti.state)
+							if err := writef(out, "  %s (%s)\n", ti.stem, ti.state); err != nil {
+								return err
+							}
 						}
 					}
-					fmt.Println()
-					fmt.Printf("Cancel %d task(s)? [y/N]: ", len(resolved))
+					if err := writeln(out); err != nil {
+						return err
+					}
+					if err := writef(out, "Cancel %d task(s)? [y/N]: ", len(resolved)); err != nil {
+						return err
+					}
 					if !confirmCancelFn(os.Stdin) {
-						fmt.Println("Cancelled. No tasks were modified.")
-						return nil
+						return writeln(out, "Cancelled. No tasks were modified.")
 					}
 				}
 			}
@@ -709,7 +743,9 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 							Error: err.Error(),
 						})
 					} else {
-						fmt.Fprintf(os.Stderr, "mato error: %v\n", err)
+						if err := writef(errOut, "mato error: %v\n", err); err != nil {
+							return err
+						}
 					}
 					if firstErr == nil {
 						firstErr = err
@@ -725,22 +761,36 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 						Warnings:   result.Warnings,
 					})
 				} else {
-					fmt.Printf("cancelled: %s (was in %s/)\n", result.Filename, result.PriorState)
+					if err := writef(out, "cancelled: %s (was in %s/)\n", result.Filename, result.PriorState); err != nil {
+						return err
+					}
 					if result.PriorState == queue.DirInProgress {
-						ui.Warnf("warning: agent container for %s may still be running\n", stem)
+						if err := ui.WarnTo(errOut, "warning: agent container for %s may still be running\n", stem); err != nil {
+							return err
+						}
 					}
 					if result.PriorState == queue.DirReadyReview {
-						ui.Warnf("warning: task is in ready-for-review/ — a review agent may be running\n")
+						if err := ui.WarnTo(errOut, "warning: task is in ready-for-review/ — a review agent may be running\n"); err != nil {
+							return err
+						}
 					}
 					if result.PriorState == queue.DirReadyMerge {
-						ui.Warnf("warning: merge queue may still merge %s's branch\n", stem)
+						if err := ui.WarnTo(errOut, "warning: merge queue may still merge %s's branch\n", stem); err != nil {
+							return err
+						}
 					}
 					if len(result.Warnings) > 0 {
-						ui.Warnf("warning: %d task(s) depend on %s:\n", len(result.Warnings), stem)
-						for _, warning := range result.Warnings {
-							ui.Warnf("  %s\n", warning)
+						if err := ui.WarnTo(errOut, "warning: %d task(s) depend on %s:\n", len(result.Warnings), stem); err != nil {
+							return err
 						}
-						ui.Warnf("these tasks will remain blocked until %s is retried\n", stem)
+						for _, warning := range result.Warnings {
+							if err := ui.WarnTo(errOut, "  %s\n", warning); err != nil {
+								return err
+							}
+						}
+						if err := ui.WarnTo(errOut, "these tasks will remain blocked until %s is retried\n", stem); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -848,6 +898,16 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+func writef(w io.Writer, format string, args ...any) error {
+	_, err := fmt.Fprintf(w, format, args...)
+	return err
+}
+
+func writeln(w io.Writer, args ...any) error {
+	_, err := fmt.Fprintln(w, args...)
+	return err
 }
 
 func newVersionCmd() *cobra.Command {

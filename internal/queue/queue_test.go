@@ -13,10 +13,11 @@ import (
 	"syscall"
 	"testing"
 
-	"mato/internal/lockfile"
 	"mato/internal/process"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
+	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func captureStderr(t *testing.T, fn func()) string {
@@ -28,7 +29,9 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 	defer func() {
+		ui.SetWarningWriter(prevWarn)
 		os.Stderr = oldStderr
 	}()
 
@@ -647,14 +650,7 @@ func TestRecoverOrphanedTasks_SkipsUnreadableAgentLock(t *testing.T) {
 		t.Fatalf("WriteFile orphan: %v", err)
 	}
 
-	orig := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, fmt.Errorf("permission denied")
-		}
-		return orig(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	stderr := captureStderr(t, func() {
 		_ = RecoverOrphanedTasks(tasksDir)
@@ -733,8 +729,8 @@ func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "work-pushed" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=work-pushed", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeWorkPushed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeWorkPushed)
 	}
 }
 

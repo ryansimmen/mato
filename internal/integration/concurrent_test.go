@@ -227,8 +227,8 @@ func TestConcurrentMergeQueueProcessing(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"alpha.txt": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"beta.txt": "beta\n"}, "beta change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "---\npriority: 10\n---\n# Beta\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 2 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 2", got)
@@ -253,8 +253,8 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha content\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"README.md": "beta content\n"}, "beta change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "---\npriority: 10\n---\n# Beta\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("first merge.ProcessQueue() = %d, want 1", got)
@@ -284,6 +284,9 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 
 	betaReady := filepath.Join(tasksDir, queue.DirReadyMerge, "beta.md")
 	mustRename(t, betaBacklog, betaReady)
+	if err := queue.WriteBranchMarker(betaReady, "task/beta"); err != nil {
+		t.Fatalf("queue.WriteBranchMarker(%s): %v", betaReady, err)
+	}
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("second merge.ProcessQueue() = %d, want 1", got)
@@ -302,8 +305,8 @@ func TestConflictRequeueThenRaceToClaim(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha content\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/conflict-task", map[string]string{"README.md": "conflict content\n"}, "conflict change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "conflict-task.md", "---\npriority: 10\n---\n# Conflict Task\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "conflict-task.md", "<!-- branch: task/conflict-task -->\n---\npriority: 10\n---\n# Conflict Task\n")
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
@@ -370,8 +373,8 @@ func TestConcurrentMergeQueueTwoHosts(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"alpha.txt": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"beta.txt": "beta\n"}, "beta change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "---\npriority: 10\n---\n# Beta\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
 
 	start := make(chan struct{})
 	results := make([]int, 2)

@@ -72,17 +72,6 @@ func SetDockerImageInspectFn(fn func(context.Context, string) error) {
 	dockerImageInspectFn = fn
 }
 
-// ExportDockerImagePullFn returns the current dockerImagePullFn for saving
-// and restoring in integration tests.
-func ExportDockerImagePullFn() func(context.Context, string) error {
-	return dockerImagePullFn
-}
-
-// SetDockerImagePullFn overrides dockerImagePullFn for testing.
-func SetDockerImagePullFn(fn func(context.Context, string) error) {
-	dockerImagePullFn = fn
-}
-
 // resolveDockerImage returns the configured Docker image name from the
 // environment, falling back to runner.DefaultDockerImage.
 func resolveDockerImage() string {

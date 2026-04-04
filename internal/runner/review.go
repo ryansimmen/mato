@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -22,23 +21,11 @@ import (
 	"mato/internal/sessionmeta"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
+	"mato/internal/ui"
 )
 
 const reviewContextPlaceholder = "REVIEW_CONTEXT_PLACEHOLDER"
 const maxReviewContextReasonLen = 500
-
-// reviewedRe matches the approval marker written by the review agent.
-var reviewedRe = regexp.MustCompile(`<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+approved\s*-->`)
-
-// reviewRejectionRe matches the rejection marker written by the review agent.
-// Requires the em-dash separator, a non-empty reason, and the closing -->.
-var reviewRejectionRe = regexp.MustCompile(`<!-- review-rejection:\s+\S+\s+at\s+\S+\s+—\s+.+\s*-->`)
-
-// approvalMarkerRe matches only the approval marker for targeted stripping.
-var approvalMarkerRe = regexp.MustCompile(`\n?<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+approved\s*-->\n?`)
-
-// rejectionMarkerRe matches only the rejection marker for targeted stripping.
-var rejectionMarkerRe = regexp.MustCompile(`\n?<!-- review-rejection:\s+\S+\s+at\s+\S+\s+—\s+.+?\s*-->\n?`)
 
 // reviewVerdict is the JSON structure written by the review agent to
 // communicate its verdict to the host without using shell expansion.
@@ -47,167 +34,96 @@ type reviewVerdict struct {
 	Reason  string `json:"reason"`  // rejection reason (empty for approvals)
 }
 
+type reviewCandidate struct {
+	task     *queue.ClaimedTask
+	priority int
+}
+
+func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queue.ParseFailure) {
+	ui.Warnf("warning: quarantining unparseable review candidate %s: %v\n", pf.Filename, pf.Err)
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		ui.Warnf("warning: could not create failed dir for %s: %v\n", pf.Filename, err)
+		return
+	}
+	if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter in ready-for-review: %v", pf.Err)); err != nil {
+		ui.Warnf("warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
+	}
+	if moveErr := queue.AtomicMove(pf.Path, filepath.Join(failedDir, pf.Filename)); moveErr != nil {
+		ui.Warnf("warning: could not move malformed review task %s to failed: %v\n", pf.Filename, moveErr)
+		return
+	}
+	deleteTaskState(tasksDir, pf.Filename)
+	fmt.Printf("quarantined malformed review candidate %s to failed/\n", pf.Filename)
+}
+
+func reviewTaskReady(snap *queue.TaskSnapshot) bool {
+	return snap != nil && snap.ReviewFailureCount < snap.Meta.MaxRetries
+}
+
+func buildReviewCandidate(tasksDir, failedDir string, snap *queue.TaskSnapshot) (*reviewCandidate, bool) {
+	if snap == nil {
+		return nil, false
+	}
+	failures := snap.ReviewFailureCount
+	maxRetries := snap.Meta.MaxRetries
+	if failures >= maxRetries {
+		if err := os.MkdirAll(failedDir, 0o755); err != nil {
+			ui.Warnf("warning: could not create failed dir for %s: %v\n", snap.Filename, err)
+			return nil, false
+		}
+		if err := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("review retry budget exhausted (%d failures >= max_retries %d)", failures, maxRetries)); err != nil {
+			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
+		}
+		if moveErr := queue.AtomicMove(snap.Path, filepath.Join(failedDir, snap.Filename)); moveErr != nil {
+			ui.Warnf("warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
+			return nil, false
+		}
+		runtimecleanup.DeleteAllPreservingVerdict(tasksDir, snap.Filename)
+		fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
+			snap.Filename, failures, maxRetries)
+		return nil, false
+	}
+
+	branch := strings.TrimSpace(snap.Branch)
+	if branch == "" {
+		recordMissingReviewBranchMarker(tasksDir, snap.Path, snap.Filename)
+		return nil, false
+	}
+
+	return &reviewCandidate{
+		task: &queue.ClaimedTask{
+			Filename: snap.Filename,
+			Branch:   branch,
+			Title:    frontmatter.ExtractTitle(snap.Filename, snap.Body),
+			TaskPath: snap.Path,
+		},
+		priority: snap.Meta.Priority,
+	}, true
+}
+
 // reviewCandidates scans ready-for-review/ and returns all review candidates
 // sorted by priority (ascending) then filename. Tasks whose review retry
 // budget is exhausted are moved to failed/ and excluded from the result.
+// Tasks missing the required <!-- branch: ... --> marker are recorded as
+// review failures and skipped instead of falling back to a filename-derived
+// branch name.
 //
 // When idx is non-nil, pre-parsed metadata from the index is used instead of
 // re-parsing each file from disk.
 func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTask {
+	if idx == nil {
+		idx = queue.BuildIndex(tasksDir)
+	}
 	failedDir := filepath.Join(tasksDir, queue.DirFailed)
 
-	type candidate struct {
-		task     *queue.ClaimedTask
-		priority int
+	candidates := make([]reviewCandidate, 0, len(idx.TasksByState(queue.DirReadyReview)))
+	for _, pf := range idx.ReviewParseFailures() {
+		quarantineMalformedReviewTask(tasksDir, failedDir, pf)
 	}
-
-	var candidates []candidate
-
-	// reservedBranches tracks synthesized branch names across the candidate
-	// batch so that two markerless tasks whose sanitized names collapse to the
-	// same base branch receive distinct synthesized names.
-	reservedBranches := make(map[string]struct{})
-
-	// Use index if available; otherwise fall back to filesystem scan.
-	if idx != nil {
-		// Quarantine malformed review tasks whose frontmatter could not be parsed.
-		for _, pf := range idx.ReviewParseFailures() {
-			fmt.Fprintf(os.Stderr, "warning: quarantining unparseable review candidate %s: %v\n", pf.Filename, pf.Err)
-			if err := os.MkdirAll(failedDir, 0o755); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", pf.Filename, err)
-				continue
-			}
-			if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter in ready-for-review: %v", pf.Err)); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
-			}
-			if moveErr := queue.AtomicMove(pf.Path, filepath.Join(failedDir, pf.Filename)); moveErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move malformed review task %s to failed: %v\n", pf.Filename, moveErr)
-			} else {
-				deleteTaskState(tasksDir, pf.Filename)
-				fmt.Printf("quarantined malformed review candidate %s to failed/\n", pf.Filename)
-			}
-		}
-
-		snaps := idx.TasksByState(queue.DirReadyReview)
-		for _, snap := range snaps {
-			maxRetries := snap.Meta.MaxRetries
-			failures := snap.ReviewFailureCount
-			if failures >= maxRetries {
-				if err := os.MkdirAll(failedDir, 0o755); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", snap.Filename, err)
-					continue
-				}
-				if err := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("review retry budget exhausted (%d failures >= max_retries %d)", failures, maxRetries)); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
-				}
-				if moveErr := queue.AtomicMove(snap.Path, filepath.Join(failedDir, snap.Filename)); moveErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
-				} else {
-					runtimecleanup.DeleteAllPreservingVerdict(tasksDir, snap.Filename)
-					fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
-						snap.Filename, failures, maxRetries)
-				}
-				continue
-			}
-
-			branch := snap.Branch
-			if branch == "" {
-				branch = "task/" + frontmatter.SanitizeBranchName(snap.Filename)
-				activeBranches := idx.ActiveBranches()
-				if _, taken := activeBranches[branch]; taken {
-					branch = branch + "-" + frontmatter.BranchDisambiguator(snap.Filename)
-				}
-				if _, taken := reservedBranches[branch]; taken {
-					branch = branch + "-" + frontmatter.BranchDisambiguator(snap.Filename)
-				}
-				reservedBranches[branch] = struct{}{}
-			}
-			title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
-			candidates = append(candidates, candidate{
-				task: &queue.ClaimedTask{
-					Filename: snap.Filename,
-					Branch:   branch,
-					Title:    title,
-					TaskPath: snap.Path,
-				},
-				priority: snap.Meta.Priority,
-			})
-		}
-	} else {
-		// Fallback: scan filesystem.
-		reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-		names, err := queue.ListTaskFiles(reviewDir)
-		if err != nil {
-			return nil
-		}
-
-		for _, name := range names {
-			path := filepath.Join(reviewDir, name)
-			meta, body, err := frontmatter.ParseTaskFile(path)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: quarantining unparseable review candidate %s: %v\n", name, err)
-				if mkErr := os.MkdirAll(failedDir, 0o755); mkErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", name, mkErr)
-					continue
-				}
-				if appendErr := taskfile.AppendTerminalFailureRecord(path, fmt.Sprintf("unparseable frontmatter in ready-for-review: %v", err)); appendErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", name, appendErr)
-				}
-				if moveErr := queue.AtomicMove(path, filepath.Join(failedDir, name)); moveErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not move malformed review task %s to failed: %v\n", name, moveErr)
-				} else {
-					deleteTaskState(tasksDir, name)
-					fmt.Printf("quarantined malformed review candidate %s to failed/\n", name)
-				}
-				continue
-			}
-
-			maxRetries := meta.MaxRetries
-			failures, failErr := queue.CountReviewFailureLines(path)
-			if failErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not count failures for review candidate %s, skipping: %v\n", name, failErr)
-				continue
-			}
-			if failures >= maxRetries {
-				dst := filepath.Join(failedDir, name)
-				if err := os.MkdirAll(failedDir, 0o755); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", name, err)
-					continue
-				}
-				if err := taskfile.AppendTerminalFailureRecord(path, fmt.Sprintf("review retry budget exhausted (%d failures >= max_retries %d)", failures, maxRetries)); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", name, err)
-				}
-				if moveErr := queue.AtomicMove(path, dst); moveErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", name, moveErr)
-				} else {
-					runtimecleanup.DeleteAllPreservingVerdict(tasksDir, name)
-					fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
-						name, failures, maxRetries)
-				}
-				continue
-			}
-
-			branch := taskfile.ParseBranch(path)
-			if branch == "" {
-				branch = "task/" + frontmatter.SanitizeBranchName(name)
-				if _, taken := queue.CollectActiveBranches(tasksDir, nil)[branch]; taken {
-					branch = branch + "-" + frontmatter.BranchDisambiguator(name)
-				}
-				if _, taken := reservedBranches[branch]; taken {
-					branch = branch + "-" + frontmatter.BranchDisambiguator(name)
-				}
-				reservedBranches[branch] = struct{}{}
-			}
-			title := frontmatter.ExtractTitle(name, body)
-			candidates = append(candidates, candidate{
-				task: &queue.ClaimedTask{
-					Filename: name,
-					Branch:   branch,
-					Title:    title,
-					TaskPath: path,
-				},
-				priority: meta.Priority,
-			})
+	for _, snap := range idx.TasksByState(queue.DirReadyReview) {
+		candidate, ok := buildReviewCandidate(tasksDir, failedDir, snap)
+		if ok {
+			candidates = append(candidates, *candidate)
 		}
 	}
 
@@ -225,34 +141,31 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 	return result
 }
 
+func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
+	const reason = "missing required <!-- branch: ... --> marker in ready-for-review"
+
+	ui.Warnf("warning: review candidate %s is missing a required branch marker\n", filename)
+	recorded := appendReviewFailure(taskPath, "mato", reason)
+	recordTaskStateUpdate(tasksDir, filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
+		state.LastOutcome = taskstate.OutcomeReviewBranchMarkerMissing
+	})
+	logReviewFailureOutcome("Review incomplete", filename, recorded, "missing required branch marker")
+}
+
 // hasReviewCandidates reports whether ready-for-review/ currently contains at
-// least one parseable task that has not exhausted its review retry budget.
+// least one parseable task that has not exhausted its review retry budget and
+// carries the required <!-- branch: ... --> marker.
 //
 // This helper is intentionally read-only. It is used by idle reporting after
 // merge processing, where we need a fresh filesystem view of ready-for-review/
 // without the side effects of quarantining malformed files or failing exhausted
-// tasks.
+// tasks. A task missing the branch marker will never be selected by
+// reviewCandidates, so counting it here would prevent idle detection.
 func hasReviewCandidates(tasksDir string) bool {
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	names, err := queue.ListTaskFiles(reviewDir)
-	if err != nil {
-		return false
-	}
-
-	for _, name := range names {
-		path := filepath.Join(reviewDir, name)
-		meta, _, err := frontmatter.ParseTaskFile(path)
-		if err != nil {
-			continue
+	for _, snap := range queue.BuildIndex(tasksDir).TasksByState(queue.DirReadyReview) {
+		if reviewTaskReady(snap) && strings.TrimSpace(snap.Branch) != "" {
+			return true
 		}
-		failures, failErr := queue.CountReviewFailureLines(path)
-		if failErr != nil {
-			continue
-		}
-		if failures >= meta.MaxRetries {
-			continue
-		}
-		return true
 	}
 
 	return false
@@ -310,7 +223,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	defer git.RemoveClone(cloneDir)
 
 	if err := configureReceiveDeny(env.repoRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
+		ui.Warnf("warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
 	}
 
 	run.cloneDir = cloneDir
@@ -323,7 +236,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	recordTaskStateUpdate(env.tasksDir, task.Filename, "record review launch taskstate", func(state *taskstate.TaskState) {
 		state.TaskBranch = task.Branch
 		state.TargetBranch = branch
-		state.LastOutcome = "review-launched"
+		state.LastOutcome = taskstate.OutcomeReviewLaunched
 	})
 	if env.reviewSessionResumeEnabled {
 		recordSessionUpdate(env.tasksDir, sessionmeta.KindReview, task.Filename, "record review session", func(session *sessionmeta.Session) {
@@ -373,60 +286,17 @@ var rejectDisposition = reviewDisposition{
 	logPrefix:   "Review rejected",
 }
 
-// resolveReviewVerdict reads the task file and checks for approval or rejection
-// markers written directly by the review agent (backward compatibility path).
-// Returns "approve", "reject", or "" if neither marker is found.
-func resolveReviewVerdict(task *queue.ClaimedTask) string {
-	taskData, err := os.ReadFile(task.TaskPath)
-	if err != nil {
-		return ""
-	}
-	content := string(taskData)
-	if reviewedRe.MatchString(content) {
-		return "approve"
-	}
-	if reviewRejectionRe.MatchString(content) {
-		return "reject"
-	}
-	return ""
-}
-
-// stripLastTerminalMarker removes only the last occurrence of a terminal
-// verdict marker matching re from the task file at taskPath. This preserves
-// older review-rejection markers from prior review cycles (which feed into
-// MATO_REVIEW_FEEDBACK) while rolling back only the consumed terminal marker
-// from the current failed handoff.
-func stripLastTerminalMarker(taskPath string, re *regexp.Regexp) {
-	data, err := os.ReadFile(taskPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not read task file %s for marker rollback: %v\n", taskPath, err)
-		return
-	}
-	locs := re.FindAllIndex(data, -1)
-	if len(locs) == 0 {
-		return
-	}
-	last := locs[len(locs)-1]
-	cleaned := make([]byte, 0, len(data)-(last[1]-last[0])+1)
-	cleaned = append(cleaned, data[:last[0]]...)
-	cleaned = append(cleaned, '\n')
-	cleaned = append(cleaned, data[last[1]:]...)
-	if err := atomicwrite.WriteFile(taskPath, cleaned); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not strip terminal review marker from %s: %v\n", taskPath, err)
-	}
-}
-
 // VerifyReviewBranch checks whether the task branch exists in the host repo
 // before launching a review agent. If the branch is missing it records a
 // review-failure marker and returns false. Returns true when the branch
 // exists and the review may proceed.
 func VerifyReviewBranch(repoRoot, tasksDir string, task *queue.ClaimedTask, agentID string) bool {
 	if _, err := git.Output(repoRoot, "rev-parse", "--verify", "refs/heads/"+task.Branch); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: task branch %s missing from host repo, recording review failure for %s\n", task.Branch, task.Filename)
+		ui.Warnf("warning: task branch %s missing from host repo, recording review failure for %s\n", task.Branch, task.Filename)
 		appendReviewFailure(task.TaskPath, agentID, "task branch "+task.Branch+" not found in host repo")
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
 			state.TaskBranch = task.Branch
-			state.LastOutcome = "review-branch-missing"
+			state.LastOutcome = taskstate.OutcomeReviewBranchMissing
 		})
 		return false
 	}
@@ -443,7 +313,8 @@ func PostReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 // postReviewAction reads the verdict file written by the review agent and
 // handles the result. If approved, the host moves the task to ready-to-merge/
 // and writes the approval marker. If rejected, moves to backlog/ and writes
-// the rejection marker. If no verdict file exists, writes a review-failure.
+// the rejection marker. If the verdict file is missing or unreadable, it
+// records a review-failure and leaves the task in ready-for-review/.
 //
 // The handoff is rollback-safe: the verdict marker is written only after the
 // task file has been successfully moved to its destination directory, and the
@@ -455,9 +326,9 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	// Task must still be in ready-for-review/ (agent no longer moves files).
 	if _, err := os.Stat(task.TaskPath); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: review verdict for %s discarded: task file moved (%v)\n", task.Filename, err)
+			ui.Warnf("warning: review verdict for %s discarded: task file moved (%v)\n", task.Filename, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "warning: could not verify review task file %s: %v\n", task.Filename, err)
+			ui.Warnf("warning: could not verify review task file %s: %v\n", task.Filename, err)
 		}
 		return
 	}
@@ -466,26 +337,17 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 
 	data, err := os.ReadFile(verdictPath)
 	if err != nil {
-		// No verdict file: review agent crashed or failed to write verdict.
-		// Fall back to checking the task file for markers (backward compat).
-		// If the move fails, strip the pre-existing terminal marker so the
-		// task is not left in ready-for-review/ with a consumed verdict.
-		switch resolveReviewVerdict(task) {
-		case "approve":
-			if !moveReviewedTask(tasksDir, agentID, task, approveDisposition, "") {
-				stripLastTerminalMarker(task.TaskPath, approvalMarkerRe)
-			}
-		case "reject":
-			if !moveReviewedTask(tasksDir, agentID, task, rejectDisposition, "") {
-				stripLastTerminalMarker(task.TaskPath, rejectionMarkerRe)
-			}
-		default:
-			recorded := appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
-			recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-				state.LastOutcome = "review-incomplete"
-			})
-			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
+		reason := "review agent exited without rendering a verdict"
+		detail := ""
+		if !os.IsNotExist(err) {
+			reason = fmt.Sprintf("could not read verdict file: %v", err)
+			detail = reason
 		}
+		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
+			state.LastOutcome = taskstate.OutcomeReviewIncomplete
+		})
+		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, detail)
 		return
 	}
 
@@ -493,7 +355,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	if err := json.Unmarshal(data, &verdict); err != nil {
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not parse verdict file: %v", err))
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-incomplete"
+			state.LastOutcome = taskstate.OutcomeReviewIncomplete
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "malformed verdict file")
 		os.Remove(verdictPath)
@@ -526,7 +388,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		}
 		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-error"
+			state.LastOutcome = taskstate.OutcomeReviewError
 		})
 		logReviewFailureOutcome("Review error", task.Filename, recorded, reason)
 		os.Remove(verdictPath)
@@ -534,7 +396,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	default:
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-incomplete"
+			state.LastOutcome = taskstate.OutcomeReviewIncomplete
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, fmt.Sprintf("unknown verdict %q", verdict.Verdict))
 		os.Remove(verdictPath)
@@ -554,33 +416,33 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp reviewDisposition, marker string) bool {
 	dst := filepath.Join(tasksDir, disp.dir, task.Filename)
 	if err := queue.AtomicMove(task.TaskPath, dst); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, disp.dir, err)
+		ui.Warnf("warning: could not move reviewed task %s to %s: %v\n", task.Filename, disp.dir, err)
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not move task to %s: %v", disp.dir, err))
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-move-failed"
+			state.LastOutcome = taskstate.OutcomeReviewMoveFailed
 		})
 		logReviewFailureOutcome("Review move failed", task.Filename, recorded, err.Error())
 		return false
 	}
 	if marker != "" {
 		if err := appendToFileFn(dst, marker); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: task %s moved to %s/ but could not write verdict marker: %v\n", task.Filename, disp.dir, err)
+			ui.Warnf("warning: task %s moved to %s/ but could not write verdict marker: %v\n", task.Filename, disp.dir, err)
 			// On the rejection path the marker is the durable record of
 			// reviewer feedback that feeds MATO_REVIEW_FEEDBACK. Try a
 			// fallback write (read-modify-write) using a different I/O
 			// path before giving up.
 			if disp.dir == queue.DirBacklog {
 				if fallbackErr := fallbackMarkerWrite(dst, marker); fallbackErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: fallback marker write also failed for %s: %v\n", task.Filename, fallbackErr)
+					ui.Warnf("warning: fallback marker write also failed for %s: %v\n", task.Filename, fallbackErr)
 					return false
 				}
 				fmt.Fprintf(os.Stderr, "info: rejection marker written via fallback for %s\n", task.Filename)
 			}
 		}
 	}
-	outcome := "review-rejected"
+	outcome := taskstate.OutcomeReviewRejected
 	if disp.dir == queue.DirReadyMerge {
-		outcome = "review-approved"
+		outcome = taskstate.OutcomeReviewApproved
 	}
 	recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
 		if strings.TrimSpace(state.LastHeadSHA) != "" {
@@ -614,7 +476,7 @@ var fallbackMarkerWrite = func(dst, marker string) error {
 // The task stays in ready-for-review/ for a future review attempt.
 func appendReviewFailure(taskPath, agentID, reason string) bool {
 	if err := taskfile.AppendReviewFailure(taskPath, agentID, reason); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		ui.Warnf("warning: %v\n", err)
 		return false
 	}
 	return true
@@ -665,7 +527,7 @@ func extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, filename str
 func loadTaskStateForReview(tasksDir, filename string) *taskstate.TaskState {
 	state, err := taskstate.Load(tasksDir, filename)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not load taskstate for %s: %v\n", filename, err)
+		ui.Warnf("warning: could not load taskstate for %s: %v\n", filename, err)
 		return nil
 	}
 	return state
@@ -674,7 +536,7 @@ func loadTaskStateForReview(tasksDir, filename string) *taskstate.TaskState {
 func resolveReviewBranchTip(repoRoot string, task *queue.ClaimedTask) string {
 	tip, err := git.Output(repoRoot, "rev-parse", "refs/heads/"+task.Branch)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not resolve review branch tip for %s: %v\n", task.Filename, err)
+		ui.Warnf("warning: could not resolve review branch tip for %s: %v\n", task.Filename, err)
 		return "unknown"
 	}
 	tip = strings.TrimSpace(tip)

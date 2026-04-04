@@ -37,6 +37,21 @@ func WriteTempFile(t *testing.T, content string) string {
 	return f.Name()
 }
 
+// MakeUnreadablePath creates a self-referential symlink at path so reads fail
+// with a non-NotExist error on platforms that support symlinks.
+func MakeUnreadablePath(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", path, err)
+	}
+	if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove existing path %s: %v", path, err)
+	}
+	if err := os.Symlink(filepath.Base(path), path); err != nil {
+		t.Skipf("create unreadable path %s: %v", path, err)
+	}
+}
+
 // SetupRepo creates a temporary git repository with one initial commit
 // containing a README.md file. It returns the repo root directory.
 func SetupRepo(t *testing.T) string {

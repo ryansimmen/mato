@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 
-	"mato/internal/dag"
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
@@ -91,22 +90,6 @@ type GraphData struct {
 	Cycles            [][]string         `json:"cycles,omitempty"`
 	ParseFailures     []ParseFailure     `json:"parse_failures,omitempty"`
 	DuplicateWarnings []DuplicateWarning `json:"duplicate_warnings,omitempty"`
-}
-
-// blockReasonString converts dag.BlockReason to its string representation.
-func blockReasonString(r dag.BlockReason) string {
-	switch r {
-	case dag.BlockedByWaiting:
-		return "waiting"
-	case dag.BlockedByUnknown:
-		return "unknown"
-	case dag.BlockedByExternal:
-		return "external"
-	case dag.BlockedByAmbiguous:
-		return "ambiguous"
-	default:
-		return "unknown"
-	}
 }
 
 // classifyRef determines the status of a dependency reference using the
@@ -265,7 +248,7 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 				for _, d := range details {
 					node.BlockDetails = append(node.BlockDetails, BlockDetail{
 						DependencyID: d.DependencyID,
-						Reason:       blockReasonString(d.Reason),
+						Reason:       d.Reason.String(),
 					})
 				}
 			}
@@ -388,7 +371,9 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 	case "json":
 		return RenderJSON(w, data)
 	default:
-		RenderText(w, data)
+		if err := RenderText(w, data); err != nil {
+			return fmt.Errorf("render text graph: %w", err)
+		}
 		return nil
 	}
 }
