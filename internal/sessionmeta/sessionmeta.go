@@ -208,7 +208,7 @@ func Sweep(tasksDir string) error {
 		if !ok || kind == "" || taskFilename == "" {
 			continue
 		}
-		if isActive(tasksDir, taskFilename) {
+		if dirs.IsActive(tasksDir, taskFilename) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(runtimeDir, entry.Name())); err != nil && !os.IsNotExist(err) {
@@ -284,15 +284,6 @@ func parseEntryName(name string) (kind, taskFilename string, ok bool) {
 		return candidate, strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json"), true
 	}
 	return "", "", false
-}
-
-func isActive(tasksDir, taskFilename string) bool {
-	for _, dir := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge} {
-		if _, err := os.Stat(filepath.Join(tasksDir, dir, taskFilename)); err == nil {
-			return true
-		}
-	}
-	return false
 }
 
 func newSessionID() (string, error) {
