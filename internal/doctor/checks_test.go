@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/lockfile"
 	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
@@ -324,16 +323,7 @@ func TestDoctor_DoesNotTreatUnreadableAgentLockAsStale(t *testing.T) {
 	allOK(t)
 
 	lockPath := filepath.Join(tasksDir, ".locks", "liveagent.pid")
-	testutil.WriteFile(t, lockPath, process.LockIdentity(os.Getpid()))
-
-	orig := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, fmt.Errorf("permission denied")
-		}
-		return orig(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {

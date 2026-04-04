@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"testing"
 
-	"mato/internal/lockfile"
 	"mato/internal/process"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
+	"mato/internal/testutil"
 )
 
 func captureStderr(t *testing.T, fn func()) string {
@@ -647,14 +647,7 @@ func TestRecoverOrphanedTasks_SkipsUnreadableAgentLock(t *testing.T) {
 		t.Fatalf("WriteFile orphan: %v", err)
 	}
 
-	orig := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, fmt.Errorf("permission denied")
-		}
-		return orig(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	stderr := captureStderr(t, func() {
 		_ = RecoverOrphanedTasks(tasksDir)

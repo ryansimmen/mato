@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/lockfile"
 	"mato/internal/process"
+	"mato/internal/testutil"
 )
 
 func TestCleanStaleLocks_RemovesDeadProcessLock(t *testing.T) {
@@ -120,22 +120,11 @@ func TestCleanStaleLocks_PreservesUnreadableLock(t *testing.T) {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
 	lockPath := filepath.Join(locksDir, "unknown-agent.pid")
-	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
-		t.Fatalf("write lock: %v", err)
-	}
-
-	orig := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, fmt.Errorf("permission denied")
-		}
-		return orig(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	CleanStaleLocks(tasksDir)
 
-	if _, err := os.Stat(lockPath); err != nil {
+	if _, err := os.Lstat(lockPath); err != nil {
 		t.Fatalf("unreadable lock should be preserved: %v", err)
 	}
 }
@@ -260,27 +249,16 @@ func TestCleanStaleReviewLocks_PreservesUnreadableLock(t *testing.T) {
 	}
 
 	lockPath := filepath.Join(locksDir, "review-unreadable-task.md.lock")
-	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
-		t.Fatalf("write review lock: %v", err)
-	}
-
-	origReadFile := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, fmt.Errorf("permission denied")
-		}
-		return origReadFile(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(origReadFile) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	stderr := captureStderr(t, func() {
 		CleanStaleReviewLocks(tasksDir)
 	})
 
-	if _, err := os.Stat(lockPath); err != nil {
+	if _, err := os.Lstat(lockPath); err != nil {
 		t.Fatalf("unreadable review lock should be preserved: %v", err)
 	}
-	if !strings.Contains(stderr, "warning: could not verify review lock review-unreadable-task.md.lock: permission denied") {
+	if !strings.Contains(stderr, "warning: could not verify review lock review-unreadable-task.md.lock:") {
 		t.Fatalf("expected verify warning in stderr, got %q", stderr)
 	}
 }

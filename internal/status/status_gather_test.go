@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"mato/internal/frontmatter"
-	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
+	"mato/internal/testutil"
 )
 
 // setupTasksDir creates the standard queue directory structure in a temp dir.
@@ -391,15 +391,7 @@ func TestActiveAgents_UnreadableLockFile(t *testing.T) {
 	}
 	defer cleanup2()
 
-	// Inject a ReadFile hook that fails for the bad agent's lock file.
-	origFn := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(name string) ([]byte, error) {
-		if filepath.Base(name) == "bad00001.pid" {
-			return nil, errors.New("simulated read error")
-		}
-		return origFn(name)
-	})
-	defer lockfile.SetTestHookReadFile(origFn)
+	testutil.MakeUnreadablePath(t, filepath.Join(tasksDir, ".locks", "bad00001.pid"))
 
 	agents, warnings, err := activeAgents(tasksDir)
 	if err != nil {
@@ -421,7 +413,7 @@ func TestActiveAgents_UnreadableLockFile(t *testing.T) {
 	if !strings.Contains(warnings[0], "bad00001.pid") {
 		t.Errorf("warning should mention bad00001.pid, got %q", warnings[0])
 	}
-	if !strings.Contains(warnings[0], "simulated read error") {
+	if !strings.Contains(warnings[0], "skipped unreadable lock file") {
 		t.Errorf("warning should mention error, got %q", warnings[0])
 	}
 }
@@ -1470,7 +1462,8 @@ func TestGatherStatus_OlderProgressUnreadableWarning(t *testing.T) {
 		t.Fatalf("WriteMessage(bad): %v", err)
 	}
 
-	// Make badagent's progress file unreadable via the messaging read hook.
+	// Replace badagent's progress file with a self-referential symlink so reads
+	// fail with a real filesystem error.
 	eventsDir := filepath.Join(tasksDir, "messages", "events")
 	entries, readErr := os.ReadDir(eventsDir)
 	if readErr != nil {
@@ -1483,14 +1476,7 @@ func TestGatherStatus_OlderProgressUnreadableWarning(t *testing.T) {
 			break
 		}
 	}
-	origReadFile := messaging.TestHookReadFile()
-	messaging.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == unreadablePath {
-			return nil, fmt.Errorf("permission denied")
-		}
-		return origReadFile(path)
-	})
-	t.Cleanup(func() { messaging.SetTestHookReadFile(origReadFile) })
+	testutil.MakeUnreadablePath(t, unreadablePath)
 
 	// Flood with newer messages to push both agents outside the recent window.
 	for i := 0; i < statusMessageLimit+10; i++ {

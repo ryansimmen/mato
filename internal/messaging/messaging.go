@@ -20,16 +20,6 @@ import (
 
 var osReadFile = os.ReadFile
 
-// TestHookReadFile exposes the current read hook for tests.
-func TestHookReadFile() func(string) ([]byte, error) {
-	return osReadFile
-}
-
-// SetTestHookReadFile replaces the read hook for tests.
-func SetTestHookReadFile(fn func(string) ([]byte, error)) {
-	osReadFile = fn
-}
-
 type Message struct {
 	ID     string    `json:"id"`
 	From   string    `json:"from"`

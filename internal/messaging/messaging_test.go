@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/lockfile"
 	"mato/internal/queue"
+	"mato/internal/testutil"
 )
 
 func TestInitMessaging(t *testing.T) {
@@ -673,21 +673,11 @@ func TestCleanStalePresence_UnreadableAgentLockPreserved(t *testing.T) {
 	}
 
 	lockPath := filepath.Join(tasksDir, ".locks", "live.pid")
-	if err := os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
-		t.Fatalf("WriteFile live lock: %v", err)
-	}
 	if err := WritePresence(tasksDir, "live", "live-task.md", "live-branch"); err != nil {
 		t.Fatalf("WritePresence live: %v", err)
 	}
 
-	origRead := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, fmt.Errorf("permission denied")
-		}
-		return origRead(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(origRead) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	oldStderr := os.Stderr
 	r, w, err := os.Pipe()
