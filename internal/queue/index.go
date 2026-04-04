@@ -24,7 +24,8 @@ type TaskSnapshot struct {
 	Cancelled          bool
 	Branch             string // from <!-- branch: ... --> comment, "" if absent
 	FailureCount       int    // <!-- failure: ... --> markers (excluding review-failure)
-	ReviewFailureCount int    // <!-- review-failure: ... --> markers
+	LastFailureAt      time.Time
+	ReviewFailureCount int // <!-- review-failure: ... --> markers
 	// ClaimedBy is the agent ID from <!-- claimed-by: ... -->, "" if absent.
 	ClaimedBy string
 	// ClaimedAt is the timestamp from <!-- claimed-by: ... claimed-at: ... -->.
@@ -136,6 +137,86 @@ var activeDirs = []string{DirInProgress, DirReadyReview, DirReadyMerge}
 // nonCompletedDirs are all directories except completed/.
 var nonCompletedDirs = []string{DirWaiting, DirBacklog, DirInProgress, DirReadyReview, DirReadyMerge, DirFailed}
 
+type taskFileMetadata struct {
+	branch                    string
+	claimedBy                 string
+	claimedAt                 time.Time
+	cancelled                 bool
+	failureCount              int
+	lastFailureAt             time.Time
+	reviewFailureCount        int
+	lastFailureReason         string
+	lastCycleFailureReason    string
+	lastTerminalFailureReason string
+	lastReviewRejectionReason string
+}
+
+func scanTaskFileMetadata(tasksDir, filename string, data []byte) taskFileMetadata {
+	branch, _ := taskfile.ParseBranchMarkerLine(data)
+	claimedBy, _ := taskfile.ParseClaimedBy(data)
+	claimedAt, _ := taskfile.ParseClaimedAt(data)
+	lastFailureAt, _ := lastFailureTime(data)
+
+	info := taskFileMetadata{
+		branch:                    branch,
+		claimedBy:                 claimedBy,
+		claimedAt:                 claimedAt,
+		cancelled:                 taskfile.ContainsCancelledMarker(data),
+		failureCount:              taskfile.CountFailureMarkers(data),
+		lastFailureAt:             lastFailureAt,
+		reviewFailureCount:        taskfile.CountReviewFailureMarkers(data),
+		lastFailureReason:         taskfile.LastFailureReason(data),
+		lastCycleFailureReason:    taskfile.LastCycleFailureReason(data),
+		lastTerminalFailureReason: taskfile.LastTerminalFailureReason(data),
+		lastReviewRejectionReason: taskfile.LastReviewRejectionReason(data),
+	}
+	if info.lastReviewRejectionReason == "" && tasksDir != "" && filename != "" {
+		if vr, ok := taskfile.ReadVerdictRejection(tasksDir, filename); ok {
+			info.lastReviewRejectionReason = vr.Reason
+		}
+	}
+	return info
+}
+
+func snapshotFromData(state, filename, path string, data []byte, info taskFileMetadata) (*TaskSnapshot, error) {
+	meta, body, err := frontmatter.ParseTaskData(data, path)
+	if err != nil {
+		return nil, err
+	}
+
+	snap := &TaskSnapshot{
+		Filename:                  filename,
+		State:                     state,
+		Path:                      path,
+		Meta:                      meta,
+		Body:                      body,
+		Cancelled:                 info.cancelled,
+		Branch:                    info.branch,
+		FailureCount:              info.failureCount,
+		LastFailureAt:             info.lastFailureAt,
+		ReviewFailureCount:        info.reviewFailureCount,
+		ClaimedBy:                 info.claimedBy,
+		ClaimedAt:                 info.claimedAt,
+		LastFailureReason:         info.lastFailureReason,
+		LastCycleFailureReason:    info.lastCycleFailureReason,
+		LastTerminalFailureReason: info.lastTerminalFailureReason,
+		LastReviewRejectionReason: info.lastReviewRejectionReason,
+	}
+	if globErr := frontmatter.ValidateAffectsGlobs(meta.Affects); globErr != nil {
+		snap.GlobError = globErr
+	}
+	return snap, nil
+}
+
+func loadTaskSnapshot(tasksDir, state, filename, path string) (*TaskSnapshot, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	info := scanTaskFileMetadata(tasksDir, filename, data)
+	return snapshotFromData(state, filename, path, data, info)
+}
+
 // BuildIndex scans all queue directories under tasksDir and reads each task
 // file exactly once, building an in-memory index. Returns a fully populated
 // PollIndex.
@@ -198,70 +279,38 @@ func BuildIndex(tasksDir string) *PollIndex {
 				continue
 			}
 
-			branch, _ := taskfile.ParseBranchMarkerLine(data)
-			claimedBy, _ := taskfile.ParseClaimedBy(data)
-			claimedAt, _ := taskfile.ParseClaimedAt(data)
-			cancelled := taskfile.ContainsCancelledMarker(data)
-			failureCount := taskfile.CountFailureMarkers(data)
-			lastFailureReason := taskfile.LastFailureReason(data)
-			lastCycleFailureReason := taskfile.LastCycleFailureReason(data)
-			lastTerminalFailureReason := taskfile.LastTerminalFailureReason(data)
-			lastReviewRejectionReason := taskfile.LastReviewRejectionReason(data)
-			if lastReviewRejectionReason == "" {
-				if vr, ok := taskfile.ReadVerdictRejection(tasksDir, name); ok {
-					lastReviewRejectionReason = vr.Reason
-				}
-			}
-
-			meta, body, err := frontmatter.ParseTaskData(data, path)
+			info := scanTaskFileMetadata(tasksDir, name, data)
+			snap, err := snapshotFromData(dir, name, path, data, info)
 			if err != nil {
 				idx.parseFailures = append(idx.parseFailures, ParseFailure{
 					Filename:                  name,
 					State:                     dir,
 					Path:                      path,
 					Err:                       err,
-					Cancelled:                 cancelled,
-					Branch:                    branch,
-					ClaimedBy:                 claimedBy,
-					ClaimedAt:                 claimedAt,
-					FailureCount:              failureCount,
-					LastFailureReason:         lastFailureReason,
-					LastCycleFailureReason:    lastCycleFailureReason,
-					LastTerminalFailureReason: lastTerminalFailureReason,
-					LastReviewRejectionReason: lastReviewRejectionReason,
+					Cancelled:                 info.cancelled,
+					Branch:                    info.branch,
+					ClaimedBy:                 info.claimedBy,
+					ClaimedAt:                 info.claimedAt,
+					FailureCount:              info.failureCount,
+					LastFailureReason:         info.lastFailureReason,
+					LastCycleFailureReason:    info.lastCycleFailureReason,
+					LastTerminalFailureReason: info.lastTerminalFailureReason,
+					LastReviewRejectionReason: info.lastReviewRejectionReason,
 				})
-				if isActive[dir] && branch != "" {
-					idx.activeBranches[branch] = struct{}{}
+				if isActive[dir] && info.branch != "" {
+					idx.activeBranches[info.branch] = struct{}{}
 				}
 				continue
 			}
-
-			snap := &TaskSnapshot{
-				Filename:                  name,
-				State:                     dir,
-				Path:                      path,
-				Meta:                      meta,
-				Body:                      body,
-				Cancelled:                 cancelled,
-				Branch:                    branch,
-				FailureCount:              failureCount,
-				ReviewFailureCount:        taskfile.CountReviewFailureMarkers(data),
-				ClaimedBy:                 claimedBy,
-				ClaimedAt:                 claimedAt,
-				LastFailureReason:         lastFailureReason,
-				LastCycleFailureReason:    lastCycleFailureReason,
-				LastTerminalFailureReason: lastTerminalFailureReason,
-				LastReviewRejectionReason: lastReviewRejectionReason,
-			}
+			meta := snap.Meta
 
 			// Validate glob syntax in affects once and cache the result.
 			// Invalid globs are logged as build warnings but the task
 			// is still fully indexed so its affects remain visible to
 			// overlap detection.
-			if globErr := frontmatter.ValidateAffectsGlobs(meta.Affects); globErr != nil {
-				snap.GlobError = globErr
+			if snap.GlobError != nil {
 				idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
-					State: dir, Path: path, Err: globErr,
+					State: dir, Path: path, Err: snap.GlobError,
 				})
 			}
 
@@ -289,8 +338,8 @@ func BuildIndex(tasksDir string) *PollIndex {
 
 			// Populate active-only indexes.
 			if isActive[dir] {
-				if branch != "" {
-					idx.activeBranches[branch] = struct{}{}
+				if info.branch != "" {
+					idx.activeBranches[info.branch] = struct{}{}
 				}
 				for _, af := range meta.Affects {
 					idx.activeAffects[af] = append(idx.activeAffects[af], name)

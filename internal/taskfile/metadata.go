@@ -88,16 +88,6 @@ func parseBranchCommentLine(trimmed string) (string, bool) {
 	return m[1], true
 }
 
-// parseBranchComment extracts the branch name from a <!-- branch: ... -->
-// comment in the given data. Returns the branch name and true if found.
-func parseBranchComment(data []byte) (string, bool) {
-	m := branchCommentRe.FindSubmatch(data)
-	if len(m) < 2 {
-		return "", false
-	}
-	return string(m[1]), true
-}
-
 // ParseBranchMarkerLine extracts the first branch marker that appears as a
 // standalone line outside code fences. Marker-like text embedded in prose or
 // code blocks is ignored.

@@ -2,7 +2,6 @@ package inspect
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"regexp"
 	"time"
@@ -62,79 +61,81 @@ func colorStatus(status string) string {
 	}
 }
 
-func renderText(w io.Writer, result inspectResult) {
-	fmt.Fprintf(w, "Task: %s\n", colors.Bold(result.TaskID))
+func renderText(w io.Writer, result inspectResult) error {
+	tw := ui.NewTextWriter(w)
+	tw.Printf("Task: %s\n", colors.Bold(result.TaskID))
 	if result.Title != "" && result.Title != result.TaskID {
-		fmt.Fprintf(w, "Title: %s\n", result.Title)
+		tw.Printf("Title: %s\n", result.Title)
 	}
-	fmt.Fprintf(w, "File: %s/%s\n", result.State, result.Filename)
-	fmt.Fprintf(w, "State: %s\n", result.State)
-	fmt.Fprintf(w, "Status: %s\n", colorStatus(result.Status))
-	fmt.Fprintf(w, "Reason: %s\n", annotateTimestamps(result.Reason))
-	fmt.Fprintf(w, "Next step: %s\n", result.NextStep)
+	tw.Printf("File: %s/%s\n", result.State, result.Filename)
+	tw.Printf("State: %s\n", result.State)
+	tw.Printf("Status: %s\n", colorStatus(result.Status))
+	tw.Printf("Reason: %s\n", annotateTimestamps(result.Reason))
+	tw.Printf("Next step: %s\n", result.NextStep)
 
 	if result.QueuePosition > 0 {
-		fmt.Fprintf(w, "Queue position: %d of %d\n", result.QueuePosition, result.QueueTotal)
+		tw.Printf("Queue position: %d of %d\n", result.QueuePosition, result.QueueTotal)
 	}
 	if result.Branch != "" {
-		fmt.Fprintf(w, "Branch: %s\n", colors.Dim(result.Branch))
+		tw.Printf("Branch: %s\n", colors.Dim(result.Branch))
 	}
 	if result.MaxRetries > 0 && (result.FailureCount > 0 || result.ReviewFailureCount > 0 || result.Status == "failed" || result.Status == "invalid") {
-		fmt.Fprintf(w, "Max retries: %d\n", result.MaxRetries)
+		tw.Printf("Max retries: %d\n", result.MaxRetries)
 	}
 	if result.ClaimedBy != "" {
 		if result.ClaimedAt.IsZero() {
-			fmt.Fprintf(w, "Claimed by: %s\n", colors.Cyan(result.ClaimedBy))
+			tw.Printf("Claimed by: %s\n", colors.Cyan(result.ClaimedBy))
 		} else {
 			ts := result.ClaimedAt.UTC().Format(time.RFC3339)
 			rel := timeutil.RelativeTime(result.ClaimedAt.UTC(), time.Now().UTC())
 			if rel != "" {
 				ts += "  " + rel
 			}
-			fmt.Fprintf(w, "Claimed by: %s at %s\n", colors.Cyan(result.ClaimedBy), colors.Dim(ts))
+			tw.Printf("Claimed by: %s at %s\n", colors.Cyan(result.ClaimedBy), colors.Dim(ts))
 		}
 	}
 	if result.ReviewFailureCount > 0 {
-		fmt.Fprintf(w, "Review failures: %s\n", colors.Red(result.ReviewFailureCount))
+		tw.Printf("Review failures: %s\n", colors.Red(result.ReviewFailureCount))
 	}
 	if len(result.BlockingDependencies) > 0 {
-		fmt.Fprintln(w, "Blocking dependencies:")
+		tw.Println("Blocking dependencies:")
 		for _, dep := range result.BlockingDependencies {
 			if dep.Filename != "" {
-				fmt.Fprintf(w, "- %s (%s/%s)\n", dep.ID, dep.State, dep.Filename)
+				tw.Printf("- %s (%s/%s)\n", dep.ID, dep.State, dep.Filename)
 			} else {
-				fmt.Fprintf(w, "- %s (%s)\n", dep.ID, dep.State)
+				tw.Printf("- %s (%s)\n", dep.ID, dep.State)
 			}
 		}
 	}
 	if result.BlockingTask != nil {
-		fmt.Fprintf(w, "Blocking task: %s/%s\n", result.BlockingTask.State, result.BlockingTask.Filename)
+		tw.Printf("Blocking task: %s/%s\n", result.BlockingTask.State, result.BlockingTask.Filename)
 	}
 	if len(result.ConflictingAffects) > 0 {
-		fmt.Fprintf(w, "Conflicting affects: %s\n", colors.Yellow(joinList(result.ConflictingAffects)))
+		tw.Printf("Conflicting affects: %s\n", colors.Yellow(joinList(result.ConflictingAffects)))
 	}
 	if result.FailureKind != "" {
-		fmt.Fprintf(w, "Failure: %s", colors.Red(result.FailureKind))
+		tw.Printf("Failure: %s", colors.Red(result.FailureKind))
 		if result.MaxRetries > 0 {
-			fmt.Fprintf(w, " (%d/%d)", result.FailureCount, result.MaxRetries)
+			tw.Printf(" (%d/%d)", result.FailureCount, result.MaxRetries)
 		}
-		fmt.Fprintln(w)
+		tw.Println()
 	}
 	if result.LastFailureReason != "" {
-		fmt.Fprintf(w, "Last failure: %s\n", colors.Red(result.LastFailureReason))
+		tw.Printf("Last failure: %s\n", colors.Red(result.LastFailureReason))
 	}
 	if result.LastCycleReason != "" {
-		fmt.Fprintf(w, "Cycle failure: %s\n", colors.Red(result.LastCycleReason))
+		tw.Printf("Cycle failure: %s\n", colors.Red(result.LastCycleReason))
 	}
 	if result.LastTerminalReason != "" {
-		fmt.Fprintf(w, "Terminal failure: %s\n", colors.Red(result.LastTerminalReason))
+		tw.Printf("Terminal failure: %s\n", colors.Red(result.LastTerminalReason))
 	}
 	if result.ReviewRejectionReason != "" {
-		fmt.Fprintf(w, "Review history: previously rejected: %s\n", colors.Yellow(result.ReviewRejectionReason))
+		tw.Printf("Review history: previously rejected: %s\n", colors.Yellow(result.ReviewRejectionReason))
 	}
 	if result.ParseError != "" {
-		fmt.Fprintf(w, "Parse error: %s\n", colors.Red(result.ParseError))
+		tw.Printf("Parse error: %s\n", colors.Red(result.ParseError))
 	}
+	return tw.Err()
 }
 
 func renderJSON(w io.Writer, result inspectResult) error {

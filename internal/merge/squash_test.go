@@ -11,6 +11,7 @@ import (
 
 	"mato/internal/git"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestParseAgentCommitLog(t *testing.T) {
@@ -223,13 +224,13 @@ func TestTaskBranchName(t *testing.T) {
 			want: "task/my-feature",
 		},
 		{
-			name: "falls back to sanitized name",
+			name: "missing branch stays empty",
 			task: mergeQueueTask{name: "add dark mode.md"},
-			want: "task/add-dark-mode",
+			want: "",
 		},
 		{
-			name: "empty branch uses name",
-			task: mergeQueueTask{name: "fix-bug.md"},
+			name: "trims branch whitespace",
+			task: mergeQueueTask{branch: "  task/fix-bug  ", name: "fix-bug.md"},
 			want: "task/fix-bug",
 		},
 	}
@@ -237,10 +238,7 @@ func TestTaskBranchName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := taskBranchName(tt.task)
-			if !strings.HasPrefix(got, "task/") {
-				t.Errorf("expected branch to start with 'task/', got %q", got)
-			}
-			if tt.task.branch != "" && got != tt.want {
+			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
@@ -351,7 +349,9 @@ func TestCleanupTaskBranch_IgnoresMissingRemoteBranch(t *testing.T) {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 	defer func() {
+		ui.SetWarningWriter(prevWarn)
 		os.Stderr = originalStderr
 	}()
 
@@ -730,7 +730,11 @@ func TestMergeReadyTask_EmptyCommitSHA(t *testing.T) {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stderr = w
-	defer func() { os.Stderr = originalStderr }()
+	prevWarn := ui.SetWarningWriter(w)
+	defer func() {
+		ui.SetWarningWriter(prevWarn)
+		os.Stderr = originalStderr
+	}()
 
 	task := mergeQueueTask{
 		name:   "empty-sha.md",

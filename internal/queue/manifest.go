@@ -2,11 +2,11 @@ package queue
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/ui"
 )
 
 // ComputeQueueManifest returns the queue manifest content as a string without
@@ -28,7 +28,7 @@ func ComputeQueueManifestFromView(tasksDir string, exclude map[string]struct{}, 
 	idx = ensureIndex(tasksDir, idx)
 
 	for _, warn := range idx.BuildWarnings() {
-		fmt.Fprintf(os.Stderr, "warning: could not build queue index cleanly: read %s: %v\n", warn.Path, warn.Err)
+		ui.Warnf("warning: could not build queue index cleanly: read %s: %v\n", warn.Path, warn.Err)
 		if warn.State == DirBacklog && warn.DirLevel {
 			return "", fmt.Errorf("read backlog dir: %w", warn.Err)
 		}
@@ -40,7 +40,7 @@ func ComputeQueueManifestFromView(tasksDir string, exclude map[string]struct{}, 
 				continue
 			}
 		}
-		fmt.Fprintf(os.Stderr, "warning: could not parse backlog task %s for queue manifest: %v\n", pf.Filename, pf.Err)
+		ui.Warnf("warning: could not parse backlog task %s for queue manifest: %v\n", pf.Filename, pf.Err)
 	}
 
 	manifest := strings.Join(lines, "\n")

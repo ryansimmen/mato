@@ -43,7 +43,9 @@ func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 	}
 	os.Stdout = stdoutW
 	os.Stderr = stderrW
+	prevWarn := ui.SetWarningWriter(stderrW)
 	defer func() {
+		ui.SetWarningWriter(prevWarn)
 		os.Stdout = oldStdout
 		os.Stderr = oldStderr
 	}()
@@ -244,8 +246,8 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "work-pushed" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=work-pushed", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeWorkPushed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeWorkPushed)
 	}
 	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
@@ -1005,21 +1007,25 @@ func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 	}
 }
 
-func TestSelectTaskForReview_BranchFallback(t *testing.T) {
+func TestSelectTaskForReview_RequiresBranchMarker(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
-	// No branch comment — should fall back to task/<sanitized-name>
+	// No branch comment — should be skipped and recorded as a review failure.
 	os.WriteFile(filepath.Join(reviewDir, "my-task.md"), []byte(
 		"---\npriority: 5\n---\n# My Task\nNo branch comment here.\n"), 0o644)
 
 	got := selectTaskForReview(tasksDir, nil)
-	if got == nil {
-		t.Fatal("expected non-nil result")
+	if got != nil {
+		t.Fatalf("expected nil result, got %+v", got)
 	}
-	if got.Branch != "task/my-task" {
-		t.Fatalf("Branch = %q, want %q (fallback)", got.Branch, "task/my-task")
+	data, err := os.ReadFile(filepath.Join(reviewDir, "my-task.md"))
+	if err != nil {
+		t.Fatalf("ReadFile my-task.md: %v", err)
+	}
+	if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "ready-for-review") {
+		t.Fatalf("expected review-failure marker, got:\n%s", string(data))
 	}
 }
 
@@ -1217,11 +1223,11 @@ func TestReviewCandidates_SortedByPriority(t *testing.T) {
 	os.MkdirAll(reviewDir, 0o755)
 
 	os.WriteFile(filepath.Join(reviewDir, "low.md"), []byte(
-		"---\npriority: 20\n---\n# Low\n"), 0o644)
+		"<!-- branch: task/low -->\n---\npriority: 20\n---\n# Low\n"), 0o644)
 	os.WriteFile(filepath.Join(reviewDir, "high.md"), []byte(
-		"---\npriority: 5\n---\n# High\n"), 0o644)
+		"<!-- branch: task/high -->\n---\npriority: 5\n---\n# High\n"), 0o644)
 	os.WriteFile(filepath.Join(reviewDir, "mid.md"), []byte(
-		"---\npriority: 10\n---\n# Mid\n"), 0o644)
+		"<!-- branch: task/mid -->\n---\npriority: 10\n---\n# Mid\n"), 0o644)
 
 	candidates := reviewCandidates(tasksDir, nil)
 	if len(candidates) != 3 {
@@ -2271,52 +2277,6 @@ func TestPostReviewAction_EmptyVerdictFile(t *testing.T) {
 	data, _ := os.ReadFile(reviewPath)
 	if !strings.Contains(string(data), "<!-- review-failure:") {
 		t.Fatal("review-failure not written for empty verdict file")
-	}
-}
-
-func TestReviewedReRegex(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		match bool
-	}{
-		{"complete marker", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved -->", true},
-		{"extra whitespace before close", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved  -->", true},
-		{"missing closing tag", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved", false},
-		{"partial write no em-dash", "<!-- reviewed: agent1 at 2026-01", false},
-		{"missing approved word", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — -->", false},
-		{"empty string", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := reviewedRe.MatchString(tt.input); got != tt.match {
-				t.Errorf("reviewedRe.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
-			}
-		})
-	}
-}
-
-func TestReviewRejectionReRegex(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		match bool
-	}{
-		{"complete marker", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — missing error wrapping -->", true},
-		{"reason with spaces", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — needs better test coverage for edge cases -->", true},
-		{"extra whitespace before close", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — bad code  -->", true},
-		{"missing closing tag", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — missing error wrapping", false},
-		{"partial write no em-dash", "<!-- review-rejection: agent1 at 2026-01", false},
-		{"missing reason after em-dash", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — -->", false},
-		{"no em-dash or reason", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z", false},
-		{"empty string", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := reviewRejectionRe.MatchString(tt.input); got != tt.match {
-				t.Errorf("reviewRejectionRe.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
-			}
-		})
 	}
 }
 
@@ -4554,7 +4514,7 @@ func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
 	}
 	pollMergeFn = func(context.Context, string, string, string) int {
 		path := filepath.Join(tasksDir, queue.DirReadyReview, "new-review.md")
-		if err := os.WriteFile(path, []byte("---\nid: new-review\nbranch: task/new-review\n---\n# Review\n"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte("<!-- branch: task/new-review -->\n---\nid: new-review\n---\n# Review\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
 		return 0
@@ -4658,8 +4618,78 @@ func TestPollIterate_IdleReviewProbeDoesNotMoveExhaustedTasks(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// resolveGitIdentity tests
+func TestPollIterate_IdleReviewProbeExcludesBranchlessHandoff(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	// Task with valid frontmatter and retry budget, but no branch marker.
+	branchlessContent := "---\npriority: 10\nmax_retries: 3\n---\n# Branchless Handoff\n"
+	branchlessPath := filepath.Join(tasksDir, queue.DirReadyReview, "branchless.md")
+	if err := os.WriteFile(branchlessPath, []byte(branchlessContent), 0o644); err != nil {
+		t.Fatalf("WriteFile branchless review task: %v", err)
+	}
+
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
+
+	result := pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	if result.hasReviewTasks {
+		t.Fatal("hasReviewTasks = true, want false when only a branchless review handoff exists")
+	}
+	// The branchless task must remain in ready-for-review/ — not moved by the idle probe.
+	if _, err := os.Stat(branchlessPath); err != nil {
+		t.Fatalf("branchless review task should remain in ready-for-review/: %v", err)
+	}
+}
+
+func TestCollectBoundedRunState_BranchlessReviewIsIdle(t *testing.T) {
+	origPollWriteManifestFn := pollWriteManifestFn
+	defer func() { pollWriteManifestFn = origPollWriteManifestFn }()
+
+	tasksDir := setupFullTasksDir(t)
+	// Task with valid frontmatter and retry budget, but no branch marker.
+	branchlessContent := "---\npriority: 10\nmax_retries: 3\n---\n# Branchless Handoff\n"
+	branchlessPath := filepath.Join(tasksDir, queue.DirReadyReview, "branchless.md")
+	if err := os.WriteFile(branchlessPath, []byte(branchlessContent), 0o644); err != nil {
+		t.Fatalf("WriteFile branchless review task: %v", err)
+	}
+
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+
+	state := collectBoundedRunState(tasksDir, map[string]struct{}{}, 0)
+	if state.hasReviewTasks {
+		t.Fatal("hasReviewTasks = true, want false when only a branchless review handoff exists")
+	}
+	if !state.isIdle() {
+		t.Fatal("bounded-run state should be idle when only a branchless review task exists")
+	}
+	// The branchless task must remain in ready-for-review/ — not moved.
+	if _, err := os.Stat(branchlessPath); err != nil {
+		t.Fatalf("branchless review task should remain in ready-for-review/: %v", err)
+	}
+}
 // ---------------------------------------------------------------------------
 
 func TestResolveGitIdentity_ConfiguredValues(t *testing.T) {
@@ -5296,14 +5326,7 @@ func TestStartupPullCancelledBySignalContext(t *testing.T) {
 func TestCleanStaleClones_RemovesOldCloneDirectories(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	origTempDirFn := tempDirFn
-	t.Cleanup(func() { tempDirFn = origTempDirFn })
-	tempDirFn = func() string { return tmpDir }
-
-	origNowFn := nowFn
-	t.Cleanup(func() { nowFn = origNowFn })
 	fakeNow := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	nowFn = func() time.Time { return fakeNow }
 
 	staleTime := fakeNow.Add(-25 * time.Hour)
 	freshTime := fakeNow.Add(-1 * time.Hour)
@@ -5336,7 +5359,7 @@ func TestCleanStaleClones_RemovesOldCloneDirectories(t *testing.T) {
 	os.WriteFile(regularFile, []byte("data"), 0o644)
 	os.Chtimes(regularFile, staleTime, staleTime)
 
-	cleanStaleClones(24 * time.Hour)
+	cleanStaleClones(tmpDir, fakeNow, 24*time.Hour)
 
 	// Stale debug clone should be removed.
 	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
@@ -5367,25 +5390,14 @@ func TestCleanStaleClones_RemovesOldCloneDirectories(t *testing.T) {
 func TestCleanStaleClones_NoEntriesNoPanic(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	origTempDirFn := tempDirFn
-	t.Cleanup(func() { tempDirFn = origTempDirFn })
-	tempDirFn = func() string { return tmpDir }
-
 	// Should not panic when there are no entries.
-	cleanStaleClones(24 * time.Hour)
+	cleanStaleClones(tmpDir, time.Now(), 24*time.Hour)
 }
 
 func TestCleanStaleClones_LogsRemovedDirectories(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	origTempDirFn := tempDirFn
-	t.Cleanup(func() { tempDirFn = origTempDirFn })
-	tempDirFn = func() string { return tmpDir }
-
-	origNowFn := nowFn
-	t.Cleanup(func() { nowFn = origNowFn })
 	fakeNow := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	nowFn = func() time.Time { return fakeNow }
 
 	staleDir := filepath.Join(tmpDir, "mato-logtest")
 	os.MkdirAll(staleDir, 0o755)
@@ -5394,7 +5406,7 @@ func TestCleanStaleClones_LogsRemovedDirectories(t *testing.T) {
 	os.Chtimes(staleDir, staleTime, staleTime)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		cleanStaleClones(24 * time.Hour)
+		cleanStaleClones(tmpDir, fakeNow, 24*time.Hour)
 	})
 
 	if !strings.Contains(stdout, "Cleaned up stale clone directory") {

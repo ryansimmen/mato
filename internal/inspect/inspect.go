@@ -119,8 +119,7 @@ func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
 	if format == "json" {
 		return renderJSON(w, result)
 	}
-	renderText(w, result)
-	return nil
+	return renderText(w, result)
 }
 
 func inspectTask(tasksDir, taskRef string) (inspectResult, error) {
@@ -460,7 +459,7 @@ func runningReason(snap *queue.TaskSnapshot) string {
 func buildBlockedDependencies(details []dag.BlockDetail, locationsByRef map[string][]dependencyLocation) []blockingDependency {
 	deps := make([]blockingDependency, 0, len(details))
 	for _, detail := range details {
-		reason := blockReasonString(detail.Reason)
+		reason := detail.Reason.String()
 		// Reason preserves the DAG-level blocker classification, while State is a
 		// presentation field that may be rewritten to a concrete queue state when
 		// the dependency can be located in the current snapshot.
@@ -518,21 +517,6 @@ func blockedReason(deps []blockingDependency) string {
 		parts = append(parts, fmt.Sprintf("%s (%s)", dep.ID, dep.State))
 	}
 	return "task is blocked by " + strings.Join(parts, ", ")
-}
-
-func blockReasonString(reason dag.BlockReason) string {
-	switch reason {
-	case dag.BlockedByWaiting:
-		return queue.DirWaiting
-	case dag.BlockedByUnknown:
-		return "unknown"
-	case dag.BlockedByExternal:
-		return "external"
-	case dag.BlockedByAmbiguous:
-		return "ambiguous"
-	default:
-		return "unknown"
-	}
 }
 
 func sortedKeys(m map[string]struct{}) []string {

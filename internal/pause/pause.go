@@ -1,3 +1,4 @@
+// Package pause coordinates agent pause and resume state using a durable sentinel.
 package pause
 
 import (

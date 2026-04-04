@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mato/internal/frontmatter"
+	"mato/internal/ui"
 )
 
 // setupIndexDirs creates the standard .mato directory tree in a temp dir
@@ -730,9 +731,11 @@ func TestEnsureIndex_NilDoesNotWriteStderr(t *testing.T) {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	idx := ensureIndex(tasksDir, nil)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	os.Stderr = oldStderr
 

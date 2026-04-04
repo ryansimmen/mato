@@ -19,6 +19,7 @@ import (
 	"mato/internal/lockfile"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
+	"mato/internal/ui"
 )
 
 var writeBranchMarkerRecoveryFn = WriteBranchMarker
@@ -87,12 +88,12 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 
 		laterDir, warns := LaterStateDuplicateDir(name, laterStateDirs(tasksDir)...)
 		for _, w := range warns {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", w)
+			ui.Warnf("warning: %v\n", w)
 		}
 		if laterDir != "" {
 			if err := os.Remove(src); err != nil {
 				if !os.IsNotExist(err) {
-					fmt.Fprintf(os.Stderr, "warning: could not remove stale in-progress copy %s: %v\n", name, err)
+					ui.Warnf("warning: could not remove stale in-progress copy %s: %v\n", name, err)
 				}
 				continue
 			}
@@ -103,7 +104,7 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 		if agent := ParseClaimedBy(src); agent != "" {
 			status, err := identity.DescribeAgentActivity(tasksDir, agent)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not verify agent %s for in-progress task %s: %v\n", agent, name, err)
+				ui.Warnf("warning: could not verify agent %s for in-progress task %s: %v\n", agent, name, err)
 				continue
 			}
 			if status == identity.AgentActive {
@@ -114,7 +115,7 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 
 		if recovery, recovered, err := recoverPushedTaskToReadyReview(tasksDir, name, src); recovered {
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not recover pushed task %s to ready-for-review: %v\n", name, err)
+				ui.Warnf("warning: could not recover pushed task %s to ready-for-review: %v\n", name, err)
 			} else if recovery != nil {
 				pushedRecoveries = append(pushedRecoveries, *recovery)
 			}
@@ -124,12 +125,12 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 		dst := filepath.Join(tasksDir, DirBacklog, name)
 		if err := AtomicMove(src, dst); err != nil {
 			if !errors.Is(err, ErrDestinationExists) {
-				fmt.Fprintf(os.Stderr, "warning: could not recover orphaned task %s: %v\n", name, err)
+				ui.Warnf("warning: could not recover orphaned task %s: %v\n", name, err)
 				continue
 			}
 			resolved, err := resolveOrphanCollision(src, dst)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not resolve orphan collision for %s: %v\n", name, err)
+				ui.Warnf("warning: could not resolve orphan collision for %s: %v\n", name, err)
 				continue
 			}
 			if resolved == "" {
@@ -143,7 +144,7 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 		content := fmt.Sprintf("\n<!-- failure: mato-recovery at %s — agent was interrupted -->\n",
 			time.Now().UTC().Format(time.RFC3339))
 		if err := atomicwrite.AppendToFile(dst, content); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write failure record for %s: %v\n", name, err)
+			ui.Warnf("warning: could not write failure record for %s: %v\n", name, err)
 		}
 
 		fmt.Fprintf(os.Stderr, "Recovered orphaned task %s back to backlog\n", name)
@@ -181,9 +182,9 @@ func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskReco
 		state.TaskBranch = branch
 		state.TargetBranch = targetBranch
 		state.LastHeadSHA = lastHeadSHA
-		state.LastOutcome = "work-pushed"
+		state.LastOutcome = taskstate.OutcomeWorkPushed
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not record recovered pushed taskstate for %s: %v\n", name, err)
+		ui.Warnf("warning: could not record recovered pushed taskstate for %s: %v\n", name, err)
 	}
 	fmt.Fprintf(os.Stderr, "Recovered pushed task %s to ready-for-review\n", name)
 	return &PushedTaskRecovery{Filename: name, Branch: branch, TargetBranch: targetBranch, LastHeadSHA: lastHeadSHA}, true, nil
@@ -355,13 +356,13 @@ func crossDeviceMove(src, dst string) error {
 	if err := writeFileFn(f, data); err != nil {
 		f.Close()
 		if cleanErr := removeFn(dst); cleanErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: cross-device move cleanup failed for %s: %v\n", dst, cleanErr)
+			ui.Warnf("warning: cross-device move cleanup failed for %s: %v\n", dst, cleanErr)
 		}
 		return fmt.Errorf("atomic move %s → %s: write destination: %w", src, dst, err)
 	}
 	if err := f.Close(); err != nil {
 		if cleanErr := removeFn(dst); cleanErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: cross-device move cleanup failed for %s: %v\n", dst, cleanErr)
+			ui.Warnf("warning: cross-device move cleanup failed for %s: %v\n", dst, cleanErr)
 		}
 		return fmt.Errorf("atomic move %s → %s: close destination: %w", src, dst, err)
 	}

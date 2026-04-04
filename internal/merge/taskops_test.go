@@ -340,7 +340,7 @@ func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	if err := taskstate.Update(tasksDir, "cleanup.md", func(state *taskstate.TaskState) {
-		state.LastOutcome = "review-approved"
+		state.LastOutcome = taskstate.OutcomeReviewApproved
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -353,8 +353,8 @@ func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "merge-conflict-cleanup" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=merge-conflict-cleanup", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeMergeConflictCleanup {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeMergeConflictCleanup)
 	}
 }
 

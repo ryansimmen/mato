@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/process"
@@ -834,6 +833,45 @@ func TestShowToBuffer(t *testing.T) {
 	}
 }
 
+func TestShowTo_TextWriterError(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "demo.md"), []byte("---\nid: demo\npriority: 10\n---\n# Demo task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		show func(io.Writer, string) error
+	}{
+		{name: "compact", show: ShowTo},
+		{name: "verbose", show: ShowVerboseTo},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writeErr := errors.New("broken pipe")
+			fw := &failAfterNWriter{n: 1, err: writeErr}
+
+			err := tt.show(fw, repoRoot)
+			if err == nil {
+				t.Fatal("expected writer error, got nil")
+			}
+			if !errors.Is(err, writeErr) {
+				t.Fatalf("error = %v, want wrapped %v", err, writeErr)
+			}
+		})
+	}
+}
+
 func TestShowTo_UnreadableLockFileWarning(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
@@ -853,15 +891,9 @@ func TestShowTo_UnreadableLockFileWarning(t *testing.T) {
 	}
 	defer cleanup()
 
-	// Inject a hook that fails to read the lock file (simulating TOCTOU race).
-	origFn := readLockFileFn
-	readLockFileFn = func(name string) ([]byte, error) {
-		if filepath.Base(name) == "warn0001.pid" {
-			return nil, errors.New("permission denied")
-		}
-		return origFn(name)
-	}
-	defer func() { readLockFileFn = origFn }()
+	// Replace the registered lock with a self-referential symlink so reads fail
+	// with a real filesystem error.
+	testutil.MakeUnreadablePath(t, filepath.Join(tasksDir, ".locks", "warn0001.pid"))
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot); err != nil {
@@ -881,22 +913,11 @@ func TestActiveAgents_GenuinelyUnreadableLockFile(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	// Write a lock file then make it unreadable via permissions.
-	// Before the fix, identity.IsAgentActive would silently return false
-	// (lockfile.IsHeld returns false on read error), causing activeAgents
-	// to skip the agent without generating a warning.
+	// Make the lock path unreadable with a self-referential symlink. Before the
+	// fix, identity.IsAgentActive would silently return false on read errors,
+	// causing activeAgents to skip the agent without generating a warning.
 	lockPath := filepath.Join(locksDir, "unread01.pid")
-	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	origRead := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, errors.New("permission denied")
-		}
-		return origRead(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(origRead) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	agents, warnings, err := activeAgents(tasksDir)
 	if err != nil {

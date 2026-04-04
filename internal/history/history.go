@@ -75,8 +75,7 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 	if format == "json" {
 		return renderJSON(w, events)
 	}
-	renderText(w, events)
-	return nil
+	return renderText(w, events)
 }
 
 func collectEvents(tasksDir string) ([]Event, error) {
@@ -293,10 +292,11 @@ func colorEventType(padded string) string {
 // width-based truncation on very narrow terminals.
 const minTruncWidth = 6
 
-func renderText(w io.Writer, events []Event) {
+func renderText(w io.Writer, events []Event) error {
+	tw := ui.NewTextWriter(w)
 	if len(events) == 0 {
-		fmt.Fprintln(w, "(no history)")
-		return
+		tw.Println("(no history)")
+		return tw.Err()
 	}
 
 	termWidth := ui.TermWidth()
@@ -385,14 +385,14 @@ func renderText(w io.Writer, events []Event) {
 		}
 
 		if eventTaskWidth > 0 {
-			fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
+			tw.Printf("%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
 		} else if termWidth > 0 && len([]rune(ts))+2+len([]rune(event.Type)) > termWidth {
 			// Timestamp was truncated so tightly that adding "  TYPE"
 			// would still overflow; print only the truncated timestamp.
-			fmt.Fprint(w, colors.Dim(ts))
+			tw.Print(colors.Dim(ts))
 		} else {
 			// No room for task column; omit trailing type padding.
-			fmt.Fprintf(w, "%s  %s", colors.Dim(ts), colorEventType(event.Type))
+			tw.Printf("%s  %s", colors.Dim(ts), colorEventType(event.Type))
 		}
 
 		if showDetail && detail != "" {
@@ -401,14 +401,15 @@ func renderText(w io.Writer, events []Event) {
 				maxDetail := termWidth - usedWidth
 				if maxDetail > 0 {
 					detail = ui.Truncate(detail, maxDetail)
-					fmt.Fprintf(w, "  %s", detail)
+					tw.Printf("  %s", detail)
 				}
 			} else {
-				fmt.Fprintf(w, "  %s", detail)
+				tw.Printf("  %s", detail)
 			}
 		}
-		fmt.Fprintln(w)
+		tw.Println()
 	}
+	return tw.Err()
 }
 
 func renderJSON(w io.Writer, events []Event) error {

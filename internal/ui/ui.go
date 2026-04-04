@@ -46,11 +46,21 @@ var warningWriter io.Writer
 // Warnf writes a formatted warning to stderr following the repo
 // convention of "warning: ..." messages.
 func Warnf(format string, args ...any) {
-	w := warningWriter
+	_ = WarnTo(nil, format, args...)
+}
+
+// WarnTo writes a formatted warning to w. When w is nil, it follows the same
+// fallback chain as Warnf: the configured warning writer when present, or
+// os.Stderr at call time.
+func WarnTo(w io.Writer, format string, args ...any) error {
+	if w == nil {
+		w = warningWriter
+	}
 	if w == nil {
 		w = os.Stderr
 	}
-	fmt.Fprintf(w, format, args...)
+	_, err := fmt.Fprintf(w, format, args...)
+	return err
 }
 
 // SetWarningWriter replaces the warning destination and returns the

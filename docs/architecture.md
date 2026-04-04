@@ -33,9 +33,9 @@ High-level flow:
 1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, uses `internal/configresolve` to resolve precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)` via `mato run`, bootstraps a repository via `setup.InitRepo(...)`, shows effective repo defaults via `mato config`, or routes to read-only subcommands such as `status.Show(...)`, `history.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
 2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs. `RunOptions.Mode` selects between the default daemon loop, one-iteration bounded execution (`--once`), and drain-until-idle bounded execution (`--until-idle`).
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, chooses a stable task branch (reusing any recorded branch marker when safe, otherwise deriving a sanitized/disambiguated branch), then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim, works on the preselected branch, and commits locally.
-4. After the agent exits, the host pushes the task branch and moves the task file to `ready-for-review/`.
-5. A review agent evaluates the pushed branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with recorded feedback.
-6. The host merge queue squashes approved task branches into the target branch and moves the task file to `completed/`.
+4. After the agent exits, the host pushes the task branch, writes the authoritative `<!-- branch: ... -->` marker, and moves the task file to `ready-for-review/`.
+5. A review agent evaluates the pushed branch. Approved tasks advance to `ready-to-merge/`; rejected tasks return to `backlog/` with recorded feedback. Review treats missing branch markers on handoff files as a recorded failure, not as a cue to reconstruct the branch from the filename.
+6. The host merge queue squashes approved task branches into the target branch and moves the task file to `completed/`. Merge likewise requires the recorded branch marker and requeues/fails corrupted handoffs instead of guessing.
 ## 2. Host Loop
 ### Startup
 `runner.Run(repoRoot, branch, opts)` performs host initialization in this order:
@@ -195,7 +195,7 @@ State-by-state behavior:
 - `COMMIT`: `git add -A`, commit with the task title, and exit. The host detects commits and handles push + review transition.
 - `ON_FAILURE`: append a structured `<!-- failure: ... -->` record, try to check out the target branch, then always move the task back to `backlog/`. The host checks the failure record budget on the next cycle via `SelectAndClaimTask`.
 
-After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, updates `.mato/runtime/taskstate/<task-filename>.json` with the pushed branch tip and outcome, updates the `work` session's `last_head_sha`, and sends `conflict-warning` and `completion` messages.
+After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, updates `.mato/runtime/taskstate/<task-filename>.json` with the pushed branch tip and outcome, updates the `work` session's `last_head_sha`, and sends `conflict-warning` and `completion` messages. That branch marker is the durable handoff record for all post-work phases; if a `ready-for-review/` or `ready-to-merge/` task is missing it, the host records a failure/requeue instead of synthesizing a branch from the filename.
 
 The prompt enforces several invariants: one task per run; agents never push any branches (the host handles all pushes); they send at most 4 messages per task (3 `progress` + 1 for `ON_FAILURE`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States
@@ -318,7 +318,7 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
    - **Approved**: host writes `<!-- reviewed: ... -->` to the task file, moves it to `ready-to-merge/`, records `review-approved` in taskstate, and sends a completion message.
    - **Rejected**: host writes `<!-- review-rejection: ... -->` to the task file, moves it back to `backlog/`, records `review-rejected` in taskstate, and sends a completion message.
    - **Error**: host writes a `<!-- review-failure: ... -->` record, records `review-error`, and leaves the task in `ready-for-review/`.
-   - **No verdict file** (agent crashed): host falls back to checking for HTML markers in the task file, then writes a `<!-- review-failure: ... -->` record and records `review-incomplete` if none found.
+   - **No verdict file** (agent crashed): host writes a `<!-- review-failure: ... -->` record, records `review-incomplete`, and leaves the task in `ready-for-review/` for retry.
 
 ### Key properties
 - Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` records are counted for the task's failure record budget.

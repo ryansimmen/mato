@@ -26,15 +26,23 @@ func GenerateAgentID() (string, error) {
 // exists but cannot be read, allowing callers to distinguish unreadable
 // locks from dead or missing ones.
 func CheckAgentActive(tasksDir, agentID string) (bool, error) {
+	meta, err := agentLockMetadata(tasksDir, agentID)
+	if err != nil {
+		return false, err
+	}
+	return meta.IsActive(), nil
+}
+
+func agentLockMetadata(tasksDir, agentID string) (lockfile.Metadata, error) {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
-		return false, nil
+		return lockfile.Metadata{}, nil
 	}
 	if strings.Contains(agentID, "/") || strings.Contains(agentID, "\\") {
-		return false, nil
+		return lockfile.Metadata{}, nil
 	}
 	lockFile := filepath.Join(tasksDir, ".locks", agentID+".pid")
-	return lockfile.CheckHeld(lockFile)
+	return lockfile.ReadMetadata(lockFile)
 }
 
 // IsAgentActive checks whether the agent that wrote a lock file is still running.
@@ -61,11 +69,11 @@ const (
 // It treats missing or invalid agent IDs as inactive, active locks as active,
 // and unreadable lock files as unknown with context.
 func DescribeAgentActivity(tasksDir, agentID string) (AgentActivity, error) {
-	active, err := CheckAgentActive(tasksDir, agentID)
+	meta, err := agentLockMetadata(tasksDir, agentID)
 	if err != nil {
 		return AgentUnknown, fmt.Errorf("read agent lock %s: %w", agentID, err)
 	}
-	if active {
+	if meta.IsActive() {
 		return AgentActive, nil
 	}
 	return AgentInactive, nil

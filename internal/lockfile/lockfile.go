@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"mato/internal/process"
@@ -18,14 +19,30 @@ var (
 	osRemove   = os.Remove
 )
 
-// TestHookReadFile exposes the current read hook for tests.
-func TestHookReadFile() func(string) ([]byte, error) {
-	return osReadFile
+// Status describes the current state of a lock file's holder.
+type Status int
+
+const (
+	// StatusInactive means the lock file is missing, empty, invalid, or held by
+	// a dead process.
+	StatusInactive Status = iota
+	// StatusActive means the lock holder is still alive.
+	StatusActive
+	// StatusUnknown means the lock file could not be read, so its state could
+	// not be determined.
+	StatusUnknown
+)
+
+// Metadata captures the parsed state of a lock file.
+type Metadata struct {
+	PID      int
+	Identity string
+	Status   Status
 }
 
-// SetTestHookReadFile replaces the read hook for tests.
-func SetTestHookReadFile(fn func(string) ([]byte, error)) {
-	osReadFile = fn
+// IsActive reports whether the metadata describes a live lock holder.
+func (m Metadata) IsActive() bool {
+	return m.Status == StatusActive
 }
 
 // CheckHeld checks whether a lock file at the given path exists and is held
@@ -33,18 +50,44 @@ func SetTestHookReadFile(fn func(string) ([]byte, error)) {
 // but cannot be read, allowing callers to distinguish unreadable files from
 // absent or dead locks.
 func CheckHeld(lockPath string) (bool, error) {
+	meta, err := ReadMetadata(lockPath)
+	if err != nil {
+		return false, err
+	}
+	return meta.IsActive(), nil
+}
+
+// ReadMetadata reads a lock file once and returns its parsed holder metadata.
+// Missing, empty, invalid, or dead locks are reported as StatusInactive.
+// Unreadable locks return StatusUnknown along with the read error.
+func ReadMetadata(lockPath string) (Metadata, error) {
 	data, err := osReadFile(lockPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return Metadata{Status: StatusInactive}, nil
 		}
-		return false, err
+		return Metadata{Status: StatusUnknown}, err
 	}
-	content := strings.TrimSpace(string(data))
-	if content == "" {
-		return false, nil
+	return metadataFromContent(string(data)), nil
+}
+
+func metadataFromContent(content string) Metadata {
+	meta := Metadata{
+		Identity: strings.TrimSpace(content),
+		Status:   StatusInactive,
 	}
-	return process.IsLockHolderAlive(content), nil
+	if meta.Identity == "" {
+		return meta
+	}
+
+	parts := strings.SplitN(meta.Identity, ":", 2)
+	if pid, err := strconv.Atoi(parts[0]); err == nil && pid > 0 {
+		meta.PID = pid
+	}
+	if process.IsLockHolderAlive(meta.Identity) {
+		meta.Status = StatusActive
+	}
+	return meta
 }
 
 // IsHeld checks whether a lock file at the given path exists and is held by
@@ -124,8 +167,7 @@ func Acquire(locksDir, name string) (func(), bool) {
 			return nil, false
 		}
 
-		content := strings.TrimSpace(string(data))
-		if content != "" && process.IsLockHolderAlive(content) {
+		if metadataFromContent(string(data)).IsActive() {
 			return nil, false
 		}
 		// Empty content (crash between create and write) or dead PID: reclaim.

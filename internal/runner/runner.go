@@ -676,7 +676,7 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 		return err
 	}
 
-	cleanStaleClones(staleCloneMaxAge)
+	cleanStaleClones(os.TempDir(), time.Now(), staleCloneMaxAge)
 
 	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown, opts.Mode)
 }
@@ -688,7 +688,7 @@ func reportBranchResolution(result git.EnsureBranchResult) {
 
 	switch result.Source {
 	case git.BranchSourceRemoteCached, git.BranchSourceHeadRemoteUnavailable:
-		fmt.Fprintf(os.Stderr, "warning: using branch %s (%s)\n", result.Branch, result.SourceDescription())
+		ui.Warnf("warning: using branch %s (%s)\n", result.Branch, result.SourceDescription())
 	default:
 		fmt.Printf("Using branch %s (%s)\n", result.Branch, result.SourceDescription())
 	}
@@ -807,10 +807,10 @@ func pollCleanup(tasksDir string) {
 	messaging.CleanStalePresence(tasksDir)
 	messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 	if err := taskstate.Sweep(tasksDir); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not clean stale taskstate: %v\n", err)
+		ui.Warnf("warning: could not clean stale taskstate: %v\n", err)
 	}
 	if err := sessionmeta.Sweep(tasksDir); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not clean stale sessionmeta: %v\n", err)
+		ui.Warnf("warning: could not clean stale sessionmeta: %v\n", err)
 	}
 }
 
@@ -824,12 +824,9 @@ const cloneDirPrefix = "mato-"
 // ample time to inspect a failed push before the directory is reclaimed.
 const staleCloneMaxAge = 24 * time.Hour
 
-// tempDirFn returns the OS temp directory. Tests override it to avoid
-// touching the real /tmp.
-var tempDirFn = os.TempDir
-
-// cleanStaleClones removes clone directories in the OS temp directory that
-// were preserved for debugging after a failed push (see runOnce in task.go).
+// cleanStaleClones removes clone directories in the given temp directory
+// that were preserved for debugging after a failed push (see runOnce in
+// task.go).
 //
 // A directory is removed only when all three conditions are met:
 //  1. Its name starts with the "mato-" prefix used by git.CreateClone.
@@ -837,20 +834,19 @@ var tempDirFn = os.TempDir
 //     writeDebugMarker when a clone is intentionally preserved after a
 //     postAgentPush failure. This positively identifies the directory as
 //     a mato debug clone rather than an active or unrelated temp clone.
-//  3. Its modification time is older than maxAge.
+//  3. Its modification time is older than maxAge relative to now.
 //
 // This runs once at runner startup, before the poll loop begins, so that
 // stale clones from previous runs are reclaimed without risking removal of
 // clones that may still be in active use by a currently running agent.
-func cleanStaleClones(maxAge time.Duration) {
-	tmpDir := tempDirFn()
+func cleanStaleClones(tmpDir string, now time.Time, maxAge time.Duration) {
 	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not list temp directory for clone cleanup: %v\n", err)
+		ui.Warnf("warning: could not list temp directory for clone cleanup: %v\n", err)
 		return
 	}
 
-	cutoff := nowFn().Add(-maxAge)
+	cutoff := now.Add(-maxAge)
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -878,10 +874,10 @@ func cleanStaleClones(maxAge time.Duration) {
 		}
 
 		if err := os.RemoveAll(dirPath); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not remove stale clone %s: %v\n", dirPath, err)
+			ui.Warnf("warning: could not remove stale clone %s: %v\n", dirPath, err)
 			continue
 		}
-		fmt.Printf("Cleaned up stale clone directory: %s (age: %s)\n", dirPath, nowFn().Sub(info.ModTime()).Truncate(time.Minute))
+		fmt.Printf("Cleaned up stale clone directory: %s (age: %s)\n", dirPath, now.Sub(info.ModTime()).Truncate(time.Minute))
 	}
 }
 
@@ -931,7 +927,7 @@ var nowFn = time.Now
 func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool) {
 	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
 	if err := queue.WriteQueueManifestFromView(tasksDir, failedDirExcluded, idx, view); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write queue manifest: %v\n", err)
+		ui.Warnf("warning: could not write queue manifest: %v\n", err)
 		return view, true
 	}
 	return view, false
@@ -949,9 +945,9 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 	var fdErr *queue.FailedDirUnavailableError
 	if errors.As(claimErr, &fdErr) {
 		failedDirExcluded[fdErr.TaskFilename] = struct{}{}
-		fmt.Fprintf(os.Stderr, "warning: excluding retry-exhausted task %s from future polls (failed/ directory unavailable)\n", fdErr.TaskFilename)
+		ui.Warnf("warning: excluding retry-exhausted task %s from future polls (failed/ directory unavailable)\n", fdErr.TaskFilename)
 	} else if claimErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not claim task: %v\n", claimErr)
+		ui.Warnf("warning: could not claim task: %v\n", claimErr)
 		hadError = true
 	}
 
@@ -966,17 +962,17 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 		Branch: task.Branch,
 		Body:   "Starting work",
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write intent message: %v\n", err)
+		ui.Warnf("warning: could not write intent message: %v\n", err)
 	}
 	if err := messaging.WritePresence(tasksDir, agentID, task.Filename, task.Branch); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write presence: %v\n", err)
+		ui.Warnf("warning: could not write presence: %v\n", err)
 	}
 	if err := messaging.BuildAndWriteFileClaims(tasksDir, task.Filename); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not build file claims: %v\n", err)
+		ui.Warnf("warning: could not build file claims: %v\n", err)
 	}
 
 	if err := runOnce(ctx, env, run, task); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: agent run failed: %v\n", err)
+		ui.Warnf("warning: agent run failed: %v\n", err)
 	}
 
 	recoverStuckTask(tasksDir, agentID, task)
@@ -1004,7 +1000,7 @@ func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, br
 
 	fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
 	if err := runReview(ctx, env, run, reviewTask, branch); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: review agent failed: %v\n", err)
+		ui.Warnf("warning: review agent failed: %v\n", err)
 	}
 	postReviewAction(tasksDir, agentID, reviewTask)
 	return true
@@ -1121,7 +1117,7 @@ func pollIterate(
 		if msg := hb.pausedMessage(now, priorPausedState); msg != "" {
 			fmt.Println(msg)
 			if pauseProblem != "" {
-				fmt.Fprintf(os.Stderr, "warning: pause sentinel: %s\n", pauseProblem)
+				ui.Warnf("warning: pause sentinel: %s\n", pauseProblem)
 			}
 		}
 	} else if priorPausedState {
@@ -1206,7 +1202,7 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 				boundedErrorCount++
 			}
 			if consecutiveErrors == errBackoffThreshold {
-				fmt.Fprintf(os.Stderr, "warning: entering backoff mode after %d consecutive poll errors\n", consecutiveErrors)
+				ui.Warnf("warning: entering backoff mode after %d consecutive poll errors\n", consecutiveErrors)
 			}
 		} else {
 			if consecutiveErrors >= errBackoffThreshold {
@@ -1257,7 +1253,7 @@ func surfaceBuildWarnings(idx *queue.PollIndex) bool {
 	}
 	hasDirReadFailure := false
 	for _, w := range warnings {
-		fmt.Fprintf(os.Stderr, "warning: index build: %s (%s): %v\n", w.Path, w.State, w.Err)
+		ui.Warnf("warning: index build: %s (%s): %v\n", w.Path, w.State, w.Err)
 		// Directory-level read failures produce paths without a .md
 		// suffix; these mean the index is missing an entire queue
 		// directory and downstream scheduling may be distorted.
@@ -1274,20 +1270,20 @@ var appendToFileFn = atomicwrite.AppendToFile
 
 func recordTaskStateUpdate(tasksDir, filename, action string, fn func(*taskstate.TaskState)) {
 	if err := taskstate.Update(tasksDir, filename, fn); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not %s for %s: %v\n", action, filename, err)
+		ui.Warnf("warning: could not %s for %s: %v\n", action, filename, err)
 	}
 }
 
 func recordSessionUpdate(tasksDir, kind, filename, action string, fn func(*sessionmeta.Session)) {
 	if err := sessionmeta.Update(tasksDir, kind, filename, fn); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not %s for %s: %v\n", action, filename, err)
+		ui.Warnf("warning: could not %s for %s: %v\n", action, filename, err)
 	}
 }
 
 func loadOrCreateSession(tasksDir, kind, filename, branch string) *sessionmeta.Session {
 	session, err := sessionmeta.LoadOrCreate(tasksDir, kind, filename, branch)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not prepare %s session for %s: %v\n", kind, filename, err)
+		ui.Warnf("warning: could not prepare %s session for %s: %v\n", kind, filename, err)
 		return nil
 	}
 	return session
@@ -1296,7 +1292,7 @@ func loadOrCreateSession(tasksDir, kind, filename, branch string) *sessionmeta.S
 func resetSession(tasksDir, kind, filename, branch string) string {
 	session, err := sessionmeta.ResetSessionID(tasksDir, kind, filename, branch)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not reset %s session for %s: %v\n", kind, filename, err)
+		ui.Warnf("warning: could not reset %s session for %s: %v\n", kind, filename, err)
 		return ""
 	}
 	if session == nil {
@@ -1337,7 +1333,7 @@ func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extra
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "warning: Copilot resume rejected; retrying with a fresh session\n")
+	ui.Warnf("warning: Copilot resume rejected; retrying with a fresh session\n")
 	if freshSessionID := strings.TrimSpace(resetResumeSession()); freshSessionID != "" && freshSessionID != run.resumeSessionID {
 		run.resumeSessionID = freshSessionID
 		freshErr, _ := runAttempt(run)

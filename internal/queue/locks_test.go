@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"mato/internal/lockfile"
 	"mato/internal/process"
+	"mato/internal/testutil"
 )
 
 func TestCleanStaleLocks_RemovesDeadProcessLock(t *testing.T) {
@@ -119,22 +120,11 @@ func TestCleanStaleLocks_PreservesUnreadableLock(t *testing.T) {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
 	lockPath := filepath.Join(locksDir, "unknown-agent.pid")
-	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
-		t.Fatalf("write lock: %v", err)
-	}
-
-	orig := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, fmt.Errorf("permission denied")
-		}
-		return orig(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(orig) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	CleanStaleLocks(tasksDir)
 
-	if _, err := os.Stat(lockPath); err != nil {
+	if _, err := os.Lstat(lockPath); err != nil {
 		t.Fatalf("unreadable lock should be preserved: %v", err)
 	}
 }
@@ -251,6 +241,28 @@ func TestCleanStaleReviewLocks_RemovesDeadProcess(t *testing.T) {
 	}
 }
 
+func TestCleanStaleReviewLocks_PreservesUnreadableLock(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+	locksDir := filepath.Join(tasksDir, DirLocks)
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("mkdir .locks: %v", err)
+	}
+
+	lockPath := filepath.Join(locksDir, "review-unreadable-task.md.lock")
+	testutil.MakeUnreadablePath(t, lockPath)
+
+	stderr := captureStderr(t, func() {
+		CleanStaleReviewLocks(tasksDir)
+	})
+
+	if _, err := os.Lstat(lockPath); err != nil {
+		t.Fatalf("unreadable review lock should be preserved: %v", err)
+	}
+	if !strings.Contains(stderr, "warning: could not verify review lock review-unreadable-task.md.lock:") {
+		t.Fatalf("expected verify warning in stderr, got %q", stderr)
+	}
+}
+
 func TestCleanStaleReviewLocks_PreservesLiveProcess(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 	locksDir := filepath.Join(tasksDir, DirLocks)
@@ -270,6 +282,39 @@ func TestCleanStaleReviewLocks_PreservesLiveProcess(t *testing.T) {
 	lockPath := filepath.Join(locksDir, "review-live-task.md.lock")
 	if _, err := os.Stat(lockPath); err != nil {
 		t.Fatalf("live review lock should be preserved: %v", err)
+	}
+}
+
+func TestCleanStaleReviewLocks_WarnsOnRemoveFailure(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+	locksDir := filepath.Join(tasksDir, DirLocks)
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("mkdir .locks: %v", err)
+	}
+
+	lockPath := filepath.Join(locksDir, "review-remove-failure-task.md.lock")
+	if err := os.WriteFile(lockPath, []byte("999999:0"), 0o644); err != nil {
+		t.Fatalf("write stale review lock: %v", err)
+	}
+
+	origRemove := removeFn
+	removeFn = func(path string) error {
+		if path == lockPath {
+			return fmt.Errorf("permission denied")
+		}
+		return origRemove(path)
+	}
+	t.Cleanup(func() { removeFn = origRemove })
+
+	stderr := captureStderr(t, func() {
+		CleanStaleReviewLocks(tasksDir)
+	})
+
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("review lock should remain when removal fails: %v", err)
+	}
+	if !strings.Contains(stderr, "warning: could not remove stale review lock review-remove-failure-task.md.lock: permission denied") {
+		t.Fatalf("expected remove warning in stderr, got %q", stderr)
 	}
 }
 

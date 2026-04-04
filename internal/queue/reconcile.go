@@ -8,6 +8,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
+	"mato/internal/ui"
 )
 
 // promotableTask describes a waiting task whose dependencies are satisfied.
@@ -64,26 +65,26 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 
 	// Move unparseable waiting/backlog tasks to failed/ using index parse failures.
 	for _, pf := range idx.WaitingParseFailures() {
-		fmt.Fprintf(os.Stderr, "warning: moving unparseable waiting task %s to failed/: %v\n", pf.Filename, pf.Err)
+		ui.Warnf("warning: moving unparseable waiting task %s to failed/: %v\n", pf.Filename, pf.Err)
 		if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter: %v", pf.Err)); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
+			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
 		}
 		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
+			ui.Warnf("warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
 		} else {
 			deleteTaskState(tasksDir, pf.Filename)
 			moved = true
 		}
 	}
 	for _, pf := range idx.BacklogParseFailures() {
-		fmt.Fprintf(os.Stderr, "warning: moving unparseable backlog task %s to failed/: %v\n", pf.Filename, pf.Err)
+		ui.Warnf("warning: moving unparseable backlog task %s to failed/: %v\n", pf.Filename, pf.Err)
 		if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter: %v", pf.Err)); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
+			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
 		}
 		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
+			ui.Warnf("warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
 		} else {
 			deleteTaskState(tasksDir, pf.Filename)
 			moved = true
@@ -93,13 +94,13 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	// Move backlog tasks with invalid glob syntax to failed/.
 	for _, snap := range idx.TasksByState(DirBacklog) {
 		if snap.GlobError != nil {
-			fmt.Fprintf(os.Stderr, "warning: moving backlog task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
+			ui.Warnf("warning: moving backlog task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
 			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", snap.GlobError)); appendErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
+				ui.Warnf("warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
 			}
 			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
 			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+				ui.Warnf("warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 			} else {
 				deleteTaskState(tasksDir, snap.Filename)
 				moved = true
@@ -117,10 +118,10 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			}
 			waitingPath := filepath.Join(tasksDir, DirWaiting, snap.Filename)
 			if err := AtomicMove(snap.Path, waitingPath); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", snap.Filename, err)
+				ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", snap.Filename, err)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", snap.Filename, FormatDependencyBlocks(blocks))
+			ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", snap.Filename, FormatDependencyBlocks(blocks))
 			moved = true
 			demoted++
 		}
@@ -136,15 +137,15 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	for _, issue := range diag.Issues {
 		switch issue.Kind {
 		case DependencyAmbiguousID:
-			fmt.Fprintf(os.Stderr, "warning: task ID %q exists in both completed and non-completed directories; dependency on it will not be satisfied\n", issue.TaskID)
+			ui.Warnf("warning: task ID %q exists in both completed and non-completed directories; dependency on it will not be satisfied\n", issue.TaskID)
 		case DependencyDuplicateID:
-			fmt.Fprintf(os.Stderr, "warning: duplicate waiting task ID %q: %s and %s\n", issue.TaskID, issue.DependsOn, issue.Filename)
+			ui.Warnf("warning: duplicate waiting task ID %q: %s and %s\n", issue.TaskID, issue.DependsOn, issue.Filename)
 		case DependencySelfCycle:
-			fmt.Fprintf(os.Stderr, "warning: task %s depends on itself\n", issue.TaskID)
+			ui.Warnf("warning: task %s depends on itself\n", issue.TaskID)
 		case DependencyCycle:
-			fmt.Fprintf(os.Stderr, "warning: task %s is part of a circular dependency\n", issue.TaskID)
+			ui.Warnf("warning: task %s is part of a circular dependency\n", issue.TaskID)
 		case DependencyUnknownID:
-			fmt.Fprintf(os.Stderr, "warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", issue.Filename, issue.DependsOn)
+			ui.Warnf("warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", issue.Filename, issue.DependsOn)
 		}
 	}
 
@@ -158,13 +159,13 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			continue // retained copy or unknown ID — skip
 		}
 		reason := fmt.Sprintf("duplicate waiting task ID %q (retained copy: %s)", snap.Meta.ID, retainedFile)
-		fmt.Fprintf(os.Stderr, "warning: moving duplicate waiting task %s to failed/: %s\n", snap.Filename, reason)
+		ui.Warnf("warning: moving duplicate waiting task %s to failed/: %s\n", snap.Filename, reason)
 		if err := taskfile.AppendTerminalFailureRecord(snap.Path, reason); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
+			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
 		}
 		failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
 		if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+			ui.Warnf("warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 		} else {
 			deleteTaskState(tasksDir, snap.Filename)
 			moved = true
@@ -186,13 +187,13 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		if snap.GlobError == nil {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "warning: moving waiting task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
+		ui.Warnf("warning: moving waiting task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
 		if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", snap.GlobError)); appendErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
+			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
 		}
 		failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
 		if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
+			ui.Warnf("warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 		} else {
 			deleteTaskState(tasksDir, snap.Filename)
 			moved = true
@@ -226,13 +227,13 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			// Step 1: Check for existing cycle-failure marker (idempotency).
 			data, err := os.ReadFile(snap.Path)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not read %s for cycle-failure check: %v\n", snap.Filename, err)
+				ui.Warnf("warning: could not read %s for cycle-failure check: %v\n", snap.Filename, err)
 				continue
 			}
 			if !taskfile.ContainsCycleFailure(data) {
 				// Step 2: Append cycle-failure record before moving.
 				if err := taskfile.AppendCycleFailureRecord(snap.Path); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not append cycle-failure record to %s: %v\n", snap.Filename, err)
+					ui.Warnf("warning: could not append cycle-failure record to %s: %v\n", snap.Filename, err)
 					continue
 				}
 			}
@@ -241,7 +242,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			if err := AtomicMove(snap.Path, failedPath); err != nil {
 				// Step 4: If move fails, warn and continue. The idempotency
 				// check in step 1 prevents duplicate records on the next pass.
-				fmt.Fprintf(os.Stderr, "warning: could not move cycle member %s to failed/: %v\n", snap.Filename, err)
+				ui.Warnf("warning: could not move cycle member %s to failed/: %v\n", snap.Filename, err)
 			} else {
 				deleteTaskState(tasksDir, snap.Filename)
 				moved = true
@@ -272,7 +273,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		}
 		dst := filepath.Join(tasksDir, DirBacklog, snap.Filename)
 		if err := AtomicMove(snap.Path, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not promote waiting task %s: %v\n", snap.Filename, err)
+			ui.Warnf("warning: could not promote waiting task %s: %v\n", snap.Filename, err)
 			continue
 		}
 		moved = true
