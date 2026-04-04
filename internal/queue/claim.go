@@ -12,6 +12,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
+	"mato/internal/ui"
 )
 
 // errFailedDirUnavailable is the sentinel wrapped by FailedDirUnavailableError.
@@ -225,7 +226,7 @@ func chooseClaimBranch(name string, activeBranches map[string]struct{}, existing
 // when the task was successfully moved to failed/.
 func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
 	if err := retryExhaustedMoveFn(dst, filepath.Join(failedDir, name)); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not move retry-exhausted task %s to failed: %v\n", name, err)
+		ui.Warnf("warning: could not move retry-exhausted task %s to failed: %v\n", name, err)
 		// Move back to backlog so the task is not left orphaned
 		// in in-progress/ without a claimed-by marker.
 		if rbErr := retryExhaustedRollback(dst, src); rbErr != nil {
@@ -281,7 +282,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		// after index construction cannot bypass dependency enforcement.
 		snap, snapErr := loadTaskSnapshot(tasksDir, DirBacklog, name, src)
 		if snapErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, snapErr)
+			ui.Warnf("warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, snapErr)
 			continue
 		}
 		meta := snap.Meta
@@ -291,10 +292,10 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
 			waitingPath := filepath.Join(tasksDir, DirWaiting, name)
 			if err := AtomicMove(src, waitingPath); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
+				ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, FormatDependencyBlocks(blocks))
+			ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, FormatDependencyBlocks(blocks))
 			continue
 		}
 
@@ -321,7 +322,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		originalData, err := claimReadFileFn(dst)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read claimed task %s before stamping claim metadata: %v\n", name, err)
+			ui.Warnf("warning: could not read claimed task %s before stamping claim metadata: %v\n", name, err)
 			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
 				return nil, rbErr
 			}
@@ -333,7 +334,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		claimedAt := time.Now().UTC().Format(time.RFC3339)
 		if err := claimPrependFn(dst, agentID, claimedAt); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not write claimed-by header for %s: %v\n", name, err)
+			ui.Warnf("warning: could not write claimed-by header for %s: %v\n", name, err)
 			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
 				return nil, rbErr
 			}
@@ -342,7 +343,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		claimedData, err := claimReadFileFn(dst)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read claimed task %s for branch marker: %v\n", name, err)
+			ui.Warnf("warning: could not read claimed task %s for branch marker: %v\n", name, err)
 			if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
 				return nil, fmt.Errorf("read claimed task for branch marker: %w (also failed to restore task contents: %v)", err, restoreErr)
 			}
@@ -360,7 +361,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		if existingBranch != branch {
 			if err := WriteBranchMarker(dst, branch); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write branch marker for %s: %v\n", name, err)
+				ui.Warnf("warning: could not write branch marker for %s: %v\n", name, err)
 				if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
 					return nil, fmt.Errorf("write branch marker for %s: %w (also failed to restore task contents: %v)", name, err, restoreErr)
 				}

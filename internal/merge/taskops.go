@@ -14,6 +14,7 @@ import (
 	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
+	"mato/internal/ui"
 )
 
 var removeBranchMarkerFn = removeBranchMarker
@@ -32,13 +33,13 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 	if errors.Is(mergeErr, errSquashMergeConflict) && filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirBacklog) {
 		cleanupTaskBranchFn(repoRoot, taskBranchName(task))
 		if err := removeBranchMarkerFn(dst); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not clear branch marker after merge-conflict cleanup for %s: %v\n", task.name, err)
+			ui.Warnf("warning: could not clear branch marker after merge-conflict cleanup for %s: %v\n", task.name, err)
 		}
 		if err := taskstate.Update(tasksDir, task.name, func(state *taskstate.TaskState) {
 			state.TaskBranch = taskBranchName(task)
 			state.LastOutcome = taskstate.OutcomeMergeConflictCleanup
 		}); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not record merge-conflict cleanup taskstate for %s: %v\n", task.name, err)
+			ui.Warnf("warning: could not record merge-conflict cleanup taskstate for %s: %v\n", task.name, err)
 		}
 	}
 	return nil
@@ -75,7 +76,7 @@ func failMergeTask(src, dst, reason string) error {
 
 	appendErr := appendTaskRecord(src, "<!-- failure: merge-queue at %s — %s -->", time.Now().UTC().Format(time.RFC3339), reason)
 	if appendErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not append failure record to %s: %v\n", filepath.Base(src), appendErr)
+		ui.Warnf("warning: could not append failure record to %s: %v\n", filepath.Base(src), appendErr)
 	}
 	if dst == "" {
 		return appendErr

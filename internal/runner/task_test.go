@@ -20,6 +20,7 @@ import (
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestMoveTaskToReviewWithMarker_Success(t *testing.T) {
@@ -712,9 +713,10 @@ func TestExtractFailureLines_MultipleDistinctFailures(t *testing.T) {
 	}
 }
 
-// captureStderr redirects os.Stderr to a pipe, runs fn, and returns whatever
-// was written. Tests that use this must not call t.Parallel because os.Stderr
-// is process-global.
+// captureStderr redirects os.Stderr to a pipe and routes ui.Warnf
+// through ui.SetWarningWriter, runs fn, and returns whatever was
+// written. Tests that use this must not call t.Parallel because
+// os.Stderr is process-global.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stderr
@@ -723,9 +725,11 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	fn()
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	os.Stderr = old
 

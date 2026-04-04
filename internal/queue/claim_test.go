@@ -13,6 +13,7 @@ import (
 
 	"mato/internal/taskfile"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func setupClaimTestDir(t *testing.T) string {
@@ -855,9 +856,11 @@ func TestSelectAndClaimTask_InvalidYAML_Skipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	task, claimErr := SelectAndClaimTask(dir, "agent-warn", candidates("bad-yaml.md"), 0, nil)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	captured, readErr := io.ReadAll(r)
 	os.Stderr = origStderr
@@ -900,9 +903,11 @@ func TestSelectAndClaimTask_InvalidYAML_ExhaustedRetries_Skipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	task, claimErr := SelectAndClaimTask(dir, "agent-exhaust", candidates("bad-exhausted.md"), 0, nil)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	r.Close()
 	os.Stderr = origStderr
@@ -1073,9 +1078,11 @@ func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	task, err := SelectAndClaimTask(dir, "agent-x", candidates("unreadable.md", "readable.md"), 0, nil)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	stderrBytes, _ := io.ReadAll(r)
 	os.Stderr = oldStderr

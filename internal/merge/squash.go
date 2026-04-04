@@ -2,9 +2,10 @@ package merge
 
 import (
 	"fmt"
-	"mato/internal/git"
-	"os"
 	"strings"
+
+	"mato/internal/git"
+	"mato/internal/ui"
 )
 
 var gitOutput = git.Output
@@ -70,7 +71,7 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	// Capture merge result for completion detail.
 	sha, err := gitOutput(cloneDir, "rev-parse", "HEAD")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not determine commit SHA after push: %v\n", err)
+		ui.Warnf("warning: could not determine commit SHA after push: %v\n", err)
 		sha = "unknown"
 	}
 	filesOut, _ := gitOutput(cloneDir, "diff", "--name-only", "HEAD~1..HEAD")
@@ -265,12 +266,12 @@ func cleanupTaskBranch(repoRoot, branchName string) {
 	// Clean up the stale task branch so the next agent can push a fresh one.
 	// Cleanup is best-effort: log warnings but never abort the merge flow.
 	if _, err := gitOutput(repoRoot, "branch", "-D", branchName); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not delete local task branch %s: %v\n", branchName, err)
+		ui.Warnf("warning: could not delete local task branch %s: %v\n", branchName, err)
 	}
 	if _, err := gitOutput(repoRoot, "push", "origin", "--delete", branchName); err != nil {
 		if strings.Contains(err.Error(), "remote ref does not exist") {
 			return
 		}
-		fmt.Fprintf(os.Stderr, "warning: could not delete remote task branch %s: %v\n", branchName, err)
+		ui.Warnf("warning: could not delete remote task branch %s: %v\n", branchName, err)
 	}
 }

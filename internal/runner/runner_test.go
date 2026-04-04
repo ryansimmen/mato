@@ -43,7 +43,9 @@ func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 	}
 	os.Stdout = stdoutW
 	os.Stderr = stderrW
+	prevWarn := ui.SetWarningWriter(stderrW)
 	defer func() {
+		ui.SetWarningWriter(prevWarn)
 		os.Stdout = oldStdout
 		os.Stderr = oldStderr
 	}()

@@ -21,6 +21,7 @@ import (
 	"mato/internal/sessionmeta"
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
+	"mato/internal/ui"
 )
 
 const reviewContextPlaceholder = "REVIEW_CONTEXT_PLACEHOLDER"
@@ -39,16 +40,16 @@ type reviewCandidate struct {
 }
 
 func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queue.ParseFailure) {
-	fmt.Fprintf(os.Stderr, "warning: quarantining unparseable review candidate %s: %v\n", pf.Filename, pf.Err)
+	ui.Warnf("warning: quarantining unparseable review candidate %s: %v\n", pf.Filename, pf.Err)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", pf.Filename, err)
+		ui.Warnf("warning: could not create failed dir for %s: %v\n", pf.Filename, err)
 		return
 	}
 	if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter in ready-for-review: %v", pf.Err)); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
+		ui.Warnf("warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
 	}
 	if moveErr := queue.AtomicMove(pf.Path, filepath.Join(failedDir, pf.Filename)); moveErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not move malformed review task %s to failed: %v\n", pf.Filename, moveErr)
+		ui.Warnf("warning: could not move malformed review task %s to failed: %v\n", pf.Filename, moveErr)
 		return
 	}
 	deleteTaskState(tasksDir, pf.Filename)
@@ -67,14 +68,14 @@ func buildReviewCandidate(tasksDir, failedDir string, snap *queue.TaskSnapshot) 
 	maxRetries := snap.Meta.MaxRetries
 	if failures >= maxRetries {
 		if err := os.MkdirAll(failedDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not create failed dir for %s: %v\n", snap.Filename, err)
+			ui.Warnf("warning: could not create failed dir for %s: %v\n", snap.Filename, err)
 			return nil, false
 		}
 		if err := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("review retry budget exhausted (%d failures >= max_retries %d)", failures, maxRetries)); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
+			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
 		}
 		if moveErr := queue.AtomicMove(snap.Path, filepath.Join(failedDir, snap.Filename)); moveErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
+			ui.Warnf("warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
 			return nil, false
 		}
 		runtimecleanup.DeleteAllPreservingVerdict(tasksDir, snap.Filename)
@@ -143,7 +144,7 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
 	const reason = "missing required <!-- branch: ... --> marker in ready-for-review"
 
-	fmt.Fprintf(os.Stderr, "warning: review candidate %s is missing a required branch marker\n", filename)
+	ui.Warnf("warning: review candidate %s is missing a required branch marker\n", filename)
 	recorded := appendReviewFailure(taskPath, "mato", reason)
 	recordTaskStateUpdate(tasksDir, filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
 		state.LastOutcome = taskstate.OutcomeReviewBranchMarkerMissing
@@ -222,7 +223,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	defer git.RemoveClone(cloneDir)
 
 	if err := configureReceiveDeny(env.repoRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
+		ui.Warnf("warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
 	}
 
 	run.cloneDir = cloneDir
@@ -291,7 +292,7 @@ var rejectDisposition = reviewDisposition{
 // exists and the review may proceed.
 func VerifyReviewBranch(repoRoot, tasksDir string, task *queue.ClaimedTask, agentID string) bool {
 	if _, err := git.Output(repoRoot, "rev-parse", "--verify", "refs/heads/"+task.Branch); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: task branch %s missing from host repo, recording review failure for %s\n", task.Branch, task.Filename)
+		ui.Warnf("warning: task branch %s missing from host repo, recording review failure for %s\n", task.Branch, task.Filename)
 		appendReviewFailure(task.TaskPath, agentID, "task branch "+task.Branch+" not found in host repo")
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
 			state.TaskBranch = task.Branch
@@ -325,9 +326,9 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	// Task must still be in ready-for-review/ (agent no longer moves files).
 	if _, err := os.Stat(task.TaskPath); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: review verdict for %s discarded: task file moved (%v)\n", task.Filename, err)
+			ui.Warnf("warning: review verdict for %s discarded: task file moved (%v)\n", task.Filename, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "warning: could not verify review task file %s: %v\n", task.Filename, err)
+			ui.Warnf("warning: could not verify review task file %s: %v\n", task.Filename, err)
 		}
 		return
 	}
@@ -415,7 +416,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp reviewDisposition, marker string) bool {
 	dst := filepath.Join(tasksDir, disp.dir, task.Filename)
 	if err := queue.AtomicMove(task.TaskPath, dst); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, disp.dir, err)
+		ui.Warnf("warning: could not move reviewed task %s to %s: %v\n", task.Filename, disp.dir, err)
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not move task to %s: %v", disp.dir, err))
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
 			state.LastOutcome = taskstate.OutcomeReviewMoveFailed
@@ -425,14 +426,14 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 	}
 	if marker != "" {
 		if err := appendToFileFn(dst, marker); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: task %s moved to %s/ but could not write verdict marker: %v\n", task.Filename, disp.dir, err)
+			ui.Warnf("warning: task %s moved to %s/ but could not write verdict marker: %v\n", task.Filename, disp.dir, err)
 			// On the rejection path the marker is the durable record of
 			// reviewer feedback that feeds MATO_REVIEW_FEEDBACK. Try a
 			// fallback write (read-modify-write) using a different I/O
 			// path before giving up.
 			if disp.dir == queue.DirBacklog {
 				if fallbackErr := fallbackMarkerWrite(dst, marker); fallbackErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: fallback marker write also failed for %s: %v\n", task.Filename, fallbackErr)
+					ui.Warnf("warning: fallback marker write also failed for %s: %v\n", task.Filename, fallbackErr)
 					return false
 				}
 				fmt.Fprintf(os.Stderr, "info: rejection marker written via fallback for %s\n", task.Filename)
@@ -475,7 +476,7 @@ var fallbackMarkerWrite = func(dst, marker string) error {
 // The task stays in ready-for-review/ for a future review attempt.
 func appendReviewFailure(taskPath, agentID, reason string) bool {
 	if err := taskfile.AppendReviewFailure(taskPath, agentID, reason); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		ui.Warnf("warning: %v\n", err)
 		return false
 	}
 	return true
@@ -526,7 +527,7 @@ func extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, filename str
 func loadTaskStateForReview(tasksDir, filename string) *taskstate.TaskState {
 	state, err := taskstate.Load(tasksDir, filename)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not load taskstate for %s: %v\n", filename, err)
+		ui.Warnf("warning: could not load taskstate for %s: %v\n", filename, err)
 		return nil
 	}
 	return state
@@ -535,7 +536,7 @@ func loadTaskStateForReview(tasksDir, filename string) *taskstate.TaskState {
 func resolveReviewBranchTip(repoRoot string, task *queue.ClaimedTask) string {
 	tip, err := git.Output(repoRoot, "rev-parse", "refs/heads/"+task.Branch)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not resolve review branch tip for %s: %v\n", task.Filename, err)
+		ui.Warnf("warning: could not resolve review branch tip for %s: %v\n", task.Filename, err)
 		return "unknown"
 	}
 	tip = strings.TrimSpace(tip)

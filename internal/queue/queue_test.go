@@ -17,6 +17,7 @@ import (
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func captureStderr(t *testing.T, fn func()) string {
@@ -28,7 +29,9 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 	defer func() {
+		ui.SetWarningWriter(prevWarn)
 		os.Stderr = oldStderr
 	}()
 

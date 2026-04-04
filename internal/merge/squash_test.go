@@ -11,6 +11,7 @@ import (
 
 	"mato/internal/git"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestParseAgentCommitLog(t *testing.T) {
@@ -348,7 +349,9 @@ func TestCleanupTaskBranch_IgnoresMissingRemoteBranch(t *testing.T) {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 	defer func() {
+		ui.SetWarningWriter(prevWarn)
 		os.Stderr = originalStderr
 	}()
 
@@ -727,7 +730,11 @@ func TestMergeReadyTask_EmptyCommitSHA(t *testing.T) {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 	os.Stderr = w
-	defer func() { os.Stderr = originalStderr }()
+	prevWarn := ui.SetWarningWriter(w)
+	defer func() {
+		ui.SetWarningWriter(prevWarn)
+		os.Stderr = originalStderr
+	}()
 
 	task := mergeQueueTask{
 		name:   "empty-sha.md",
