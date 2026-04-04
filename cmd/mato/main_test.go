@@ -1860,20 +1860,17 @@ func TestRootCmd_NonRepoPathRejected(t *testing.T) {
 	}
 }
 
-func TestValidateBranch_GitCheckRefFormatHookable(t *testing.T) {
-	orig := git.ExportValidateBranchFn()
-	defer git.SetValidateBranchFn(orig)
-
-	git.SetValidateBranchFn(func(name string) error {
-		return fmt.Errorf("injected error for %s", name)
-	})
-
-	err := validateBranch("anything")
-	if err == nil {
-		t.Fatal("expected injected error, got nil")
+func TestValidateBranch_DelegatesToSharedValidator(t *testing.T) {
+	if err := validateBranch("feature/shared-validator"); err != nil {
+		t.Fatalf("validateBranch(valid): %v", err)
 	}
-	if !strings.Contains(err.Error(), "injected error") {
-		t.Errorf("error = %q, want injected error", err.Error())
+
+	err := validateBranch("foo..bar")
+	if err == nil {
+		t.Fatal("expected invalid branch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid branch name") {
+		t.Errorf("error = %q, want invalid branch name", err.Error())
 	}
 }
 
