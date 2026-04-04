@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -26,19 +25,6 @@ import (
 
 const reviewContextPlaceholder = "REVIEW_CONTEXT_PLACEHOLDER"
 const maxReviewContextReasonLen = 500
-
-// reviewedRe matches the approval marker written by the review agent.
-var reviewedRe = regexp.MustCompile(`<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+approved\s*-->`)
-
-// reviewRejectionRe matches the rejection marker written by the review agent.
-// Requires the em-dash separator, a non-empty reason, and the closing -->.
-var reviewRejectionRe = regexp.MustCompile(`<!-- review-rejection:\s+\S+\s+at\s+\S+\s+—\s+.+\s*-->`)
-
-// approvalMarkerRe matches only the approval marker for targeted stripping.
-var approvalMarkerRe = regexp.MustCompile(`\n?<!-- reviewed:\s+\S+\s+at\s+\S+\s+—\s+approved\s*-->\n?`)
-
-// rejectionMarkerRe matches only the rejection marker for targeted stripping.
-var rejectionMarkerRe = regexp.MustCompile(`\n?<!-- review-rejection:\s+\S+\s+at\s+\S+\s+—\s+.+?\s*-->\n?`)
 
 // reviewVerdict is the JSON structure written by the review agent to
 // communicate its verdict to the host without using shell expansion.
@@ -373,49 +359,6 @@ var rejectDisposition = reviewDisposition{
 	logPrefix:   "Review rejected",
 }
 
-// resolveReviewVerdict reads the task file and checks for approval or rejection
-// markers written directly by the review agent (backward compatibility path).
-// Returns "approve", "reject", or "" if neither marker is found.
-func resolveReviewVerdict(task *queue.ClaimedTask) string {
-	taskData, err := os.ReadFile(task.TaskPath)
-	if err != nil {
-		return ""
-	}
-	content := string(taskData)
-	if reviewedRe.MatchString(content) {
-		return "approve"
-	}
-	if reviewRejectionRe.MatchString(content) {
-		return "reject"
-	}
-	return ""
-}
-
-// stripLastTerminalMarker removes only the last occurrence of a terminal
-// verdict marker matching re from the task file at taskPath. This preserves
-// older review-rejection markers from prior review cycles (which feed into
-// MATO_REVIEW_FEEDBACK) while rolling back only the consumed terminal marker
-// from the current failed handoff.
-func stripLastTerminalMarker(taskPath string, re *regexp.Regexp) {
-	data, err := os.ReadFile(taskPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not read task file %s for marker rollback: %v\n", taskPath, err)
-		return
-	}
-	locs := re.FindAllIndex(data, -1)
-	if len(locs) == 0 {
-		return
-	}
-	last := locs[len(locs)-1]
-	cleaned := make([]byte, 0, len(data)-(last[1]-last[0])+1)
-	cleaned = append(cleaned, data[:last[0]]...)
-	cleaned = append(cleaned, '\n')
-	cleaned = append(cleaned, data[last[1]:]...)
-	if err := atomicwrite.WriteFile(taskPath, cleaned); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not strip terminal review marker from %s: %v\n", taskPath, err)
-	}
-}
-
 // VerifyReviewBranch checks whether the task branch exists in the host repo
 // before launching a review agent. If the branch is missing it records a
 // review-failure marker and returns false. Returns true when the branch
@@ -443,7 +386,8 @@ func PostReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 // postReviewAction reads the verdict file written by the review agent and
 // handles the result. If approved, the host moves the task to ready-to-merge/
 // and writes the approval marker. If rejected, moves to backlog/ and writes
-// the rejection marker. If no verdict file exists, writes a review-failure.
+// the rejection marker. If the verdict file is missing or unreadable, it
+// records a review-failure and leaves the task in ready-for-review/.
 //
 // The handoff is rollback-safe: the verdict marker is written only after the
 // task file has been successfully moved to its destination directory, and the
@@ -466,26 +410,17 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 
 	data, err := os.ReadFile(verdictPath)
 	if err != nil {
-		// No verdict file: review agent crashed or failed to write verdict.
-		// Fall back to checking the task file for markers (backward compat).
-		// If the move fails, strip the pre-existing terminal marker so the
-		// task is not left in ready-for-review/ with a consumed verdict.
-		switch resolveReviewVerdict(task) {
-		case "approve":
-			if !moveReviewedTask(tasksDir, agentID, task, approveDisposition, "") {
-				stripLastTerminalMarker(task.TaskPath, approvalMarkerRe)
-			}
-		case "reject":
-			if !moveReviewedTask(tasksDir, agentID, task, rejectDisposition, "") {
-				stripLastTerminalMarker(task.TaskPath, rejectionMarkerRe)
-			}
-		default:
-			recorded := appendReviewFailure(task.TaskPath, agentID, "review agent exited without rendering a verdict")
-			recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-				state.LastOutcome = "review-incomplete"
-			})
-			logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "")
+		reason := "review agent exited without rendering a verdict"
+		detail := ""
+		if !os.IsNotExist(err) {
+			reason = fmt.Sprintf("could not read verdict file: %v", err)
+			detail = reason
 		}
+		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
+			state.LastOutcome = "review-incomplete"
+		})
+		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, detail)
 		return
 	}
 

@@ -318,7 +318,7 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
    - **Approved**: host writes `<!-- reviewed: ... -->` to the task file, moves it to `ready-to-merge/`, records `review-approved` in taskstate, and sends a completion message.
    - **Rejected**: host writes `<!-- review-rejection: ... -->` to the task file, moves it back to `backlog/`, records `review-rejected` in taskstate, and sends a completion message.
    - **Error**: host writes a `<!-- review-failure: ... -->` record, records `review-error`, and leaves the task in `ready-for-review/`.
-   - **No verdict file** (agent crashed): host falls back to checking for HTML markers in the task file, then writes a `<!-- review-failure: ... -->` record and records `review-incomplete` if none found.
+   - **No verdict file** (agent crashed): host writes a `<!-- review-failure: ... -->` record, records `review-incomplete`, and leaves the task in `ready-for-review/` for retry.
 
 ### Key properties
 - Review rejections do **not** count against `max_retries`. Only `<!-- failure: ... -->` records are counted for the task's failure record budget.

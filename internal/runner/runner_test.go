@@ -2274,52 +2274,6 @@ func TestPostReviewAction_EmptyVerdictFile(t *testing.T) {
 	}
 }
 
-func TestReviewedReRegex(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		match bool
-	}{
-		{"complete marker", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved -->", true},
-		{"extra whitespace before close", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved  -->", true},
-		{"missing closing tag", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved", false},
-		{"partial write no em-dash", "<!-- reviewed: agent1 at 2026-01", false},
-		{"missing approved word", "<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — -->", false},
-		{"empty string", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := reviewedRe.MatchString(tt.input); got != tt.match {
-				t.Errorf("reviewedRe.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
-			}
-		})
-	}
-}
-
-func TestReviewRejectionReRegex(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		match bool
-	}{
-		{"complete marker", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — missing error wrapping -->", true},
-		{"reason with spaces", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — needs better test coverage for edge cases -->", true},
-		{"extra whitespace before close", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — bad code  -->", true},
-		{"missing closing tag", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — missing error wrapping", false},
-		{"partial write no em-dash", "<!-- review-rejection: agent1 at 2026-01", false},
-		{"missing reason after em-dash", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — -->", false},
-		{"no em-dash or reason", "<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z", false},
-		{"empty string", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := reviewRejectionRe.MatchString(tt.input); got != tt.match {
-				t.Errorf("reviewRejectionRe.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
-			}
-		})
-	}
-}
-
 func TestPostReviewAction_PartialRejectionMarkerTreatedAsNoVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
