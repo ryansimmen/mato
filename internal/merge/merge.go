@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
@@ -32,6 +33,7 @@ type mergeQueueTask struct {
 }
 
 var errTaskBranchNotPushed = errors.New("task branch not pushed by agent")
+var errTaskBranchMarkerMissing = errors.New("missing required <!-- branch: ... --> marker after work handoff")
 var errSquashMergeConflict = errors.New("squash merge conflict")
 var errPushAfterSquashFailed = errors.New("push failed after squash merge")
 var removeTaskFileFn = os.Remove
@@ -51,12 +53,10 @@ func ProcessQueue(repoRoot, tasksDir, branch string) int {
 }
 
 // ProcessQueueContext merges completed task branches into the target branch.
-// It scans ready-to-merge/ for task files, prefers branch metadata recorded in
-// each task file, falls back to the filename-derived branch name for backward
-// compatibility, and performs a squash merge.
-// Active branches for fallback disambiguation are always resolved via a fresh
-// filesystem scan (passing nil to CollectActiveBranches) to avoid stale data
-// from a PollIndex snapshot that was built earlier in the poll cycle.
+// It requires each ready-to-merge task to carry an explicit <!-- branch: ... -->
+// marker written during the work handoff; tasks missing that marker are routed
+// through the normal merge-failure requeue/failed path instead of guessing a
+// branch name from the filename.
 // Returns the number of tasks successfully merged.
 func ProcessQueueContext(ctx context.Context, repoRoot, tasksDir, branch string) int {
 	if ctx.Err() != nil {
@@ -64,16 +64,7 @@ func ProcessQueueContext(ctx context.Context, repoRoot, tasksDir, branch string)
 	}
 
 	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
-
-	// Pass nil to force a fresh filesystem scan rather than relying on a
-	// potentially stale PollIndex snapshot. The index is built at the
-	// start of each poll cycle, but by the time ProcessQueue runs, task
-	// claiming and review actions may have changed the set of active
-	// branches. A fresh scan here ensures correct fallback branch
-	// disambiguation for legacy tasks without a <!-- branch: --> marker.
-	activeBranches := queue.CollectActiveBranches(tasksDir, nil)
-
-	candidates, err := loadMergeCandidates(readyDir, tasksDir, activeBranches)
+	candidates, err := loadMergeCandidates(readyDir, tasksDir)
 	if err != nil {
 		return 0
 	}
@@ -82,18 +73,13 @@ func ProcessQueueContext(ctx context.Context, repoRoot, tasksDir, branch string)
 }
 
 // loadMergeCandidates reads task files from dir, parses frontmatter for each
-// .md file, resolves branch names (using activeBranches for fallback
-// disambiguation), and returns a priority-sorted slice of candidates.
-// Unparseable files are requeued to the backlog with a stderr warning.
-func loadMergeCandidates(dir, tasksDir string, activeBranches map[string]struct{}) ([]mergeQueueTask, error) {
+// .md file, requires an explicit recorded branch marker, and returns a
+// priority-sorted slice of candidates. Unparseable or marker-less files are
+// routed through the normal failure/requeue path with a stderr warning.
+func loadMergeCandidates(dir, tasksDir string) ([]mergeQueueTask, error) {
 	names, err := queue.ListTaskFiles(dir)
 	if err != nil {
 		return nil, err
-	}
-
-	reservedBranches := make(map[string]struct{}, len(activeBranches)+len(names))
-	for branch := range activeBranches {
-		reservedBranches[branch] = struct{}{}
 	}
 
 	tasks := make([]mergeQueueTask, 0, len(names))
@@ -108,14 +94,14 @@ func loadMergeCandidates(dir, tasksDir string, activeBranches map[string]struct{
 			continue
 		}
 
-		taskBranch := taskfile.ParseBranch(path)
+		taskBranch := strings.TrimSpace(taskfile.ParseBranch(path))
 		if taskBranch == "" {
-			taskBranch = "task/" + frontmatter.SanitizeBranchName(name)
-			if _, taken := reservedBranches[taskBranch]; taken {
-				taskBranch = taskBranch + "-" + frontmatter.BranchDisambiguator(name)
+			fmt.Fprintf(os.Stderr, "warning: ready-to-merge task %s is missing a required branch marker\n", name)
+			if failureErr := failMergeTask(path, mergeFailureDestination(tasksDir, path, name), errTaskBranchMarkerMissing.Error()); failureErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not requeue task %s after missing branch marker: %v\n", name, failureErr)
 			}
+			continue
 		}
-		reservedBranches[taskBranch] = struct{}{}
 
 		tasks = append(tasks, mergeQueueTask{
 			name:     name,

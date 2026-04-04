@@ -257,7 +257,7 @@ func TestProcessQueueMergesReadyTaskBranch(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add feature!!.md")
-	taskContent := "---\npriority: 5\n---\n<!-- claimed-by: agent123  claimed-at: 2026-01-01T00:00:00Z -->\n# Add feature\nMerge this task.\n"
+	taskContent := "---\npriority: 5\n---\n<!-- claimed-by: agent123  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/add-feature -->\n# Add feature\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestProcessQueue_UsesBranchFromTaskFile(t *testing.T) {
 	}
 }
 
-func TestProcessQueue_FallbackToDerivedBranch(t *testing.T) {
+func TestProcessQueue_MissingBranchMarkerRequeuesTask(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := setupTasksDir(t)
 	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
@@ -436,9 +436,9 @@ func TestProcessQueue_FallbackToDerivedBranch(t *testing.T) {
 	}
 
 	taskName := "fallback branch.md"
-	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskName)
-	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
-		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
+	taskBranch := "task/" + frontmatter.SanitizeBranchName(taskName)
+	if _, err := git.Output(repoRoot, "checkout", "-b", taskBranch, "mato"); err != nil {
+		t.Fatalf("git checkout -b %s: %v", taskBranch, err)
 	}
 	if err := os.WriteFile(filepath.Join(repoRoot, "fallback.txt"), []byte("fallback branch\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile fallback.txt: %v", err)
@@ -459,246 +459,16 @@ func TestProcessQueue_FallbackToDerivedBranch(t *testing.T) {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
 
-	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
-		t.Fatalf("ProcessQueue() = %d, want 1", got)
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "fallback.txt")); err != nil {
-		t.Fatalf("expected derived branch change to merge: %v", err)
+	backlogFile := filepath.Join(tasksDir, queue.DirBacklog, taskName)
+	data, err := os.ReadFile(backlogFile)
+	if err != nil {
+		t.Fatalf("backlog task file missing: %v", err)
 	}
-}
-
-func TestProcessQueue_BranchCollisionDisambiguation(t *testing.T) {
-	repoRoot := testutil.SetupRepo(t)
-	tasksDir := setupTasksDir(t)
-	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
-		t.Fatalf("git checkout -b mato: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
-		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
-	}
-
-	// Two tasks whose filenames sanitize to the same branch name.
-	// "collide task.md" and "collide_task.md" both sanitize to "task/collide-task".
-	taskA := "collide task.md"
-	taskB := "collide_task.md"
-	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskA)
-	disambiguatedBranch := derivedBranch + "-" + frontmatter.BranchDisambiguator(taskB)
-
-	// Verify both filenames actually collide on the same derived branch.
-	if got := "task/" + frontmatter.SanitizeBranchName(taskB); got != derivedBranch {
-		t.Fatalf("test setup: expected both filenames to derive the same branch, got %q and %q", derivedBranch, got)
-	}
-
-	// Create git branches with changes for both tasks.
-	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
-		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
-	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "a.txt"), []byte("task A\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile a.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "add", "a.txt"); err != nil {
-		t.Fatalf("git add a.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "commit", "-m", "task A work"); err != nil {
-		t.Fatalf("git commit task A: %v", err)
-	}
-
-	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
-		t.Fatalf("git checkout mato: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "checkout", "-b", disambiguatedBranch, "mato"); err != nil {
-		t.Fatalf("git checkout -b %s: %v", disambiguatedBranch, err)
-	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "b.txt"), []byte("task B\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile b.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "add", "b.txt"); err != nil {
-		t.Fatalf("git add b.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "commit", "-m", "task B work"); err != nil {
-		t.Fatalf("git commit task B: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
-		t.Fatalf("git checkout mato: %v", err)
-	}
-
-	// Task A sits in in-progress/ with a branch comment claiming the derived branch.
-	inProgressDir := filepath.Join(tasksDir, queue.DirInProgress)
-	if err := os.MkdirAll(inProgressDir, 0o755); err != nil {
-		t.Fatalf("os.MkdirAll in-progress: %v", err)
-	}
-	taskAContent := "<!-- branch: " + derivedBranch + " -->\n# Collide task A\nSome work.\n"
-	if err := os.WriteFile(filepath.Join(inProgressDir, taskA), []byte(taskAContent), 0o644); err != nil {
-		t.Fatalf("os.WriteFile task A: %v", err)
-	}
-
-	// Task B in ready-to-merge/ has no branch comment, so it falls back to derived name.
-	taskBContent := "---\npriority: 5\n---\n# Collide task B\nMore work.\n"
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskB), []byte(taskBContent), 0o644); err != nil {
-		t.Fatalf("os.WriteFile task B: %v", err)
-	}
-
-	// Task B should use the disambiguated branch and merge successfully.
-	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
-		t.Fatalf("ProcessQueue() = %d, want 1", got)
-	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "b.txt")); err != nil {
-		t.Fatalf("expected disambiguated branch change (b.txt) to merge: %v", err)
-	}
-}
-
-func TestProcessQueue_LegacyBranchCollisionReservesDisambiguatedBranchPerPass(t *testing.T) {
-	repoRoot := testutil.SetupRepo(t)
-	tasksDir := setupTasksDir(t)
-	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
-		t.Fatalf("git checkout -b mato: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
-		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
-	}
-
-	taskA := "legacy collide one.md"
-	taskB := "legacy_collide_one.md"
-	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskA)
-	disambiguatedBranch := derivedBranch + "-" + frontmatter.BranchDisambiguator(taskB)
-	if got := "task/" + frontmatter.SanitizeBranchName(taskB); got != derivedBranch {
-		t.Fatalf("test setup: expected both filenames to derive same branch, got %q and %q", derivedBranch, got)
-	}
-
-	if _, err := git.Output(repoRoot, "checkout", "-b", derivedBranch, "mato"); err != nil {
-		t.Fatalf("git checkout -b %s: %v", derivedBranch, err)
-	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "legacy-a.txt"), []byte("task A\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile legacy-a.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "add", "legacy-a.txt"); err != nil {
-		t.Fatalf("git add legacy-a.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "commit", "-m", "legacy task A work"); err != nil {
-		t.Fatalf("git commit task A: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
-		t.Fatalf("git checkout mato: %v", err)
-	}
-
-	if _, err := git.Output(repoRoot, "checkout", "-b", disambiguatedBranch, "mato"); err != nil {
-		t.Fatalf("git checkout -b %s: %v", disambiguatedBranch, err)
-	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "legacy-b.txt"), []byte("task B\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile legacy-b.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "add", "legacy-b.txt"); err != nil {
-		t.Fatalf("git add legacy-b.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "commit", "-m", "legacy task B work"); err != nil {
-		t.Fatalf("git commit task B: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
-		t.Fatalf("git checkout mato: %v", err)
-	}
-
-	content := "---\npriority: 5\n---\n# Legacy task\n"
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskA), []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile task A: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskB), []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile task B: %v", err)
-	}
-
-	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 2 {
-		t.Fatalf("ProcessQueue() = %d, want 2", got)
-	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "legacy-a.txt")); err != nil {
-		t.Fatalf("expected derived branch change to merge: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "legacy-b.txt")); err != nil {
-		t.Fatalf("expected disambiguated branch change to merge: %v", err)
-	}
-}
-
-// TestProcessQueue_StalePollIndexDoesNotAffectFallbackBranch verifies that
-// a legacy task (no <!-- branch: --> marker) in ready-to-merge/ resolves the
-// correct disambiguated branch even when a colliding branch appears in
-// in-progress/ after the PollIndex snapshot was built. Before the fix,
-// ProcessQueue used the stale index for active-branch resolution; now it
-// always performs a fresh filesystem scan, so same-cycle branch changes are
-// visible during fallback disambiguation.
-func TestProcessQueue_StalePollIndexDoesNotAffectFallbackBranch(t *testing.T) {
-	repoRoot := testutil.SetupRepo(t)
-	tasksDir := setupTasksDir(t)
-	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
-		t.Fatalf("git checkout -b mato: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
-		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
-	}
-
-	// Two tasks whose filenames sanitize to the same branch name.
-	taskInProgress := "stale task.md"
-	taskLegacy := "stale_task.md"
-	derivedBranch := "task/" + frontmatter.SanitizeBranchName(taskInProgress)
-	disambiguatedBranch := derivedBranch + "-" + frontmatter.BranchDisambiguator(taskLegacy)
-
-	// Verify both filenames actually collide on the same derived branch.
-	if got := "task/" + frontmatter.SanitizeBranchName(taskLegacy); got != derivedBranch {
-		t.Fatalf("test setup: expected both filenames to derive the same branch, got %q and %q", derivedBranch, got)
-	}
-
-	// Build a PollIndex BEFORE adding the in-progress task. This
-	// simulates the real poll loop where BuildIndex runs at the start
-	// of the cycle and the in-progress task is claimed later.
-	staleIdx := queue.BuildIndex(tasksDir)
-	branches := staleIdx.ActiveBranches()
-	if _, ok := branches[derivedBranch]; ok {
-		t.Fatal("stale index should not contain the derived branch yet")
-	}
-
-	// Now simulate the in-progress task being claimed during the same
-	// poll cycle: write it to in-progress/ with a branch comment.
-	inProgressDir := filepath.Join(tasksDir, queue.DirInProgress)
-	if err := os.MkdirAll(inProgressDir, 0o755); err != nil {
-		t.Fatalf("os.MkdirAll in-progress: %v", err)
-	}
-	taskInProgressContent := "<!-- branch: " + derivedBranch + " -->\n# Stale task A\nSome work.\n"
-	if err := os.WriteFile(filepath.Join(inProgressDir, taskInProgress), []byte(taskInProgressContent), 0o644); err != nil {
-		t.Fatalf("os.WriteFile task in-progress: %v", err)
-	}
-
-	// Create the disambiguated branch with a commit for the legacy task.
-	if _, err := git.Output(repoRoot, "checkout", "-b", disambiguatedBranch, "mato"); err != nil {
-		t.Fatalf("git checkout -b %s: %v", disambiguatedBranch, err)
-	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "stale.txt"), []byte("legacy task work\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile stale.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "add", "stale.txt"); err != nil {
-		t.Fatalf("git add stale.txt: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "commit", "-m", "legacy task work"); err != nil {
-		t.Fatalf("git commit legacy task: %v", err)
-	}
-	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
-		t.Fatalf("git checkout mato: %v", err)
-	}
-
-	// Place the legacy task in ready-to-merge/ with no branch comment.
-	taskLegacyContent := "---\npriority: 5\n---\n# Stale task B\nLegacy work.\n"
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskLegacy), []byte(taskLegacyContent), 0o644); err != nil {
-		t.Fatalf("os.WriteFile legacy task: %v", err)
-	}
-
-	// ProcessQueue no longer accepts a PollIndex; it always scans the
-	// filesystem. Before this fix, passing the stale index here would
-	// cause the legacy task to resolve to the non-disambiguated branch
-	// (because the stale index didn't see the in-progress collision),
-	// resulting in a "task branch not pushed by agent" failure.
-	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
-		t.Fatalf("ProcessQueue() = %d, want 1", got)
-	}
-
-	// Verify the disambiguated branch's commit was merged.
-	if _, err := os.Stat(filepath.Join(repoRoot, "stale.txt")); err != nil {
-		t.Fatalf("expected disambiguated branch change (stale.txt) to merge: %v", err)
+	if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "after work handoff") {
+		t.Fatalf("expected missing-marker merge failure, got:\n%s", string(data))
 	}
 }
 
@@ -747,7 +517,7 @@ func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "conflict task.md")
-	taskContent := "---\npriority: 1\n---\n# Conflict task\nThis should conflict.\n"
+	taskContent := "---\npriority: 1\n---\n<!-- branch: task/conflict-task -->\n# Conflict task\nThis should conflict.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
@@ -848,7 +618,7 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 	}
 
 	firstTaskFile := filepath.Join(tasksDir, queue.DirReadyMerge, firstTaskName)
-	firstTaskContent := "---\npriority: 1\n---\n# First task\nThis should merge first.\n"
+	firstTaskContent := "---\npriority: 1\n---\n<!-- branch: " + firstBranch + " -->\n# First task\nThis should merge first.\n"
 	if err := os.WriteFile(firstTaskFile, []byte(firstTaskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile first task file: %v", err)
 	}
@@ -895,6 +665,7 @@ func TestProcessQueue_RespectsMaxRetries(t *testing.T) {
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "missing branch.md")
 	taskContent := strings.Join([]string{
+		"<!-- branch: task/missing-branch -->",
 		"---",
 		"max_retries: 1",
 		"---",
@@ -941,6 +712,7 @@ func TestProcessQueue_ZeroMaxRetries(t *testing.T) {
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "zero-retry.md")
 	taskContent := strings.Join([]string{
+		"<!-- branch: task/zero-retry -->",
 		"---",
 		"max_retries: 0",
 		"---",
@@ -982,6 +754,7 @@ func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "missing branch.md")
 	taskContent := strings.Join([]string{
+		"<!-- branch: task/missing-branch -->",
 		"<!-- failure: one -->",
 		"<!-- failure: two -->",
 		"# Missing branch",
@@ -1043,7 +816,7 @@ func TestProcessQueueMovesTaskToBacklogWhenPushFails(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add feature!!.md")
-	taskContent := "---\npriority: 5\n---\n# Add feature\nMerge this task.\n"
+	taskContent := "---\npriority: 5\n---\n<!-- branch: task/add-feature -->\n# Add feature\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
@@ -1102,6 +875,7 @@ func TestProcessQueue_PushFailureRespectsMaxRetries(t *testing.T) {
 	// failure should route it to failed/ instead of backlog/.
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "push-retry.md")
 	taskContent := strings.Join([]string{
+		"<!-- branch: task/push-retry -->",
 		"---",
 		"max_retries: 1",
 		"---",
@@ -1172,7 +946,7 @@ func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add feature!!.md")
-	taskContent := "---\npriority: 5\n---\n# Add feature\nMerge this task.\n"
+	taskContent := "---\npriority: 5\n---\n<!-- branch: task/add-feature -->\n# Add feature\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
@@ -1216,13 +990,13 @@ func TestProcessQueue_DuplicateInCompletedIsRemoved(t *testing.T) {
 
 	// Place a task in ready-to-merge with a merged record.
 	rtmFile := filepath.Join(tasksDir, queue.DirReadyMerge, "dup-task.md")
-	if err := os.WriteFile(rtmFile, []byte("---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
+	if err := os.WriteFile(rtmFile, []byte("<!-- branch: task/dup-task -->\n---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile rtm: %v", err)
 	}
 
 	// Place a copy in completed (simulating a prior successful move).
 	completedFile := filepath.Join(tasksDir, queue.DirCompleted, "dup-task.md")
-	if err := os.WriteFile(completedFile, []byte("---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
+	if err := os.WriteFile(completedFile, []byte("<!-- branch: task/dup-task -->\n---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile completed: %v", err)
 	}
 
@@ -1279,7 +1053,7 @@ func TestProcessQueue_RecoveryPathWritesCompletionDetail(t *testing.T) {
 
 	// Place a task in ready-to-merge with a merged marker but no completion detail.
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "recover-detail.md")
-	taskContent := "---\nid: recover-detail\npriority: 5\n---\n# Recover detail\nMerge this.\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"
+	taskContent := "<!-- branch: task/recover-detail -->\n---\nid: recover-detail\npriority: 5\n---\n# Recover detail\nMerge this.\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task: %v", err)
 	}
@@ -1360,7 +1134,7 @@ func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
 			t.Fatalf("git checkout mato: %v", err)
 		}
 
-		taskContent := "---\npriority: 10\n---\n# " + title + "\n"
+		taskContent := "<!-- branch: " + taskBranch + " -->\n---\npriority: 10\n---\n# " + title + "\n"
 		if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskName), []byte(taskContent), 0o644); err != nil {
 			t.Fatalf("os.WriteFile %s: %v", taskName, err)
 		}
@@ -1438,7 +1212,7 @@ func TestProcessQueue_MalformedTaskInReadyToMerge(t *testing.T) {
 		t.Fatalf("os.WriteFile bad-task.md: %v", err)
 	}
 	validTask := filepath.Join(tasksDir, queue.DirReadyMerge, "good-task.md")
-	if err := os.WriteFile(validTask, []byte("---\npriority: 1\n---\n# Good task\n"), 0o644); err != nil {
+	if err := os.WriteFile(validTask, []byte("<!-- branch: task/good-task -->\n---\npriority: 1\n---\n# Good task\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile good-task.md: %v", err)
 	}
 
@@ -1586,7 +1360,7 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "durable-merge.md")
-	taskContent := "---\nid: durable-merge\npriority: 5\n---\n# Durable merge\nMerge this.\n"
+	taskContent := "<!-- branch: task/durable-merge -->\n---\nid: durable-merge\npriority: 5\n---\n# Durable merge\nMerge this.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task: %v", err)
 	}
@@ -1698,7 +1472,7 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "readonly-task.md")
-	taskContent := "---\npriority: 5\n---\n# Readonly task\nMerge this.\n"
+	taskContent := "---\npriority: 5\n---\n<!-- branch: task/readonly-task -->\n# Readonly task\nMerge this.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task: %v", err)
 	}
@@ -1865,7 +1639,7 @@ func TestProcessQueue_CommitIncludesTrailers(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add-trailers-feature.md")
-	taskContent := "---\nid: add-trailers-feature\npriority: 5\naffects:\n  - internal/merge/merge.go\n  - internal/merge/merge_test.go\n---\n# Add trailers feature\nMerge this task.\n"
+	taskContent := "<!-- branch: task/add-trailers-feature -->\n---\nid: add-trailers-feature\npriority: 5\naffects:\n  - internal/merge/merge.go\n  - internal/merge/merge_test.go\n---\n# Add trailers feature\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
@@ -1921,7 +1695,7 @@ func TestProcessQueue_CommitOmitsTrailersWhenEmpty(t *testing.T) {
 	// defaults id to the filename stem, so Task-ID will still appear.
 	// Only Affects should be absent.
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "no-metadata.md")
-	taskContent := "---\npriority: 5\n---\n# No metadata task\nMerge this task.\n"
+	taskContent := "<!-- branch: task/no-metadata -->\n---\npriority: 5\n---\n# No metadata task\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
@@ -1970,7 +1744,7 @@ func TestProcessQueue_WritesCompletionDetail(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add-completion.md")
-	taskContent := "---\nid: add-completion\npriority: 5\naffects:\n  - completion.txt\n---\n# Add completion\nMerge this task.\n"
+	taskContent := "<!-- branch: task/add-completion -->\n---\nid: add-completion\npriority: 5\naffects:\n  - completion.txt\n---\n# Add completion\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
@@ -2055,7 +1829,7 @@ func TestProcessQueue_CompletionDetailFilesChanged(t *testing.T) {
 	}
 
 	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "multi-file.md")
-	taskContent := "---\nid: multi-file\npriority: 5\n---\n# Multi file task\n"
+	taskContent := "<!-- branch: task/multi-file -->\n---\nid: multi-file\npriority: 5\n---\n# Multi file task\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
 	}
@@ -2382,13 +2156,13 @@ func TestLoadMergeCandidates(t *testing.T) {
 	}
 
 	// Valid task with frontmatter.
-	validTask := "---\nid: task-alpha\npriority: 20\naffects:\n  - internal/foo\n---\n# Alpha task\nDo the alpha work.\n"
+	validTask := "<!-- branch: task/alpha -->\n---\nid: task-alpha\npriority: 20\naffects:\n  - internal/foo\n---\n# Alpha task\nDo the alpha work.\n"
 	if err := os.WriteFile(filepath.Join(readyDir, "alpha.md"), []byte(validTask), 0o644); err != nil {
 		t.Fatalf("write alpha.md: %v", err)
 	}
 
 	// Another valid task with higher priority (lower number = higher priority).
-	validTask2 := "---\nid: task-beta\npriority: 10\n---\n# Beta task\nDo the beta work.\n"
+	validTask2 := "<!-- branch: task/beta -->\n---\nid: task-beta\npriority: 10\n---\n# Beta task\nDo the beta work.\n"
 	if err := os.WriteFile(filepath.Join(readyDir, "beta.md"), []byte(validTask2), 0o644); err != nil {
 		t.Fatalf("write beta.md: %v", err)
 	}
@@ -2403,8 +2177,7 @@ func TestLoadMergeCandidates(t *testing.T) {
 		t.Fatalf("write notes.txt: %v", err)
 	}
 
-	activeBranches := map[string]struct{}{}
-	candidates, err := loadMergeCandidates(readyDir, tasksDir, activeBranches)
+	candidates, err := loadMergeCandidates(readyDir, tasksDir)
 	if err != nil {
 		t.Fatalf("loadMergeCandidates: %v", err)
 	}
@@ -2447,7 +2220,7 @@ func TestLoadMergeCandidates_EmptyDir(t *testing.T) {
 	readyDir := t.TempDir()
 	tasksDir := t.TempDir()
 
-	candidates, err := loadMergeCandidates(readyDir, tasksDir, nil)
+	candidates, err := loadMergeCandidates(readyDir, tasksDir)
 	if err != nil {
 		t.Fatalf("loadMergeCandidates: %v", err)
 	}
@@ -2458,7 +2231,7 @@ func TestLoadMergeCandidates_EmptyDir(t *testing.T) {
 
 func TestLoadMergeCandidates_NonexistentDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	_, err := loadMergeCandidates(filepath.Join(tasksDir, "nonexistent"), tasksDir, nil)
+	_, err := loadMergeCandidates(filepath.Join(tasksDir, "nonexistent"), tasksDir)
 	if err == nil {
 		t.Fatal("expected error for nonexistent directory, got nil")
 	}
@@ -2472,13 +2245,14 @@ func TestLoadMergeCandidates_SamePrioritySortsByName(t *testing.T) {
 	}
 
 	for _, name := range []string{"charlie.md", "alice.md", "bob.md"} {
-		content := "---\npriority: 50\n---\n# " + name + "\n"
+		branch := "task/" + strings.TrimSuffix(name, ".md")
+		content := "<!-- branch: " + branch + " -->\n---\npriority: 50\n---\n# " + name + "\n"
 		if err := os.WriteFile(filepath.Join(readyDir, name), []byte(content), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
 
-	candidates, err := loadMergeCandidates(readyDir, tasksDir, nil)
+	candidates, err := loadMergeCandidates(readyDir, tasksDir)
 	if err != nil {
 		t.Fatalf("loadMergeCandidates: %v", err)
 	}

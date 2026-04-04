@@ -77,16 +77,15 @@ func TestMergeMissingBranch_ExplicitMarker(t *testing.T) {
 	}
 }
 
-// TestMergeMissingBranch_FilenameDerived verifies the same missing-branch
-// failure path when no explicit <!-- branch: ... --> marker exists and the
-// branch name is derived from the filename.
-func TestMergeMissingBranch_FilenameDerived(t *testing.T) {
+// TestMergeMissingBranch_MissingMarker verifies that a ready-to-merge task with
+// no explicit <!-- branch: ... --> marker is treated as a corrupted handoff and
+// moved to failed/ when its retry budget is exhausted.
+func TestMergeMissingBranch_MissingMarker(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	headBefore := strings.TrimSpace(mustGitOutput(t, repoRoot, "rev-parse", "mato"))
 
-	// No explicit branch marker — merge queue derives "task/missing-derived"
-	// from the filename. Use max_retries: 1 with one prior failure.
+	// No explicit branch marker. Use max_retries: 1 with one prior failure.
 	taskContent := strings.Join([]string{
 		"---",
 		"id: missing-derived",
@@ -113,8 +112,8 @@ func TestMergeMissingBranch_FilenameDerived(t *testing.T) {
 	if !strings.Contains(data, "<!-- failure: merge-queue") {
 		t.Fatalf("failed task missing merge-queue failure record:\n%s", data)
 	}
-	if !strings.Contains(data, "task branch not pushed by agent") {
-		t.Fatalf("failed task missing 'task branch not pushed by agent' text:\n%s", data)
+	if !strings.Contains(data, "missing required") || !strings.Contains(data, "after work handoff") {
+		t.Fatalf("failed task missing required-marker text:\n%s", data)
 	}
 
 	headAfter := strings.TrimSpace(mustGitOutput(t, repoRoot, "rev-parse", "mato"))
@@ -201,7 +200,7 @@ func TestMergeMissingBranch_SuccessfulTaskUnaffected(t *testing.T) {
 
 	// Good task — branch exists.
 	writeTask(t, tasksDir, queue.DirReadyMerge, "good-task.md",
-		"---\npriority: 1\n---\n# Good task\n")
+		"<!-- branch: task/good-task -->\n---\npriority: 1\n---\n# Good task\n")
 
 	// Bad task — branch missing, retries exhausted.
 	badContent := strings.Join([]string{
