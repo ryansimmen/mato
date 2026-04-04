@@ -2,12 +2,12 @@ package queue
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"mato/internal/identity"
 	"mato/internal/lockfile"
-
-	"path/filepath"
+	"mato/internal/ui"
 )
 
 // CleanStaleLocks removes lock files for agents that are no longer running.
@@ -53,8 +53,15 @@ func CleanStaleReviewLocks(tasksDir string) {
 			continue
 		}
 		lockPath := filepath.Join(locksDir, e.Name())
-		if !lockfile.IsHeld(lockPath) {
-			os.Remove(lockPath)
+		held, err := lockfile.CheckHeld(lockPath)
+		if err != nil {
+			ui.Warnf("warning: could not verify review lock %s: %v\n", e.Name(), err)
+			continue
+		}
+		if !held {
+			if err := removeFn(lockPath); err != nil && !os.IsNotExist(err) {
+				ui.Warnf("warning: could not remove stale review lock %s: %v\n", e.Name(), err)
+			}
 		}
 	}
 }
