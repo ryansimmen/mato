@@ -126,7 +126,9 @@ the report can be rendered:
   selected checks report repo-health problems in-band
 - replace the current `doctorNeedsDockerConfig()` behavior with a narrower
   pre-resolution helper: only pre-resolve Docker image in Cobra setup when the
-  selected checks include `docker` and do not include `config`
+  explicit selected check set includes `docker` and excludes `config`; default
+  full runs with no `--only` should not pre-resolve because `config` will run
+  inside `doctor.Run()`
 
 That yields the desired ownership split:
 
@@ -288,83 +290,28 @@ result makes the helper robust if defaults evolve.
 
 ## Implementation Steps
 
-### 1. Change doctor command setup ownership
+### 1. Add shared branch validation
 
 Update:
-
-- `cmd/mato/commands.go`
-
-Changes:
-
-- remove the eager git-repository validation path from `newDoctorCmd()` so doctor
-  can report repo problems in-band
-- replace `doctorNeedsDockerConfig()` with a helper that pre-resolves Docker
-  image only for runs that need `docker` but do not run `config`
-- when `config` is selected, let `doctor.Run()` own config loading and any
-  resulting parse/ambiguity findings
-
-This is the key change that makes `config.parse_error` and `config.no_repo`
-reachable on the default CLI path.
-
-### 2. Extend doctor check registration
-
-Update:
-
-- `internal/doctor/checks.go`
-- `internal/doctor/doctor.go`
-
-Changes:
-
-- add `config` to the ordered `checks` list
-- add `config` to `validCheckNames`
-- place `config` before `docker` so full doctor runs surface configuration health
-  before Docker probing
-- extend shared doctor context so `checkConfig` can cache the resolved Docker
-  image for `checkDocker`
-
-Recommended order:
-
-- `git`
-- `tools`
-- `config`
-- `docker`
-- `queue`
-- `tasks`
-- `locks`
-- `hygiene`
-- `deps`
-
-### 3. Implement `internal/doctor/check_config.go`
-
-Add a new check implementation that:
-
-- returns early with a `config.no_repo` error finding if repo root is not known
-  and the `git` check is not selected
-- skips emitting `config.no_repo` when `git` is also selected, since repo
-  resolution failure is already reported there
-- calls the new `configresolve` validation helper when `cc.repoRoot` is present
-- converts fatal helper errors into a `config.parse_error` finding
-- converts validation issues into normal `doctor.Finding` entries
-- caches the resolved effective Docker image in shared doctor context whenever
-  config loading succeeds and `docker_image` is resolvable, even if other config
-  findings exist, so the later `docker` check uses the same effective value
-
-This check should be read-only and should not participate in `--fix`. No config
-finding should ever be marked `Fixable: true`.
-
-### 4. Add shared branch validation
-
-Refactor branch validation out of `cmd/mato/resolve.go` into a shared internal
-package function, then update:
 
 - `cmd/mato/resolve.go`
-- any branch-validation tests in `cmd/mato/main_test.go`
+- `cmd/mato/main_test.go`
+- `internal/git`
 - new configresolve tests
+
+Changes:
+
+- refactor branch validation out of `cmd/mato/resolve.go` into a shared internal
+  package function
+- preserve the current hookable test pattern behind the shared helper
+- update `cmd/mato` init-path validation to call the shared helper
+- let `internal/configresolve` call the same helper when validating effective
+  `branch`
 
 The existing behavior and error wording should remain effectively the same so
 CLI behavior does not regress.
 
-### 5. Add config-validation helper in `internal/configresolve`
+### 2. Add config-validation helper in `internal/configresolve`
 
 Implement the validation helper with these rules:
 
@@ -386,6 +333,77 @@ That is a change from `ResolveRunConfig(...)`, which currently returns on the
 first bool/duration/reasoning-effort failure. The new helper should preserve the
 existing resolution logic but collect issues so `mato doctor` can show all bad
 effective settings in one run.
+
+### 3. Extend doctor check registration
+
+Update:
+
+- `internal/doctor/checks.go`
+- `internal/doctor/doctor.go`
+
+Changes:
+
+- add `config` to the ordered `checks` list
+- add `config` to `validCheckNames`
+- place `config` before `docker` so full doctor runs surface configuration health
+  before Docker probing
+- extend shared doctor context with a small selected-check helper or equivalent
+  state derived from `opts.Only` so checks can tell whether another check is
+  selected
+- extend shared doctor context so `checkConfig` can cache the resolved Docker
+  image for `checkDocker`
+- keep `config` out of the `tasksDir`-guarded check set; it should manage repo
+  prerequisites itself, like `git`, `tools`, and `docker`
+
+Recommended order:
+
+- `git`
+- `tools`
+- `config`
+- `docker`
+- `queue`
+- `tasks`
+- `locks`
+- `hygiene`
+- `deps`
+
+### 4. Implement `internal/doctor/check_config.go`
+
+Add a new check implementation that:
+
+- returns early with a `config.no_repo` error finding if repo root is not known
+  and the `git` check is not selected
+- skips emitting `config.no_repo` when `git` is also selected, since repo
+  resolution failure is already reported there
+- determines whether `git` is selected via shared selected-check state on
+  `checkContext`, rather than re-parsing `opts.Only` ad hoc inside the check
+- calls the new `configresolve` validation helper when `cc.repoRoot` is present
+- converts fatal helper errors into a `config.parse_error` finding
+- converts validation issues into normal `doctor.Finding` entries
+- caches the resolved effective Docker image in shared doctor context whenever
+  config loading succeeds and `docker_image` is resolvable, even if other config
+  findings exist, so the later `docker` check uses the same effective value
+
+This check should be read-only and should not participate in `--fix`. No config
+finding should ever be marked `Fixable: true`.
+
+### 5. Change doctor command setup ownership
+
+Update:
+
+- `cmd/mato/commands.go`
+
+Changes:
+
+- remove the eager git-repository validation path from `newDoctorCmd()` so doctor
+  can report repo problems in-band
+- replace `doctorNeedsDockerConfig()` with a helper that pre-resolves Docker
+  image only for runs that need `docker` but do not run `config`
+- when `config` is selected, let `doctor.Run()` own config loading and any
+  resulting parse/ambiguity findings
+
+This is the key change that makes `config.parse_error` and `config.no_repo`
+reachable on the default CLI path.
 
 ### 6. Preserve narrow Docker resolution semantics
 
@@ -462,6 +480,9 @@ Add unit tests covering:
   Docker image
 - in a full run with fatal config parse failure, `docker` still reports CLI or
   daemon health but does not emit image-availability findings
+- in a full run on a non-repo, `docker` falls back to its existing env/default
+  image resolution path after `git` reports the repo failure and `config`
+  suppresses duplicate `config.no_repo`
 - JSON output includes a `config` check entry
 - bad repo with `--only config` reports a config-specific error finding rather
   than crashing
@@ -478,7 +499,9 @@ Add or update tests covering:
 - `--only docker,config` and `--only config,docker` take the same resolution path
 - the new Docker pre-resolution helper returns false for `[]string{"config"}`
 - the new Docker pre-resolution helper returns true for
-  `[]string{"docker"}` and false for full runs that include `config`
+  `[]string{"docker"}`
+- the new Docker pre-resolution helper returns false for `[]string{"docker",
+  "config"}` and for default full runs with no `--only`
 - `newDoctorCmd` no longer rejects a non-git repo before `doctor.Run()` can
   report it
 - branch-validation tests still pass after extracting shared validation logic
