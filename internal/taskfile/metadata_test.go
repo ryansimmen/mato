@@ -9,10 +9,10 @@ import (
 	"time"
 )
 
-func TestParseBranchComment(t *testing.T) {
+func TestParseBranchCommentLine(t *testing.T) {
 	tests := []struct {
 		name   string
-		data   string
+		line   string
 		want   string
 		wantOK bool
 	}{
@@ -20,9 +20,8 @@ func TestParseBranchComment(t *testing.T) {
 		{"extra whitespace", "<!-- branch:   task/spaces   -->", "task/spaces", true},
 		{"no whitespace", "<!-- branch:task/nospace -->", "task/nospace", true},
 		{"with slashes", "<!-- branch: task/deep/nested -->", "task/deep/nested", true},
-		{"in multiline", "line1\n<!-- branch: task/mid -->\nline3", "task/mid", true},
-		{"first match wins", "<!-- branch: task/first -->\n<!-- branch: task/second -->", "task/first", true},
-		{"unterminated", "<!-- branch: task/open\n", "", false},
+		{"embedded prose", "Branch is <!-- branch: task/foo --> inline.", "", false},
+		{"unterminated", "<!-- branch: task/open", "", false},
 		{"empty", "", "", false},
 		{"no marker", "# Just a heading\nSome text.", "", false},
 		{"missing branch value", "<!-- branch: -->", "", false},
@@ -30,7 +29,7 @@ func TestParseBranchComment(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := parseBranchComment([]byte(tt.data))
+			got, ok := parseBranchCommentLine(tt.line)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
