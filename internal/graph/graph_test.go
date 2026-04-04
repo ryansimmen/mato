@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -622,6 +623,28 @@ func TestBuild_ShowTo_GlobWarningNoError(t *testing.T) {
 	}
 }
 
+func TestShowTo_TextWriteErrorPropagates(t *testing.T) {
+	repoDir := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, dir := range queue.AllDirs {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	writeTask(t, tasksDir, "backlog", "sample.md", "---\nid: sample\npriority: 10\n---\n# Sample task\n")
+
+	writeErr := errors.New("broken pipe")
+	fw := &failAfterNWriter{n: 1, err: writeErr}
+
+	err := ShowTo(fw, repoDir, "text", false)
+	if err == nil {
+		t.Fatal("expected writer error, got nil")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, writeErr)
+	}
+}
+
 func TestBuild_CycleMemberDuplicateID_ShowAll(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 
@@ -885,6 +908,20 @@ func edgesTo(data GraphData, toKey string) []Edge {
 		}
 	}
 	return result
+}
+
+type failAfterNWriter struct {
+	n      int
+	err    error
+	writes int
+}
+
+func (w *failAfterNWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.n {
+		return 0, w.err
+	}
+	return len(p), nil
 }
 
 func TestShowTo_MissingMatoDir(t *testing.T) {
