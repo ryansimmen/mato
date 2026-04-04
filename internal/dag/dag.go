@@ -37,6 +37,22 @@ const (
 	BlockedByAmbiguous                    // dependency ID exists in both completed/ and a non-completed directory
 )
 
+// String returns the stable user-facing label for a blocking reason.
+func (r BlockReason) String() string {
+	switch r {
+	case BlockedByWaiting:
+		return "waiting"
+	case BlockedByUnknown:
+		return "unknown"
+	case BlockedByExternal:
+		return "external"
+	case BlockedByAmbiguous:
+		return "ambiguous"
+	default:
+		return "unknown"
+	}
+}
+
 // BlockDetail describes a single blocking dependency.
 type BlockDetail struct {
 	DependencyID string
