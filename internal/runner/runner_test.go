@@ -4690,6 +4690,7 @@ func TestCollectBoundedRunState_BranchlessReviewIsIdle(t *testing.T) {
 		t.Fatalf("branchless review task should remain in ready-for-review/: %v", err)
 	}
 }
+
 // ---------------------------------------------------------------------------
 
 func TestResolveGitIdentity_ConfiguredValues(t *testing.T) {
@@ -5300,10 +5301,7 @@ func TestStartupPullCancelledBySignalContext(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, stderr := captureStdoutStderr(t, func() {
-			done <- ensureDockerImage(ctx, "test:latest")
-		})
-		_ = stderr
+		done <- ensureDockerImage(ctx, "test:latest")
 	}()
 
 	// Wait for pull to start, then cancel the context (simulating SIGINT).
