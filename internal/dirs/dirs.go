@@ -3,6 +3,11 @@
 // duplicating these constants and risking silent drift.
 package dirs
 
+import (
+	"os"
+	"path/filepath"
+)
+
 // Root is the canonical repository-local queue directory.
 const Root = ".mato"
 
@@ -23,4 +28,20 @@ var All = []string{
 	Waiting, Backlog, InProgress,
 	ReadyReview, ReadyMerge,
 	Completed, Failed,
+}
+
+var active = []string{
+	Waiting, Backlog, InProgress,
+	ReadyReview, ReadyMerge,
+}
+
+// IsActive reports whether a task file exists in any non-terminal queue
+// directory.
+func IsActive(tasksDir, taskFilename string) bool {
+	for _, dir := range active {
+		if _, err := os.Stat(filepath.Join(tasksDir, dir, taskFilename)); err == nil {
+			return true
+		}
+	}
+	return false
 }

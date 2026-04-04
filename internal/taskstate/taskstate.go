@@ -126,7 +126,7 @@ func Sweep(tasksDir string) error {
 		if taskFilename == "" {
 			continue
 		}
-		if isActive(tasksDir, taskFilename) {
+		if dirs.IsActive(tasksDir, taskFilename) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(runtimeDir, entry.Name())); err != nil && !os.IsNotExist(err) {
@@ -156,13 +156,4 @@ func pathFor(tasksDir, taskFilename string) (string, error) {
 
 func runtimeDir(tasksDir string) string {
 	return filepath.Join(tasksDir, "runtime", "taskstate")
-}
-
-func isActive(tasksDir, taskFilename string) bool {
-	for _, dir := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge} {
-		if _, err := os.Stat(filepath.Join(tasksDir, dir, taskFilename)); err == nil {
-			return true
-		}
-	}
-	return false
 }
