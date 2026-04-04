@@ -76,12 +76,9 @@ func showToMode(w io.Writer, repoRoot string, mode textViewMode) error {
 
 	c := newColorSet()
 	if mode == textViewVerbose {
-		renderVerboseDashboard(w, c, data)
-	} else {
-		renderCompactDashboard(w, c, data)
+		return renderVerboseDashboard(w, c, data)
 	}
-
-	return nil
+	return renderCompactDashboard(w, c, data)
 }
 
 type taskEntry struct {

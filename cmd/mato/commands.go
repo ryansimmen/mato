@@ -36,8 +36,8 @@ import (
 var doctorRunFn = doctor.Run
 
 // inspectShowFn is the function used to render task inspection results.
-// Tests replace it to verify CLI flag parsing and delegation.
-var inspectShowFn = inspect.Show
+// Tests replace it to verify CLI flag parsing, delegation, and writer errors.
+var inspectShowFn = inspect.ShowTo
 
 // logShowFn is the function used to render durable task history.
 // Tests replace it to verify CLI flag parsing and delegation.
@@ -420,7 +420,7 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
-			return inspectShowFn(repo, args[0], format)
+			return inspectShowFn(cmd.OutOrStdout(), repo, args[0], format)
 		},
 	}
 	configureCommand(cmd)

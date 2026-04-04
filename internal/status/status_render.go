@@ -26,36 +26,93 @@ const compactListLimit = 5
 // width-based truncation on very narrow terminals.
 const minTruncWidth = 6
 
-func renderVerboseDashboard(w io.Writer, c colorSet, data statusData) {
-	renderQueueOverview(w, c, data)
-	renderRunnableBacklog(w, c, data)
-	renderActiveAgents(w, c, data)
-	renderAgentProgress(w, c, data)
-	renderInProgressTasks(w, c, data)
-	renderReadyForReview(w, c, data)
-	renderReadyToMerge(w, c, data)
-	renderDependencyBlocked(w, c, data)
-	renderConflictDeferred(w, c, data)
-	renderFailedTasks(w, c, data)
-	renderRecentCompletions(w, c, data)
-	renderRecentMessages(w, c, data)
-	renderWarnings(w, c, data)
+type renderWriter struct {
+	w   io.Writer
+	err error
 }
 
-func renderCompactDashboard(w io.Writer, c colorSet, data statusData) {
-	renderCompactQueueSummary(w, c, data)
-	renderCompactAgents(w, c, data)
-	renderCompactAttention(w, c, data)
-	renderCompactNextUp(w, c, data)
+func (rw *renderWriter) print(args ...any) {
+	if rw.err != nil {
+		return
+	}
+	_, rw.err = fmt.Fprint(rw.w, args...)
 }
 
-func renderCompactQueueSummary(w io.Writer, c colorSet, data statusData) {
+func (rw *renderWriter) printf(format string, args ...any) {
+	if rw.err != nil {
+		return
+	}
+	_, rw.err = fmt.Fprintf(rw.w, format, args...)
+}
+
+func (rw *renderWriter) println(args ...any) {
+	if rw.err != nil {
+		return
+	}
+	_, rw.err = fmt.Fprintln(rw.w, args...)
+}
+
+func renderVerboseDashboard(w io.Writer, c colorSet, data statusData) error {
+	if err := renderQueueOverview(w, c, data); err != nil {
+		return err
+	}
+	if err := renderRunnableBacklog(w, c, data); err != nil {
+		return err
+	}
+	if err := renderActiveAgents(w, c, data); err != nil {
+		return err
+	}
+	if err := renderAgentProgress(w, c, data); err != nil {
+		return err
+	}
+	if err := renderInProgressTasks(w, c, data); err != nil {
+		return err
+	}
+	if err := renderReadyForReview(w, c, data); err != nil {
+		return err
+	}
+	if err := renderReadyToMerge(w, c, data); err != nil {
+		return err
+	}
+	if err := renderDependencyBlocked(w, c, data); err != nil {
+		return err
+	}
+	if err := renderConflictDeferred(w, c, data); err != nil {
+		return err
+	}
+	if err := renderFailedTasks(w, c, data); err != nil {
+		return err
+	}
+	if err := renderRecentCompletions(w, c, data); err != nil {
+		return err
+	}
+	if err := renderRecentMessages(w, c, data); err != nil {
+		return err
+	}
+	return renderWarnings(w, c, data)
+}
+
+func renderCompactDashboard(w io.Writer, c colorSet, data statusData) error {
+	if err := renderCompactQueueSummary(w, c, data); err != nil {
+		return err
+	}
+	if err := renderCompactAgents(w, c, data); err != nil {
+		return err
+	}
+	if err := renderCompactAttention(w, c, data); err != nil {
+		return err
+	}
+	return renderCompactNextUp(w, c, data)
+}
+
+func renderCompactQueueSummary(w io.Writer, c colorSet, data statusData) error {
 	mergeState := c.Dim("idle")
 	if data.mergeLockActive {
 		mergeState = c.Yellow("active")
 	}
 
-	fmt.Fprintf(w, "%s %s backlog | %s runnable | %s running | %s review | %s merge | %s failed\n",
+	rw := renderWriter{w: w}
+	rw.printf("%s %s backlog | %s runnable | %s running | %s review | %s merge | %s failed\n",
 		c.Bold("Queue:"),
 		c.Green(data.queueCounts[queue.DirBacklog]),
 		c.Green(data.runnable),
@@ -64,10 +121,11 @@ func renderCompactQueueSummary(w io.Writer, c colorSet, data statusData) {
 		c.Cyan(data.queueCounts[queue.DirReadyMerge]),
 		c.Red(data.queueCounts[queue.DirFailed]),
 	)
-	fmt.Fprintf(w, "%s %s   %s %s\n",
+	rw.printf("%s %s   %s %s\n",
 		c.Bold("Pause:"), renderPauseState(c, data.pauseState),
 		c.Bold("Merge queue:"), mergeState,
 	)
+	return rw.err
 }
 
 type compactAgentRow struct {
@@ -78,12 +136,13 @@ type compactAgentRow struct {
 	age     string
 }
 
-func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%s (%d)\n", c.Bold("Agents"), len(data.agents))
+func renderCompactAgents(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.printf("%s (%d)\n", c.Bold("Agents"), len(data.agents))
 	if len(data.agents) == 0 {
-		fmt.Fprintln(w, c.Dim("  (none)"))
-		return
+		rw.println(c.Dim("  (none)"))
+		return rw.err
 	}
 
 	termWidth := ui.TermWidth()
@@ -209,7 +268,7 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 				line = strings.Join(parts, "  ")
 			}
 		}
-		fmt.Fprintf(w, "%s%s\n", indent, line)
+		rw.printf("%s%s\n", indent, line)
 	}
 	if len(rows) > compactListLimit {
 		summary := fmt.Sprintf("... +%d more", len(rows)-compactListLimit)
@@ -220,8 +279,9 @@ func renderCompactAgents(w io.Writer, c colorSet, data statusData) {
 			}
 			summary = ui.Truncate(summary, maxSummary)
 		}
-		fmt.Fprintf(w, "%s%s\n", indent, c.Dim(summary))
+		rw.printf("%s%s\n", indent, c.Dim(summary))
 	}
+	return rw.err
 }
 
 func compactAgentRows(data statusData) []compactAgentRow {
@@ -287,37 +347,39 @@ func compactProgressLabel(body string) string {
 	return line
 }
 
-func renderCompactAttention(w io.Writer, c colorSet, data statusData) {
+func renderCompactAttention(w io.Writer, c colorSet, data statusData) error {
 	orphaned := compactOrphanedInProgressTasks(data)
 	hasAttention := len(data.warnings) > 0 || len(data.failedTasks) > 0 || len(data.waitingTasks) > 0 || len(data.deferredDetail) > 0 || len(orphaned) > 0
 	if !hasAttention {
-		return
+		return nil
 	}
 
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Attention"))
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Attention"))
 
 	if len(data.warnings) > 0 {
 		if len(data.warnings) <= 3 {
 			for _, warn := range data.warnings {
-				fmt.Fprintf(w, "  %s %s\n", c.Yellow("warning:"), warn)
+				rw.printf("  %s %s\n", c.Yellow("warning:"), warn)
 			}
 		} else {
-			fmt.Fprintf(w, "  %s warnings\n", c.Yellow(len(data.warnings)))
+			rw.printf("  %s warnings\n", c.Yellow(len(data.warnings)))
 		}
 	}
 	if len(data.failedTasks) > 0 {
-		fmt.Fprintf(w, "  %s failed\n", c.Red(len(data.failedTasks)))
+		rw.printf("  %s failed\n", c.Red(len(data.failedTasks)))
 	}
 	if len(data.waitingTasks) > 0 {
-		fmt.Fprintf(w, "  %s blocked by dependencies\n", c.Yellow(len(data.waitingTasks)))
+		rw.printf("  %s blocked by dependencies\n", c.Yellow(len(data.waitingTasks)))
 	}
 	if len(data.deferredDetail) > 0 {
-		fmt.Fprintf(w, "  %s conflict-deferred\n", c.Yellow(len(data.deferredDetail)))
+		rw.printf("  %s conflict-deferred\n", c.Yellow(len(data.deferredDetail)))
 	}
 	for _, task := range orphaned {
-		fmt.Fprintf(w, "  %s running without active agent\n", c.Yellow(task.name))
+		rw.printf("  %s running without active agent\n", c.Yellow(task.name))
 	}
+	return rw.err
 }
 
 func compactOrphanedInProgressTasks(data statusData) []taskEntry {
@@ -340,12 +402,13 @@ func compactOrphanedInProgressTasks(data statusData) []taskEntry {
 	return orphaned
 }
 
-func renderCompactNextUp(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Next Up"))
+func renderCompactNextUp(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Next Up"))
 	if len(data.runnableBacklog) == 0 {
-		fmt.Fprintln(w, c.Dim("  (none)"))
-		return
+		rw.println(c.Dim("  (none)"))
+		return rw.err
 	}
 
 	termWidth := ui.TermWidth()
@@ -366,31 +429,34 @@ func renderCompactNextUp(w io.Writer, c colorSet, data statusData) {
 			}
 			label = ui.Truncate(label, maxLabel)
 		}
-		fmt.Fprintf(w, "  %d. %s\n", i+1, label)
+		rw.printf("  %d. %s\n", i+1, label)
 	}
 	if len(data.runnableBacklog) > compactListLimit {
-		fmt.Fprintf(w, "  %s\n", c.Dim(fmt.Sprintf("... +%d more", len(data.runnableBacklog)-compactListLimit)))
+		rw.printf("  %s\n", c.Dim(fmt.Sprintf("... +%d more", len(data.runnableBacklog)-compactListLimit)))
 	}
+	return rw.err
 }
 
-func renderQueueOverview(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w, c.Bold("Queue Overview"))
-	fmt.Fprintln(w, c.Bold("──────────────"))
-	fmt.Fprintf(w, "  backlog:        %s  %s\n", c.Green(data.queueCounts[queue.DirBacklog]), c.Dim("(total tasks in backlog/)"))
-	fmt.Fprintf(w, "  runnable:       %s\n", c.Green(data.runnable))
-	fmt.Fprintf(w, "  deferred:       %s  %s\n", c.Yellow(len(data.deferredDetail)), c.Dim("(conflict-blocked, in backlog)"))
-	fmt.Fprintf(w, "  blocked:        %s  %s\n", c.Dim(len(data.waitingTasks)), c.Dim("(dependency-blocked, including misplaced backlog tasks)"))
-	fmt.Fprintf(w, "  in-progress:    %s\n", c.Yellow(data.queueCounts[queue.DirInProgress]))
-	fmt.Fprintf(w, "  ready-review:   %s\n", c.Cyan(data.queueCounts[queue.DirReadyReview]))
-	fmt.Fprintf(w, "  ready-to-merge: %s\n", c.Cyan(data.queueCounts[queue.DirReadyMerge]))
-	fmt.Fprintf(w, "  completed:      %s\n", c.Green(data.queueCounts[queue.DirCompleted]))
-	fmt.Fprintf(w, "  failed:         %s\n", c.Red(data.queueCounts[queue.DirFailed]))
+func renderQueueOverview(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println(c.Bold("Queue Overview"))
+	rw.println(c.Bold("──────────────"))
+	rw.printf("  backlog:        %s  %s\n", c.Green(data.queueCounts[queue.DirBacklog]), c.Dim("(total tasks in backlog/)"))
+	rw.printf("  runnable:       %s\n", c.Green(data.runnable))
+	rw.printf("  deferred:       %s  %s\n", c.Yellow(len(data.deferredDetail)), c.Dim("(conflict-blocked, in backlog)"))
+	rw.printf("  blocked:        %s  %s\n", c.Dim(len(data.waitingTasks)), c.Dim("(dependency-blocked, including misplaced backlog tasks)"))
+	rw.printf("  in-progress:    %s\n", c.Yellow(data.queueCounts[queue.DirInProgress]))
+	rw.printf("  ready-review:   %s\n", c.Cyan(data.queueCounts[queue.DirReadyReview]))
+	rw.printf("  ready-to-merge: %s\n", c.Cyan(data.queueCounts[queue.DirReadyMerge]))
+	rw.printf("  completed:      %s\n", c.Green(data.queueCounts[queue.DirCompleted]))
+	rw.printf("  failed:         %s\n", c.Red(data.queueCounts[queue.DirFailed]))
 	if data.mergeLockActive {
-		fmt.Fprintf(w, "  merge queue:    %s\n", c.Yellow("active"))
+		rw.printf("  merge queue:    %s\n", c.Yellow("active"))
 	} else {
-		fmt.Fprintf(w, "  merge queue:    %s\n", c.Dim("idle"))
+		rw.printf("  merge queue:    %s\n", c.Dim("idle"))
 	}
-	fmt.Fprintf(w, "  pause state:    %s\n", renderPauseState(c, data.pauseState))
+	rw.printf("  pause state:    %s\n", renderPauseState(c, data.pauseState))
+	return rw.err
 }
 
 func renderPauseState(c colorSet, state pause.State) string {
@@ -403,13 +469,14 @@ func renderPauseState(c colorSet, state pause.State) string {
 	return c.Yellow("paused since " + state.Since.Format(time.RFC3339))
 }
 
-func renderRunnableBacklog(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Runnable Backlog (execution order)"))
-	fmt.Fprintln(w, c.Bold("──────────────────────────────────"))
+func renderRunnableBacklog(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Runnable Backlog (execution order)"))
+	rw.println(c.Bold("──────────────────────────────────"))
 	if len(data.runnableBacklog) == 0 {
-		fmt.Fprintln(w, c.Dim("  (none)"))
-		return
+		rw.println(c.Dim("  (none)"))
+		return rw.err
 	}
 	termWidth := ui.TermWidth()
 	for i, task := range data.runnableBacklog {
@@ -426,17 +493,19 @@ func renderRunnableBacklog(w io.Writer, c colorSet, data statusData) {
 			}
 			label = ui.Truncate(label, maxLabel)
 		}
-		fmt.Fprintf(w, "  %d. %s  %s\n", i+1, label, c.Dim(suffix))
+		rw.printf("  %d. %s  %s\n", i+1, label, c.Dim(suffix))
 	}
+	return rw.err
 }
 
-func renderActiveAgents(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Active Agents"))
-	fmt.Fprintln(w, c.Bold("─────────────"))
+func renderActiveAgents(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Active Agents"))
+	rw.println(c.Bold("─────────────"))
 	if len(data.agents) == 0 {
-		fmt.Fprintln(w, c.Dim("  (none)"))
-		return
+		rw.println(c.Dim("  (none)"))
+		return rw.err
 	}
 	termWidth := ui.TermWidth()
 	for _, agent := range data.agents {
@@ -495,18 +564,18 @@ func renderActiveAgents(w io.Writer, c colorSet, data statusData) {
 							} else {
 								name = ""
 							}
-							fmt.Fprintf(w, "  %s\n", c.Yellow(name))
+							rw.printf("  %s\n", c.Yellow(name))
 							continue
 						}
 					}
 				}
 			}
 			if branch != "" {
-				fmt.Fprintf(w, "  %s (PID %d): %s on %s\n", c.Yellow(name), agent.PID, task, c.Cyan(branch))
+				rw.printf("  %s (PID %d): %s on %s\n", c.Yellow(name), agent.PID, task, c.Cyan(branch))
 			} else if task != "" {
-				fmt.Fprintf(w, "  %s (PID %d): %s\n", c.Yellow(name), agent.PID, task)
+				rw.printf("  %s (PID %d): %s\n", c.Yellow(name), agent.PID, task)
 			} else {
-				fmt.Fprintf(w, "  %s (PID %d)\n", c.Yellow(name), agent.PID)
+				rw.printf("  %s (PID %d)\n", c.Yellow(name), agent.PID)
 			}
 		} else {
 			// No presence info; show identity only.
@@ -524,23 +593,25 @@ func renderActiveAgents(w io.Writer, c colorSet, data statusData) {
 						} else {
 							name = ""
 						}
-						fmt.Fprintf(w, "  %s\n", c.Yellow(name))
+						rw.printf("  %s\n", c.Yellow(name))
 						continue
 					}
 				}
 			}
-			fmt.Fprintf(w, "  %s (PID %d)\n", c.Yellow(name), agent.PID)
+			rw.printf("  %s (PID %d)\n", c.Yellow(name), agent.PID)
 		}
 	}
+	return rw.err
 }
 
-func renderAgentProgress(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Current Agent Progress"))
-	fmt.Fprintln(w, c.Bold("──────────────────────"))
+func renderAgentProgress(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Current Agent Progress"))
+	rw.println(c.Bold("──────────────────────"))
 	if len(data.activeProgress) == 0 {
-		fmt.Fprintln(w, c.Dim("  (none)"))
-		return
+		rw.println(c.Dim("  (none)"))
+		return rw.err
 	}
 	termWidth := ui.TermWidth()
 	for _, p := range data.activeProgress {
@@ -554,17 +625,19 @@ func renderAgentProgress(w io.Writer, c colorSet, data statusData) {
 			}
 			body = ui.Truncate(body, maxBody)
 		}
-		fmt.Fprintf(w, "  %s: %s (%s) — %s ago\n", c.Yellow(p.displayID), body, p.task, c.Dim(p.ago))
+		rw.printf("  %s: %s (%s) — %s ago\n", c.Yellow(p.displayID), body, p.task, c.Dim(p.ago))
 	}
+	return rw.err
 }
 
-func renderInProgressTasks(w io.Writer, c colorSet, data statusData) {
+func renderInProgressTasks(w io.Writer, c colorSet, data statusData) error {
 	if len(data.inProgressTasks) == 0 {
-		return
+		return nil
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("In-Progress Tasks"))
-	fmt.Fprintln(w, c.Bold("─────────────────"))
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("In-Progress Tasks"))
+	rw.println(c.Bold("─────────────────"))
 	termWidth := ui.TermWidth()
 	now := time.Now().UTC()
 	for _, task := range data.inProgressTasks {
@@ -599,7 +672,7 @@ func renderInProgressTasks(w io.Writer, c colorSet, data statusData) {
 				}
 				labelText = ui.Truncate(labelText, maxLabel)
 			}
-			fmt.Fprintf(w, "  %s%s\n", c.Yellow(labelText), suffix)
+			rw.printf("  %s%s\n", c.Yellow(labelText), suffix)
 		} else {
 			if termWidth > 0 {
 				maxLabel := termWidth - 2
@@ -608,18 +681,20 @@ func renderInProgressTasks(w io.Writer, c colorSet, data statusData) {
 				}
 				labelText = ui.Truncate(labelText, maxLabel)
 			}
-			fmt.Fprintf(w, "  %s\n", c.Yellow(labelText))
+			rw.printf("  %s\n", c.Yellow(labelText))
 		}
 	}
+	return rw.err
 }
 
-func renderReadyForReview(w io.Writer, c colorSet, data statusData) {
+func renderReadyForReview(w io.Writer, c colorSet, data statusData) error {
 	if len(data.readyForReview) == 0 {
-		return
+		return nil
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Ready for Review"))
-	fmt.Fprintln(w, c.Bold("────────────────"))
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Ready for Review"))
+	rw.println(c.Bold("────────────────"))
 	termWidth := ui.TermWidth()
 	for _, task := range data.readyForReview {
 		var parts []string
@@ -639,20 +714,22 @@ func renderReadyForReview(w io.Writer, c colorSet, data statusData) {
 				}
 				detail = ui.Truncate(detail, maxDetail)
 			}
-			fmt.Fprintf(w, "  %s — %s\n", c.Cyan(task.name), detail)
+			rw.printf("  %s — %s\n", c.Cyan(task.name), detail)
 		} else {
-			fmt.Fprintf(w, "  %s\n", c.Cyan(task.name))
+			rw.printf("  %s\n", c.Cyan(task.name))
 		}
 	}
+	return rw.err
 }
 
-func renderReadyToMerge(w io.Writer, c colorSet, data statusData) {
+func renderReadyToMerge(w io.Writer, c colorSet, data statusData) error {
 	if len(data.readyToMerge) == 0 {
-		return
+		return nil
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Ready to Merge"))
-	fmt.Fprintln(w, c.Bold("──────────────"))
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Ready to Merge"))
+	rw.println(c.Bold("──────────────"))
 	termWidth := ui.TermWidth()
 	for _, task := range data.readyToMerge {
 		labelText := task.name
@@ -667,17 +744,19 @@ func renderReadyToMerge(w io.Writer, c colorSet, data statusData) {
 			}
 			labelText = ui.Truncate(labelText, maxLabel)
 		}
-		fmt.Fprintf(w, "  %s  %s\n", c.Cyan(labelText), c.Dim(suffix))
+		rw.printf("  %s  %s\n", c.Cyan(labelText), c.Dim(suffix))
 	}
+	return rw.err
 }
 
-func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Dependency-Blocked"))
-	fmt.Fprintln(w, c.Bold("──────────────────"))
+func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Dependency-Blocked"))
+	rw.println(c.Bold("──────────────────"))
 	if len(data.waitingTasks) == 0 {
-		fmt.Fprintln(w, c.Dim("  (none)"))
-		return
+		rw.println(c.Dim("  (none)"))
+		return rw.err
 	}
 	termWidth := ui.TermWidth()
 	for _, task := range data.waitingTasks {
@@ -697,9 +776,9 @@ func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) {
 			}
 			labelText = ui.Truncate(labelText, maxLabel)
 		}
-		fmt.Fprintf(w, "  %s  %s\n", labelText, c.Dim(suffix))
+		rw.printf("  %s  %s\n", labelText, c.Dim(suffix))
 		if len(task.Dependencies) == 0 {
-			fmt.Fprintf(w, "    depends on: none\n")
+			rw.printf("    depends on: none\n")
 			continue
 		}
 		depStrs := make([]string, 0, len(task.Dependencies))
@@ -718,17 +797,19 @@ func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) {
 			}
 			depLine = ui.Truncate(depLine, maxDep)
 		}
-		fmt.Fprintf(w, "    depends on: %s\n", depLine)
+		rw.printf("    depends on: %s\n", depLine)
 	}
+	return rw.err
 }
 
-func renderConflictDeferred(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Conflict-Deferred (backlog/, excluded from queue)"))
-	fmt.Fprintln(w, c.Bold("──────────────────────────────────────────────────"))
+func renderConflictDeferred(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Conflict-Deferred (backlog/, excluded from queue)"))
+	rw.println(c.Bold("──────────────────────────────────────────────────"))
 	if len(data.deferredDetail) == 0 {
-		fmt.Fprintln(w, c.Dim("  (none)"))
-		return
+		rw.println(c.Dim("  (none)"))
+		return rw.err
 	}
 	termWidth := ui.TermWidth()
 	deferredNames := make([]string, 0, len(data.deferredDetail))
@@ -738,7 +819,7 @@ func renderConflictDeferred(w io.Writer, c colorSet, data statusData) {
 	sort.Strings(deferredNames)
 	for _, name := range deferredNames {
 		info := data.deferredDetail[name]
-		fmt.Fprintf(w, "  %s\n", c.Yellow(name))
+		rw.printf("  %s\n", c.Yellow(name))
 		blockedLine := fmt.Sprintf("%s (%s/)", info.BlockedBy, info.BlockedByDir)
 		affectsLine := strings.Join(info.ConflictingAffects, ", ")
 		if termWidth > 0 {
@@ -753,18 +834,20 @@ func renderConflictDeferred(w io.Writer, c colorSet, data statusData) {
 			}
 			affectsLine = ui.Truncate(affectsLine, maxAffects)
 		}
-		fmt.Fprintf(w, "    blocked by: %s\n", blockedLine)
-		fmt.Fprintf(w, "    conflicting affects: %s\n", affectsLine)
+		rw.printf("    blocked by: %s\n", blockedLine)
+		rw.printf("    conflicting affects: %s\n", affectsLine)
 	}
+	return rw.err
 }
 
-func renderFailedTasks(w io.Writer, c colorSet, data statusData) {
+func renderFailedTasks(w io.Writer, c colorSet, data statusData) error {
 	if len(data.failedTasks) == 0 {
-		return
+		return nil
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Failed Tasks"))
-	fmt.Fprintln(w, c.Bold("────────────"))
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Failed Tasks"))
+	rw.println(c.Bold("────────────"))
 	termWidth := ui.TermWidth()
 	for _, task := range data.failedTasks {
 		labelText := task.name
@@ -813,17 +896,19 @@ func renderFailedTasks(w io.Writer, c colorSet, data statusData) {
 			}
 			labelText = ui.Truncate(labelText, maxLabel)
 		}
-		fmt.Fprintf(w, "  %s%s\n", c.Red(labelText), suffix)
+		rw.printf("  %s%s\n", c.Red(labelText), suffix)
 	}
+	return rw.err
 }
 
-func renderRecentCompletions(w io.Writer, c colorSet, data statusData) {
+func renderRecentCompletions(w io.Writer, c colorSet, data statusData) error {
 	if len(data.completions) == 0 {
-		return
+		return nil
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Recent Completions"))
-	fmt.Fprintln(w, c.Bold("──────────────────"))
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Recent Completions"))
+	rw.println(c.Bold("──────────────────"))
 	show := data.completions
 	if len(show) > 5 {
 		show = show[:5]
@@ -849,17 +934,19 @@ func renderRecentCompletions(w io.Writer, c colorSet, data statusData) {
 			labelText = ui.Truncate(labelText, maxLabel)
 		}
 		label := c.Green(labelText)
-		fmt.Fprintf(w, "  %s  %s\n", label, c.Dim(suffix))
+		rw.printf("  %s  %s\n", label, c.Dim(suffix))
 	}
+	return rw.err
 }
 
-func renderRecentMessages(w io.Writer, c colorSet, data statusData) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold("Recent Messages"))
-	fmt.Fprintln(w, c.Bold("───────────────"))
+func renderRecentMessages(w io.Writer, c colorSet, data statusData) error {
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold("Recent Messages"))
+	rw.println(c.Bold("───────────────"))
 	if len(data.recentMessages) == 0 {
-		fmt.Fprintln(w, c.Dim("  (none)"))
-		return
+		rw.println(c.Dim("  (none)"))
+		return rw.err
 	}
 	termWidth := ui.TermWidth()
 	for i := len(data.recentMessages) - 1; i >= 0; i-- {
@@ -883,19 +970,22 @@ func renderRecentMessages(w io.Writer, c colorSet, data statusData) {
 			}
 			line = ui.Truncate(line, maxLine)
 		}
-		fmt.Fprintf(w, "  %s %s: %s\n", c.Dim("["+msg.SentAt.Local().Format("15:04:05")+"]"), c.Yellow(from), line)
+		rw.printf("  %s %s: %s\n", c.Dim("["+msg.SentAt.Local().Format("15:04:05")+"]"), c.Yellow(from), line)
 	}
+	return rw.err
 }
 
 // renderWarnings prints any non-fatal warnings collected during data gathering.
-func renderWarnings(w io.Writer, c colorSet, data statusData) {
+func renderWarnings(w io.Writer, c colorSet, data statusData) error {
 	if len(data.warnings) == 0 {
-		return
+		return nil
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, c.Bold(c.Yellow("Warnings")))
-	fmt.Fprintln(w, c.Bold(c.Yellow("────────")))
+	rw := renderWriter{w: w}
+	rw.println()
+	rw.println(c.Bold(c.Yellow("Warnings")))
+	rw.println(c.Bold(c.Yellow("────────")))
 	for _, warn := range data.warnings {
-		fmt.Fprintf(w, "  %s %s\n", c.Yellow("⚠"), warn)
+		rw.printf("  %s %s\n", c.Yellow("⚠"), warn)
 	}
+	return rw.err
 }

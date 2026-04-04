@@ -42,6 +42,32 @@ const (
 	sourceFailed sourceStatus = "failed"
 )
 
+type textWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (tw *textWriter) print(args ...any) {
+	if tw.err != nil {
+		return
+	}
+	_, tw.err = fmt.Fprint(tw.w, args...)
+}
+
+func (tw *textWriter) printf(format string, args ...any) {
+	if tw.err != nil {
+		return
+	}
+	_, tw.err = fmt.Fprintf(tw.w, format, args...)
+}
+
+func (tw *textWriter) println(args ...any) {
+	if tw.err != nil {
+		return
+	}
+	_, tw.err = fmt.Fprintln(tw.w, args...)
+}
+
 // Show writes durable task history to stdout.
 func Show(repo string, limit int, format string) error {
 	return ShowTo(os.Stdout, repo, limit, format)
@@ -75,8 +101,7 @@ func ShowTo(w io.Writer, repo string, limit int, format string) error {
 	if format == "json" {
 		return renderJSON(w, events)
 	}
-	renderText(w, events)
-	return nil
+	return renderText(w, events)
 }
 
 func collectEvents(tasksDir string) ([]Event, error) {
@@ -293,10 +318,11 @@ func colorEventType(padded string) string {
 // width-based truncation on very narrow terminals.
 const minTruncWidth = 6
 
-func renderText(w io.Writer, events []Event) {
+func renderText(w io.Writer, events []Event) error {
+	tw := textWriter{w: w}
 	if len(events) == 0 {
-		fmt.Fprintln(w, "(no history)")
-		return
+		tw.println("(no history)")
+		return tw.err
 	}
 
 	termWidth := ui.TermWidth()
@@ -385,14 +411,14 @@ func renderText(w io.Writer, events []Event) {
 		}
 
 		if eventTaskWidth > 0 {
-			fmt.Fprintf(w, "%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
+			tw.printf("%s  %s  %-*s", colors.Dim(ts), colorEventType(padded), eventTaskWidth, taskName)
 		} else if termWidth > 0 && len([]rune(ts))+2+len([]rune(event.Type)) > termWidth {
 			// Timestamp was truncated so tightly that adding "  TYPE"
 			// would still overflow; print only the truncated timestamp.
-			fmt.Fprint(w, colors.Dim(ts))
+			tw.print(colors.Dim(ts))
 		} else {
 			// No room for task column; omit trailing type padding.
-			fmt.Fprintf(w, "%s  %s", colors.Dim(ts), colorEventType(event.Type))
+			tw.printf("%s  %s", colors.Dim(ts), colorEventType(event.Type))
 		}
 
 		if showDetail && detail != "" {
@@ -401,14 +427,15 @@ func renderText(w io.Writer, events []Event) {
 				maxDetail := termWidth - usedWidth
 				if maxDetail > 0 {
 					detail = ui.Truncate(detail, maxDetail)
-					fmt.Fprintf(w, "  %s", detail)
+					tw.printf("  %s", detail)
 				}
 			} else {
-				fmt.Fprintf(w, "  %s", detail)
+				tw.printf("  %s", detail)
 			}
 		}
-		fmt.Fprintln(w)
+		tw.println()
 	}
+	return tw.err
 }
 
 func renderJSON(w io.Writer, events []Event) error {
