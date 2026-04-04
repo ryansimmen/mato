@@ -47,8 +47,8 @@ func ValidateRepoDefaults(repoRoot string) (*RepoValidationResult, error) {
 			ReviewModel:           resolveStringValue("", envReviewModel, load.Config.ReviewModel, runner.DefaultReviewModel),
 			TaskReasoningEffort:   resolveStringValue("", envTaskReasoningEffort, load.Config.TaskReasoningEffort, runner.DefaultReasoningEffort),
 			ReviewReasoningEffort: resolveStringValue("", envReviewReasoningEffort, load.Config.ReviewReasoningEffort, runner.DefaultReasoningEffort),
-			AgentTimeout:          resolveDurationValueForValidation(envAgentTimeout, load.Config.AgentTimeout, "agent_timeout", runner.DefaultAgentTimeout),
-			RetryCooldown:         resolveDurationValueForValidation(envRetryCooldown, load.Config.RetryCooldown, "retry_cooldown", queue.DefaultRetryCooldown),
+			AgentTimeout:          resolveDurationValueForValidation(envAgentTimeout, load.Config.AgentTimeout, runner.DefaultAgentTimeout),
+			RetryCooldown:         resolveDurationValueForValidation(envRetryCooldown, load.Config.RetryCooldown, queue.DefaultRetryCooldown),
 		},
 	}
 
@@ -137,12 +137,8 @@ func resolveBranchForValidation(load config.LoadResult) (Resolved[string], *Vali
 func resolveBoolValueForValidation(envMeta envVarMeta, configVal *bool, defaultVal bool, settingName, configPath string) (Resolved[bool], *ValidationIssue) {
 	raw, ok := os.LookupEnv(envMeta.Name)
 	if ok && strings.TrimSpace(raw) != "" {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
-		case "1", "true", "yes", "on":
-			return Resolved[bool]{Value: true, Source: SourceEnv, EnvVar: envMeta.Name}, nil
-		case "0", "false", "no", "off":
-			return Resolved[bool]{Value: false, Source: SourceEnv, EnvVar: envMeta.Name}, nil
-		default:
+		parsed, ok := parseEnvBool(raw)
+		if !ok {
 			return Resolved[bool]{Source: SourceEnv, EnvVar: envMeta.Name}, &ValidationIssue{
 				Code:    "config.invalid_bool",
 				Setting: settingName,
@@ -151,6 +147,7 @@ func resolveBoolValueForValidation(envMeta envVarMeta, configVal *bool, defaultV
 				EnvVar:  envMeta.Name,
 			}
 		}
+		return Resolved[bool]{Value: parsed, Source: SourceEnv, EnvVar: envMeta.Name}, nil
 	}
 	if configVal != nil {
 		return Resolved[bool]{Value: *configVal, Source: SourceConfig}, nil
@@ -158,7 +155,7 @@ func resolveBoolValueForValidation(envMeta envVarMeta, configVal *bool, defaultV
 	return Resolved[bool]{Value: defaultVal, Source: SourceDefault}, nil
 }
 
-func resolveDurationValueForValidation(envMeta envVarMeta, configVal *string, name string, defaultVal time.Duration) Resolved[string] {
+func resolveDurationValueForValidation(envMeta envVarMeta, configVal *string, defaultVal time.Duration) Resolved[string] {
 	if v := os.Getenv(envMeta.Name); v != "" {
 		return Resolved[string]{Value: v, Source: SourceEnv, EnvVar: envMeta.Name}
 	}

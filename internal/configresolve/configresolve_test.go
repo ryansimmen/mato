@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"mato/internal/config"
-	"mato/internal/git"
 	"mato/internal/queue"
 	"mato/internal/runner"
 	"mato/internal/testutil"
@@ -225,8 +224,6 @@ func TestResolveDoctorDockerImage(t *testing.T) {
 }
 
 func TestValidateRepoDefaults(t *testing.T) {
-	stringPtr := func(v string) *string { return &v }
-
 	t.Run("valid effective config has no issues", func(t *testing.T) {
 		repoRoot := testutil.SetupRepo(t)
 		t.Setenv(envBranch.Name, "")
@@ -336,21 +333,17 @@ func TestValidateRepoDefaults(t *testing.T) {
 		}
 	})
 
-	t.Run("shared branch validation hook is used", func(t *testing.T) {
+	t.Run("branch validation uses shared git rules", func(t *testing.T) {
 		repoRoot := testutil.SetupRepo(t)
 		t.Setenv(envBranch.Name, "")
-		orig := git.ExportValidateBranchFn()
-		defer git.SetValidateBranchFn(orig)
-		git.SetValidateBranchFn(func(string) error { return nil })
+		testutil.WriteFile(t, repoRoot+"/.mato.yaml", "branch: foo..bar\n")
 
 		result, err := ValidateRepoDefaults(repoRoot)
 		if err != nil {
 			t.Fatalf("ValidateRepoDefaults: %v", err)
 		}
-		if len(result.Issues) != 0 {
-			t.Fatalf("Issues = %+v, want none", result.Issues)
+		if len(result.Issues) != 1 || result.Issues[0].Code != "config.invalid_branch" {
+			t.Fatalf("Issues = %+v, want one invalid branch issue", result.Issues)
 		}
 	})
-
-	_ = stringPtr
 }

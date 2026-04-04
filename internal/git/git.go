@@ -25,16 +25,6 @@ func ValidateBranch(branch string) error {
 	return validateBranchFn(branch)
 }
 
-// ExportValidateBranchFn returns the current branch-validation hook.
-func ExportValidateBranchFn() func(string) error {
-	return validateBranchFn
-}
-
-// SetValidateBranchFn overrides branch validation for tests.
-func SetValidateBranchFn(fn func(string) error) {
-	validateBranchFn = fn
-}
-
 // ResolveRepoRoot resolves the repository root directory for the given path
 // by running "git rev-parse --show-toplevel". The result is trimmed of
 // whitespace so callers receive a clean absolute path.

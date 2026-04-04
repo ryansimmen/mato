@@ -211,17 +211,6 @@ func TestValidateBranch(t *testing.T) {
 			t.Fatalf("err = %v, want invalid branch name", err)
 		}
 	})
-
-	t.Run("hookable", func(t *testing.T) {
-		orig := ExportValidateBranchFn()
-		defer SetValidateBranchFn(orig)
-		SetValidateBranchFn(func(name string) error {
-			return exec.ErrNotFound
-		})
-		if err := ValidateBranch("main"); err == nil {
-			t.Fatal("expected injected error, got nil")
-		}
-	})
 }
 
 func TestEnsureBranch_PrefersRemoteTrackingBranch(t *testing.T) {
