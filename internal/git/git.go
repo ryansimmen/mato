@@ -12,6 +12,19 @@ import (
 	"mato/internal/atomicwrite"
 )
 
+var validateBranchFn = func(name string) error {
+	out, err := exec.Command("git", "check-ref-format", "--branch", name).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("invalid branch name %q: git check-ref-format rejected it (%s)", name, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// ValidateBranch checks that branch is a valid git branch name.
+func ValidateBranch(branch string) error {
+	return validateBranchFn(branch)
+}
+
 // ResolveRepoRoot resolves the repository root directory for the given path
 // by running "git rev-parse --show-toplevel". The result is trimmed of
 // whitespace so callers receive a clean absolute path.

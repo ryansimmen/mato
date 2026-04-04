@@ -290,19 +290,27 @@ func resolveStringValue(flagValue string, envMeta envVarMeta, configVal *string,
 func resolveBoolValue(envMeta envVarMeta, configVal *bool, defaultVal bool) (Resolved[bool], error) {
 	raw, ok := os.LookupEnv(envMeta.Name)
 	if ok && strings.TrimSpace(raw) != "" {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
-		case "1", "true", "yes", "on":
-			return Resolved[bool]{Value: true, Source: SourceEnv, EnvVar: envMeta.Name}, nil
-		case "0", "false", "no", "off":
-			return Resolved[bool]{Value: false, Source: SourceEnv, EnvVar: envMeta.Name}, nil
-		default:
+		parsed, ok := parseEnvBool(raw)
+		if !ok {
 			return Resolved[bool]{}, fmt.Errorf("parse %s %q: must be true or false", envMeta.Name, raw)
 		}
+		return Resolved[bool]{Value: parsed, Source: SourceEnv, EnvVar: envMeta.Name}, nil
 	}
 	if configVal != nil {
 		return Resolved[bool]{Value: *configVal, Source: SourceConfig}, nil
 	}
 	return Resolved[bool]{Value: defaultVal, Source: SourceDefault}, nil
+}
+
+func parseEnvBool(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func resolveDurationValue(envMeta envVarMeta, configVal *string, name string, defaultVal time.Duration) (Resolved[time.Duration], error) {

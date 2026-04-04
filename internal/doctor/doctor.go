@@ -74,12 +74,18 @@ type Options struct {
 var validCheckNames = map[string]bool{
 	"git":     true,
 	"tools":   true,
+	"config":  true,
 	"docker":  true,
 	"queue":   true,
 	"tasks":   true,
 	"locks":   true,
 	"hygiene": true,
 	"deps":    true,
+}
+
+// IsValidCheckName reports whether name is a supported doctor check name.
+func IsValidCheckName(name string) bool {
+	return validCheckNames[name]
 }
 
 // Run executes all configured checks and returns a report. The context
@@ -131,9 +137,10 @@ func Run(ctx context.Context, repoInput string, opts Options) (Report, error) {
 	}
 
 	cc := &checkContext{
-		ctx:       ctx,
-		repoInput: repoInput,
-		opts:      opts,
+		ctx:            ctx,
+		repoInput:      repoInput,
+		opts:           opts,
+		selectedChecks: onlySet,
 	}
 
 	// Resolve repoInput to an absolute path for the git check.

@@ -207,16 +207,24 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 	return cmd
 }
 
-func doctorNeedsDockerConfig(only []string) bool {
+func doctorShouldPreResolveDockerImage(only []string) bool {
 	if len(only) == 0 {
-		return true
+		return false
 	}
+	hasDocker := false
+	hasConfig := false
 	for _, name := range only {
-		if name == "docker" {
-			return true
+		if !doctor.IsValidCheckName(name) {
+			return false
+		}
+		switch name {
+		case "docker":
+			hasDocker = true
+		case "config":
+			hasConfig = true
 		}
 	}
-	return false
+	return hasDocker && !hasConfig
 }
 
 func newDoctorCmd(repoFlag *string) *cobra.Command {
@@ -237,12 +245,9 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validateRepoPath(repoInput); err != nil {
-				return err
-			}
 
 			var dockerImage string
-			if doctorNeedsDockerConfig(only) {
+			if doctorShouldPreResolveDockerImage(only) {
 				repoRoot := ""
 				if root, err := resolveRepoRoot(repoInput); err == nil {
 					repoRoot = root
@@ -285,7 +290,7 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 
 	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-repair safe issues (stale locks, orphaned tasks, missing dirs, Docker image pulls, stale events, temp files)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
-	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, docker, queue, tasks, locks, hygiene, deps)")
+	cmd.Flags().StringSliceVar(&only, "only", nil, "Run only specified checks (repeatable: git, tools, config, docker, queue, tasks, locks, hygiene, deps)")
 
 	return cmd
 }

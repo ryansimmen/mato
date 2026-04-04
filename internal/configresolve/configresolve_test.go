@@ -222,3 +222,128 @@ func TestResolveDoctorDockerImage(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateRepoDefaults(t *testing.T) {
+	t.Run("valid effective config has no issues", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "")
+		testutil.WriteFile(t, repoRoot+"/.mato.yaml", "branch: main\ndocker_image: custom:latest\nagent_timeout: 45m\nretry_cooldown: 5m\nreview_session_resume_enabled: false\ntask_reasoning_effort: medium\nreview_reasoning_effort: xhigh\n")
+
+		result, err := ValidateRepoDefaults(repoRoot)
+		if err != nil {
+			t.Fatalf("ValidateRepoDefaults: %v", err)
+		}
+		if len(result.Issues) != 0 {
+			t.Fatalf("Issues = %+v, want none", result.Issues)
+		}
+		if result.Resolved.Branch.Value != "main" || result.Resolved.DockerImage.Value != "custom:latest" {
+			t.Fatalf("Resolved = %+v", result.Resolved)
+		}
+	})
+
+	t.Run("invalid branch from config", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "")
+		testutil.WriteFile(t, repoRoot+"/.mato.yaml", "branch: foo..bar\n")
+
+		result, err := ValidateRepoDefaults(repoRoot)
+		if err != nil {
+			t.Fatalf("ValidateRepoDefaults: %v", err)
+		}
+		if len(result.Issues) != 1 || result.Issues[0].Code != "config.invalid_branch" || result.Issues[0].ConfigPath == "" {
+			t.Fatalf("Issues = %+v", result.Issues)
+		}
+	})
+
+	t.Run("invalid branch from env", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "foo..bar")
+
+		result, err := ValidateRepoDefaults(repoRoot)
+		if err != nil {
+			t.Fatalf("ValidateRepoDefaults: %v", err)
+		}
+		if len(result.Issues) != 1 || result.Issues[0].EnvVar != envBranch.Name {
+			t.Fatalf("Issues = %+v", result.Issues)
+		}
+	})
+
+	t.Run("invalid env bool", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "")
+		t.Setenv(envReviewSessionResumeEnabled.Name, "maybe")
+
+		result, err := ValidateRepoDefaults(repoRoot)
+		if err != nil {
+			t.Fatalf("ValidateRepoDefaults: %v", err)
+		}
+		if len(result.Issues) != 1 || result.Issues[0].Code != "config.invalid_bool" {
+			t.Fatalf("Issues = %+v", result.Issues)
+		}
+	})
+
+	t.Run("invalid env duration", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "")
+		t.Setenv(envAgentTimeout.Name, "bad")
+
+		result, err := ValidateRepoDefaults(repoRoot)
+		if err != nil {
+			t.Fatalf("ValidateRepoDefaults: %v", err)
+		}
+		if len(result.Issues) != 1 || result.Issues[0].Code != "config.invalid_duration" || result.Issues[0].EnvVar != envAgentTimeout.Name {
+			t.Fatalf("Issues = %+v", result.Issues)
+		}
+	})
+
+	t.Run("invalid config durations and reasoning efforts accumulate", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "")
+		testutil.WriteFile(t, repoRoot+"/.mato.yaml", "task_reasoning_effort: nope\nreview_reasoning_effort: wrong\nagent_timeout: bad\nretry_cooldown: 0s\n")
+
+		result, err := ValidateRepoDefaults(repoRoot)
+		if err != nil {
+			t.Fatalf("ValidateRepoDefaults: %v", err)
+		}
+		if len(result.Issues) != 4 {
+			t.Fatalf("len(Issues) = %d, want 4: %+v", len(result.Issues), result.Issues)
+		}
+	})
+
+	t.Run("fatal ambiguity error returned", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "")
+		testutil.WriteFile(t, repoRoot+"/.mato.yaml", "branch: main\n")
+		testutil.WriteFile(t, repoRoot+"/.mato.yml", "branch: main\n")
+
+		_, err := ValidateRepoDefaults(repoRoot)
+		if err == nil || !strings.Contains(err.Error(), "found both .mato.yaml and .mato.yml") {
+			t.Fatalf("err = %v, want ambiguity error", err)
+		}
+	})
+
+	t.Run("fatal parse error returned", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "")
+		testutil.WriteFile(t, repoRoot+"/.mato.yaml", ":\n  bad yaml: [unbalanced\n")
+
+		_, err := ValidateRepoDefaults(repoRoot)
+		if err == nil || !strings.Contains(err.Error(), "parse config file") {
+			t.Fatalf("err = %v, want parse error", err)
+		}
+	})
+
+	t.Run("branch validation uses shared git rules", func(t *testing.T) {
+		repoRoot := testutil.SetupRepo(t)
+		t.Setenv(envBranch.Name, "")
+		testutil.WriteFile(t, repoRoot+"/.mato.yaml", "branch: foo..bar\n")
+
+		result, err := ValidateRepoDefaults(repoRoot)
+		if err != nil {
+			t.Fatalf("ValidateRepoDefaults: %v", err)
+		}
+		if len(result.Issues) != 1 || result.Issues[0].Code != "config.invalid_branch" {
+			t.Fatalf("Issues = %+v, want one invalid branch issue", result.Issues)
+		}
+	})
+}

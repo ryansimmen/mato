@@ -122,8 +122,15 @@ func checkDocker(cc *checkContext) CheckReport {
 		Message:  "docker daemon reachable",
 	})
 
+	if cc.configValidationFatal && cc.checkSelected("config") {
+		return cr
+	}
+
 	// Check if the configured Docker image is available locally.
-	image := cc.opts.DockerImage
+	image := cc.resolvedDockerImage
+	if !cc.dockerImageResolved {
+		image = cc.opts.DockerImage
+	}
 	if image == "" {
 		image = resolveDockerImage()
 	}

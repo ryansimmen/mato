@@ -198,6 +198,21 @@ func TestOutput_SuccessWithStderrWarning(t *testing.T) {
 	}
 }
 
+func TestValidateBranch(t *testing.T) {
+	t.Run("valid branch", func(t *testing.T) {
+		if err := ValidateBranch("feature/add-tests"); err != nil {
+			t.Fatalf("ValidateBranch: %v", err)
+		}
+	})
+
+	t.Run("invalid branch", func(t *testing.T) {
+		err := ValidateBranch("foo..bar")
+		if err == nil || !strings.Contains(err.Error(), "invalid branch name") {
+			t.Fatalf("err = %v, want invalid branch name", err)
+		}
+	})
+}
+
 func TestEnsureBranch_PrefersRemoteTrackingBranch(t *testing.T) {
 	bare, clone := initBareAndClone(t)
 
