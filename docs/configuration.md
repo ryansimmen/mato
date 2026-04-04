@@ -30,7 +30,7 @@ mato pause [--repo <path>]
 mato resume [--repo <path>]
 mato version
 ```
-Valid `--only` check names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
+Valid `--only` check names: `git`, `tools`, `config`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
 The task queue location is fixed at `<repo>/.mato`.
 `mato init` performs lightweight repository bootstrap without Docker. It resolves the repository root, checks out or creates the target branch, creates the `.mato/` queue, lock, and messaging directories, ensures git identity exists locally, updates `.gitignore` with `/.mato/`, and guarantees the target branch has at least one commit.
 Run mode creates the queue structure if needed, starts the Docker-based Copilot loop,
@@ -216,18 +216,32 @@ mato graph --all
 
 ### `mato doctor`
 `mato doctor` runs structured health checks on the repository and task queue.
-It loads `.mato.yaml` and resolves the Docker image using the same precedence as
-the run command (env var > config file > default), so the docker check verifies the
-image users will actually run with. A malformed `.mato.yaml` is a hard error when
-the requested checks need config-backed Docker resolution; queue-only runs such as
-`mato doctor --only queue,tasks,deps` skip that Docker/config path.
+Full runs include an explicit `config` check that validates effective repo
+defaults using the same env/config/default precedence as `mato config` and
+`mato run`. Docker-only runs stay intentionally narrow: `mato doctor --only
+docker` resolves only the Docker image and ignores unrelated invalid run
+settings. Queue-only runs such as `mato doctor --only queue,tasks,deps` skip
+unrelated config validation entirely.
 
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
 | `--fix` | `false` | Auto-repair safe issues: stale locks (agent PIDs, review locks, merge locks), orphaned in-progress tasks, missing queue dirs, Docker image pulls, stale event messages, and leftover atomic-write temp files. |
 | `--format` | `text` | Output format: `text` or `json`. |
-| `--only <check>` | all checks | Run only specified checks (repeatable). Valid names: `git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`. |
+| `--only <check>` | all checks | Run only specified checks (repeatable). Valid names: `git`, `tools`, `config`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`. |
+
+Examples:
+
+```bash
+# Validate effective repo defaults only
+mato doctor --only config
+
+# Validate config, then Docker reachability and image availability
+mato doctor --only config,docker
+
+# Validate queue health without unrelated config coupling
+mato doctor --only queue,tasks,deps
+```
 
 Recommended queue-only preflight command:
 
