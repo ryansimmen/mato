@@ -152,15 +152,17 @@ func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
 }
 
 // hasReviewCandidates reports whether ready-for-review/ currently contains at
-// least one parseable task that has not exhausted its review retry budget.
+// least one parseable task that has not exhausted its review retry budget and
+// carries the required <!-- branch: ... --> marker.
 //
 // This helper is intentionally read-only. It is used by idle reporting after
 // merge processing, where we need a fresh filesystem view of ready-for-review/
 // without the side effects of quarantining malformed files or failing exhausted
-// tasks.
+// tasks. A task missing the branch marker will never be selected by
+// reviewCandidates, so counting it here would prevent idle detection.
 func hasReviewCandidates(tasksDir string) bool {
 	for _, snap := range queue.BuildIndex(tasksDir).TasksByState(queue.DirReadyReview) {
-		if reviewTaskReady(snap) {
+		if reviewTaskReady(snap) && strings.TrimSpace(snap.Branch) != "" {
 			return true
 		}
 	}
