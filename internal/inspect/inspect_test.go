@@ -3,6 +3,7 @@ package inspect
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -460,6 +461,22 @@ func TestShowTo_JSONFields(t *testing.T) {
 	}
 }
 
+func TestShowTo_TextWriterError(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, queue.DirBacklog, "sample.md", "---\nid: sample\npriority: 5\n---\n# Sample\n")
+
+	writeErr := errors.New("broken pipe")
+	fw := &failAfterNWriter{n: 1, err: writeErr}
+
+	err := ShowTo(fw, repoRoot, "sample", "text")
+	if err == nil {
+		t.Fatal("expected writer error, got nil")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, writeErr)
+	}
+}
+
 func TestShowTo_TaskResolutionErrors(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		repoRoot, _ := testutil.SetupRepoWithTasks(t)
@@ -510,6 +527,20 @@ func writeVerdictFile(t *testing.T, tasksDir, filename string, verdict map[strin
 	if err := os.WriteFile(filepath.Join(msgDir, "verdict-"+filename+".json"), data, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+}
+
+type failAfterNWriter struct {
+	n      int
+	err    error
+	writes int
+}
+
+func (w *failAfterNWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.n {
+		return 0, w.err
+	}
+	return len(p), nil
 }
 
 func TestShowTo_VerdictFallbackShowsRejectionReason(t *testing.T) {

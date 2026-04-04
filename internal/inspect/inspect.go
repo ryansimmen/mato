@@ -119,8 +119,7 @@ func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
 	if format == "json" {
 		return renderJSON(w, result)
 	}
-	renderText(w, result)
-	return nil
+	return renderText(w, result)
 }
 
 func inspectTask(tasksDir, taskRef string) (inspectResult, error) {

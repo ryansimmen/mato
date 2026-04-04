@@ -3,6 +3,7 @@ package history
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,22 @@ func TestShowTo_EmptyHistoryWithoutCompletionsDir_UsesJSONArray(t *testing.T) {
 	}
 	if strings.TrimSpace(jsonBuf.String()) != "[]" {
 		t.Fatalf("json = %q, want []", jsonBuf.String())
+	}
+}
+
+func TestShowTo_TextWriterError(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, queue.DirFailed, "broken.md", "# Broken\n\n<!-- failure: worker-a at 2026-03-20T09:00:00Z step=WORK error=broken -->\n")
+
+	writeErr := errors.New("broken pipe")
+	fw := &failAfterNWriter{n: 1, err: writeErr}
+
+	err := ShowTo(fw, repoRoot, 20, "text")
+	if err == nil {
+		t.Fatal("expected writer error, got nil")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, writeErr)
 	}
 }
 
@@ -302,6 +319,20 @@ func mustParseTime(t *testing.T, value string) time.Time {
 		t.Fatalf("time.Parse(%q): %v", value, err)
 	}
 	return ts
+}
+
+type failAfterNWriter struct {
+	n      int
+	err    error
+	writes int
+}
+
+func (w *failAfterNWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.n {
+		return 0, w.err
+	}
+	return len(p), nil
 }
 
 func TestShowTo_TextRelativeTimeAnnotation(t *testing.T) {

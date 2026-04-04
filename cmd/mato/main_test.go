@@ -332,6 +332,20 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(data)
 }
 
+type failAfterNWriter struct {
+	n      int
+	err    error
+	writes int
+}
+
+func (w *failAfterNWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.n {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
 func renderCommandError(t *testing.T, err error) (string, int) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -1622,11 +1636,13 @@ func TestInspectCmd_ExactArgs(t *testing.T) {
 func TestInspectCmd_DelegatesToInspectShow(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	var gotRepo, gotRef, gotFormat string
+	var gotWriter io.Writer
 
 	orig := inspectShowFn
 	defer func() { inspectShowFn = orig }()
 
-	inspectShowFn = func(repoRootArg, taskRef, format string) error {
+	inspectShowFn = func(w io.Writer, repoRootArg, taskRef, format string) error {
+		gotWriter = w
 		gotRepo = repoRootArg
 		gotRef = taskRef
 		gotFormat = format
@@ -1647,6 +1663,30 @@ func TestInspectCmd_DelegatesToInspectShow(t *testing.T) {
 	}
 	if gotFormat != "json" {
 		t.Errorf("format = %q, want %q", gotFormat, "json")
+	}
+	if gotWriter == nil {
+		t.Fatal("writer = nil, want command output writer")
+	}
+}
+
+func TestInspectCmd_TextWriterErrorPropagates(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "sample.md"), "---\nid: sample\npriority: 1\n---\n# Sample task\n")
+
+	writeErr := errors.New("broken pipe")
+	fw := &failAfterNWriter{n: 1, err: writeErr}
+
+	cmd := newRootCmd()
+	cmd.SetOut(fw)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"inspect", "sample", "--repo", repoRoot, "--format", "text"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected writer error, got nil")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, writeErr)
 	}
 }
 
