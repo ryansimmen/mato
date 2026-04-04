@@ -5,19 +5,25 @@ import (
 	"os"
 	"strings"
 
+	"mato/internal/configresolve"
 	"mato/internal/git"
 	"mato/internal/queue"
 )
 
 // checkContext carries shared state across checks within a single doctor run.
 type checkContext struct {
-	ctx       context.Context
-	repoInput string
-	repoRoot  string // populated by resolveRepo on success
-	repoErr   error  // populated by resolveRepo on failure
-	tasksDir  string // derived from repoRoot
-	opts      Options
-	idx       *queue.PollIndex // lazily built, shared across checks
+	ctx                    context.Context
+	repoInput              string
+	repoRoot               string // populated by resolveRepo on success
+	repoErr                error  // populated by resolveRepo on failure
+	tasksDir               string // derived from repoRoot
+	opts                   Options
+	idx                    *queue.PollIndex // lazily built, shared across checks
+	selectedChecks         map[string]bool
+	resolvedDockerImage    string
+	dockerImageResolved    bool
+	configValidationFatal  bool
+	configValidationResult *configresolve.RepoValidationResult
 }
 
 var osStatFn = os.Stat
@@ -30,6 +36,13 @@ func (c *checkContext) hasRepo() bool {
 // hasTasksDir returns true if tasksDir is resolved.
 func (c *checkContext) hasTasksDir() bool {
 	return c.tasksDir != ""
+}
+
+func (c *checkContext) checkSelected(name string) bool {
+	if len(c.selectedChecks) == 0 {
+		return true
+	}
+	return c.selectedChecks[name]
 }
 
 // resolveRepo attempts to resolve repoRoot from repoInput using git.
@@ -95,6 +108,7 @@ type checkDef struct {
 var checks = []checkDef{
 	{"git", checkGit},
 	{"tools", checkTools},
+	{"config", checkConfig},
 	{"docker", checkDocker},
 	{"queue", checkQueueLayout},
 	{"tasks", checkTaskParsing},
