@@ -409,6 +409,73 @@ func TestCheckHeld_UnreadableFile(t *testing.T) {
 	}
 }
 
+func TestReadMetadata_LiveProcess(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "live.lock")
+	identity := process.LockIdentity(os.Getpid())
+	if err := os.WriteFile(lockPath, []byte(identity), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+
+	meta, err := ReadMetadata(lockPath)
+	if err != nil {
+		t.Fatalf("ReadMetadata returned unexpected error: %v", err)
+	}
+	if meta.Status != StatusActive {
+		t.Fatalf("ReadMetadata status = %v, want %v", meta.Status, StatusActive)
+	}
+	if meta.PID != os.Getpid() {
+		t.Fatalf("ReadMetadata PID = %d, want %d", meta.PID, os.Getpid())
+	}
+	if meta.Identity != identity {
+		t.Fatalf("ReadMetadata identity = %q, want %q", meta.Identity, identity)
+	}
+}
+
+func TestReadMetadata_LegacyPIDOnly(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "legacy.lock")
+	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+
+	meta, err := ReadMetadata(lockPath)
+	if err != nil {
+		t.Fatalf("ReadMetadata returned unexpected error: %v", err)
+	}
+	if meta.Status != StatusActive {
+		t.Fatalf("ReadMetadata status = %v, want %v", meta.Status, StatusActive)
+	}
+	if meta.PID != os.Getpid() {
+		t.Fatalf("ReadMetadata PID = %d, want %d", meta.PID, os.Getpid())
+	}
+}
+
+func TestReadMetadata_UnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "unreadable.lock")
+	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+
+	orig := osReadFile
+	osReadFile = func(path string) ([]byte, error) {
+		if path == lockPath {
+			return nil, fmt.Errorf("permission denied")
+		}
+		return orig(path)
+	}
+	t.Cleanup(func() { osReadFile = orig })
+
+	meta, err := ReadMetadata(lockPath)
+	if err == nil {
+		t.Fatal("ReadMetadata should return an error for an unreadable file")
+	}
+	if meta.Status != StatusUnknown {
+		t.Fatalf("ReadMetadata status = %v, want %v", meta.Status, StatusUnknown)
+	}
+}
+
 func TestIsHeld_PIDReuse(t *testing.T) {
 	dir := t.TempDir()
 	lockPath := filepath.Join(dir, "reuse.lock")

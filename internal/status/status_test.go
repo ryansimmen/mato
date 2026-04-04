@@ -893,14 +893,14 @@ func TestShowTo_UnreadableLockFileWarning(t *testing.T) {
 	defer cleanup()
 
 	// Inject a hook that fails to read the lock file (simulating TOCTOU race).
-	origFn := readLockFileFn
-	readLockFileFn = func(name string) ([]byte, error) {
+	origFn := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(name string) ([]byte, error) {
 		if filepath.Base(name) == "warn0001.pid" {
 			return nil, errors.New("permission denied")
 		}
 		return origFn(name)
-	}
-	defer func() { readLockFileFn = origFn }()
+	})
+	defer lockfile.SetTestHookReadFile(origFn)
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot); err != nil {

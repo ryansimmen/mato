@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -22,14 +21,10 @@ import (
 
 	"mato/internal/frontmatter"
 	"mato/internal/git"
-	"mato/internal/identity"
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/queue"
 )
-
-// readLockFileFn is the function used to read lock file contents.
-// Tests can replace it to simulate read failures.
-var readLockFileFn = os.ReadFile
 
 type textViewMode int
 
@@ -192,27 +187,16 @@ func activeAgents(tasksDir string) ([]statusAgent, []string, error) {
 			continue
 		}
 		agentID := strings.TrimSuffix(entry.Name(), ".pid")
-		active, checkErr := identity.CheckAgentActive(tasksDir, agentID)
-		if checkErr != nil {
-			warnings = append(warnings, fmt.Sprintf("skipped unreadable lock file %s: %v", entry.Name(), checkErr))
-			continue
-		}
-		if !active {
-			continue
-		}
-		data, err := readLockFileFn(filepath.Join(tasksDir, ".locks", entry.Name()))
+		lockPath := filepath.Join(tasksDir, ".locks", entry.Name())
+		meta, err := lockfile.ReadMetadata(lockPath)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("skipped unreadable lock file %s: %v", entry.Name(), err))
 			continue
 		}
-		// Lock identity format is "PID:starttime" (or legacy "PID").
-		identity := strings.TrimSpace(string(data))
-		parts := strings.SplitN(identity, ":", 2)
-		pid, err := strconv.Atoi(parts[0])
-		if err != nil {
+		if !meta.IsActive() {
 			continue
 		}
-		agents = append(agents, statusAgent{ID: agentID, PID: pid})
+		agents = append(agents, statusAgent{ID: agentID, PID: meta.PID})
 	}
 
 	sort.Slice(agents, func(i, j int) bool {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"mato/internal/frontmatter"
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
@@ -391,14 +392,14 @@ func TestActiveAgents_UnreadableLockFile(t *testing.T) {
 	defer cleanup2()
 
 	// Inject a ReadFile hook that fails for the bad agent's lock file.
-	origFn := readLockFileFn
-	readLockFileFn = func(name string) ([]byte, error) {
+	origFn := lockfile.TestHookReadFile()
+	lockfile.SetTestHookReadFile(func(name string) ([]byte, error) {
 		if filepath.Base(name) == "bad00001.pid" {
 			return nil, errors.New("simulated read error")
 		}
 		return origFn(name)
-	}
-	defer func() { readLockFileFn = origFn }()
+	})
+	defer lockfile.SetTestHookReadFile(origFn)
 
 	agents, warnings, err := activeAgents(tasksDir)
 	if err != nil {
