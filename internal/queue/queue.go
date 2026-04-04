@@ -181,7 +181,7 @@ func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskReco
 		state.TaskBranch = branch
 		state.TargetBranch = targetBranch
 		state.LastHeadSHA = lastHeadSHA
-		state.LastOutcome = "work-pushed"
+		state.LastOutcome = taskstate.OutcomeWorkPushed
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not record recovered pushed taskstate for %s: %v\n", name, err)
 	}

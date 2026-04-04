@@ -726,8 +726,8 @@ func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "work-pushed" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=work-pushed", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeWorkPushed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeWorkPushed)
 	}
 }
 

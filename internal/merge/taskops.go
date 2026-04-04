@@ -36,7 +36,7 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 		}
 		if err := taskstate.Update(tasksDir, task.name, func(state *taskstate.TaskState) {
 			state.TaskBranch = taskBranchName(task)
-			state.LastOutcome = "merge-conflict-cleanup"
+			state.LastOutcome = taskstate.OutcomeMergeConflictCleanup
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not record merge-conflict cleanup taskstate for %s: %v\n", task.name, err)
 		}

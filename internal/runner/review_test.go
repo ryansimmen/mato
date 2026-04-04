@@ -468,7 +468,7 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget(t *testing.T) {
 		"<!-- review-failure: agent3 at 2026-01-03T00:00:00Z — fail 3 -->\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"), []byte(content), 0o644)
 	if err := taskstate.Update(tasksDir, "exhausted.md", func(state *taskstate.TaskState) {
-		state.LastOutcome = "review-launched"
+		state.LastOutcome = taskstate.OutcomeReviewLaunched
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget_PreservesVerdict(t 
 		"<!-- review-failure: agent3 at 2026-01-03T00:00:00Z — fail 3 -->\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"), []byte(content), 0o644)
 	if err := taskstate.Update(tasksDir, "exhausted.md", func(state *taskstate.TaskState) {
-		state.LastOutcome = "review-launched"
+		state.LastOutcome = taskstate.OutcomeReviewLaunched
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -660,8 +660,8 @@ func TestPostReviewAction_ErrorVerdictRecordsTaskState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "review-error" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=review-error", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeReviewError {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewError)
 	}
 }
 
@@ -679,8 +679,8 @@ func TestPostReviewAction_MalformedVerdictRecordsIncompleteTaskState(t *testing.
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "review-incomplete" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=review-incomplete", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeReviewIncomplete {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewIncomplete)
 	}
 }
 
@@ -1161,8 +1161,8 @@ func TestVerifyReviewBranch_BranchMissing(t *testing.T) {
 	if state == nil {
 		t.Fatal("missing branch should record taskstate")
 	}
-	if state.LastOutcome != "review-branch-missing" {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-branch-missing")
+	if state.LastOutcome != taskstate.OutcomeReviewBranchMissing {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeReviewBranchMissing)
 	}
 }
 
@@ -1366,8 +1366,8 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 	if state.LastReviewedSHA != "older-sha" {
 		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "older-sha")
 	}
-	if state.LastOutcome != "review-launched" {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-launched")
+	if state.LastOutcome != taskstate.OutcomeReviewLaunched {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeReviewLaunched)
 	}
 	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
 	if err != nil {
@@ -1490,8 +1490,8 @@ func TestPostReviewAction_ApprovedUpdatesLastReviewedSHA(t *testing.T) {
 	if state.LastReviewedSHA != "current-tip" {
 		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "current-tip")
 	}
-	if state.LastOutcome != "review-approved" {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-approved")
+	if state.LastOutcome != taskstate.OutcomeReviewApproved {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeReviewApproved)
 	}
 }
 
@@ -1529,8 +1529,8 @@ func TestPostReviewAction_RejectedUpdatesLastReviewedSHA(t *testing.T) {
 	if state.LastReviewedSHA != "rejected-tip" {
 		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "rejected-tip")
 	}
-	if state.LastOutcome != "review-rejected" {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-rejected")
+	if state.LastOutcome != taskstate.OutcomeReviewRejected {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeReviewRejected)
 	}
 }
 
@@ -1807,8 +1807,8 @@ func TestPostReviewAction_ApproveMoveFails_NoMarkerVerdictPreserved(t *testing.T
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "review-move-failed" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=review-move-failed", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeReviewMoveFailed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewMoveFailed)
 	}
 }
 
@@ -1862,8 +1862,8 @@ func TestPostReviewAction_RejectMoveFails_NoMarkerVerdictPreserved(t *testing.T)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "review-move-failed" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=review-move-failed", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeReviewMoveFailed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewMoveFailed)
 	}
 }
 
@@ -1912,8 +1912,8 @@ func TestMoveReviewedTask_MoveFails_RecordsReviewFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != "review-move-failed" {
-		t.Fatalf("taskstate = %+v, want LastOutcome=review-move-failed", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeReviewMoveFailed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewMoveFailed)
 	}
 }
 

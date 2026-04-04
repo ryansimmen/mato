@@ -16,9 +16,26 @@ import (
 
 const version = 1
 
-// OutcomeWorkBranchPushed marks a task whose branch push succeeded but whose
-// queue transition to ready-for-review has not completed yet.
-const OutcomeWorkBranchPushed = "work-branch-pushed"
+// Outcome constants for TaskState.LastOutcome. These cover the full task
+// lifecycle so callers never need raw strings.
+const (
+	// Work phase
+	OutcomeWorkBranchPushed = "work-branch-pushed" // branch push succeeded; queue transition pending
+	OutcomeWorkPushed       = "work-pushed"        // branch pushed and task moved to ready-for-review
+
+	// Review phase
+	OutcomeReviewLaunched            = "review-launched"              // review agent started
+	OutcomeReviewApproved            = "review-approved"              // review approved; task moved to ready-to-merge
+	OutcomeReviewRejected            = "review-rejected"              // review rejected; task moved to backlog
+	OutcomeReviewError               = "review-error"                 // review agent reported an error
+	OutcomeReviewIncomplete          = "review-incomplete"            // verdict missing or unparseable
+	OutcomeReviewBranchMissing       = "review-branch-missing"        // task branch does not exist in repo
+	OutcomeReviewBranchMarkerMissing = "review-branch-marker-missing" // branch marker missing from task file
+	OutcomeReviewMoveFailed          = "review-move-failed"           // failed to move reviewed task
+
+	// Merge phase
+	OutcomeMergeConflictCleanup = "merge-conflict-cleanup" // squash merge conflict; task returned to backlog
+)
 
 // TaskState records lightweight runtime metadata for a task.
 type TaskState struct {

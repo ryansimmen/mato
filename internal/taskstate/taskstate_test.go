@@ -24,7 +24,7 @@ func TestUpdate_CreatesAndPreservesFields(t *testing.T) {
 	if err := Update(tasksDir, "task.md", func(state *TaskState) {
 		state.TaskBranch = "task/task"
 		state.LastHeadSHA = "abc123"
-		state.LastOutcome = "work-pushed"
+		state.LastOutcome = OutcomeWorkPushed
 	}); err != nil {
 		t.Fatalf("first Update: %v", err)
 	}
@@ -47,8 +47,8 @@ func TestUpdate_CreatesAndPreservesFields(t *testing.T) {
 	if first.LastHeadSHA != "abc123" {
 		t.Fatalf("LastHeadSHA = %q, want %q", first.LastHeadSHA, "abc123")
 	}
-	if first.LastOutcome != "work-pushed" {
-		t.Fatalf("LastOutcome = %q, want %q", first.LastOutcome, "work-pushed")
+	if first.LastOutcome != OutcomeWorkPushed {
+		t.Fatalf("LastOutcome = %q, want %q", first.LastOutcome, OutcomeWorkPushed)
 	}
 	if strings.TrimSpace(first.UpdatedAt) == "" {
 		t.Fatal("UpdatedAt should be set")
@@ -56,7 +56,7 @@ func TestUpdate_CreatesAndPreservesFields(t *testing.T) {
 
 	if err := Update(tasksDir, "task.md", func(state *TaskState) {
 		state.LastReviewedSHA = "def456"
-		state.LastOutcome = "review-approved"
+		state.LastOutcome = OutcomeReviewApproved
 	}); err != nil {
 		t.Fatalf("second Update: %v", err)
 	}
@@ -73,8 +73,8 @@ func TestUpdate_CreatesAndPreservesFields(t *testing.T) {
 	if second.LastReviewedSHA != "def456" {
 		t.Fatalf("LastReviewedSHA = %q, want %q", second.LastReviewedSHA, "def456")
 	}
-	if second.LastOutcome != "review-approved" {
-		t.Fatalf("LastOutcome = %q, want %q", second.LastOutcome, "review-approved")
+	if second.LastOutcome != OutcomeReviewApproved {
+		t.Fatalf("LastOutcome = %q, want %q", second.LastOutcome, OutcomeReviewApproved)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestUpdate_CorruptJSONRecreatesFreshState(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	if err := Update(tasksDir, "task.md", func(state *TaskState) {
-		state.LastOutcome = "review-rejected"
+		state.LastOutcome = OutcomeReviewRejected
 	}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -114,8 +114,8 @@ func TestUpdate_CorruptJSONRecreatesFreshState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if state.LastOutcome != "review-rejected" {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "review-rejected")
+	if state.LastOutcome != OutcomeReviewRejected {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, OutcomeReviewRejected)
 	}
 	if state.TaskFile != "task.md" {
 		t.Fatalf("TaskFile = %q, want %q", state.TaskFile, "task.md")
@@ -193,7 +193,7 @@ func TestSweep_RemovesTerminalStateAndKeepsActive(t *testing.T) {
 
 func TestUpdate_EmptyTasksDirFails(t *testing.T) {
 	err := Update("", "task.md", func(state *TaskState) {
-		state.LastOutcome = "review-launched"
+		state.LastOutcome = OutcomeReviewLaunched
 	})
 	if err == nil {
 		t.Fatal("Update should fail for empty tasksDir")
@@ -226,5 +226,68 @@ func TestLoad_EmptyTaskFilenameFails(t *testing.T) {
 func TestDelete_MissingFileReturnsNil(t *testing.T) {
 	if err := Delete(t.TempDir(), "missing.md"); err != nil {
 		t.Fatalf("Delete missing file: %v", err)
+	}
+}
+
+func TestOutcomeConstants_CoverFullLifecycle(t *testing.T) {
+	// Verify each constant has the expected wire-format string so that
+	// existing JSON state files remain backward-compatible.
+	tests := []struct {
+		name     string
+		constant string
+		wire     string
+	}{
+		{"work-branch-pushed", OutcomeWorkBranchPushed, "work-branch-pushed"},
+		{"work-pushed", OutcomeWorkPushed, "work-pushed"},
+		{"review-launched", OutcomeReviewLaunched, "review-launched"},
+		{"review-approved", OutcomeReviewApproved, "review-approved"},
+		{"review-rejected", OutcomeReviewRejected, "review-rejected"},
+		{"review-error", OutcomeReviewError, "review-error"},
+		{"review-incomplete", OutcomeReviewIncomplete, "review-incomplete"},
+		{"review-branch-missing", OutcomeReviewBranchMissing, "review-branch-missing"},
+		{"review-branch-marker-missing", OutcomeReviewBranchMarkerMissing, "review-branch-marker-missing"},
+		{"review-move-failed", OutcomeReviewMoveFailed, "review-move-failed"},
+		{"merge-conflict-cleanup", OutcomeMergeConflictCleanup, "merge-conflict-cleanup"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.constant != tt.wire {
+				t.Fatalf("Outcome constant %q != expected wire format %q", tt.constant, tt.wire)
+			}
+		})
+	}
+}
+
+func TestOutcomeConstants_RoundTripThroughJSON(t *testing.T) {
+	tasksDir := t.TempDir()
+	outcomes := []string{
+		OutcomeWorkBranchPushed,
+		OutcomeWorkPushed,
+		OutcomeReviewLaunched,
+		OutcomeReviewApproved,
+		OutcomeReviewRejected,
+		OutcomeReviewError,
+		OutcomeReviewIncomplete,
+		OutcomeReviewBranchMissing,
+		OutcomeReviewBranchMarkerMissing,
+		OutcomeReviewMoveFailed,
+		OutcomeMergeConflictCleanup,
+	}
+	for _, outcome := range outcomes {
+		t.Run(outcome, func(t *testing.T) {
+			filename := strings.ReplaceAll(outcome, "-", "") + ".md"
+			if err := Update(tasksDir, filename, func(state *TaskState) {
+				state.LastOutcome = outcome
+			}); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			loaded, err := Load(tasksDir, filename)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if loaded.LastOutcome != outcome {
+				t.Fatalf("LastOutcome = %q, want %q", loaded.LastOutcome, outcome)
+			}
+		})
 	}
 }

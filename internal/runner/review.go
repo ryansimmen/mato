@@ -146,7 +146,7 @@ func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
 	fmt.Fprintf(os.Stderr, "warning: review candidate %s is missing a required branch marker\n", filename)
 	recorded := appendReviewFailure(taskPath, "mato", reason)
 	recordTaskStateUpdate(tasksDir, filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-		state.LastOutcome = "review-branch-marker-missing"
+		state.LastOutcome = taskstate.OutcomeReviewBranchMarkerMissing
 	})
 	logReviewFailureOutcome("Review incomplete", filename, recorded, "missing required branch marker")
 }
@@ -233,7 +233,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	recordTaskStateUpdate(env.tasksDir, task.Filename, "record review launch taskstate", func(state *taskstate.TaskState) {
 		state.TaskBranch = task.Branch
 		state.TargetBranch = branch
-		state.LastOutcome = "review-launched"
+		state.LastOutcome = taskstate.OutcomeReviewLaunched
 	})
 	if env.reviewSessionResumeEnabled {
 		recordSessionUpdate(env.tasksDir, sessionmeta.KindReview, task.Filename, "record review session", func(session *sessionmeta.Session) {
@@ -293,7 +293,7 @@ func VerifyReviewBranch(repoRoot, tasksDir string, task *queue.ClaimedTask, agen
 		appendReviewFailure(task.TaskPath, agentID, "task branch "+task.Branch+" not found in host repo")
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
 			state.TaskBranch = task.Branch
-			state.LastOutcome = "review-branch-missing"
+			state.LastOutcome = taskstate.OutcomeReviewBranchMissing
 		})
 		return false
 	}
@@ -342,7 +342,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		}
 		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-incomplete"
+			state.LastOutcome = taskstate.OutcomeReviewIncomplete
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, detail)
 		return
@@ -352,7 +352,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	if err := json.Unmarshal(data, &verdict); err != nil {
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not parse verdict file: %v", err))
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-incomplete"
+			state.LastOutcome = taskstate.OutcomeReviewIncomplete
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "malformed verdict file")
 		os.Remove(verdictPath)
@@ -385,7 +385,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 		}
 		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-error"
+			state.LastOutcome = taskstate.OutcomeReviewError
 		})
 		logReviewFailureOutcome("Review error", task.Filename, recorded, reason)
 		os.Remove(verdictPath)
@@ -393,7 +393,7 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	default:
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-incomplete"
+			state.LastOutcome = taskstate.OutcomeReviewIncomplete
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, fmt.Sprintf("unknown verdict %q", verdict.Verdict))
 		os.Remove(verdictPath)
@@ -416,7 +416,7 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 		fmt.Fprintf(os.Stderr, "warning: could not move reviewed task %s to %s: %v\n", task.Filename, disp.dir, err)
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not move task to %s: %v", disp.dir, err))
 		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = "review-move-failed"
+			state.LastOutcome = taskstate.OutcomeReviewMoveFailed
 		})
 		logReviewFailureOutcome("Review move failed", task.Filename, recorded, err.Error())
 		return false
@@ -437,9 +437,9 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 			}
 		}
 	}
-	outcome := "review-rejected"
+	outcome := taskstate.OutcomeReviewRejected
 	if disp.dir == queue.DirReadyMerge {
-		outcome = "review-approved"
+		outcome = taskstate.OutcomeReviewApproved
 	}
 	recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
 		if strings.TrimSpace(state.LastHeadSHA) != "" {
