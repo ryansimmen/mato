@@ -388,7 +388,9 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 	case "json":
 		return RenderJSON(w, data)
 	default:
-		RenderText(w, data)
+		if err := RenderText(w, data); err != nil {
+			return fmt.Errorf("render text graph: %w", err)
+		}
 		return nil
 	}
 }

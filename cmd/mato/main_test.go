@@ -1537,6 +1537,49 @@ func TestGraphCmd_FlagParsing(t *testing.T) {
 	}
 }
 
+func TestGraphCmd_DelegatesToGraphShow(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	var gotWriter io.Writer
+	var gotRepo, gotFormat string
+	var gotShowAll bool
+
+	orig := graphShowFn
+	defer func() { graphShowFn = orig }()
+	graphShowFn = func(w io.Writer, repoRootArg, format string, showAll bool) error {
+		gotWriter = w
+		gotRepo = repoRootArg
+		gotFormat = format
+		gotShowAll = showAll
+		_, _ = io.WriteString(w, "ok")
+		return nil
+	}
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"graph", "--repo", repoRoot, "--format", "json", "--all"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotWriter != &out {
+		t.Fatalf("writer = %T, want command output writer", gotWriter)
+	}
+	if gotRepo != repoRoot {
+		t.Errorf("repo = %q, want %q", gotRepo, repoRoot)
+	}
+	if gotFormat != "json" {
+		t.Errorf("format = %q, want %q", gotFormat, "json")
+	}
+	if !gotShowAll {
+		t.Error("showAll = false, want true")
+	}
+	if out.String() != "ok" {
+		t.Fatalf("output = %q, want %q", out.String(), "ok")
+	}
+}
+
 func TestGraphCmd_EndToEnd(t *testing.T) {
 	dir := t.TempDir()
 

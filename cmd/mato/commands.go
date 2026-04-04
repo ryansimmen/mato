@@ -43,6 +43,10 @@ var inspectShowFn = inspect.ShowTo
 // Tests replace it to verify CLI flag parsing and delegation.
 var logShowFn = history.ShowTo
 
+// graphShowFn is the function used to render dependency graphs.
+// Tests replace it to verify CLI flag parsing, delegation, and writer errors.
+var graphShowFn = graph.ShowTo
+
 // configShowFn is the function used to render resolved repository config.
 // Tests replace it to verify CLI flag parsing and delegation.
 var configShowFn = showConfig
@@ -391,7 +395,7 @@ func newGraphCmd(repoFlag *string) *cobra.Command {
 			if err := validateRepoPath(repo); err != nil {
 				return err
 			}
-			return graph.Show(repo, format, showAll)
+			return graphShowFn(cmd.OutOrStdout(), repo, format, showAll)
 		},
 	}
 	configureCommand(cmd)
