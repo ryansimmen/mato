@@ -5326,14 +5326,7 @@ func TestStartupPullCancelledBySignalContext(t *testing.T) {
 func TestCleanStaleClones_RemovesOldCloneDirectories(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	origTempDirFn := tempDirFn
-	t.Cleanup(func() { tempDirFn = origTempDirFn })
-	tempDirFn = func() string { return tmpDir }
-
-	origNowFn := nowFn
-	t.Cleanup(func() { nowFn = origNowFn })
 	fakeNow := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	nowFn = func() time.Time { return fakeNow }
 
 	staleTime := fakeNow.Add(-25 * time.Hour)
 	freshTime := fakeNow.Add(-1 * time.Hour)
@@ -5366,7 +5359,7 @@ func TestCleanStaleClones_RemovesOldCloneDirectories(t *testing.T) {
 	os.WriteFile(regularFile, []byte("data"), 0o644)
 	os.Chtimes(regularFile, staleTime, staleTime)
 
-	cleanStaleClones(24 * time.Hour)
+	cleanStaleClones(tmpDir, fakeNow, 24*time.Hour)
 
 	// Stale debug clone should be removed.
 	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
@@ -5397,25 +5390,14 @@ func TestCleanStaleClones_RemovesOldCloneDirectories(t *testing.T) {
 func TestCleanStaleClones_NoEntriesNoPanic(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	origTempDirFn := tempDirFn
-	t.Cleanup(func() { tempDirFn = origTempDirFn })
-	tempDirFn = func() string { return tmpDir }
-
 	// Should not panic when there are no entries.
-	cleanStaleClones(24 * time.Hour)
+	cleanStaleClones(tmpDir, time.Now(), 24*time.Hour)
 }
 
 func TestCleanStaleClones_LogsRemovedDirectories(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	origTempDirFn := tempDirFn
-	t.Cleanup(func() { tempDirFn = origTempDirFn })
-	tempDirFn = func() string { return tmpDir }
-
-	origNowFn := nowFn
-	t.Cleanup(func() { nowFn = origNowFn })
 	fakeNow := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	nowFn = func() time.Time { return fakeNow }
 
 	staleDir := filepath.Join(tmpDir, "mato-logtest")
 	os.MkdirAll(staleDir, 0o755)
@@ -5424,7 +5406,7 @@ func TestCleanStaleClones_LogsRemovedDirectories(t *testing.T) {
 	os.Chtimes(staleDir, staleTime, staleTime)
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		cleanStaleClones(24 * time.Hour)
+		cleanStaleClones(tmpDir, fakeNow, 24*time.Hour)
 	})
 
 	if !strings.Contains(stdout, "Cleaned up stale clone directory") {
