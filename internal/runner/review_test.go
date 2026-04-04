@@ -20,6 +20,7 @@ import (
 	"mato/internal/taskfile"
 	"mato/internal/taskstate"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestReviewVerdict_JSONRoundtrip(t *testing.T) {
@@ -121,9 +122,11 @@ func TestPostReviewAction_TaskAlreadyMovedLogsWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	postReviewAction(tasksDir, "host-agent", task)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	os.Stderr = oldStderr
 
@@ -170,9 +173,11 @@ func TestPostReviewAction_TaskStatErrorDoesNotClaimMoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
 
 	postReviewAction(tasksDir, "host-agent", task)
 
+	ui.SetWarningWriter(prevWarn)
 	w.Close()
 	os.Stderr = oldStderr
 

@@ -20,6 +20,7 @@ import (
 	"mato/internal/queue"
 	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
+	"mato/internal/ui"
 )
 
 type mergeQueueTask struct {
@@ -87,18 +88,18 @@ func loadMergeCandidates(dir, tasksDir string) ([]mergeQueueTask, error) {
 		path := filepath.Join(dir, name)
 		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse ready-to-merge task %s: %v\n", name, err)
+			ui.Warnf("warning: could not parse ready-to-merge task %s: %v\n", name, err)
 			if failureErr := failMergeTask(path, filepath.Join(tasksDir, queue.DirBacklog, name), fmt.Sprintf("parse task file: %v", err)); failureErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not requeue task %s: %v\n", name, failureErr)
+				ui.Warnf("warning: could not requeue task %s: %v\n", name, failureErr)
 			}
 			continue
 		}
 
 		taskBranch := strings.TrimSpace(taskfile.ParseBranch(path))
 		if taskBranch == "" {
-			fmt.Fprintf(os.Stderr, "warning: ready-to-merge task %s is missing a required branch marker\n", name)
+			ui.Warnf("warning: ready-to-merge task %s is missing a required branch marker\n", name)
 			if failureErr := failMergeTask(path, mergeFailureDestination(tasksDir, path, name), errTaskBranchMarkerMissing.Error()); failureErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not requeue task %s after missing branch marker: %v\n", name, failureErr)
+				ui.Warnf("warning: could not requeue task %s after missing branch marker: %v\n", name, failureErr)
 			}
 			continue
 		}
@@ -143,14 +144,14 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 				// ready-to-merge copy to avoid an infinite retry loop.
 				if _, statErr := os.Stat(completedPath); statErr == nil {
 					if removeErr := os.Remove(task.path); removeErr != nil {
-						fmt.Fprintf(os.Stderr, "warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
+						ui.Warnf("warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
 					} else {
 						runtimecleanup.DeleteAll(tasksDir, task.name)
 						cleanupTaskBranch(repoRoot, taskBranchName(task))
 						merged++
 					}
 				} else {
-					fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
+					ui.Warnf("warning: merged task %s but could not move to completed: %v\n", task.name, err)
 				}
 				continue
 			}
@@ -162,9 +163,9 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 
 		result, err := mergeReadyTask(repoRoot, branch, task)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not merge task %s: %v\n", task.name, err)
+			ui.Warnf("warning: could not merge task %s: %v\n", task.name, err)
 			if failureErr := handleMergeFailure(repoRoot, tasksDir, task, err); failureErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not record merge failure for task %s: %v\n", task.name, failureErr)
+				ui.Warnf("warning: could not record merge failure for task %s: %v\n", task.name, failureErr)
 			}
 			continue
 		}
@@ -178,11 +179,11 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 				Title:        task.title,
 			}
 			if err := messaging.WriteCompletionDetail(tasksDir, detail); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write completion detail for task %s: %v\n", task.name, err)
+				ui.Warnf("warning: could not write completion detail for task %s: %v\n", task.name, err)
 			}
 		}
 		if err := markTaskMerged(task.path); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: merged task %s but could not mark completion: %v\n", task.name, err)
+			ui.Warnf("warning: merged task %s but could not mark completion: %v\n", task.name, err)
 			// Continue to moveTaskWithRetry: moving to completed/ is more
 			// important than the merged record. If the move also fails,
 			// leave the task branch in place so a later cycle can recover
@@ -192,12 +193,12 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 		if err := moveTaskWithRetry(ctx, task.path, completedPath); err != nil {
 			if _, statErr := os.Stat(completedPath); statErr == nil {
 				if removeErr := removeTaskFileFn(task.path); removeErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
+					ui.Warnf("warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
 					continue
 				}
 				bookkeepingComplete = true
 			} else {
-				fmt.Fprintf(os.Stderr, "warning: merged task %s but could not move to completed: %v\n", task.name, err)
+				ui.Warnf("warning: merged task %s but could not move to completed: %v\n", task.name, err)
 				continue
 			}
 		} else {
@@ -238,13 +239,13 @@ func recoverCompletionDetailForMergedTask(repoRoot, tasksDir, branch string, tas
 
 	cloneDir, err := git.CreateClone(repoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not clone for completion detail recovery of %s: %v\n", task.name, err)
+		ui.Warnf("warning: could not clone for completion detail recovery of %s: %v\n", task.name, err)
 		return
 	}
 	defer git.RemoveClone(cloneDir)
 
 	if _, err := gitOutput(cloneDir, "fetch", "origin"); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not fetch for completion detail recovery of %s: %v\n", task.name, err)
+		ui.Warnf("warning: could not fetch for completion detail recovery of %s: %v\n", task.name, err)
 		return
 	}
 
@@ -258,7 +259,7 @@ func recoverCompletionDetailForMergedTask(repoRoot, tasksDir, branch string, tas
 		Title:        task.title,
 	}
 	if err := messaging.WriteCompletionDetail(tasksDir, detail); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write completion detail for recovered task %s: %v\n", task.name, err)
+		ui.Warnf("warning: could not write completion detail for recovered task %s: %v\n", task.name, err)
 	}
 }
 

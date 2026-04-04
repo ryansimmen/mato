@@ -11,6 +11,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/git"
+	"mato/internal/ui"
 
 	"golang.org/x/term"
 )
@@ -212,10 +213,10 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 func appendCacheMount(args []string, hostPath, containerPath, label string) []string {
 	if _, err := statPathFn(hostPath); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: skipping %s cache mount; host path %s does not exist\n", label, hostPath)
+			ui.Warnf("warning: skipping %s cache mount; host path %s does not exist\n", label, hostPath)
 			return args
 		}
-		fmt.Fprintf(os.Stderr, "warning: skipping %s cache mount; stat %s: %v\n", label, hostPath, err)
+		ui.Warnf("warning: skipping %s cache mount; stat %s: %v\n", label, hostPath, err)
 		return args
 	}
 	return append(args, "-v", fmt.Sprintf("%s:%s", hostPath, containerPath))
