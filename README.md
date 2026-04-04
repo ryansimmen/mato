@@ -237,6 +237,7 @@ rejections (`<!-- review-rejection: ... -->`). The output is newest first,
 
 - git repository detection and configuration
 - host tool availability (git, docker, gh, copilot)
+- effective repo-default config validation (`branch`, reasoning effort, durations, env booleans)
 - Docker daemon connectivity
 - queue directory layout and read errors
 - task file parsing (frontmatter errors, invalid globs)
@@ -246,9 +247,14 @@ rejections (`<!-- review-rejection: ... -->`). The output is newest first,
 Use `--fix` to auto-repair safe, idempotent issues such as missing directories,
 stale locks, and orphaned tasks. Use `--format json` for machine-readable output.
 The `--only` flag accepts a comma-separated list of check categories to run
-(`git`, `tools`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`);
+(`git`, `tools`, `config`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`);
 non-selected checks appear as skipped. Exit code 0 means healthy, 1 means
 warnings only, and 2 means errors were found.
+
+Full runs include the new `config` check. `mato doctor --only config` validates
+effective repo defaults without probing Docker. `mato doctor --only docker`
+keeps the older narrow behavior and validates only Docker-relevant config needed
+to choose the image.
 
 For queue-focused preflight validation, prefer:
 
@@ -257,7 +263,7 @@ mato doctor --only queue,tasks,deps
 ```
 
 That mode stays read-only and skips unrelated Docker checks and Docker-image
-config loading.
+config validation.
 
 ## Retry Command
 

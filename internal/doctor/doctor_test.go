@@ -16,6 +16,11 @@ import (
 	"mato/internal/testutil"
 )
 
+func writeDoctorConfig(t *testing.T, repoRoot, content string) {
+	t.Helper()
+	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yaml"), content)
+}
+
 // stubTools overrides inspectHostToolsFn for tests and restores it on cleanup.
 func stubTools(t *testing.T, fn func() runner.ToolReport) {
 	t.Helper()
@@ -129,6 +134,351 @@ func TestDoctor_NotAGitRepo(t *testing.T) {
 	if !found {
 		t.Error("expected git.not_a_repo finding")
 	}
+}
+
+func TestDoctor_ConfigIncludedInFullRun(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, cr := range report.Checks {
+		if cr.Name == "config" {
+			if cr.Status != CheckRan {
+				t.Fatalf("config status = %q, want %q", cr.Status, CheckRan)
+			}
+			return
+		}
+	}
+	t.Fatal("expected config check in full run")
+}
+
+func TestDoctor_OnlyConfigRunsOnlyConfig(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"config"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, cr := range report.Checks {
+		if cr.Name == "config" {
+			if cr.Status != CheckRan {
+				t.Fatalf("config status = %q, want %q", cr.Status, CheckRan)
+			}
+			continue
+		}
+		if cr.Status != CheckSkipped {
+			t.Fatalf("check %s status = %q, want skipped", cr.Name, cr.Status)
+		}
+	}
+	if report.Summary.Errors != 0 {
+		t.Fatalf("errors = %d, want 0", report.Summary.Errors)
+	}
+}
+
+func TestDoctor_ConfigInvalidBranchFromConfig(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	t.Setenv("MATO_BRANCH", "")
+	writeDoctorConfig(t, repoRoot, "branch: foo..bar\n")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"config"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, cr := range report.Checks {
+		if cr.Name != "config" {
+			continue
+		}
+		for _, f := range cr.Findings {
+			if f.Code == "config.invalid_branch" {
+				if f.Path == "" {
+					t.Fatal("expected config-path attribution")
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("expected config.invalid_branch finding")
+}
+
+func TestDoctor_ConfigInvalidEnvValuesUseEnvAttribution(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	t.Setenv("MATO_REVIEW_SESSION_RESUME_ENABLED", "maybe")
+	t.Setenv("MATO_AGENT_TIMEOUT", "bad")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"config"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	foundBool := false
+	foundDuration := false
+	for _, cr := range report.Checks {
+		if cr.Name != "config" {
+			continue
+		}
+		for _, f := range cr.Findings {
+			if f.Code == "config.invalid_bool" && strings.Contains(f.Message, "MATO_REVIEW_SESSION_RESUME_ENABLED") {
+				foundBool = true
+			}
+			if f.Code == "config.invalid_duration" && strings.Contains(f.Message, "MATO_AGENT_TIMEOUT") {
+				foundDuration = true
+			}
+		}
+	}
+	if !foundBool || !foundDuration {
+		t.Fatalf("foundBool=%v foundDuration=%v", foundBool, foundDuration)
+	}
+}
+
+func TestDoctor_ConfigParseErrorBecomesFinding(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	writeDoctorConfig(t, repoRoot, ":\n  bad yaml: [unbalanced\n")
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	found := false
+	for _, cr := range report.Checks {
+		if cr.Name != "config" {
+			continue
+		}
+		for _, f := range cr.Findings {
+			if f.Code == "config.parse_error" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected config.parse_error finding")
+	}
+}
+
+func TestDoctor_ConfigOnlyNonRepoReportsConfigSpecificError(t *testing.T) {
+	dir := t.TempDir()
+	allOK(t)
+
+	report, err := Run(context.Background(), dir, Options{Format: "text", Only: []string{"config"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	foundConfigNoRepo := false
+	foundGitNoRepo := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "config.no_repo" {
+				foundConfigNoRepo = true
+			}
+			if f.Code == "git.not_a_repo" {
+				foundGitNoRepo = true
+			}
+		}
+	}
+	if !foundConfigNoRepo {
+		t.Fatal("expected config.no_repo finding")
+	}
+	if foundGitNoRepo {
+		t.Fatal("did not expect git.not_a_repo in config-only run")
+	}
+}
+
+func TestDoctor_FullRunNonRepoSuppressesConfigNoRepo(t *testing.T) {
+	dir := t.TempDir()
+	allOK(t)
+
+	report, err := Run(context.Background(), dir, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	foundGitNoRepo := false
+	foundConfigNoRepo := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "git.not_a_repo" {
+				foundGitNoRepo = true
+			}
+			if f.Code == "config.no_repo" {
+				foundConfigNoRepo = true
+			}
+		}
+	}
+	if !foundGitNoRepo {
+		t.Fatal("expected git.not_a_repo finding")
+	}
+	if foundConfigNoRepo {
+		t.Fatal("did not expect duplicate config.no_repo finding")
+	}
+}
+
+func TestDoctor_DockerUsesCachedConfigImage(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	writeDoctorConfig(t, repoRoot, "docker_image: custom:latest\n")
+
+	var inspectedImage string
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		inspectedImage = image
+		return nil
+	})
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"config", "docker"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if inspectedImage != "custom:latest" {
+		t.Fatalf("inspected image = %q, want custom:latest", inspectedImage)
+	}
+	if report.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", report.ExitCode)
+	}
+}
+
+func TestDoctor_DockerStillChecksImageWhenOtherConfigFindingsExist(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	writeDoctorConfig(t, repoRoot, "docker_image: custom:latest\ntask_reasoning_effort: nope\n")
+
+	var inspectedImage string
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		inspectedImage = image
+		return fmt.Errorf("No such image: %s", image)
+	})
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"config", "docker"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if inspectedImage != "custom:latest" {
+		t.Fatalf("inspected image = %q, want custom:latest", inspectedImage)
+	}
+	foundMissing := false
+	for _, cr := range report.Checks {
+		if cr.Name != "docker" {
+			continue
+		}
+		for _, f := range cr.Findings {
+			if f.Code == "docker.image_missing" {
+				foundMissing = true
+			}
+		}
+	}
+	if !foundMissing {
+		t.Fatal("expected docker.image_missing finding")
+	}
+}
+
+func TestDoctor_DockerSkipsImageInspectionAfterFatalConfigFailure(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+	writeDoctorConfig(t, repoRoot, ":\n  bad yaml: [unbalanced\n")
+
+	inspected := false
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		inspected = true
+		return nil
+	})
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"config", "docker"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if inspected {
+		t.Fatal("expected docker image inspection to be skipped")
+	}
+	foundReachable := false
+	foundImageFinding := false
+	for _, cr := range report.Checks {
+		if cr.Name != "docker" {
+			continue
+		}
+		for _, f := range cr.Findings {
+			if f.Code == "docker.reachable" {
+				foundReachable = true
+			}
+			if strings.HasPrefix(f.Code, "docker.image_") {
+				foundImageFinding = true
+			}
+		}
+	}
+	if !foundReachable {
+		t.Fatal("expected docker.reachable finding")
+	}
+	if foundImageFinding {
+		t.Fatal("did not expect docker image findings after fatal config failure")
+	}
+}
+
+func TestDoctor_FullRunNonRepoDockerFallsBackToDefaultImage(t *testing.T) {
+	dir := t.TempDir()
+	allOK(t)
+
+	var inspectedImage string
+	stubDockerImageInspect(t, func(ctx context.Context, image string) error {
+		inspectedImage = image
+		return nil
+	})
+
+	report, err := Run(context.Background(), dir, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if inspectedImage != runner.DefaultDockerImage {
+		t.Fatalf("inspected image = %q, want %q", inspectedImage, runner.DefaultDockerImage)
+	}
+	foundConfigNoRepo := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "config.no_repo" {
+				foundConfigNoRepo = true
+			}
+		}
+	}
+	if foundConfigNoRepo {
+		t.Fatal("did not expect config.no_repo in full run")
+	}
+}
+
+func TestDoctor_JSONIncludesConfigCheck(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "json"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, report); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+
+	var parsed struct {
+		Checks []struct {
+			Name string `json:"name"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	for _, check := range parsed.Checks {
+		if check.Name == "config" {
+			return
+		}
+	}
+	t.Fatal("expected config check in JSON output")
 }
 
 func TestDoctor_MissingQueueDir(t *testing.T) {

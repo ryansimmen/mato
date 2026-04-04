@@ -1,5 +1,9 @@
 # `mato doctor` Config Validation — Implementation Plan
 
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the implemented design; see the source code for the
+> current behavior.
+
 ## Summary
 
 Add an explicit `config` check to `mato doctor` that validates effective

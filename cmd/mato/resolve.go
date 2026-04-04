@@ -33,21 +33,10 @@ func resolveRepoRoot(dir string) (string, error) {
 	return root, nil
 }
 
-// gitCheckRefFormat is the function used to validate branch names. It
-// defaults to running "git check-ref-format --branch" and can be replaced
-// in tests.
-var gitCheckRefFormat = func(name string) error {
-	out, err := exec.Command("git", "check-ref-format", "--branch", name).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("invalid branch name %q: git check-ref-format rejected it (%s)", name, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 // validateBranch checks that the branch name is a legal git refname by
 // delegating to "git check-ref-format --branch".
 func validateBranch(branch string) error {
-	return gitCheckRefFormat(branch)
+	return git.ValidateBranch(branch)
 }
 
 // gitRevParseGitDir is the function used to verify a directory is a git

@@ -1083,7 +1083,7 @@ func TestDoctorCmd_DockerImageFromConfig(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1109,7 +1109,7 @@ func TestDoctorCmd_DockerImageEnvOverridesConfig(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1135,7 +1135,7 @@ func TestDoctorCmd_MalformedConfigReturnsError(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for malformed .mato.yaml, got nil")
@@ -1160,7 +1160,7 @@ func TestDoctorCmd_EnvImageStillValidatesConfig(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for malformed .mato.yaml even with MATO_DOCKER_IMAGE set, got nil")
@@ -1186,7 +1186,7 @@ func TestDoctorCmd_EnvImageWithValidConfigSucceeds(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("expected success with env var and valid config, got: %v", err)
 	}
@@ -1210,7 +1210,7 @@ func TestDoctorCmd_IgnoresUnrelatedInvalidRunSettings(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1234,7 +1234,7 @@ func TestDoctorCmd_EnvImageWithMultiDocConfigFails(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for multi-document .mato.yaml even with MATO_DOCKER_IMAGE set")
@@ -1260,7 +1260,7 @@ func TestDoctorCmd_WhitespaceOnlyEnvImageFallsBackToConfig(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1270,24 +1270,153 @@ func TestDoctorCmd_WhitespaceOnlyEnvImageFallsBackToConfig(t *testing.T) {
 	}
 }
 
-func TestDoctorNeedsDockerConfig(t *testing.T) {
+func TestDoctorShouldPreResolveDockerImage(t *testing.T) {
 	tests := []struct {
 		name string
 		only []string
 		want bool
 	}{
-		{name: "all checks", only: nil, want: true},
+		{name: "all checks", only: nil, want: false},
 		{name: "explicit docker", only: []string{"queue", "docker"}, want: true},
+		{name: "docker only", only: []string{"docker"}, want: true},
+		{name: "config only", only: []string{"config"}, want: false},
+		{name: "docker and config", only: []string{"docker", "config"}, want: false},
 		{name: "queue only", only: []string{"queue", "tasks", "deps"}, want: false},
 		{name: "git only", only: []string{"git"}, want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := doctorNeedsDockerConfig(tt.only); got != tt.want {
-				t.Errorf("doctorNeedsDockerConfig(%v) = %v, want %v", tt.only, got, tt.want)
+			if got := doctorShouldPreResolveDockerImage(tt.only); got != tt.want {
+				t.Errorf("doctorShouldPreResolveDockerImage(%v) = %v, want %v", tt.only, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDoctorCmd_DefaultRunDoesNotPreResolveDockerImage(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: custom:latest\n")
+
+	var capturedOpts doctor.Options
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		capturedOpts = opts
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedOpts.DockerImage != "" {
+		t.Fatalf("DockerImage = %q, want empty for default full doctor run", capturedOpts.DockerImage)
+	}
+}
+
+func TestDoctorCmd_DefaultRunWithMalformedConfigDelegatesToDoctor(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, ":\n  bad yaml: [unbalanced\n")
+
+	called := false
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+		called = true
+		if opts.DockerImage != "" {
+			t.Fatalf("DockerImage = %q, want empty when config check owns validation", opts.DockerImage)
+		}
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected default doctor run to delegate malformed config to doctor.Run, got: %v", err)
+	}
+	if !called {
+		t.Fatal("expected doctorRunFn to be called")
+	}
+}
+
+func TestDoctorCmd_ConfigAndDockerOrderDoesNotPreResolveDockerImage(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, "docker_image: custom:latest\n")
+
+	tests := [][]string{
+		{"doctor", "--repo", repoRoot, "--only", "docker,config"},
+		{"doctor", "--repo", repoRoot, "--only", "config,docker"},
+	}
+
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	for _, args := range tests {
+		var capturedOpts doctor.Options
+		doctorRunFn = func(_ context.Context, _ string, opts doctor.Options) (doctor.Report, error) {
+			capturedOpts = opts
+			return doctor.Report{}, nil
+		}
+
+		cmd := newRootCmd()
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("Execute(%v): %v", args, err)
+		}
+		if capturedOpts.DockerImage != "" {
+			t.Fatalf("DockerImage = %q, want empty for %v", capturedOpts.DockerImage, args)
+		}
+	}
+}
+
+func TestDoctorCmd_NonRepoNotRejectedBeforeDoctorRun(t *testing.T) {
+	dir := t.TempDir()
+	called := false
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	doctorRunFn = func(_ context.Context, repo string, _ doctor.Options) (doctor.Report, error) {
+		called = true
+		if repo != dir {
+			t.Fatalf("repo = %q, want %q", repo, dir)
+		}
+		return doctor.Report{}, nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected non-repo path to reach doctor.Run, got: %v", err)
+	}
+	if !called {
+		t.Fatal("expected doctorRunFn to be called")
+	}
+}
+
+func TestDoctorCmd_InvalidOnlySkipsDockerPreResolution(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	writeRepoConfig(t, repoRoot, ":\n  bad yaml: [unbalanced\n")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"doctor", "--repo", repoRoot, "--only", "docker,bogus"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected doctor.invalid_only exit error")
+	}
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %T: %v", err, err)
+	}
+	if exitErr.Code != 2 {
+		t.Fatalf("exit code = %d, want 2", exitErr.Code)
+	}
+	if strings.Contains(err.Error(), "parse config file") {
+		t.Fatalf("expected invalid --only handling before config pre-resolution, got: %v", err)
 	}
 }
 
@@ -1732,12 +1861,12 @@ func TestRootCmd_NonRepoPathRejected(t *testing.T) {
 }
 
 func TestValidateBranch_GitCheckRefFormatHookable(t *testing.T) {
-	orig := gitCheckRefFormat
-	defer func() { gitCheckRefFormat = orig }()
+	orig := git.ExportValidateBranchFn()
+	defer git.SetValidateBranchFn(orig)
 
-	gitCheckRefFormat = func(name string) error {
+	git.SetValidateBranchFn(func(name string) error {
 		return fmt.Errorf("injected error for %s", name)
-	}
+	})
 
 	err := validateBranch("anything")
 	if err == nil {
