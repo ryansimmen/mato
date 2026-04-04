@@ -140,6 +140,28 @@ func TestAnalyze_ExternalDependency(t *testing.T) {
 	}
 }
 
+func TestBlockReason_String(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason BlockReason
+		want   string
+	}{
+		{name: "waiting", reason: BlockedByWaiting, want: "waiting"},
+		{name: "unknown", reason: BlockedByUnknown, want: "unknown"},
+		{name: "external", reason: BlockedByExternal, want: "external"},
+		{name: "ambiguous", reason: BlockedByAmbiguous, want: "ambiguous"},
+		{name: "fallback", reason: BlockReason(99), want: "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.reason.String(); got != tt.want {
+				t.Fatalf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAnalyze_AmbiguousCompletedExcluded(t *testing.T) {
 	// Ambiguous ID is excluded from completedIDs by the caller.
 	// Task should remain blocked.
