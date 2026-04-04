@@ -676,7 +676,7 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 		return err
 	}
 
-	cleanStaleClones(staleCloneMaxAge)
+	cleanStaleClones(os.TempDir(), time.Now(), staleCloneMaxAge)
 
 	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown, opts.Mode)
 }
@@ -824,12 +824,9 @@ const cloneDirPrefix = "mato-"
 // ample time to inspect a failed push before the directory is reclaimed.
 const staleCloneMaxAge = 24 * time.Hour
 
-// tempDirFn returns the OS temp directory. Tests override it to avoid
-// touching the real /tmp.
-var tempDirFn = os.TempDir
-
-// cleanStaleClones removes clone directories in the OS temp directory that
-// were preserved for debugging after a failed push (see runOnce in task.go).
+// cleanStaleClones removes clone directories in the given temp directory
+// that were preserved for debugging after a failed push (see runOnce in
+// task.go).
 //
 // A directory is removed only when all three conditions are met:
 //  1. Its name starts with the "mato-" prefix used by git.CreateClone.
@@ -837,20 +834,19 @@ var tempDirFn = os.TempDir
 //     writeDebugMarker when a clone is intentionally preserved after a
 //     postAgentPush failure. This positively identifies the directory as
 //     a mato debug clone rather than an active or unrelated temp clone.
-//  3. Its modification time is older than maxAge.
+//  3. Its modification time is older than maxAge relative to now.
 //
 // This runs once at runner startup, before the poll loop begins, so that
 // stale clones from previous runs are reclaimed without risking removal of
 // clones that may still be in active use by a currently running agent.
-func cleanStaleClones(maxAge time.Duration) {
-	tmpDir := tempDirFn()
+func cleanStaleClones(tmpDir string, now time.Time, maxAge time.Duration) {
 	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
 		ui.Warnf("warning: could not list temp directory for clone cleanup: %v\n", err)
 		return
 	}
 
-	cutoff := nowFn().Add(-maxAge)
+	cutoff := now.Add(-maxAge)
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -881,7 +877,7 @@ func cleanStaleClones(maxAge time.Duration) {
 			ui.Warnf("warning: could not remove stale clone %s: %v\n", dirPath, err)
 			continue
 		}
-		fmt.Printf("Cleaned up stale clone directory: %s (age: %s)\n", dirPath, nowFn().Sub(info.ModTime()).Truncate(time.Minute))
+		fmt.Printf("Cleaned up stale clone directory: %s (age: %s)\n", dirPath, now.Sub(info.ModTime()).Truncate(time.Minute))
 	}
 }
 
