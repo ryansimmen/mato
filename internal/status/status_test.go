@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/process"
@@ -892,15 +891,9 @@ func TestShowTo_UnreadableLockFileWarning(t *testing.T) {
 	}
 	defer cleanup()
 
-	// Inject a hook that fails to read the lock file (simulating TOCTOU race).
-	origFn := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(name string) ([]byte, error) {
-		if filepath.Base(name) == "warn0001.pid" {
-			return nil, errors.New("permission denied")
-		}
-		return origFn(name)
-	})
-	defer lockfile.SetTestHookReadFile(origFn)
+	// Replace the registered lock with a self-referential symlink so reads fail
+	// with a real filesystem error.
+	testutil.MakeUnreadablePath(t, filepath.Join(tasksDir, ".locks", "warn0001.pid"))
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot); err != nil {
@@ -920,22 +913,11 @@ func TestActiveAgents_GenuinelyUnreadableLockFile(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	// Write a lock file then make it unreadable via permissions.
-	// Before the fix, identity.IsAgentActive would silently return false
-	// (lockfile.IsHeld returns false on read error), causing activeAgents
-	// to skip the agent without generating a warning.
+	// Make the lock path unreadable with a self-referential symlink. Before the
+	// fix, identity.IsAgentActive would silently return false on read errors,
+	// causing activeAgents to skip the agent without generating a warning.
 	lockPath := filepath.Join(locksDir, "unread01.pid")
-	if err := os.WriteFile(lockPath, []byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	origRead := lockfile.TestHookReadFile()
-	lockfile.SetTestHookReadFile(func(path string) ([]byte, error) {
-		if path == lockPath {
-			return nil, errors.New("permission denied")
-		}
-		return origRead(path)
-	})
-	t.Cleanup(func() { lockfile.SetTestHookReadFile(origRead) })
+	testutil.MakeUnreadablePath(t, lockPath)
 
 	agents, warnings, err := activeAgents(tasksDir)
 	if err != nil {
