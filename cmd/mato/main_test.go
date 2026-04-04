@@ -659,15 +659,17 @@ func TestInitCmd_Idempotent(t *testing.T) {
 }
 
 func TestPrintInitResult_RemoteCachedBranchMessage(t *testing.T) {
-	output := captureStdout(t, func() {
-		printInitResult(&setup.InitResult{
-			BranchName:       "mato",
-			BranchSource:     git.BranchSourceRemoteCached,
-			IgnorePattern:    "/.mato/",
-			TasksDir:         filepath.Join("repo", ".mato"),
-			GitignoreUpdated: false,
-		})
-	})
+	var out bytes.Buffer
+	if err := printInitResult(&out, &setup.InitResult{
+		BranchName:       "mato",
+		BranchSource:     git.BranchSourceRemoteCached,
+		IgnorePattern:    "/.mato/",
+		TasksDir:         filepath.Join("repo", ".mato"),
+		GitignoreUpdated: false,
+	}); err != nil {
+		t.Fatalf("printInitResult: %v", err)
+	}
+	output := out.String()
 
 	if !strings.Contains(output, "Switched to branch: mato (cached origin/mato (origin unavailable))") {
 		t.Fatalf("expected cached origin branch message, got %q", output)
@@ -675,15 +677,17 @@ func TestPrintInitResult_RemoteCachedBranchMessage(t *testing.T) {
 }
 
 func TestPrintInitResult_RemoteBranchMessage(t *testing.T) {
-	output := captureStdout(t, func() {
-		printInitResult(&setup.InitResult{
-			BranchName:       "mato",
-			BranchSource:     git.BranchSourceRemote,
-			IgnorePattern:    "/.mato/",
-			TasksDir:         filepath.Join("repo", ".mato"),
-			GitignoreUpdated: false,
-		})
-	})
+	var out bytes.Buffer
+	if err := printInitResult(&out, &setup.InitResult{
+		BranchName:       "mato",
+		BranchSource:     git.BranchSourceRemote,
+		IgnorePattern:    "/.mato/",
+		TasksDir:         filepath.Join("repo", ".mato"),
+		GitignoreUpdated: false,
+	}); err != nil {
+		t.Fatalf("printInitResult: %v", err)
+	}
+	output := out.String()
 
 	if !strings.Contains(output, "Switched to branch: mato (live origin/mato)") {
 		t.Fatalf("expected live origin branch message, got %q", output)
@@ -1692,7 +1696,9 @@ func TestInspectCmd_DelegatesToInspectShow(t *testing.T) {
 		return nil
 	}
 
+	var out bytes.Buffer
 	cmd := newRootCmd()
+	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"inspect", "sample-task", "--repo", repoRoot, "--format", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1707,8 +1713,31 @@ func TestInspectCmd_DelegatesToInspectShow(t *testing.T) {
 	if gotFormat != "json" {
 		t.Errorf("format = %q, want %q", gotFormat, "json")
 	}
-	if gotWriter == nil {
-		t.Fatal("writer = nil, want command output writer")
+	if gotWriter != &out {
+		t.Fatalf("writer = %T %p, want command output writer %p", gotWriter, gotWriter, &out)
+	}
+}
+
+func TestInspectCmd_TextOutputUsesCommandWriters(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "sample.md"), "---\nid: sample\npriority: 1\n---\n# Sample task\n")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := newRootCmd()
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"inspect", "sample", "--repo", repoRoot, "--format", "text"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("inspect command failed: %v", err)
+	}
+
+	if got := stdout.String(); !strings.Contains(got, "Task: sample") || !strings.Contains(got, "File: backlog/sample.md") {
+		t.Fatalf("stdout = %q, want rendered inspect text on the command writer", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
 	}
 }
 
@@ -2472,14 +2501,22 @@ func TestCancelCmd_InProgressWarning(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
 	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "running"})
-	stderr := captureStderr(t, func() {
-		if err := cmd.Execute(); err != nil {
-			t.Fatalf("cancel command failed: %v", err)
-		}
-	})
-	if !strings.Contains(stderr, "warning: agent container for running may still be running") {
-		t.Fatalf("missing in-progress warning: %q", stderr)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel command failed: %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "cancelled: running.md (was in in-progress/)") {
+		t.Fatalf("stdout = %q, want cancellation message on stdout", got)
+	}
+	if strings.Contains(stdout.String(), "warning:") {
+		t.Fatalf("stdout leaked warning output: %q", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "warning: agent container for running may still be running") {
+		t.Fatalf("missing in-progress warning on stderr: %q", got)
 	}
 }
 
@@ -3126,7 +3163,9 @@ func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
 	origDryRunFn := dryRunFn
 	defer func() { dryRunFn = origDryRunFn }()
 
-	dryRunFn = func(_ io.Writer, _ string, branch string, opts runner.RunOptions) error {
+	var gotWriter io.Writer
+	dryRunFn = func(w io.Writer, _ string, branch string, opts runner.RunOptions) error {
+		gotWriter = w
 		if branch != "main" {
 			t.Fatalf("branch = %q, want %q", branch, "main")
 		}
@@ -3136,10 +3175,20 @@ func TestConfigFile_DryRunUsesConfigBranch(t *testing.T) {
 		return nil
 	}
 
+	var out bytes.Buffer
+	var stderr bytes.Buffer
 	cmd := newRootCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
 	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--dry-run"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
+	}
+	if gotWriter != &out {
+		t.Fatalf("dryRun writer = %T %p, want command output writer %p", gotWriter, gotWriter, &out)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
 	}
 }
 
@@ -3924,15 +3973,23 @@ func TestRetryCmd_TextMode_DependencyBlockedWarningOnStderr(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
 	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "blocked"})
-	stderr := captureStderr(t, func() {
-		if err := cmd.Execute(); err != nil {
-			t.Fatalf("retry failed: %v", err)
-		}
-	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
 
-	if !strings.Contains(stderr, "dependency-blocked") {
-		t.Errorf("stderr = %q, want warning about dependency block", stderr)
+	if got := stdout.String(); !strings.Contains(got, "Requeued blocked to backlog") {
+		t.Fatalf("stdout = %q, want requeue message on stdout", got)
+	}
+	if strings.Contains(stdout.String(), "warning:") {
+		t.Fatalf("stdout leaked warning output: %q", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "dependency-blocked") {
+		t.Errorf("stderr = %q, want warning about dependency block", got)
 	}
 }
 

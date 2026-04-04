@@ -55,6 +55,16 @@ func TestWarnf_ExplicitWriterOverridesStderr(t *testing.T) {
 	}
 }
 
+func TestWarnTo_ExplicitWriter(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WarnTo(&buf, "warning: %s\n", "scoped"); err != nil {
+		t.Fatalf("WarnTo: %v", err)
+	}
+	if got := buf.String(); got != "warning: scoped\n" {
+		t.Errorf("WarnTo output = %q, want %q", got, "warning: scoped\n")
+	}
+}
+
 func TestWarnf_NilWriterUsesStderr(t *testing.T) {
 	// When warningWriter is nil, Warnf falls back to os.Stderr.
 	// We redirect os.Stderr to verify output arrives there.
