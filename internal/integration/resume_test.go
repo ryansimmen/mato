@@ -119,7 +119,7 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 	}, "\n"))
 	createTaskBranch(t, repoRoot, branch, map[string]string{"cleanup.txt": "hello\n"}, "cleanup taskstate")
 	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
-		state.LastOutcome = "review-launched"
+		state.LastOutcome = taskstate.OutcomeReviewLaunched
 		state.TaskBranch = branch
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
@@ -137,8 +137,8 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after approval: %v", err)
 	}
-	if state == nil || state.LastOutcome != "review-approved" {
-		t.Fatalf("taskstate after approval = %+v, want LastOutcome=review-approved", state)
+	if state == nil || state.LastOutcome != taskstate.OutcomeReviewApproved {
+		t.Fatalf("taskstate after approval = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewApproved)
 	}
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)

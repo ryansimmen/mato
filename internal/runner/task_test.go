@@ -1539,8 +1539,8 @@ func TestPostAgentPush_RecordsWorkTaskState(t *testing.T) {
 	if state.LastHeadSHA != currentTip {
 		t.Fatalf("LastHeadSHA = %q, want %q", state.LastHeadSHA, currentTip)
 	}
-	if state.LastOutcome != "work-pushed" {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, "work-pushed")
+	if state.LastOutcome != taskstate.OutcomeWorkPushed {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeWorkPushed)
 	}
 }
 

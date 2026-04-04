@@ -218,7 +218,7 @@ func finalizePushedTask(tasksDir, targetBranch, agentID, filename, branch, curre
 		state.TaskBranch = branch
 		state.TargetBranch = targetBranch
 		state.LastHeadSHA = currentTip
-		state.LastOutcome = "work-pushed"
+		state.LastOutcome = taskstate.OutcomeWorkPushed
 	})
 	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not rebuild file claims after pushing %s: %v\n", filename, err)

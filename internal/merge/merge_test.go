@@ -200,7 +200,7 @@ func TestProcessQueue_AlreadyMergedDuplicateDestinationCleansRuntimeState(t *tes
 		t.Fatalf("os.WriteFile completed task: %v", err)
 	}
 	if err := taskstate.Update(tasksDir, taskName, func(state *taskstate.TaskState) {
-		state.LastOutcome = "review-approved"
+		state.LastOutcome = taskstate.OutcomeReviewApproved
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
