@@ -778,11 +778,11 @@ func TestHasReviewCandidates_ValidTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
 
-	content := "---\npriority: 10\nmax_retries: 3\n---\n# Valid Task\n"
+	content := "<!-- branch: task/valid -->\n---\npriority: 10\nmax_retries: 3\n---\n# Valid Task\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "valid.md"), []byte(content), 0o644)
 
 	if !hasReviewCandidates(tasksDir) {
-		t.Fatal("expected true for valid review task")
+		t.Fatal("expected true for valid review task with branch marker")
 	}
 }
 
@@ -848,9 +848,9 @@ func TestHasReviewCandidates_MixedTasks_ReturnsTrueForValid(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"),
 		[]byte(exhaustedContent), 0o644)
 
-	// Valid task with remaining budget.
+	// Valid task with remaining budget and branch marker.
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "good.md"),
-		[]byte("---\npriority: 5\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
+		[]byte("<!-- branch: task/good -->\n---\npriority: 5\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
 
 	if !hasReviewCandidates(tasksDir) {
 		t.Fatal("expected true when at least one valid task exists among malformed/exhausted")
@@ -866,6 +866,47 @@ func TestHasReviewCandidates_MixedTasks_ReturnsTrueForValid(t *testing.T) {
 	failedEntries, _ := os.ReadDir(filepath.Join(tasksDir, queue.DirFailed))
 	if len(failedEntries) != 0 {
 		t.Fatalf("nothing should be moved to failed/, found %d entries", len(failedEntries))
+	}
+}
+
+func TestHasReviewCandidates_BranchlessTask_ReturnsFalse(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirFailed), 0o755)
+
+	// Task with valid frontmatter and retry budget, but no branch marker.
+	content := "---\npriority: 10\nmax_retries: 3\n---\n# Branchless Task\n"
+	branchlessPath := filepath.Join(tasksDir, queue.DirReadyReview, "branchless.md")
+	os.WriteFile(branchlessPath, []byte(content), 0o644)
+
+	if hasReviewCandidates(tasksDir) {
+		t.Fatal("expected false when only a branchless review task exists")
+	}
+
+	// The branchless task must remain in ready-for-review/ (not moved).
+	if _, err := os.Stat(branchlessPath); err != nil {
+		t.Fatalf("branchless task should remain in ready-for-review/: %v", err)
+	}
+	failedEntries, _ := os.ReadDir(filepath.Join(tasksDir, queue.DirFailed))
+	if len(failedEntries) != 0 {
+		t.Fatalf("nothing should be moved to failed/ by read-only probe, found %d entries", len(failedEntries))
+	}
+}
+
+func TestHasReviewCandidates_BranchlessMixed_OnlyCountsBranched(t *testing.T) {
+	tasksDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+
+	// Branchless task — should not count.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "no-branch.md"),
+		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# No Branch\n"), 0o644)
+
+	// Task with branch marker — should count.
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "has-branch.md"),
+		[]byte("<!-- branch: task/has-branch -->\n---\npriority: 10\nmax_retries: 3\n---\n# Has Branch\n"), 0o644)
+
+	if !hasReviewCandidates(tasksDir) {
+		t.Fatal("expected true when a branched task exists alongside a branchless one")
 	}
 }
 

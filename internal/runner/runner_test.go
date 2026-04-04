@@ -4512,7 +4512,7 @@ func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
 	}
 	pollMergeFn = func(context.Context, string, string, string) int {
 		path := filepath.Join(tasksDir, queue.DirReadyReview, "new-review.md")
-		if err := os.WriteFile(path, []byte("---\nid: new-review\nbranch: task/new-review\n---\n# Review\n"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte("<!-- branch: task/new-review -->\n---\nid: new-review\n---\n# Review\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
 		return 0
@@ -4616,8 +4616,78 @@ func TestPollIterate_IdleReviewProbeDoesNotMoveExhaustedTasks(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// resolveGitIdentity tests
+func TestPollIterate_IdleReviewProbeExcludesBranchlessHandoff(t *testing.T) {
+	origPauseReadFn := pauseReadFn
+	origPollWriteManifestFn := pollWriteManifestFn
+	origPollClaimAndRunFn := pollClaimAndRunFn
+	origPollReviewFn := pollReviewFn
+	origPollMergeFn := pollMergeFn
+	defer func() {
+		pauseReadFn = origPauseReadFn
+		pollWriteManifestFn = origPollWriteManifestFn
+		pollClaimAndRunFn = origPollClaimAndRunFn
+		pollReviewFn = origPollReviewFn
+		pollMergeFn = origPollMergeFn
+	}()
+
+	tasksDir := setupFullTasksDir(t)
+	// Task with valid frontmatter and retry budget, but no branch marker.
+	branchlessContent := "---\npriority: 10\nmax_retries: 3\n---\n# Branchless Handoff\n"
+	branchlessPath := filepath.Join(tasksDir, queue.DirReadyReview, "branchless.md")
+	if err := os.WriteFile(branchlessPath, []byte(branchlessContent), 0o644); err != nil {
+		t.Fatalf("WriteFile branchless review task: %v", err)
+	}
+
+	pauseReadFn = func(string) (pause.State, error) { return pause.State{}, nil }
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+	pollClaimAndRunFn = func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+		return false, false
+	}
+	pollReviewFn = func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+		return false
+	}
+	pollMergeFn = func(context.Context, string, string, string) int { return 0 }
+
+	result := pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	if result.hasReviewTasks {
+		t.Fatal("hasReviewTasks = true, want false when only a branchless review handoff exists")
+	}
+	// The branchless task must remain in ready-for-review/ — not moved by the idle probe.
+	if _, err := os.Stat(branchlessPath); err != nil {
+		t.Fatalf("branchless review task should remain in ready-for-review/: %v", err)
+	}
+}
+
+func TestCollectBoundedRunState_BranchlessReviewIsIdle(t *testing.T) {
+	origPollWriteManifestFn := pollWriteManifestFn
+	defer func() { pollWriteManifestFn = origPollWriteManifestFn }()
+
+	tasksDir := setupFullTasksDir(t)
+	// Task with valid frontmatter and retry budget, but no branch marker.
+	branchlessContent := "---\npriority: 10\nmax_retries: 3\n---\n# Branchless Handoff\n"
+	branchlessPath := filepath.Join(tasksDir, queue.DirReadyReview, "branchless.md")
+	if err := os.WriteFile(branchlessPath, []byte(branchlessContent), 0o644); err != nil {
+		t.Fatalf("WriteFile branchless review task: %v", err)
+	}
+
+	pollWriteManifestFn = func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+		return queue.RunnableBacklogView{}, false
+	}
+
+	state := collectBoundedRunState(tasksDir, map[string]struct{}{}, 0)
+	if state.hasReviewTasks {
+		t.Fatal("hasReviewTasks = true, want false when only a branchless review handoff exists")
+	}
+	if !state.isIdle() {
+		t.Fatal("bounded-run state should be idle when only a branchless review task exists")
+	}
+	// The branchless task must remain in ready-for-review/ — not moved.
+	if _, err := os.Stat(branchlessPath); err != nil {
+		t.Fatalf("branchless review task should remain in ready-for-review/: %v", err)
+	}
+}
 // ---------------------------------------------------------------------------
 
 func TestResolveGitIdentity_ConfiguredValues(t *testing.T) {
