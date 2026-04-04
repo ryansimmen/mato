@@ -1011,6 +1011,38 @@ func TestReviewCandidates_Indexed_BranchFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestReviewCandidates_IndexedMatchesFilesystemFallback(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range queue.AllDirs {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "beta.md"),
+		[]byte("<!-- branch: task/custom-beta -->\n---\npriority: 10\nmax_retries: 3\n---\n# Beta\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "alpha.md"),
+		[]byte("<!-- branch: task/custom-alpha -->\n---\npriority: 10\nmax_retries: 3\n---\n# Alpha\n"), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "top.md"),
+		[]byte("<!-- branch: task/top -->\n---\npriority: 5\nmax_retries: 3\n---\n# Top\n"), 0o644)
+
+	noIndex := reviewCandidates(tasksDir, nil)
+	indexed := reviewCandidates(tasksDir, queue.BuildIndex(tasksDir))
+
+	if len(noIndex) != len(indexed) {
+		t.Fatalf("len(candidates) mismatch: no-index=%d indexed=%d", len(noIndex), len(indexed))
+	}
+	for i := range noIndex {
+		if noIndex[i].Filename != indexed[i].Filename {
+			t.Fatalf("candidate[%d] filename mismatch: no-index=%q indexed=%q", i, noIndex[i].Filename, indexed[i].Filename)
+		}
+		if noIndex[i].Branch != indexed[i].Branch {
+			t.Fatalf("candidate[%d] branch mismatch: no-index=%q indexed=%q", i, noIndex[i].Branch, indexed[i].Branch)
+		}
+		if noIndex[i].Title != indexed[i].Title {
+			t.Fatalf("candidate[%d] title mismatch: no-index=%q indexed=%q", i, noIndex[i].Title, indexed[i].Title)
+		}
+	}
+}
+
 func TestReviewCandidates_Indexed_MissingBranchMarkerRecordsFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range queue.AllDirs {

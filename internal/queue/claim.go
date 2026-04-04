@@ -54,34 +54,25 @@ func normalizeClaimCandidate(name string) (string, bool) {
 	return name, true
 }
 
-func retryClaimability(path string, failures, maxRetries int, cooldown time.Duration) (retryExhausted bool, cooledDown bool) {
+func retryClaimability(failures, maxRetries int, lastFailureAt time.Time, cooldown time.Duration) (retryExhausted bool, cooledDown bool) {
 	retryExhausted = failures >= maxRetries
 	if failures == 0 || retryExhausted {
 		return retryExhausted, true
 	}
-	rawData, err := os.ReadFile(path)
-	if err != nil {
-		return false, true
-	}
-	if lastFail, ok := lastFailureTime(rawData); ok {
-		return false, timeNowFn().Sub(lastFail) >= retryCooldown(cooldown)
+	if !lastFailureAt.IsZero() {
+		return false, timeNowFn().Sub(lastFailureAt) >= retryCooldown(cooldown)
 	}
 	return false, true
 }
 
-func immediatelyClaimableTask(path string, depLookup dependencyLookup, cooldown time.Duration) bool {
-	meta, _, parseErr := frontmatter.ParseTaskFile(path)
-	if parseErr != nil {
+func immediatelyClaimableTask(snap *TaskSnapshot, depLookup dependencyLookup, cooldown time.Duration) bool {
+	if snap == nil {
 		return false
 	}
-	if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
+	if blocks := depLookup.blockedDependencies(snap.Meta.DependsOn); len(blocks) > 0 {
 		return false
 	}
-	failures, failErr := CountFailureLines(path)
-	if failErr != nil {
-		return false
-	}
-	retryExhausted, cooledDown := retryClaimability(path, failures, meta.MaxRetries, cooldown)
+	retryExhausted, cooledDown := retryClaimability(snap.FailureCount, snap.Meta.MaxRetries, snap.LastFailureAt, cooldown)
 	return retryExhausted || cooledDown
 }
 
@@ -288,17 +279,14 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		// Always re-read the candidate file before claiming so manual edits made
 		// after index construction cannot bypass dependency enforcement.
-		meta, body, parseErr := frontmatter.ParseTaskFile(src)
-		if parseErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, parseErr)
+		snap, snapErr := loadTaskSnapshot(tasksDir, DirBacklog, name, src)
+		if snapErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, snapErr)
 			continue
 		}
-		failures, failErr := CountFailureLines(src)
-		if failErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not count failures for %s, skipping: %v\n", name, failErr)
-			continue
-		}
-		retryExhausted, cooledDown := retryClaimability(src, failures, meta.MaxRetries, cooldown)
+		meta := snap.Meta
+		title := frontmatter.ExtractTitle(name, snap.Body)
+		retryExhausted, cooledDown := retryClaimability(snap.FailureCount, meta.MaxRetries, snap.LastFailureAt, cooldown)
 
 		if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
 			waitingPath := filepath.Join(tasksDir, DirWaiting, name)
@@ -314,7 +302,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		// prevent rapid retry churn after immediate agent crashes. Tasks that
 		// already exhausted their retry budget should still move straight to
 		// failed/ without waiting for cooldown.
-		if failures > 0 && !retryExhausted && !cooledDown {
+		if snap.FailureCount > 0 && !retryExhausted && !cooledDown {
 			continue
 		}
 
@@ -340,7 +328,8 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			continue
 		}
 
-		existingBranchBeforeClaim, hadRecordedBranchMark := taskfile.ParseBranchMarkerLine(originalData)
+		existingBranchBeforeClaim := snap.Branch
+		hadRecordedBranchMark := existingBranchBeforeClaim != ""
 
 		claimedAt := time.Now().UTC().Format(time.RFC3339)
 		if err := claimPrependFn(dst, agentID, claimedAt); err != nil {
@@ -368,7 +357,6 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			existingBranch = existingBranchBeforeClaim
 		}
 		branch := chooseClaimBranch(name, activeBranches, existingBranch)
-		title := frontmatter.ExtractTitle(name, body)
 
 		if existingBranch != branch {
 			if err := WriteBranchMarker(dst, branch); err != nil {
