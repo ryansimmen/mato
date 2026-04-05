@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/config"
 	"mato/internal/git"
 	"mato/internal/runner"
 	"mato/internal/setup"
@@ -59,10 +60,10 @@ func TestInitRepo_ThenDryRunWorks(t *testing.T) {
 		t.Fatalf("InitRepo: %v", err)
 	}
 	if err := runner.DryRun(io.Discard, repoRoot, "mato", runner.RunOptions{
-		TaskModel:             runner.DefaultTaskModel,
-		ReviewModel:           runner.DefaultReviewModel,
-		TaskReasoningEffort:   runner.DefaultReasoningEffort,
-		ReviewReasoningEffort: runner.DefaultReasoningEffort,
+		TaskModel:             config.DefaultTaskModel,
+		ReviewModel:           config.DefaultReviewModel,
+		TaskReasoningEffort:   config.DefaultReasoningEffort,
+		ReviewReasoningEffort: config.DefaultReasoningEffort,
 	}); err != nil {
 		t.Fatalf("DryRun after init: %v", err)
 	}

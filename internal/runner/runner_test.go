@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"mato/internal/config"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
@@ -87,11 +88,11 @@ func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 
 func testRunOptions() RunOptions {
 	return RunOptions{
-		TaskModel:                  DefaultTaskModel,
-		ReviewModel:                DefaultReviewModel,
+		TaskModel:                  config.DefaultTaskModel,
+		ReviewModel:                config.DefaultReviewModel,
 		ReviewSessionResumeEnabled: true,
-		TaskReasoningEffort:        DefaultReasoningEffort,
-		ReviewReasoningEffort:      DefaultReasoningEffort,
+		TaskReasoningEffort:        config.DefaultReasoningEffort,
+		ReviewReasoningEffort:      config.DefaultReasoningEffort,
 	}
 }
 
@@ -1531,7 +1532,7 @@ func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 	}{
 		{
 			name: "default when unset",
-			want: DefaultAgentTimeout,
+			want: config.DefaultAgentTimeout,
 		},
 		{
 			name: "valid duration 1h",
@@ -1571,8 +1572,8 @@ func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 }
 
 func TestDefaultAgentTimeout(t *testing.T) {
-	if DefaultAgentTimeout != 30*time.Minute {
-		t.Fatalf("expected default timeout of 30m, got %v", DefaultAgentTimeout)
+	if config.DefaultAgentTimeout != 30*time.Minute {
+		t.Fatalf("expected default timeout of 30m, got %v", config.DefaultAgentTimeout)
 	}
 }
 
@@ -4672,32 +4673,32 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 	}{
 		{
 			name: "missing task model",
-			opts: RunOptions{ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "task model must not be empty",
 		},
 		{
 			name: "missing review model",
-			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: config.DefaultTaskModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "review model must not be empty",
 		},
 		{
 			name: "missing task reasoning effort",
-			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "task reasoning effort must not be empty",
 		},
 		{
 			name: "missing review reasoning effort",
-			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort},
 			want: "review reasoning effort must not be empty",
 		},
 		{
 			name: "whitespace task model",
-			opts: RunOptions{TaskModel: "   ", ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: "   ", ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "task model must not be empty",
 		},
 		{
 			name: "invalid run mode",
-			opts: RunOptions{Mode: RunMode(99), TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{Mode: RunMode(99), TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "invalid run mode",
 		},
 	}
@@ -4716,14 +4717,14 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 }
 
 func TestDefaultConstants(t *testing.T) {
-	if DefaultTaskModel != "claude-opus-4.6" {
-		t.Fatalf("DefaultTaskModel = %q, want %q", DefaultTaskModel, "claude-opus-4.6")
+	if config.DefaultTaskModel != "claude-opus-4.6" {
+		t.Fatalf("DefaultTaskModel = %q, want %q", config.DefaultTaskModel, "claude-opus-4.6")
 	}
-	if DefaultReviewModel != "gpt-5.4" {
-		t.Fatalf("DefaultReviewModel = %q, want %q", DefaultReviewModel, "gpt-5.4")
+	if config.DefaultReviewModel != "gpt-5.4" {
+		t.Fatalf("DefaultReviewModel = %q, want %q", config.DefaultReviewModel, "gpt-5.4")
 	}
-	if DefaultReasoningEffort != "high" {
-		t.Fatalf("DefaultReasoningEffort = %q, want %q", DefaultReasoningEffort, "high")
+	if config.DefaultReasoningEffort != "high" {
+		t.Fatalf("DefaultReasoningEffort = %q, want %q", config.DefaultReasoningEffort, "high")
 	}
 }
 
@@ -4744,7 +4745,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	}
 
 	env, run := buildEnvAndRunContext("main", tools, "agent-123", "Test User", "test@test.com",
-		"/repo", "/repo/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: 45 * time.Minute})
+		"/repo", "/repo/.mato", RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort, AgentTimeout: 45 * time.Minute})
 
 	if env.image == "" {
 		t.Error("expected default docker image to be set")
@@ -4767,17 +4768,17 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	if run.timeout != 45*time.Minute {
 		t.Errorf("expected timeout %v, got %v", 45*time.Minute, run.timeout)
 	}
-	if run.model != DefaultTaskModel {
-		t.Errorf("expected task model %q, got %q", DefaultTaskModel, run.model)
+	if run.model != config.DefaultTaskModel {
+		t.Errorf("expected task model %q, got %q", config.DefaultTaskModel, run.model)
 	}
-	if run.reasoningEffort != DefaultReasoningEffort {
-		t.Errorf("expected task reasoning effort %q, got %q", DefaultReasoningEffort, run.reasoningEffort)
+	if run.reasoningEffort != config.DefaultReasoningEffort {
+		t.Errorf("expected task reasoning effort %q, got %q", config.DefaultReasoningEffort, run.reasoningEffort)
 	}
-	if env.reviewModel != DefaultReviewModel {
-		t.Errorf("expected review model %q, got %q", DefaultReviewModel, env.reviewModel)
+	if env.reviewModel != config.DefaultReviewModel {
+		t.Errorf("expected review model %q, got %q", config.DefaultReviewModel, env.reviewModel)
 	}
-	if env.reviewReasoningEffort != DefaultReasoningEffort {
-		t.Errorf("expected review reasoning effort %q, got %q", DefaultReasoningEffort, env.reviewReasoningEffort)
+	if env.reviewReasoningEffort != config.DefaultReasoningEffort {
+		t.Errorf("expected review reasoning effort %q, got %q", config.DefaultReasoningEffort, env.reviewReasoningEffort)
 	}
 	if !env.reviewSessionResumeEnabled {
 		t.Fatal("expected review session resume to be enabled")
@@ -4789,7 +4790,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 
 func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, DockerImage: "custom:latest", AgentTimeout: time.Hour})
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort, DockerImage: "custom:latest", AgentTimeout: time.Hour})
 
 	if env.image != "custom:latest" {
 		t.Errorf("expected custom image %q, got %q", "custom:latest", env.image)
@@ -4819,7 +4820,7 @@ func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 
 func TestBuildEnvAndRunContext_PromptPlaceholders(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: time.Hour})
+	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort, AgentTimeout: time.Hour})
 
 	if strings.Contains(run.prompt, "TASKS_DIR_PLACEHOLDER") {
 		t.Error("prompt still contains TASKS_DIR_PLACEHOLDER")

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/runner"
+	"mato/internal/config"
 )
 
 // Function variable hooks for test injection.
@@ -73,12 +73,12 @@ func SetDockerImageInspectFn(fn func(context.Context, string) error) {
 }
 
 // resolveDockerImage returns the configured Docker image name from the
-// environment, falling back to runner.DefaultDockerImage.
+// environment, falling back to config.DefaultDockerImage.
 func resolveDockerImage() string {
 	if img := strings.TrimSpace(os.Getenv("MATO_DOCKER_IMAGE")); img != "" {
 		return img
 	}
-	return runner.DefaultDockerImage
+	return config.DefaultDockerImage
 }
 
 // ---------- C. Docker ----------

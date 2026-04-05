@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/config"
 	"mato/internal/frontmatter"
 	"mato/internal/runtimecleanup"
 	"mato/internal/taskfile"
@@ -76,10 +77,6 @@ func immediatelyClaimableTask(snap *TaskSnapshot, depLookup dependencyLookup, co
 	retryExhausted, cooledDown := retryClaimability(snap.FailureCount, snap.Meta.MaxRetries, snap.LastFailureAt, cooldown)
 	return retryExhausted || cooledDown
 }
-
-// DefaultRetryCooldown is the default time to wait after a task failure before
-// the task becomes eligible for claiming again.
-const DefaultRetryCooldown = 2 * time.Minute
 
 // Testing hooks for the claim path. Default to real implementations.
 // Tests can override these to inject failures without filesystem permission
@@ -428,12 +425,12 @@ func CountReviewFailureLines(taskPath string) (int, error) {
 }
 
 // retryCooldown resolves the effective retry cooldown duration, defaulting to
-// DefaultRetryCooldown when cooldown is zero or negative.
+// config.DefaultRetryCooldown when cooldown is zero or negative.
 func retryCooldown(cooldown time.Duration) time.Duration {
 	if cooldown > 0 {
 		return cooldown
 	}
-	return DefaultRetryCooldown
+	return config.DefaultRetryCooldown
 }
 
 // lastFailureTime extracts the timestamp from the most recent standalone

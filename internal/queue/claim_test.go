@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/config"
 	"mato/internal/taskfile"
 	"mato/internal/testutil"
 	"mato/internal/ui"
@@ -1671,10 +1672,10 @@ func TestRetryCooldown(t *testing.T) {
 		cooldown time.Duration
 		want     time.Duration
 	}{
-		{"default", 0, DefaultRetryCooldown},
+		{"default", 0, config.DefaultRetryCooldown},
 		{"custom valid", 5 * time.Minute, 5 * time.Minute},
 		{"custom seconds", 30 * time.Second, 30 * time.Second},
-		{"negative falls back", -1 * time.Minute, DefaultRetryCooldown},
+		{"negative falls back", -1 * time.Minute, config.DefaultRetryCooldown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

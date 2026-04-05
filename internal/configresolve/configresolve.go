@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"mato/internal/config"
-	"mato/internal/queue"
-	"mato/internal/runner"
 )
 
 type Source string
@@ -136,17 +134,17 @@ func ResolveBranch(load config.LoadResult, flagValue string) (Resolved[string], 
 	if load.Config.Branch != nil {
 		return Resolved[string]{Value: *load.Config.Branch, Source: SourceConfig}, nil
 	}
-	return Resolved[string]{Value: "mato", Source: SourceDefault}, nil
+	return Resolved[string]{Value: config.DefaultBranch, Source: SourceDefault}, nil
 }
 
 func ResolveRunConfig(flags RunFlags, load config.LoadResult) (RunConfig, error) {
 	cfg := load.Config
 	resolved := RunConfig{
-		DockerImage:           resolveStringValue("", envDockerImage, cfg.DockerImage, runner.DefaultDockerImage),
-		TaskModel:             resolveStringValue(flags.TaskModel, envTaskModel, cfg.TaskModel, runner.DefaultTaskModel),
-		ReviewModel:           resolveStringValue(flags.ReviewModel, envReviewModel, cfg.ReviewModel, runner.DefaultReviewModel),
-		TaskReasoningEffort:   resolveStringValue(flags.TaskReasoningEffort, envTaskReasoningEffort, cfg.TaskReasoningEffort, runner.DefaultReasoningEffort),
-		ReviewReasoningEffort: resolveStringValue(flags.ReviewReasoningEffort, envReviewReasoningEffort, cfg.ReviewReasoningEffort, runner.DefaultReasoningEffort),
+		DockerImage:           resolveStringValue("", envDockerImage, cfg.DockerImage, config.DefaultDockerImage),
+		TaskModel:             resolveStringValue(flags.TaskModel, envTaskModel, cfg.TaskModel, config.DefaultTaskModel),
+		ReviewModel:           resolveStringValue(flags.ReviewModel, envReviewModel, cfg.ReviewModel, config.DefaultReviewModel),
+		TaskReasoningEffort:   resolveStringValue(flags.TaskReasoningEffort, envTaskReasoningEffort, cfg.TaskReasoningEffort, config.DefaultReasoningEffort),
+		ReviewReasoningEffort: resolveStringValue(flags.ReviewReasoningEffort, envReviewReasoningEffort, cfg.ReviewReasoningEffort, config.DefaultReasoningEffort),
 	}
 
 	resumeEnabled, err := resolveBoolValue(envReviewSessionResumeEnabled, cfg.ReviewSessionResume, true)
@@ -155,13 +153,13 @@ func ResolveRunConfig(flags RunFlags, load config.LoadResult) (RunConfig, error)
 	}
 	resolved.ReviewSessionResumeEnabled = resumeEnabled
 
-	agentTimeout, err := resolveDurationValue(envAgentTimeout, cfg.AgentTimeout, "agent_timeout", runner.DefaultAgentTimeout)
+	agentTimeout, err := resolveDurationValue(envAgentTimeout, cfg.AgentTimeout, "agent_timeout", config.DefaultAgentTimeout)
 	if err != nil {
 		return RunConfig{}, err
 	}
 	resolved.AgentTimeout = agentTimeout
 
-	retryCooldown, err := resolveDurationValue(envRetryCooldown, cfg.RetryCooldown, "retry_cooldown", queue.DefaultRetryCooldown)
+	retryCooldown, err := resolveDurationValue(envRetryCooldown, cfg.RetryCooldown, "retry_cooldown", config.DefaultRetryCooldown)
 	if err != nil {
 		return RunConfig{}, err
 	}
@@ -177,19 +175,6 @@ func ResolveRunConfig(flags RunFlags, load config.LoadResult) (RunConfig, error)
 	return resolved, nil
 }
 
-func (c RunConfig) RunOptions() runner.RunOptions {
-	return runner.RunOptions{
-		DockerImage:                c.DockerImage.Value,
-		TaskModel:                  c.TaskModel.Value,
-		ReviewModel:                c.ReviewModel.Value,
-		ReviewSessionResumeEnabled: c.ReviewSessionResumeEnabled.Value,
-		TaskReasoningEffort:        c.TaskReasoningEffort.Value,
-		ReviewReasoningEffort:      c.ReviewReasoningEffort.Value,
-		AgentTimeout:               c.AgentTimeout.Value,
-		RetryCooldown:              c.RetryCooldown.Value,
-	}
-}
-
 func ResolveDoctorDockerImage(repoRoot string) (Resolved[string], error) {
 	if v, ok, err := resolveEnvString(envDockerImage, false); err != nil {
 		return Resolved[string]{}, err
@@ -202,7 +187,7 @@ func ResolveDoctorDockerImage(repoRoot string) (Resolved[string], error) {
 		return Resolved[string]{Value: v, Source: SourceEnv, EnvVar: envDockerImage.Name}, nil
 	}
 	if repoRoot == "" {
-		return Resolved[string]{Value: runner.DefaultDockerImage, Source: SourceDefault}, nil
+		return Resolved[string]{Value: config.DefaultDockerImage, Source: SourceDefault}, nil
 	}
 	load, err := config.Load(repoRoot)
 	if err != nil {
@@ -211,7 +196,7 @@ func ResolveDoctorDockerImage(repoRoot string) (Resolved[string], error) {
 	if load.Config.DockerImage != nil {
 		return Resolved[string]{Value: *load.Config.DockerImage, Source: SourceConfig}, nil
 	}
-	return Resolved[string]{Value: runner.DefaultDockerImage, Source: SourceDefault}, nil
+	return Resolved[string]{Value: config.DefaultDockerImage, Source: SourceDefault}, nil
 }
 
 func RenderText(w io.Writer, repoDefaults *RepoDefaults) error {
