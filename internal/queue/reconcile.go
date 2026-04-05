@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"mato/internal/frontmatter"
-	"mato/internal/runtimecleanup"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
 )
@@ -348,7 +348,7 @@ func promoteReadyWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnos
 }
 
 func deleteTaskState(tasksDir, filename string) {
-	runtimecleanup.DeleteAll(tasksDir, filename)
+	runtimedata.DeleteRuntimeArtifacts(tasksDir, filename)
 }
 
 // CountPromotableWaitingTasks is a read-only variant of ReconcileReadyQueue.

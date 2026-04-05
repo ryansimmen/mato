@@ -24,8 +24,8 @@ import (
 	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/ui"
 )
 
@@ -225,9 +225,9 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/pushed-task -->\n# Example Task\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
 		state.TaskBranch = "task/pushed-task"
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -253,12 +253,12 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	if !strings.Contains(string(data), "<!-- branch: task/pushed-task -->") {
 		t.Fatalf("ready-for-review task should keep branch marker, got:\n%s", string(data))
 	}
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeWorkPushed {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeWorkPushed)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeWorkPushed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeWorkPushed)
 	}
 	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
@@ -3745,7 +3745,7 @@ func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
 		t.Fatalf("WriteFile done task: %v", err)
 	}
 	for _, name := range []string{"active.md", "done.md", "gone.md"} {
-		if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+		if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
 			state.LastOutcome = name
 		}); err != nil {
 			t.Fatalf("seed taskstate %s: %v", name, err)
@@ -3754,7 +3754,7 @@ func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
 	captureStdoutStderr(t, func() {
 		pollCleanup(tasksDir)
 	})
-	active, err := taskstate.Load(tasksDir, "active.md")
+	active, err := runtimedata.LoadTaskState(tasksDir, "active.md")
 	if err != nil {
 		t.Fatalf("Load active taskstate: %v", err)
 	}
@@ -3762,7 +3762,7 @@ func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
 		t.Fatal("active taskstate should remain after pollCleanup")
 	}
 	for _, name := range []string{"done.md", "gone.md"} {
-		state, err := taskstate.Load(tasksDir, name)
+		state, err := runtimedata.LoadTaskState(tasksDir, name)
 		if err != nil {
 			t.Fatalf("Load %s taskstate: %v", name, err)
 		}
@@ -3792,11 +3792,11 @@ func TestPollCleanup_RebuildsFileClaimsAfterRecoveringPushedTask(t *testing.T) {
 	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, "pushed-claims.md", func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, "pushed-claims.md", func(state *runtimedata.TaskState) {
 		state.TaskBranch = "task/pushed-claims"
 		state.TargetBranch = "mato"
 		state.LastHeadSHA = "deadbeef"
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -3881,11 +3881,11 @@ func TestRecoverStuckTask_PushedTaskRecoveryUsesAffectsForMessageFiles(t *testin
 	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
 		state.TaskBranch = "task/recovered-files"
 		state.TargetBranch = "mato"
 		state.LastHeadSHA = "deadbeef"
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}

@@ -18,7 +18,7 @@ import (
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/queue"
-	"mato/internal/runtimecleanup"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
 )
@@ -146,7 +146,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 					if removeErr := os.Remove(task.path); removeErr != nil {
 						ui.Warnf("warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
 					} else {
-						runtimecleanup.DeleteAll(tasksDir, task.name)
+						runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
 						cleanupTaskBranch(repoRoot, taskBranchName(task))
 						merged++
 					}
@@ -155,7 +155,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 				}
 				continue
 			}
-			runtimecleanup.DeleteAll(tasksDir, task.name)
+			runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
 			cleanupTaskBranch(repoRoot, taskBranchName(task))
 			merged++
 			continue
@@ -205,7 +205,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 			bookkeepingComplete = true
 		}
 		if bookkeepingComplete {
-			runtimecleanup.DeleteAll(tasksDir, task.name)
+			runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
 			cleanupTaskBranch(repoRoot, taskBranchName(task))
 		}
 		merged++

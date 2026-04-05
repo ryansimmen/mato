@@ -16,9 +16,8 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
-	"mato/internal/sessionmeta"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/testutil"
 	"mato/internal/ui"
 )
@@ -283,7 +282,7 @@ func TestPostAgentPush_RecordsWorkSessionHead(t *testing.T) {
 		t.Fatalf("rev-parse starting tip: %v", err)
 	}
 	startingTip = strings.TrimSpace(startingTip)
-	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, taskFile, func(session *sessionmeta.Session) {
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindWork, taskFile, func(session *runtimedata.Session) {
 		session.TaskBranch = claimed.Branch
 	}); err != nil {
 		t.Fatalf("seed work session: %v", err)
@@ -302,7 +301,7 @@ func TestPostAgentPush_RecordsWorkSessionHead(t *testing.T) {
 	if err := postAgentPush(env, "agent1", claimed, cloneDir, startingTip); err != nil {
 		t.Fatalf("postAgentPush: %v", err)
 	}
-	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindWork, taskFile)
+	session, err := runtimedata.LoadSession(tasksDir, runtimedata.KindWork, taskFile)
 	if err != nil {
 		t.Fatalf("Load work session: %v", err)
 	}
@@ -332,7 +331,7 @@ func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
 		}
 		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceLocal}, nil
 	})
-	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, "task.md", func(session *sessionmeta.Session) {
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindWork, "task.md", func(session *runtimedata.Session) {
 		session.CopilotSessionID = "work-session-123"
 		session.TaskBranch = "task/task"
 	}); err != nil {
@@ -396,7 +395,7 @@ func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
 
 	// Seed a work session on the OLD branch with a known session ID.
 	oldSessionID := "stale-session-from-old-branch"
-	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, "task.md", func(session *sessionmeta.Session) {
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindWork, "task.md", func(session *runtimedata.Session) {
 		session.CopilotSessionID = oldSessionID
 		session.TaskBranch = "task/task-old"
 	}); err != nil {
@@ -449,7 +448,7 @@ func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
 		t.Fatalf("expected --resume with rotated session ID in docker args, got: %s", joined)
 	}
 	// Verify the persisted session metadata has the new branch and a new session ID.
-	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindWork, "task.md")
+	session, err := runtimedata.LoadSession(tasksDir, runtimedata.KindWork, "task.md")
 	if err != nil {
 		t.Fatalf("Load work session: %v", err)
 	}
@@ -488,7 +487,7 @@ func TestRunOnce_BranchSetupFailureDoesNotCreateWorkSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected runOnce error")
 	}
-	session, loadErr := sessionmeta.Load(tasksDir, sessionmeta.KindWork, "task.md")
+	session, loadErr := runtimedata.LoadSession(tasksDir, runtimedata.KindWork, "task.md")
 	if loadErr != nil {
 		t.Fatalf("Load work session: %v", loadErr)
 	}
@@ -1483,7 +1482,7 @@ func TestPostAgentPush_RecordsWorkTaskState(t *testing.T) {
 	if err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef"); err != nil {
 		t.Fatalf("postAgentPush: %v", err)
 	}
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
@@ -1499,8 +1498,8 @@ func TestPostAgentPush_RecordsWorkTaskState(t *testing.T) {
 	if state.LastHeadSHA != currentTip {
 		t.Fatalf("LastHeadSHA = %q, want %q", state.LastHeadSHA, currentTip)
 	}
-	if state.LastOutcome != taskstate.OutcomeWorkPushed {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeWorkPushed)
+	if state.LastOutcome != runtimedata.OutcomeWorkPushed {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeWorkPushed)
 	}
 }
 
@@ -1563,15 +1562,15 @@ func TestPostAgentPush_BranchMarkerWriteFailureLeavesPushedTaskState(t *testing.
 	if err == nil {
 		t.Fatal("expected error when branch marker write fails")
 	}
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
 	if state == nil {
 		t.Fatal("expected taskstate to be written")
 	}
-	if state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeWorkBranchPushed)
+	if state.LastOutcome != runtimedata.OutcomeWorkBranchPushed {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeWorkBranchPushed)
 	}
 	if state.LastHeadSHA != currentTip {
 		t.Fatalf("LastHeadSHA = %q, want %q", state.LastHeadSHA, currentTip)

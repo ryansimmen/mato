@@ -13,8 +13,7 @@ import (
 	"mato/internal/atomicwrite"
 	"mato/internal/git"
 	"mato/internal/queue"
-	"mato/internal/sessionmeta"
-	"mato/internal/taskstate"
+	"mato/internal/runtimedata"
 	"mato/internal/ui"
 )
 
@@ -259,20 +258,20 @@ func surfaceBuildWarnings(idx *queue.PollIndex) bool {
 // NOTE: Package-level test seam — prevents t.Parallel(). See execCommandContext.
 var appendToFileFn = atomicwrite.AppendToFile
 
-func recordTaskStateUpdate(tasksDir, filename, action string, fn func(*taskstate.TaskState)) {
-	if err := taskstate.Update(tasksDir, filename, fn); err != nil {
+func recordTaskStateUpdate(tasksDir, filename, action string, fn func(*runtimedata.TaskState)) {
+	if err := runtimedata.UpdateTaskState(tasksDir, filename, fn); err != nil {
 		ui.Warnf("warning: could not %s for %s: %v\n", action, filename, err)
 	}
 }
 
-func recordSessionUpdate(tasksDir, kind, filename, action string, fn func(*sessionmeta.Session)) {
-	if err := sessionmeta.Update(tasksDir, kind, filename, fn); err != nil {
+func recordSessionUpdate(tasksDir, kind, filename, action string, fn func(*runtimedata.Session)) {
+	if err := runtimedata.UpdateSession(tasksDir, kind, filename, fn); err != nil {
 		ui.Warnf("warning: could not %s for %s: %v\n", action, filename, err)
 	}
 }
 
-func loadOrCreateSession(tasksDir, kind, filename, branch string) *sessionmeta.Session {
-	session, err := sessionmeta.LoadOrCreate(tasksDir, kind, filename, branch)
+func loadOrCreateSession(tasksDir, kind, filename, branch string) *runtimedata.Session {
+	session, err := runtimedata.LoadOrCreateSession(tasksDir, kind, filename, branch)
 	if err != nil {
 		ui.Warnf("warning: could not prepare %s session for %s: %v\n", kind, filename, err)
 		return nil
@@ -281,7 +280,7 @@ func loadOrCreateSession(tasksDir, kind, filename, branch string) *sessionmeta.S
 }
 
 func resetSession(tasksDir, kind, filename, branch string) string {
-	session, err := sessionmeta.ResetSessionID(tasksDir, kind, filename, branch)
+	session, err := runtimedata.ResetSessionID(tasksDir, kind, filename, branch)
 	if err != nil {
 		ui.Warnf("warning: could not reset %s session for %s: %v\n", kind, filename, err)
 		return ""

@@ -16,9 +16,8 @@ import (
 
 	"mato/internal/git"
 	"mato/internal/queue"
-	"mato/internal/sessionmeta"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/testutil"
 	"mato/internal/ui"
 )
@@ -472,8 +471,8 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget(t *testing.T) {
 		"<!-- review-failure: agent2 at 2026-01-02T00:00:00Z — fail 2 -->\n" +
 		"<!-- review-failure: agent3 at 2026-01-03T00:00:00Z — fail 3 -->\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"), []byte(content), 0o644)
-	if err := taskstate.Update(tasksDir, "exhausted.md", func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewLaunched
+	if err := runtimedata.UpdateTaskState(tasksDir, "exhausted.md", func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewLaunched
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -493,7 +492,7 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); err != nil {
 		t.Fatal("exhausted task should be moved to failed/")
 	}
-	state, err := taskstate.Load(tasksDir, "exhausted.md")
+	state, err := runtimedata.LoadTaskState(tasksDir, "exhausted.md")
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
@@ -513,8 +512,8 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget_PreservesVerdict(t 
 		"<!-- review-failure: agent2 at 2026-01-02T00:00:00Z — fail 2 -->\n" +
 		"<!-- review-failure: agent3 at 2026-01-03T00:00:00Z — fail 3 -->\n"
 	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md"), []byte(content), 0o644)
-	if err := taskstate.Update(tasksDir, "exhausted.md", func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewLaunched
+	if err := runtimedata.UpdateTaskState(tasksDir, "exhausted.md", func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewLaunched
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -535,7 +534,7 @@ func TestReviewCandidates_FilesystemFallback_ExhaustedBudget_PreservesVerdict(t 
 		t.Fatal("exhausted task should be moved to failed/")
 	}
 	// Taskstate should be deleted.
-	state, err := taskstate.Load(tasksDir, "exhausted.md")
+	state, err := runtimedata.LoadTaskState(tasksDir, "exhausted.md")
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
@@ -661,12 +660,12 @@ func TestPostReviewAction_ErrorVerdictRecordsTaskState(t *testing.T) {
 	os.WriteFile(reviewPath, []byte("# Task\n"), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json"), []byte(`{"verdict":"error","reason":"boom"}`), 0o644)
 	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/error", Title: "Error", TaskPath: reviewPath})
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeReviewError {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewError)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeReviewError {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeReviewError)
 	}
 }
 
@@ -680,12 +679,12 @@ func TestPostReviewAction_MalformedVerdictRecordsIncompleteTaskState(t *testing.
 	os.WriteFile(reviewPath, []byte("# Task\n"), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json"), []byte(`{bad json`), 0o644)
 	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/malformed", Title: "Malformed", TaskPath: reviewPath})
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeReviewIncomplete {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewIncomplete)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeReviewIncomplete {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeReviewIncomplete)
 	}
 }
 
@@ -1200,15 +1199,15 @@ func TestVerifyReviewBranch_BranchMissing(t *testing.T) {
 	if !strings.Contains(string(data), "not found in host repo") {
 		t.Fatal("review-failure should mention branch not found")
 	}
-	state, err := taskstate.Load(taskDir, task.Filename)
+	state, err := runtimedata.LoadTaskState(taskDir, task.Filename)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
 	if state == nil {
 		t.Fatal("missing branch should record taskstate")
 	}
-	if state.LastOutcome != taskstate.OutcomeReviewBranchMissing {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeReviewBranchMissing)
+	if state.LastOutcome != runtimedata.OutcomeReviewBranchMissing {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeReviewBranchMissing)
 	}
 }
 
@@ -1318,7 +1317,7 @@ func TestBuildReviewContext_InitialReview(t *testing.T) {
 
 func TestBuildReviewContext_FollowUpReview(t *testing.T) {
 	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task"}
-	state := &taskstate.TaskState{LastReviewedSHA: "def456"}
+	state := &runtimedata.TaskState{LastReviewedSHA: "def456"}
 	contextBlock := buildReviewContext(task, "abc123", state, "missing unit tests")
 	if !strings.Contains(contextBlock, "- last reviewed branch tip: def456") {
 		t.Fatalf("follow-up context should include prior review SHA:\n%s", contextBlock)
@@ -1370,7 +1369,7 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 		t.Fatalf("rev-parse HEAD: %v", err)
 	}
 	currentTip = strings.TrimSpace(currentTip)
-	if err := taskstate.Update(tasksDir, "task.md", func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, "task.md", func(state *runtimedata.TaskState) {
 		state.LastReviewedSHA = "older-sha"
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
@@ -1405,17 +1404,17 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 	if !strings.Contains(joined, "- previous rejection: missing tests") {
 		t.Fatalf("prompt should include previous rejection, got %s", joined)
 	}
-	state, err := taskstate.Load(tasksDir, "task.md")
+	state, err := runtimedata.LoadTaskState(tasksDir, "task.md")
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
 	if state.LastReviewedSHA != "older-sha" {
 		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "older-sha")
 	}
-	if state.LastOutcome != taskstate.OutcomeReviewLaunched {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeReviewLaunched)
+	if state.LastOutcome != runtimedata.OutcomeReviewLaunched {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeReviewLaunched)
 	}
-	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	session, err := runtimedata.LoadSession(tasksDir, runtimedata.KindReview, "task.md")
 	if err != nil {
 		t.Fatalf("Load review session: %v", err)
 	}
@@ -1452,7 +1451,7 @@ func TestRunReview_BranchChangeRotatesReviewSessionID(t *testing.T) {
 
 	// Seed a review session on the OLD branch with a known session ID.
 	oldSessionID := "stale-review-session-from-old-branch"
-	if err := sessionmeta.Update(tasksDir, sessionmeta.KindReview, "task.md", func(session *sessionmeta.Session) {
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindReview, "task.md", func(session *runtimedata.Session) {
 		session.CopilotSessionID = oldSessionID
 		session.TaskBranch = "task/task-old"
 	}); err != nil {
@@ -1487,7 +1486,7 @@ func TestRunReview_BranchChangeRotatesReviewSessionID(t *testing.T) {
 		t.Fatalf("expected --resume with rotated review session ID in docker args, got: %s", joined)
 	}
 	// Verify the persisted session metadata has the new branch and a new session ID.
-	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	session, err := runtimedata.LoadSession(tasksDir, runtimedata.KindReview, "task.md")
 	if err != nil {
 		t.Fatalf("Load review session: %v", err)
 	}
@@ -1514,7 +1513,7 @@ func TestPostReviewAction_ApprovedUpdatesLastReviewedSHA(t *testing.T) {
 	if err := os.WriteFile(reviewPath, []byte("# Task\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
 		state.LastHeadSHA = "current-tip"
 		state.LastReviewedSHA = "older-tip"
 	}); err != nil {
@@ -1526,7 +1525,7 @@ func TestPostReviewAction_ApprovedUpdatesLastReviewedSHA(t *testing.T) {
 
 	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/approved-state", Title: "Approved", TaskPath: reviewPath})
 
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
@@ -1536,8 +1535,8 @@ func TestPostReviewAction_ApprovedUpdatesLastReviewedSHA(t *testing.T) {
 	if state.LastReviewedSHA != "current-tip" {
 		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "current-tip")
 	}
-	if state.LastOutcome != taskstate.OutcomeReviewApproved {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeReviewApproved)
+	if state.LastOutcome != runtimedata.OutcomeReviewApproved {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeReviewApproved)
 	}
 }
 
@@ -1553,7 +1552,7 @@ func TestPostReviewAction_RejectedUpdatesLastReviewedSHA(t *testing.T) {
 	if err := os.WriteFile(reviewPath, []byte("# Task\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
 		state.LastHeadSHA = "rejected-tip"
 		state.LastReviewedSHA = "older-tip"
 	}); err != nil {
@@ -1565,7 +1564,7 @@ func TestPostReviewAction_RejectedUpdatesLastReviewedSHA(t *testing.T) {
 
 	postReviewAction(tasksDir, "host-agent", &queue.ClaimedTask{Filename: taskFile, Branch: "task/rejected-state", Title: "Rejected", TaskPath: reviewPath})
 
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
@@ -1575,8 +1574,8 @@ func TestPostReviewAction_RejectedUpdatesLastReviewedSHA(t *testing.T) {
 	if state.LastReviewedSHA != "rejected-tip" {
 		t.Fatalf("LastReviewedSHA = %q, want %q", state.LastReviewedSHA, "rejected-tip")
 	}
-	if state.LastOutcome != taskstate.OutcomeReviewRejected {
-		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, taskstate.OutcomeReviewRejected)
+	if state.LastOutcome != runtimedata.OutcomeReviewRejected {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeReviewRejected)
 	}
 }
 
@@ -1623,7 +1622,7 @@ func TestRunReview_DisabledResumeSkipsSessionCreation(t *testing.T) {
 	if strings.Contains(joined, "--resume=") {
 		t.Fatalf("docker args should not contain review resume session, got %s", joined)
 	}
-	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	session, err := runtimedata.LoadSession(tasksDir, runtimedata.KindReview, "task.md")
 	if err != nil {
 		t.Fatalf("Load review session: %v", err)
 	}
@@ -1664,14 +1663,14 @@ func TestRunReview_CloneFailureDoesNotCreateReviewSessionOrLaunchState(t *testin
 	if !strings.Contains(err.Error(), "create clone for review") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	state, err := taskstate.Load(tasksDir, "task.md")
+	state, err := runtimedata.LoadTaskState(tasksDir, "task.md")
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
 	if state != nil {
 		t.Fatalf("taskstate should not be created on clone failure, got %+v", state)
 	}
-	session, err := sessionmeta.Load(tasksDir, sessionmeta.KindReview, "task.md")
+	session, err := runtimedata.LoadSession(tasksDir, runtimedata.KindReview, "task.md")
 	if err != nil {
 		t.Fatalf("Load review session: %v", err)
 	}
@@ -1849,12 +1848,12 @@ func TestPostReviewAction_ApproveMoveFails_NoMarkerVerdictPreserved(t *testing.T
 		t.Fatal("verdict file should be preserved when move fails")
 	}
 	// TaskState should reflect the move failure.
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeReviewMoveFailed {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewMoveFailed)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeReviewMoveFailed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeReviewMoveFailed)
 	}
 }
 
@@ -1904,12 +1903,12 @@ func TestPostReviewAction_RejectMoveFails_NoMarkerVerdictPreserved(t *testing.T)
 		t.Fatal("verdict file should be preserved when move fails")
 	}
 	// TaskState should reflect the move failure.
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeReviewMoveFailed {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewMoveFailed)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeReviewMoveFailed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeReviewMoveFailed)
 	}
 }
 
@@ -1954,12 +1953,12 @@ func TestMoveReviewedTask_MoveFails_RecordsReviewFailure(t *testing.T) {
 		t.Fatalf("review-failure should be recorded when move fails:\n%s", string(srcData))
 	}
 	// TaskState should reflect the move failure.
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeReviewMoveFailed {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewMoveFailed)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeReviewMoveFailed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeReviewMoveFailed)
 	}
 }
 

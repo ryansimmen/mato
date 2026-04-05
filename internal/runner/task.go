@@ -17,9 +17,8 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
-	"mato/internal/sessionmeta"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/ui"
 )
 
@@ -99,11 +98,11 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 			return fmt.Errorf("capture starting tip for %s: %w", claimed.Branch, err)
 		}
 		startingTip = strings.TrimSpace(startingTip)
-		session := loadOrCreateSession(env.tasksDir, sessionmeta.KindWork, claimed.Filename, claimed.Branch)
+		session := loadOrCreateSession(env.tasksDir, runtimedata.KindWork, claimed.Filename, claimed.Branch)
 		if session != nil {
 			run.resumeSessionID = session.CopilotSessionID
 		}
-		recordSessionUpdate(env.tasksDir, sessionmeta.KindWork, claimed.Filename, "record work session", func(session *sessionmeta.Session) {
+		recordSessionUpdate(env.tasksDir, runtimedata.KindWork, claimed.Filename, "record work session", func(session *runtimedata.Session) {
 			session.TaskBranch = claimed.Branch
 			session.LastHeadSHA = startingTip
 		})
@@ -134,7 +133,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		if claimed == nil {
 			return ""
 		}
-		return resetSession(env.tasksDir, sessionmeta.KindWork, claimed.Filename, claimed.Branch)
+		return resetSession(env.tasksDir, runtimedata.KindWork, claimed.Filename, claimed.Branch)
 	})
 
 	// Post-agent: if the task is still in in-progress/ and the agent made
@@ -187,13 +186,13 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 	if _, err := git.Output(cloneDir, "push", "--force-with-lease", "origin", claimed.Branch); err != nil {
 		return fmt.Errorf("push task branch %s: %w", claimed.Branch, err)
 	}
-	recordTaskStateUpdate(env.tasksDir, claimed.Filename, "record pushed branch taskstate", func(state *taskstate.TaskState) {
+	recordTaskStateUpdate(env.tasksDir, claimed.Filename, "record pushed branch taskstate", func(state *runtimedata.TaskState) {
 		state.TaskBranch = claimed.Branch
 		state.TargetBranch = env.targetBranch
 		state.LastHeadSHA = currentTip
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	})
-	recordSessionUpdate(env.tasksDir, sessionmeta.KindWork, claimed.Filename, "record work session", func(session *sessionmeta.Session) {
+	recordSessionUpdate(env.tasksDir, runtimedata.KindWork, claimed.Filename, "record work session", func(session *runtimedata.Session) {
 		session.TaskBranch = claimed.Branch
 		session.LastHeadSHA = currentTip
 	})
@@ -218,11 +217,11 @@ func changedFilesSinceTarget(cloneDir, targetBranch string) []string {
 }
 
 func finalizePushedTask(tasksDir, targetBranch, agentID, filename, branch, currentTip string, filesChanged []string, logMove bool) {
-	recordTaskStateUpdate(tasksDir, filename, "record work push taskstate", func(state *taskstate.TaskState) {
+	recordTaskStateUpdate(tasksDir, filename, "record work push taskstate", func(state *runtimedata.TaskState) {
 		state.TaskBranch = branch
 		state.TargetBranch = targetBranch
 		state.LastHeadSHA = currentTip
-		state.LastOutcome = taskstate.OutcomeWorkPushed
+		state.LastOutcome = runtimedata.OutcomeWorkPushed
 	})
 	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		ui.Warnf("warning: could not rebuild file claims after pushing %s: %v\n", filename, err)
@@ -314,12 +313,12 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 }
 
 func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (bool, string, string, []string) {
-	state, err := taskstate.Load(tasksDir, claimed.Filename)
+	state, err := runtimedata.LoadTaskState(tasksDir, claimed.Filename)
 	if err != nil {
 		ui.Warnf("warning: could not load taskstate for %s during pushed-task recovery: %v\n", claimed.Filename, err)
 		return false, "", "", nil
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
+	if state == nil || state.LastOutcome != runtimedata.OutcomeWorkBranchPushed {
 		return false, "", "", nil
 	}
 
@@ -340,7 +339,7 @@ func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (boo
 }
 
 func loadRecoveredTargetBranch(tasksDir, filename string) string {
-	state, err := taskstate.Load(tasksDir, filename)
+	state, err := runtimedata.LoadTaskState(tasksDir, filename)
 	if err != nil || state == nil {
 		return ""
 	}

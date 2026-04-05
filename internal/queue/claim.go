@@ -11,7 +11,7 @@ import (
 	"mato/internal/atomicwrite"
 	"mato/internal/config"
 	"mato/internal/frontmatter"
-	"mato/internal/runtimecleanup"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
 )
@@ -232,7 +232,7 @@ func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
 		// host does not immediately re-claim and livelock.
 		return &FailedDirUnavailableError{TaskFilename: name, MoveErr: err}
 	}
-	runtimecleanup.DeleteAllPreservingVerdict(filepath.Dir(failedDir), name)
+	runtimedata.DeleteRuntimeArtifactsPreservingVerdict(filepath.Dir(failedDir), name)
 	return nil
 }
 

@@ -14,8 +14,8 @@ import (
 	"testing"
 
 	"mato/internal/process"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/testutil"
 	"mato/internal/ui"
 )
@@ -701,9 +701,9 @@ func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile in-progress: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
 		state.TaskBranch = "task/pushed-task"
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -725,12 +725,12 @@ func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	if !strings.Contains(string(data), "<!-- branch: task/pushed-task -->") {
 		t.Fatalf("recovered review task should keep branch marker, got:\n%s", string(data))
 	}
-	state, err := taskstate.Load(tasksDir, name)
+	state, err := runtimedata.LoadTaskState(tasksDir, name)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeWorkPushed {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeWorkPushed)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeWorkPushed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeWorkPushed)
 	}
 }
 
@@ -747,9 +747,9 @@ func TestRecoverOrphanedTasks_PushedTaskUsesBranchMarkerHook(t *testing.T) {
 	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent-1 -->\n# Hook Task\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile in-progress: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
 		state.TaskBranch = "task/hook-task"
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}

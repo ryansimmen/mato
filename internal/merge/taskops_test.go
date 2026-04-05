@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"mato/internal/queue"
-	"mato/internal/taskstate"
+	"mato/internal/runtimedata"
 )
 
 func TestTaskHasMergeSuccessRecord(t *testing.T) {
@@ -339,8 +339,8 @@ func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 	if err := os.WriteFile(taskPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, "cleanup.md", func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewApproved
+	if err := runtimedata.UpdateTaskState(tasksDir, "cleanup.md", func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewApproved
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -349,12 +349,12 @@ func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
 		t.Fatalf("handleMergeFailure: %v", err)
 	}
-	state, err := taskstate.Load(tasksDir, task.name)
+	state, err := runtimedata.LoadTaskState(tasksDir, task.name)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeMergeConflictCleanup {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeMergeConflictCleanup)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeMergeConflictCleanup {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeMergeConflictCleanup)
 	}
 }
 

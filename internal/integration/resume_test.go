@@ -10,8 +10,7 @@ import (
 	"mato/internal/merge"
 	"mato/internal/queue"
 	"mato/internal/runner"
-	"mato/internal/sessionmeta"
-	"mato/internal/taskstate"
+	"mato/internal/runtimedata"
 	"mato/internal/testutil"
 )
 
@@ -118,8 +117,8 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 		"",
 	}, "\n"))
 	createTaskBranch(t, repoRoot, branch, map[string]string{"cleanup.txt": "hello\n"}, "cleanup taskstate")
-	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewLaunched
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewLaunched
 		state.TaskBranch = branch
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
@@ -133,17 +132,17 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 		Title:    "Cleanup Taskstate",
 		TaskPath: reviewPath,
 	})
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load after approval: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeReviewApproved {
-		t.Fatalf("taskstate after approval = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewApproved)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeReviewApproved {
+		t.Fatalf("taskstate after approval = %+v, want LastOutcome=%s", state, runtimedata.OutcomeReviewApproved)
 	}
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
-	state, err = taskstate.Load(tasksDir, taskFile)
+	state, err = runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load after merge: %v", err)
 	}
@@ -182,12 +181,12 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 
 	// Runner creates a work session on branch A (as loadOrCreateSession does
 	// inside runOnce).
-	workA, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, branchA)
+	workA, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindWork, taskFile, branchA)
 	if err != nil {
 		t.Fatalf("LoadOrCreate work branchA: %v", err)
 	}
 	// Runner records head SHA after the agent commits (as recordSessionUpdate does).
-	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, taskFile, func(s *sessionmeta.Session) {
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindWork, taskFile, func(s *runtimedata.Session) {
 		s.TaskBranch = branchA
 		s.LastHeadSHA = "abc123"
 	}); err != nil {
@@ -205,7 +204,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	// --- Review cycle on branch A ---
 	// Runner creates a review session on branch A (as loadOrCreateSession does
 	// inside runReview with reviewSessionResumeEnabled).
-	reviewA, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindReview, taskFile, branchA)
+	reviewA, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindReview, taskFile, branchA)
 	if err != nil {
 		t.Fatalf("LoadOrCreate review branchA: %v", err)
 	}
@@ -260,7 +259,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	// Runner calls LoadOrCreate with the disambiguated branch (as
 	// loadOrCreateSession does inside runOnce). The returned
 	// CopilotSessionID is what the runner would pass via --resume.
-	workB, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, secondClaim.Branch)
+	workB, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindWork, taskFile, secondClaim.Branch)
 	if err != nil {
 		t.Fatalf("LoadOrCreate work disambiguated branch: %v", err)
 	}
@@ -279,7 +278,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	}
 
 	// Same-branch reload must reuse the rotated session ID (no spurious rotation).
-	workB2, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, secondClaim.Branch)
+	workB2, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindWork, taskFile, secondClaim.Branch)
 	if err != nil {
 		t.Fatalf("LoadOrCreate work disambiguated branch again: %v", err)
 	}
@@ -288,7 +287,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	}
 
 	// Review session ID must also rotate when loaded for the disambiguated branch.
-	reviewB, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindReview, taskFile, secondClaim.Branch)
+	reviewB, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindReview, taskFile, secondClaim.Branch)
 	if err != nil {
 		t.Fatalf("LoadOrCreate review disambiguated branch: %v", err)
 	}
@@ -311,8 +310,8 @@ func TestTerminalCleanup_RemovesSessionMetadata(t *testing.T) {
 		"",
 	}, "\n"))
 	createTaskBranch(t, repoRoot, branch, map[string]string{"cleanup.txt": "hello\n"}, "cleanup sessionmeta")
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, taskFile, branch); err != nil {
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		if _, err := runtimedata.LoadOrCreateSession(tasksDir, kind, taskFile, branch); err != nil {
 			t.Fatalf("seed %s session: %v", kind, err)
 		}
 	}
@@ -328,8 +327,8 @@ func TestTerminalCleanup_RemovesSessionMetadata(t *testing.T) {
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		session, err := sessionmeta.Load(tasksDir, kind, taskFile)
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		session, err := runtimedata.LoadSession(tasksDir, kind, taskFile)
 		if err != nil {
 			t.Fatalf("Load %s session after merge: %v", kind, err)
 		}
