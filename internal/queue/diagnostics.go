@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"mato/internal/dag"
+	"mato/internal/dirs"
 )
 
 // DependencyIssueKind classifies a dependency diagnostic issue.
@@ -41,7 +42,7 @@ type DependencyDiagnostics struct {
 	// RetainedFiles maps each retained waiting task ID to its filename.
 	// When duplicate waiting IDs exist, only the first file seen is
 	// retained. Callers should use this map to filter
-	// idx.TasksByState(DirWaiting) so duplicate files are not promoted
+	// idx.TasksByState(dirs.Waiting) so duplicate files are not promoted
 	// or cycle-failed.
 	RetainedFiles map[string]string
 }
@@ -81,7 +82,7 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 	}
 
 	// Build waiting node list, detecting duplicate IDs.
-	waitingTasks := idx.TasksByState(DirWaiting)
+	waitingTasks := idx.TasksByState(dirs.Waiting)
 	seenIDs := make(map[string]string, len(waitingTasks)) // id -> first filename
 	var nodes []dag.Node
 	// nodeFilenames maps node ID to filename for issue reporting.

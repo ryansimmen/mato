@@ -15,8 +15,12 @@ the broadest packages before they become harder to change.
   `internal/taskstate/`, `internal/sessionmeta/`, and
   `internal/runtimecleanup/` have been removed, and the existing on-disk
   runtime layout was preserved.
-- The remaining active work in this proposal is Phase 3 helper ownership
-  cleanup, Phase 4 `queueview` extraction, and Phase 5 `runner` reassessment.
+- Phase 3 is complete: task-file listing now lives in `internal/taskfile/`,
+  `internal/queue/taskfiles.go` and `internal/queue/dirs.go` have been
+  removed, and fence detection intentionally remains duplicated in
+  `internal/frontmatter/` and `internal/taskfile/`.
+- The remaining active work in this proposal is Phase 4 `queueview`
+  extraction and Phase 5 `runner` reassessment.
 
 ## 1. Goals
 
@@ -64,19 +68,18 @@ them.
 Phase 2 resolved this by consolidating that ownership into
 `internal/runtimedata/` while preserving the existing on-disk runtime layout.
 
-### 3.3 Some helper logic is duplicated or re-exported unnecessarily
+### 3.3 Phase 3 resolved: helper ownership cleanup removed the remaining low-value shims
 
-There are several low-value boundary leaks:
+Phase 3 resolved the two main low-value boundary leaks:
 
-- task-file listing is duplicated in `internal/queue/taskfiles.go` and
-  `internal/taskfile/active.go`
-- queue directory constants are re-exported from `internal/queue/dirs.go` even
-  though `internal/dirs/` already owns them
-- fence-line detection is duplicated in `internal/frontmatter/` and
-  `internal/taskfile/`
+- task-file listing was consolidated under `internal/taskfile/ListTaskFiles`
+- queue directory constants and the ordered directory list are now owned only
+  by `internal/dirs/`
 
-These are smaller than the `configresolve` and runtime-state issues, but they
-are cheap cleanup with clear architectural payoff.
+Fence-line detection remains duplicated in `internal/frontmatter/` and
+`internal/taskfile/` by design. The proposal explicitly preferred keeping that
+small helper duplicated over forcing a shared home that might complicate
+dependencies.
 
 ### 3.4 `runner` and `queue` are broad packages
 
@@ -335,7 +338,7 @@ Use this sequence to minimize churn and keep behavior changes low-risk.
     other runtime-state consumers.
 11. Verify sweep and cleanup behavior stays identical.
 
-### Phase 3: Remove duplicated helper ownership and redundant re-exports
+### Phase 3: Remove duplicated helper ownership and redundant re-exports (completed)
 
 12. Consolidate task-file listing into one helper.
 13. Update queue and taskfile callers to use the single helper.
@@ -734,6 +737,8 @@ internal/runtimecleanup/
 
 ### Phase 3
 
+Status: completed.
+
 Modify:
 
 ```text
@@ -840,14 +845,13 @@ show that the package boundary is genuinely blocking maintainability.
 
 ## 10. Recommended PR Breakdown
 
-The remaining refactor work should fit in at most three PRs, with the third
+The remaining refactor work should fit in at most two PRs, with the second
 only if later evidence justifies revisiting `runner`.
 
-1. helper dedup and `dirs` re-export removal
-2. `queueview` extraction for the queue read model
-3. optional later reassessment of `runner`, with no package split by default
+1. `queueview` extraction for the queue read model
+2. optional later reassessment of `runner`, with no package split by default
 
-Phases 1 and 2 already landed separately.
+Phases 1, 2, and 3 already landed separately.
 
 ## 11. Acceptance Criteria
 

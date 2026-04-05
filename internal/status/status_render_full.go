@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
-	"mato/internal/queue"
 	"mato/internal/ui"
 )
 
@@ -55,15 +55,15 @@ func renderQueueOverview(w io.Writer, c colorSet, data statusData) error {
 	rw := renderWriter{w: w}
 	rw.println(c.Bold("Queue Overview"))
 	rw.println(c.Bold("──────────────"))
-	rw.printf("  backlog:        %s  %s\n", c.Green(data.queueCounts[queue.DirBacklog]), c.Dim("(total tasks in backlog/)"))
+	rw.printf("  backlog:        %s  %s\n", c.Green(data.queueCounts[dirs.Backlog]), c.Dim("(total tasks in backlog/)"))
 	rw.printf("  runnable:       %s\n", c.Green(data.runnable))
 	rw.printf("  deferred:       %s  %s\n", c.Yellow(len(data.deferredDetail)), c.Dim("(conflict-blocked, in backlog)"))
 	rw.printf("  blocked:        %s  %s\n", c.Dim(len(data.waitingTasks)), c.Dim("(dependency-blocked, including misplaced backlog tasks)"))
-	rw.printf("  in-progress:    %s\n", c.Yellow(data.queueCounts[queue.DirInProgress]))
-	rw.printf("  ready-review:   %s\n", c.Cyan(data.queueCounts[queue.DirReadyReview]))
-	rw.printf("  ready-to-merge: %s\n", c.Cyan(data.queueCounts[queue.DirReadyMerge]))
-	rw.printf("  completed:      %s\n", c.Green(data.queueCounts[queue.DirCompleted]))
-	rw.printf("  failed:         %s\n", c.Red(data.queueCounts[queue.DirFailed]))
+	rw.printf("  in-progress:    %s\n", c.Yellow(data.queueCounts[dirs.InProgress]))
+	rw.printf("  ready-review:   %s\n", c.Cyan(data.queueCounts[dirs.ReadyReview]))
+	rw.printf("  ready-to-merge: %s\n", c.Cyan(data.queueCounts[dirs.ReadyMerge]))
+	rw.printf("  completed:      %s\n", c.Green(data.queueCounts[dirs.Completed]))
+	rw.printf("  failed:         %s\n", c.Red(data.queueCounts[dirs.Failed]))
 	if data.mergeLockActive {
 		rw.printf("  merge queue:    %s\n", c.Yellow("active"))
 	} else {

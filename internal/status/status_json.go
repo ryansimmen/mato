@@ -10,7 +10,6 @@ import (
 	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/pause"
-	"mato/internal/queue"
 	"mato/internal/ui"
 )
 
@@ -129,16 +128,16 @@ func ShowJSON(w io.Writer, repoRoot string) error {
 func statusDataToJSON(data statusData) StatusJSON {
 	out := StatusJSON{
 		Counts: map[string]int{
-			"backlog":        data.queueCounts[queue.DirBacklog],
+			"backlog":        data.queueCounts[dirs.Backlog],
 			"runnable":       data.runnable,
 			"deferred":       len(data.deferredDetail),
-			"waiting":        data.queueCounts[queue.DirWaiting],
+			"waiting":        data.queueCounts[dirs.Waiting],
 			"blocked":        len(data.waitingTasks),
-			"in_progress":    data.queueCounts[queue.DirInProgress],
-			"ready_review":   data.queueCounts[queue.DirReadyReview],
-			"ready_to_merge": data.queueCounts[queue.DirReadyMerge],
-			"completed":      data.queueCounts[queue.DirCompleted],
-			"failed":         data.queueCounts[queue.DirFailed],
+			"in_progress":    data.queueCounts[dirs.InProgress],
+			"ready_review":   data.queueCounts[dirs.ReadyReview],
+			"ready_to_merge": data.queueCounts[dirs.ReadyMerge],
+			"completed":      data.queueCounts[dirs.Completed],
+			"failed":         data.queueCounts[dirs.Failed],
 		},
 		MergeQueue: "idle",
 	}

@@ -177,7 +177,7 @@ func buildInspectContext(tasksDir string, idx *queue.PollIndex) inspectContext {
 
 func buildLocationsByRef(idx *queue.PollIndex) map[string][]dependencyLocation {
 	locations := make(map[string][]dependencyLocation)
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		for _, snap := range idx.TasksByState(dir) {
 			loc := dependencyLocation{Filename: snap.Filename, State: dir}
 			locations[frontmatter.TaskFileStem(snap.Filename)] = appendUniqueLocation(locations[frontmatter.TaskFileStem(snap.Filename)], loc)
@@ -216,7 +216,7 @@ func buildCycleMap(cycles [][]string) map[string][]string {
 
 func buildBlockedByFilename(idx *queue.PollIndex, blocked map[string][]dag.BlockDetail) map[string][]dag.BlockDetail {
 	byFilename := make(map[string][]dag.BlockDetail)
-	for _, snap := range idx.TasksByState(queue.DirWaiting) {
+	for _, snap := range idx.TasksByState(dirs.Waiting) {
 		if details, ok := blocked[snap.Meta.ID]; ok {
 			byFilename[snap.Filename] = details
 		}
@@ -252,7 +252,7 @@ func buildParseFailureResult(pf queue.ParseFailure) inspectResult {
 		ReviewFailureCount:    0,
 		MaxRetries:            0,
 	}
-	if pf.State == queue.DirReadyReview {
+	if pf.State == dirs.ReadyReview {
 		result.NextStep = "fix the task frontmatter before the next review pass quarantines it to failed/"
 	}
 	if pf.Cancelled {
@@ -264,7 +264,7 @@ func buildParseFailureResult(pf queue.ParseFailure) inspectResult {
 	} else if pf.FailureCount > 0 {
 		result.FailureKind = "retry"
 	}
-	if pf.State == queue.DirFailed {
+	if pf.State == dirs.Failed {
 		result.Status = "failed"
 		result.Reason = "task frontmatter cannot be parsed and the task is quarantined in failed/"
 		switch result.FailureKind {
@@ -300,15 +300,15 @@ func buildSnapshotResult(snap *queue.TaskSnapshot, ctx inspectContext) inspectRe
 	}
 
 	switch snap.State {
-	case queue.DirWaiting:
+	case dirs.Waiting:
 		buildWaitingResult(&result, snap, ctx)
-	case queue.DirBacklog:
+	case dirs.Backlog:
 		buildBacklogResult(&result, snap, ctx)
-	case queue.DirInProgress:
+	case dirs.InProgress:
 		result.Status = "running"
 		result.Reason = runningReason(snap)
 		result.NextStep = "wait for the active agent to finish or release the task"
-	case queue.DirReadyReview:
+	case dirs.ReadyReview:
 		if snap.ReviewFailureCount >= snap.Meta.MaxRetries {
 			result.Status = "invalid"
 			result.Reason = fmt.Sprintf("review retry budget exhausted (%d/%d failures); the next review selection pass will move this task to failed/", snap.ReviewFailureCount, snap.Meta.MaxRetries)
@@ -322,15 +322,15 @@ func buildSnapshotResult(snap *queue.TaskSnapshot, ctx inspectContext) inspectRe
 			result.Reason = "task is queued for AI review"
 		}
 		result.NextStep = "wait for the review agent to approve, reject, or record a review failure"
-	case queue.DirReadyMerge:
+	case dirs.ReadyMerge:
 		result.Status = "ready_to_merge"
 		result.Reason = "review passed; task is queued for host squash merge"
 		result.NextStep = "wait for the merge queue to squash-merge the task branch"
-	case queue.DirCompleted:
+	case dirs.Completed:
 		result.Status = "completed"
 		result.Reason = "task is already merged and completed"
 		result.NextStep = "no further action is required"
-	case queue.DirFailed:
+	case dirs.Failed:
 		buildFailedResult(&result, snap)
 	default:
 		result.Status = snap.State

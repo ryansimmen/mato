@@ -20,17 +20,17 @@ import (
 )
 
 // NodeState classifies a task's current queue position. Values match
-// the queue directory constants from queue.DirWaiting etc.
+// the queue directory constants from dirs.Waiting etc.
 type NodeState string
 
 const (
-	StateWaiting     NodeState = NodeState(queue.DirWaiting)
-	StateBacklog     NodeState = NodeState(queue.DirBacklog)
-	StateInProgress  NodeState = NodeState(queue.DirInProgress)
-	StateReadyReview NodeState = NodeState(queue.DirReadyReview)
-	StateReadyMerge  NodeState = NodeState(queue.DirReadyMerge)
-	StateCompleted   NodeState = NodeState(queue.DirCompleted)
-	StateFailed      NodeState = NodeState(queue.DirFailed)
+	StateWaiting     NodeState = NodeState(dirs.Waiting)
+	StateBacklog     NodeState = NodeState(dirs.Backlog)
+	StateInProgress  NodeState = NodeState(dirs.InProgress)
+	StateReadyReview NodeState = NodeState(dirs.ReadyReview)
+	StateReadyMerge  NodeState = NodeState(dirs.ReadyMerge)
+	StateCompleted   NodeState = NodeState(dirs.Completed)
+	StateFailed      NodeState = NodeState(dirs.Failed)
 )
 
 // GraphNode represents a single task in the dependency graph.
@@ -125,8 +125,8 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 	allIDs := idx.AllIDs()
 
 	// State ordering for deterministic sort.
-	stateOrder := make(map[string]int, len(queue.AllDirs))
-	for i, dir := range queue.AllDirs {
+	stateOrder := make(map[string]int, len(dirs.All))
+	for i, dir := range dirs.All {
 		stateOrder[dir] = i
 	}
 
@@ -149,8 +149,8 @@ func buildNodes(data *GraphData, idx *queue.PollIndex, diag *queue.DependencyDia
 	retainedWaitingIDs := diag.RetainedFiles
 	seenWaitingIDs := make(map[string]string) // meta.ID → retained filename
 
-	for _, dir := range queue.AllDirs {
-		if !showAll && (dir == queue.DirCompleted || dir == queue.DirFailed) {
+	for _, dir := range dirs.All {
+		if !showAll && (dir == dirs.Completed || dir == dirs.Failed) {
 			continue
 		}
 		for _, snap := range idx.TasksByState(dir) {
@@ -172,7 +172,7 @@ func buildNodes(data *GraphData, idx *queue.PollIndex, diag *queue.DependencyDia
 
 			stem := frontmatter.TaskFileStem(snap.Filename)
 
-			if dir == queue.DirWaiting {
+			if dir == dirs.Waiting {
 				// For waiting tasks, only use meta.ID as the alias key —
 				// NOT the filename stem. This matches the runtime DAG
 				// which resolves waiting-to-waiting dependencies by
@@ -273,7 +273,7 @@ func annotateCycles(data *GraphData, diag *queue.DependencyDiagnostics) {
 	retainedWaitingIDs := diag.RetainedFiles
 	waitingIDToKey := make(map[string]string)
 	for id, filename := range retainedWaitingIDs {
-		waitingIDToKey[id] = queue.DirWaiting + "/" + filename
+		waitingIDToKey[id] = dirs.Waiting + "/" + filename
 	}
 
 	cycleMemberKeys := make(map[string]struct{})
@@ -302,7 +302,7 @@ func annotateCycles(data *GraphData, diag *queue.DependencyDiagnostics) {
 // the index.
 func appendParseFailures(data *GraphData, idx *queue.PollIndex, showAll bool) {
 	for _, pf := range idx.ParseFailures() {
-		if !showAll && (pf.State == queue.DirCompleted || pf.State == queue.DirFailed) {
+		if !showAll && (pf.State == dirs.Completed || pf.State == dirs.Failed) {
 			continue
 		}
 		data.ParseFailures = append(data.ParseFailures, ParseFailure{

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/dirs"
 	"mato/internal/ui"
 )
 
@@ -29,7 +30,7 @@ func ComputeQueueManifestFromView(tasksDir string, exclude map[string]struct{}, 
 
 	for _, warn := range idx.BuildWarnings() {
 		ui.Warnf("warning: could not build queue index cleanly: read %s: %v\n", warn.Path, warn.Err)
-		if warn.State == DirBacklog && warn.DirLevel {
+		if warn.State == dirs.Backlog && warn.DirLevel {
 			return "", fmt.Errorf("read backlog dir: %w", warn.Err)
 		}
 	}

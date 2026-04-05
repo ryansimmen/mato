@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/merge"
 	"mato/internal/queue"
@@ -24,7 +25,7 @@ func TestResumeWorkAfterReviewRejection_ReusesBranchAndBranchContents(t *testing
 		"Implement the follow-up changes.",
 		"",
 	}, "\n")
-	writeTask(t, tasksDir, queue.DirBacklog, taskFile, taskContent)
+	writeTask(t, tasksDir, dirs.Backlog, taskFile, taskContent)
 
 	createTaskBranch(t, repoRoot, branch, map[string]string{"resume.txt": "from previous attempt\n"}, "previous attempt")
 
@@ -42,7 +43,7 @@ func TestResumeWorkAfterReviewRejection_ReusesBranchAndBranchContents(t *testing
 		t.Fatal("first claim should recognize pre-recorded branch marker")
 	}
 
-	readyReviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	readyReviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	if err := queue.WriteBranchMarker(firstClaim.TaskPath, branch); err != nil {
 		t.Fatalf("WriteBranchMarker: %v", err)
 	}
@@ -59,7 +60,7 @@ func TestResumeWorkAfterReviewRejection_ReusesBranchAndBranchContents(t *testing
 		TaskPath: readyReviewPath,
 	})
 
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	mustExist(t, backlogPath)
 	backlogData := readFile(t, backlogPath)
 	if !strings.Contains(backlogData, "<!-- branch: "+branch+" -->") {
@@ -110,7 +111,7 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "cleanup-taskstate.md"
 	branch := "task/cleanup-taskstate"
-	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, strings.Join([]string{
+	writeTask(t, tasksDir, dirs.ReadyReview, taskFile, strings.Join([]string{
 		"<!-- branch: " + branch + " -->",
 		"# Cleanup Taskstate",
 		"Review and merge this task.",
@@ -125,7 +126,7 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 	}
 
 	writeVerdict(t, tasksDir, taskFile, map[string]string{"verdict": "approve"})
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	runner.PostReviewAction(tasksDir, "review-host", &queue.ClaimedTask{
 		Filename: taskFile,
 		Branch:   branch,
@@ -163,7 +164,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "branch-rotate.md"
 
-	writeTask(t, tasksDir, queue.DirBacklog, taskFile, strings.Join([]string{
+	writeTask(t, tasksDir, dirs.Backlog, taskFile, strings.Join([]string{
 		"# Branch Rotate",
 		"Test session ID rotation on branch disambiguation.",
 		"",
@@ -198,7 +199,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	if err := queue.WriteBranchMarker(firstClaim.TaskPath, branchA); err != nil {
 		t.Fatalf("WriteBranchMarker: %v", err)
 	}
-	readyReviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	readyReviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	mustRename(t, firstClaim.TaskPath, readyReviewPath)
 
 	// --- Review cycle on branch A ---
@@ -223,7 +224,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 		Title:    "Branch Rotate",
 		TaskPath: readyReviewPath,
 	})
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, taskFile))
 
 	// --- Force a branch collision ---
 	// Place a different task in in-progress/ that occupies branch A. When
@@ -231,7 +232,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	// branch marker (branch A) is taken and falls through to a disambiguated
 	// branch name.
 	collidingTask := "collider.md"
-	writeTask(t, tasksDir, queue.DirInProgress, collidingTask, strings.Join([]string{
+	writeTask(t, tasksDir, dirs.InProgress, collidingTask, strings.Join([]string{
 		"<!-- branch: " + branchA + " -->",
 		"<!-- claimed-by: agent-collider  claimed-at: 2026-01-01T00:00:00Z -->",
 		"# Collider",
@@ -303,7 +304,7 @@ func TestTerminalCleanup_RemovesSessionMetadata(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "cleanup-sessionmeta.md"
 	branch := "task/cleanup-sessionmeta"
-	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, strings.Join([]string{
+	writeTask(t, tasksDir, dirs.ReadyReview, taskFile, strings.Join([]string{
 		"<!-- branch: " + branch + " -->",
 		"# Cleanup Sessionmeta",
 		"Review and merge this task.",
@@ -317,7 +318,7 @@ func TestTerminalCleanup_RemovesSessionMetadata(t *testing.T) {
 	}
 
 	writeVerdict(t, tasksDir, taskFile, map[string]string{"verdict": "approve"})
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	runner.PostReviewAction(tasksDir, "review-host", &queue.ClaimedTask{
 		Filename: taskFile,
 		Branch:   branch,

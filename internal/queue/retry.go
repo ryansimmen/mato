@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
@@ -84,7 +85,7 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 
 	cleaned := stripFailureMarkers(string(data))
 
-	backlogDir := filepath.Join(tasksDir, DirBacklog)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
 	backlogPath := filepath.Join(backlogDir, match.Filename)
 
 	// Write cleaned content to a temp file in backlog/, then atomically
@@ -157,14 +158,14 @@ func resolveFailedTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
 	stemRef := strings.TrimSuffix(filenameRef, ".md")
 
 	var matches []TaskMatch
-	for _, snap := range idx.TasksByState(DirFailed) {
+	for _, snap := range idx.TasksByState(dirs.Failed) {
 		match := TaskMatch{Filename: snap.Filename, State: snap.State, Path: snap.Path, Snapshot: snap}
 		if matchesTaskRef(match, ref, filenameRef, stemRef) {
 			matches = append(matches, match)
 		}
 	}
 	for _, pf := range idx.ParseFailures() {
-		if pf.State != DirFailed {
+		if pf.State != dirs.Failed {
 			continue
 		}
 		pf := pf

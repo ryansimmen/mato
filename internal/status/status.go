@@ -210,7 +210,7 @@ func activeAgents(tasksDir string) ([]statusAgent, []string, error) {
 // populates structured dependency data (ID + status) without any presentation
 // formatting so the same model can drive both text and JSON output.
 func waitingTasksFromIndex(idx *queue.PollIndex, blockedBacklog map[string][]queue.DependencyBlock) []waitingTaskSummary {
-	snaps := idx.TasksByState(queue.DirWaiting)
+	snaps := idx.TasksByState(dirs.Waiting)
 
 	// Build ID→state map from the index.
 	stateByID := taskStatesByIDFromIndex(idx)
@@ -230,12 +230,12 @@ func waitingTasksFromIndex(idx *queue.PollIndex, blockedBacklog map[string][]que
 			Name:         snap.Filename,
 			Title:        title,
 			Priority:     snap.Meta.Priority,
-			State:        queue.DirWaiting,
+			State:        dirs.Waiting,
 			Dependencies: deps,
 		})
 	}
 
-	for _, snap := range idx.TasksByState(queue.DirBacklog) {
+	for _, snap := range idx.TasksByState(dirs.Backlog) {
 		blocks, ok := blockedBacklog[snap.Filename]
 		if !ok {
 			continue
@@ -248,7 +248,7 @@ func waitingTasksFromIndex(idx *queue.PollIndex, blockedBacklog map[string][]que
 			Name:         snap.Filename,
 			Title:        frontmatter.ExtractTitle(snap.Filename, snap.Body),
 			Priority:     snap.Meta.Priority,
-			State:        queue.DirBacklog,
+			State:        dirs.Backlog,
 			Dependencies: deps,
 		})
 	}
@@ -266,7 +266,7 @@ func waitingTasksFromIndex(idx *queue.PollIndex, blockedBacklog map[string][]que
 // replacing taskStatesByID which performed its own full directory scans.
 func taskStatesByIDFromIndex(idx *queue.PollIndex) map[string]string {
 	states := make(map[string]string)
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		for _, snap := range idx.TasksByState(dir) {
 			states[frontmatter.TaskFileStem(snap.Filename)] = dir
 			if snap.Meta.ID != "" {
@@ -283,7 +283,7 @@ func taskStatesByIDFromIndex(idx *queue.PollIndex) map[string]string {
 // reverseDepsFromIndex derives reverse dependencies from the PollIndex snapshot,
 // replacing reverseDependencies which performed its own filesystem scan.
 func reverseDepsFromIndex(idx *queue.PollIndex) map[string][]string {
-	snaps := idx.TasksByState(queue.DirWaiting)
+	snaps := idx.TasksByState(dirs.Waiting)
 	result := make(map[string][]string)
 	for _, snap := range snaps {
 		for _, dep := range snap.Meta.DependsOn {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/taskfile"
 )
 
@@ -21,8 +22,8 @@ func withCreateRetryTempFileFn(t *testing.T, fn func(string, string) (*os.File, 
 
 func TestRetryTask_Success(t *testing.T) {
 	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, DirFailed)
-	backlogDir := filepath.Join(tmp, DirBacklog)
+	failedDir := filepath.Join(tmp, dirs.Failed)
+	backlogDir := filepath.Join(tmp, dirs.Backlog)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -106,10 +107,10 @@ Some instructions here.
 
 func TestRetryTask_NotInFailed(t *testing.T) {
 	tmp := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmp, DirFailed), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(tmp, dirs.Failed), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmp, DirBacklog), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(tmp, dirs.Backlog), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,8 +125,8 @@ func TestRetryTask_NotInFailed(t *testing.T) {
 
 func TestRetryTask_DestinationCollision(t *testing.T) {
 	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, DirFailed)
-	backlogDir := filepath.Join(tmp, DirBacklog)
+	failedDir := filepath.Join(tmp, dirs.Failed)
+	backlogDir := filepath.Join(tmp, dirs.Backlog)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -162,13 +163,13 @@ func TestRetryTask_DestinationCollision(t *testing.T) {
 
 func TestRetryTask_ConcurrentReservationAllowsSingleWinner(t *testing.T) {
 	tmp := t.TempDir()
-	for _, dir := range []string{DirFailed, DirBacklog} {
+	for _, dir := range []string{dirs.Failed, dirs.Backlog} {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	content := "---\nid: task\n---\n# Task\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
-	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "task.md"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, dirs.Failed, "task.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -210,15 +211,15 @@ func TestRetryTask_ConcurrentReservationAllowsSingleWinner(t *testing.T) {
 
 func TestRetryTask_TempFileFailureLeavesNoPlaceholder(t *testing.T) {
 	tmp := t.TempDir()
-	for _, dir := range []string{DirFailed, DirBacklog} {
+	for _, dir := range []string{dirs.Failed, dirs.Backlog} {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "task.md"), []byte("# Task\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, dirs.Failed, "task.md"), []byte("# Task\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	backlogPath := filepath.Join(tmp, DirBacklog, "task.md")
+	backlogPath := filepath.Join(tmp, dirs.Backlog, "task.md")
 	withCreateRetryTempFileFn(t, func(dir, pattern string) (*os.File, error) {
 		return nil, io.ErrUnexpectedEOF
 	})
@@ -234,8 +235,8 @@ func TestRetryTask_TempFileFailureLeavesNoPlaceholder(t *testing.T) {
 
 func TestRetryTask_AppendsMdExtension(t *testing.T) {
 	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, DirFailed)
-	backlogDir := filepath.Join(tmp, DirBacklog)
+	failedDir := filepath.Join(tmp, dirs.Failed)
+	backlogDir := filepath.Join(tmp, dirs.Backlog)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -259,8 +260,8 @@ func TestRetryTask_AppendsMdExtension(t *testing.T) {
 
 func TestRetryTask_ExplicitIDResolution(t *testing.T) {
 	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, DirFailed)
-	backlogDir := filepath.Join(tmp, DirBacklog)
+	failedDir := filepath.Join(tmp, dirs.Failed)
+	backlogDir := filepath.Join(tmp, dirs.Backlog)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -282,8 +283,8 @@ func TestRetryTask_ExplicitIDResolution(t *testing.T) {
 
 func TestRetryTask_ExplicitIDWithSlash(t *testing.T) {
 	tmp := t.TempDir()
-	failedDir := filepath.Join(tmp, DirFailed)
-	backlogDir := filepath.Join(tmp, DirBacklog)
+	failedDir := filepath.Join(tmp, dirs.Failed)
+	backlogDir := filepath.Join(tmp, dirs.Backlog)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -305,10 +306,10 @@ func TestRetryTask_ExplicitIDWithSlash(t *testing.T) {
 
 func TestRetryTask_RejectsPathTraversal(t *testing.T) {
 	tmp := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmp, DirFailed), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(tmp, dirs.Failed), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmp, DirBacklog), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(tmp, dirs.Backlog), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -323,14 +324,14 @@ func TestRetryTask_RejectsPathTraversal(t *testing.T) {
 
 func TestRetryTask_DependencyBlockedWarnsAndReconcileMovesToWaiting(t *testing.T) {
 	tmp := t.TempDir()
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	content := "---\nid: blocked\ndepends_on: [missing-dep]\n---\n# Blocked\n"
-	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "blocked.md"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, dirs.Failed, "blocked.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -358,7 +359,7 @@ func TestRetryTask_DependencyBlockedWarnsAndReconcileMovesToWaiting(t *testing.T
 	if got := ReconcileReadyQueue(tmp, nil); !got {
 		t.Fatal("ReconcileReadyQueue() = false, want true")
 	}
-	if _, err := os.Stat(filepath.Join(tmp, DirWaiting, "blocked.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tmp, dirs.Waiting, "blocked.md")); err != nil {
 		t.Fatalf("blocked.md not found in waiting/: %v", err)
 	}
 }
@@ -483,14 +484,14 @@ Body text.
 
 func TestRetryTask_CleansRuntimeState(t *testing.T) {
 	tmp := t.TempDir()
-	for _, dir := range []string{DirFailed, DirBacklog} {
+	for _, dir := range []string{dirs.Failed, dirs.Backlog} {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	content := "---\nid: cleanup-task\npriority: 10\n---\n# Cleanup task\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
-	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "cleanup-task.md"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, dirs.Failed, "cleanup-task.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -518,7 +519,7 @@ func TestRetryTask_CleansRuntimeState(t *testing.T) {
 	}
 
 	// Verify the task was moved to backlog.
-	if _, err := os.Stat(filepath.Join(tmp, DirBacklog, "cleanup-task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tmp, dirs.Backlog, "cleanup-task.md")); err != nil {
 		t.Fatalf("task not found in backlog: %v", err)
 	}
 
@@ -538,18 +539,18 @@ func TestRetryTask_CleansRuntimeState(t *testing.T) {
 
 func TestRetryTask_NoEmptyPlaceholderDuringWrite(t *testing.T) {
 	tmp := t.TempDir()
-	for _, dir := range []string{DirFailed, DirBacklog} {
+	for _, dir := range []string{dirs.Failed, dirs.Backlog} {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	content := "---\nid: race-check\npriority: 10\n---\n# Race check task\n\nBody.\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
-	if err := os.WriteFile(filepath.Join(tmp, DirFailed, "race-check.md"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, dirs.Failed, "race-check.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	backlogPath := filepath.Join(tmp, DirBacklog, "race-check.md")
+	backlogPath := filepath.Join(tmp, dirs.Backlog, "race-check.md")
 
 	// Wrap the real createRetryTempFileFn to intercept the moment just
 	// before the temp file is created, and verify that no empty file
@@ -586,7 +587,7 @@ func TestRetryTask_NoEmptyPlaceholderDuringWrite(t *testing.T) {
 
 func TestRetryTask_PreservesVerdictForNextWorkAgent(t *testing.T) {
 	tmp := t.TempDir()
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -594,7 +595,7 @@ func TestRetryTask_PreservesVerdictForNextWorkAgent(t *testing.T) {
 
 	filename := "stale-verdict-retry.md"
 	content := "---\nid: stale-verdict-retry\npriority: 10\n---\n# Stale verdict retry\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
-	if err := os.WriteFile(filepath.Join(tmp, DirFailed, filename), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, dirs.Failed, filename), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -612,7 +613,7 @@ func TestRetryTask_PreservesVerdictForNextWorkAgent(t *testing.T) {
 
 	// Before retry: BuildIndex should surface the verdict rejection reason.
 	idx := BuildIndex(tmp)
-	snap := idx.Snapshot(DirFailed, filename)
+	snap := idx.Snapshot(dirs.Failed, filename)
 	if snap == nil {
 		t.Fatal("expected snapshot in failed/ before retry")
 	}
@@ -633,7 +634,7 @@ func TestRetryTask_PreservesVerdictForNextWorkAgent(t *testing.T) {
 
 	// After retry: BuildIndex should still surface the rejection reason.
 	idx2 := BuildIndex(tmp)
-	snap2 := idx2.Snapshot(DirBacklog, filename)
+	snap2 := idx2.Snapshot(dirs.Backlog, filename)
 	if snap2 == nil {
 		t.Fatal("expected snapshot in backlog/ after retry")
 	}
@@ -645,7 +646,7 @@ func TestRetryTask_PreservesVerdictForNextWorkAgent(t *testing.T) {
 
 func TestRetryTask_VerdictFallbackRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tmp, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -654,7 +655,7 @@ func TestRetryTask_VerdictFallbackRoundTrip(t *testing.T) {
 	filename := "verdict-roundtrip.md"
 	// Task in failed/ with NO durable review-rejection markers — only a verdict file.
 	content := "---\nid: verdict-roundtrip\npriority: 10\n---\n# Verdict roundtrip\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
-	if err := os.WriteFile(filepath.Join(tmp, DirFailed, filename), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, dirs.Failed, filename), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -686,7 +687,7 @@ func TestRetryTask_VerdictFallbackRoundTrip(t *testing.T) {
 
 	// Verify the task is in backlog/ and the backlog snapshot surfaces the rejection.
 	idx := BuildIndex(tmp)
-	snap := idx.Snapshot(DirBacklog, filename)
+	snap := idx.Snapshot(dirs.Backlog, filename)
 	if snap == nil {
 		t.Fatal("expected snapshot in backlog/ after retry")
 	}

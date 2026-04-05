@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/process"
@@ -235,8 +236,8 @@ func scanLeftoverTempFiles(tasksDir string, fix bool) []Finding {
 	var findings []Finding
 
 	// Directories to scan for temp files.
-	scanDirs := make([]string, 0, len(queue.AllDirs)+len(messaging.MessagingDirs))
-	for _, d := range queue.AllDirs {
+	scanDirs := make([]string, 0, len(dirs.All)+len(messaging.MessagingDirs))
+	for _, d := range dirs.All {
 		scanDirs = append(scanDirs, filepath.Join(tasksDir, d))
 	}
 	for _, d := range messaging.MessagingDirs {

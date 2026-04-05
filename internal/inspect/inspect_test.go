@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/queue"
 	"mato/internal/testutil"
 )
@@ -25,7 +26,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "snapshot task without explicit id falls back to filename stem",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirBacklog, "no-id.md", "---\npriority: 5\n---\n# No ID\n")
+				writeTask(t, tasksDir, dirs.Backlog, "no-id.md", "---\npriority: 5\n---\n# No ID\n")
 			},
 			taskRef: "no-id",
 			want:    []string{"Task: no-id", "Title: No ID", "Status: runnable"},
@@ -33,8 +34,8 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting blocked by failed dependency",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "dep.md", "---\nid: dep\n---\n# Done\n<!-- failure: agent at 2026-01-01T00:00:00Z step=WORK error=broken -->\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Failed, "dep.md", "---\nid: dep\n---\n# Done\n<!-- failure: agent at 2026-01-01T00:00:00Z step=WORK error=broken -->\n")
+				writeTask(t, tasksDir, dirs.Waiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			want:    []string{"File: waiting/consumer.md", "Status: blocked", "dep (failed/dep.md)", "Next step: complete or fix the blocking dependencies so this task can leave waiting/"},
@@ -42,7 +43,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting unknown dependency",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [missing]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Waiting, "consumer.md", "---\nid: consumer\ndepends_on: [missing]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			want:    []string{"Status: blocked", "missing (unknown)"},
@@ -50,9 +51,9 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting ambiguous dependency",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirCompleted, "done.md", "---\nid: shared\n---\n# Done\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "shared.md", "---\nid: shared\n---\n# Shared\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [shared]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Completed, "done.md", "---\nid: shared\n---\n# Done\n")
+				writeTask(t, tasksDir, dirs.Waiting, "shared.md", "---\nid: shared\n---\n# Shared\n")
+				writeTask(t, tasksDir, dirs.Waiting, "consumer.md", "---\nid: consumer\ndepends_on: [shared]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			want:    []string{"Status: blocked", "shared (ambiguous)"},
@@ -60,7 +61,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting invalid glob",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirWaiting, "bad-waiting.md", "---\nid: bad-waiting\naffects: ['foo[']\n---\n# Bad Waiting\n")
+				writeTask(t, tasksDir, dirs.Waiting, "bad-waiting.md", "---\nid: bad-waiting\naffects: ['foo[']\n---\n# Bad Waiting\n")
 			},
 			taskRef: "bad-waiting",
 			want:    []string{"Status: invalid", "invalid affects glob syntax"},
@@ -68,7 +69,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting self cycle invalid",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirWaiting, "cycle.md", "---\nid: cycle\ndepends_on: [cycle]\n---\n# Cycle\n")
+				writeTask(t, tasksDir, dirs.Waiting, "cycle.md", "---\nid: cycle\ndepends_on: [cycle]\n---\n# Cycle\n")
 			},
 			taskRef: "cycle",
 			want:    []string{"Status: invalid", "depends on itself", "fix the dependency cycle"},
@@ -76,8 +77,8 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting multi-node cycle invalid",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirWaiting, "task-a.md", "---\nid: task-a\ndepends_on: [task-b]\n---\n# Task A\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# Task B\n")
+				writeTask(t, tasksDir, dirs.Waiting, "task-a.md", "---\nid: task-a\ndepends_on: [task-b]\n---\n# Task A\n")
+				writeTask(t, tasksDir, dirs.Waiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# Task B\n")
 			},
 			taskRef: "task-a",
 			want:    []string{"Status: invalid", "circular dependency", "task-a -> task-b"},
@@ -85,8 +86,8 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting duplicate invalid for non retained copy",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirWaiting, "aaa.md", "---\nid: dup\n---\n# First\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "zzz.md", "---\nid: dup\n---\n# Second\n")
+				writeTask(t, tasksDir, dirs.Waiting, "aaa.md", "---\nid: dup\n---\n# First\n")
+				writeTask(t, tasksDir, dirs.Waiting, "zzz.md", "---\nid: dup\n---\n# Second\n")
 			},
 			taskRef: "zzz",
 			want:    []string{"Status: invalid", "duplicate waiting task id", "aaa.md is the retained copy"},
@@ -94,8 +95,8 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting retained duplicate still uses normal dependency analysis",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirWaiting, "aaa.md", "---\nid: dup\ndepends_on: [missing]\n---\n# First\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "zzz.md", "---\nid: dup\n---\n# Second\n")
+				writeTask(t, tasksDir, dirs.Waiting, "aaa.md", "---\nid: dup\ndepends_on: [missing]\n---\n# First\n")
+				writeTask(t, tasksDir, dirs.Waiting, "zzz.md", "---\nid: dup\n---\n# Second\n")
 			},
 			taskRef: "aaa",
 			want:    []string{"Status: blocked", "missing (unknown)"},
@@ -104,9 +105,9 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "waiting deps satisfied but blocked by active overlap",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirCompleted, "dep.md", "---\nid: dep\n---\n# Dep\n")
-				writeTask(t, tasksDir, queue.DirInProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\naffects: [pkg/file.go]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Completed, "dep.md", "---\nid: dep\n---\n# Dep\n")
+				writeTask(t, tasksDir, dirs.InProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
+				writeTask(t, tasksDir, dirs.Waiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\naffects: [pkg/file.go]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			want:    []string{"Status: blocked", "active overlapping work still prevents promotion"},
@@ -114,7 +115,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "backlog invalid glob",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirBacklog, "bad-glob.md", "---\nid: bad-glob\naffects: ['foo[']\n---\n# Bad Glob\n")
+				writeTask(t, tasksDir, dirs.Backlog, "bad-glob.md", "---\nid: bad-glob\naffects: ['foo[']\n---\n# Bad Glob\n")
 			},
 			taskRef: "bad-glob",
 			want:    []string{"Status: invalid", "invalid affects glob syntax"},
@@ -122,8 +123,8 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "backlog dependency blocked before reconcile",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "dep.md", "---\nid: dep\n---\n# Dep\n")
-				writeTask(t, tasksDir, queue.DirBacklog, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Failed, "dep.md", "---\nid: dep\n---\n# Dep\n")
+				writeTask(t, tasksDir, dirs.Backlog, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			want:    []string{"Status: blocked", "reconcile will move this task back to waiting/"},
@@ -131,8 +132,8 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "backlog deferred with review history",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirInProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
-				writeTask(t, tasksDir, queue.DirBacklog, "deferred.md", "---\nid: deferred\naffects: [pkg/file.go]\n---\n# Deferred\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — add tests -->\n")
+				writeTask(t, tasksDir, dirs.InProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
+				writeTask(t, tasksDir, dirs.Backlog, "deferred.md", "---\nid: deferred\naffects: [pkg/file.go]\n---\n# Deferred\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — add tests -->\n")
 			},
 			taskRef: "deferred",
 			want:    []string{"Status: deferred", "Blocking task: in-progress/active.md", "Review history: previously rejected: add tests"},
@@ -140,8 +141,8 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "backlog runnable with queue position and review history",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirBacklog, "first.md", "---\nid: first\npriority: 1\n---\n# First\n")
-				writeTask(t, tasksDir, queue.DirBacklog, "second.md", "---\nid: second\npriority: 5\n---\n# Second\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — handle edge case -->\n")
+				writeTask(t, tasksDir, dirs.Backlog, "first.md", "---\nid: first\npriority: 1\n---\n# First\n")
+				writeTask(t, tasksDir, dirs.Backlog, "second.md", "---\nid: second\npriority: 5\n---\n# Second\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — handle edge case -->\n")
 			},
 			taskRef: "second",
 			want:    []string{"Status: runnable", "Queue position: 2 of 2", "Review history: previously rejected: handle edge case"},
@@ -149,7 +150,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "in progress claim metadata",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirInProgress, "running.md", "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: running\n---\n# Running\n")
+				writeTask(t, tasksDir, dirs.InProgress, "running.md", "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: running\n---\n# Running\n")
 			},
 			taskRef: "running",
 			want:    []string{"Status: running", "Claimed by: agent-1 at 2026-01-01T00:00:00Z"},
@@ -157,7 +158,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "ready for review exhausted budget",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirReadyReview, "review.md", "<!-- branch: task/review -->\n<!-- review-failure: a at 2026-01-01T00:00:00Z step=REVIEW error=one -->\n<!-- review-failure: b at 2026-01-01T00:01:00Z step=REVIEW error=two -->\n---\nid: review\nmax_retries: 2\n---\n# Review\n")
+				writeTask(t, tasksDir, dirs.ReadyReview, "review.md", "<!-- branch: task/review -->\n<!-- review-failure: a at 2026-01-01T00:00:00Z step=REVIEW error=one -->\n<!-- review-failure: b at 2026-01-01T00:01:00Z step=REVIEW error=two -->\n---\nid: review\nmax_retries: 2\n---\n# Review\n")
 			},
 			taskRef: "review",
 			want:    []string{"Status: invalid", "review retry budget exhausted", "Review failures: 2"},
@@ -165,7 +166,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "ready for review normal case",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirReadyReview, "review-ok.md", "<!-- branch: task/review-ok -->\n<!-- review-failure: a at 2026-01-01T00:00:00Z step=REVIEW error=one -->\n---\nid: review-ok\nmax_retries: 3\n---\n# Review OK\n")
+				writeTask(t, tasksDir, dirs.ReadyReview, "review-ok.md", "<!-- branch: task/review-ok -->\n<!-- review-failure: a at 2026-01-01T00:00:00Z step=REVIEW error=one -->\n---\nid: review-ok\nmax_retries: 3\n---\n# Review OK\n")
 			},
 			taskRef: "review-ok",
 			want:    []string{"Status: ready_for_review", "queued for AI review", "Branch: task/review-ok"},
@@ -174,7 +175,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "ready to merge",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirReadyMerge, "merge.md", "---\nid: merge\n---\n# Merge\n")
+				writeTask(t, tasksDir, dirs.ReadyMerge, "merge.md", "---\nid: merge\n---\n# Merge\n")
 			},
 			taskRef: "merge",
 			want:    []string{"Status: ready_to_merge", "queued for host squash merge"},
@@ -182,7 +183,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "completed task",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirCompleted, "done.md", "---\nid: done\n---\n# Done\n")
+				writeTask(t, tasksDir, dirs.Completed, "done.md", "---\nid: done\n---\n# Done\n")
 			},
 			taskRef: "done",
 			want:    []string{"Status: completed", "merged and completed"},
@@ -190,7 +191,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "failed retry",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "retry.md", "<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=first -->\n<!-- failure: b at 2026-01-01T00:01:00Z step=WORK error=second -->\n---\nid: retry\nmax_retries: 2\n---\n# Retry\n")
+				writeTask(t, tasksDir, dirs.Failed, "retry.md", "<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=first -->\n<!-- failure: b at 2026-01-01T00:01:00Z step=WORK error=second -->\n---\nid: retry\nmax_retries: 2\n---\n# Retry\n")
 			},
 			taskRef: "retry",
 			want:    []string{"Status: failed", "Failure: retry (2/2)", "Last failure: second"},
@@ -198,7 +199,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "failed cycle",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "cycle.md", "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n---\nid: cycle\n---\n# Cycle\n")
+				writeTask(t, tasksDir, dirs.Failed, "cycle.md", "<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n---\nid: cycle\n---\n# Cycle\n")
 			},
 			taskRef: "cycle",
 			want:    []string{"Status: failed", "Failure: cycle", "Cycle failure: circular dependency"},
@@ -206,7 +207,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "failed terminal",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "terminal.md", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — invalid glob syntax -->\n---\nid: terminal\n---\n# Terminal\n")
+				writeTask(t, tasksDir, dirs.Failed, "terminal.md", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — invalid glob syntax -->\n---\nid: terminal\n---\n# Terminal\n")
 			},
 			taskRef: "terminal",
 			want:    []string{"Status: failed", "Failure: terminal", "Terminal failure: invalid glob syntax"},
@@ -214,7 +215,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "failed cancelled",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
+				writeTask(t, tasksDir, dirs.Failed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
 			},
 			taskRef: "cancelled",
 			want:    []string{"Status: failed", "Failure: cancelled", "task was deliberately cancelled by an operator", "use mato retry to requeue if you want to run it again"},
@@ -222,7 +223,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "parse failed task in review",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirReadyReview, "broken.md", "<!-- branch: task/broken -->\n---\npriority: nope\n---\n# Broken\n")
+				writeTask(t, tasksDir, dirs.ReadyReview, "broken.md", "<!-- branch: task/broken -->\n---\npriority: nope\n---\n# Broken\n")
 			},
 			taskRef: "broken",
 			want:    []string{"Status: invalid", "Parse error:", "quarantines it to failed/", "File: ready-for-review/broken.md"},
@@ -230,7 +231,7 @@ func TestShowTo_TextStatuses(t *testing.T) {
 		{
 			name: "cancelled parse failed task",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n# Broken\n")
+				writeTask(t, tasksDir, dirs.Failed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n# Broken\n")
 			},
 			taskRef: "broken-cancelled",
 			want:    []string{"Status: failed", "Failure: cancelled", "Parse error:"},
@@ -271,8 +272,8 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "runnable with review history",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirBacklog, "first.md", "---\nid: first\npriority: 1\n---\n# First\n")
-				writeTask(t, tasksDir, queue.DirBacklog, "second.md", "---\nid: second\npriority: 2\n---\n# Second\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — add coverage -->\n")
+				writeTask(t, tasksDir, dirs.Backlog, "first.md", "---\nid: first\npriority: 1\n---\n# First\n")
+				writeTask(t, tasksDir, dirs.Backlog, "second.md", "---\nid: second\npriority: 2\n---\n# Second\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — add coverage -->\n")
 			},
 			taskRef: "second",
 			assert: func(t *testing.T, got map[string]any) {
@@ -300,8 +301,8 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "blocked waiting dependency fields",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "dep.md", "---\nid: dep\n---\n# Dep\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Failed, "dep.md", "---\nid: dep\n---\n# Dep\n")
+				writeTask(t, tasksDir, dirs.Waiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			assert: func(t *testing.T, got map[string]any) {
@@ -325,8 +326,8 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "deferred backlog fields",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirInProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
-				writeTask(t, tasksDir, queue.DirBacklog, "deferred.md", "---\nid: deferred\naffects: [pkg/file.go]\n---\n# Deferred\n")
+				writeTask(t, tasksDir, dirs.InProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
+				writeTask(t, tasksDir, dirs.Backlog, "deferred.md", "---\nid: deferred\naffects: [pkg/file.go]\n---\n# Deferred\n")
 			},
 			taskRef: "deferred",
 			assert: func(t *testing.T, got map[string]any) {
@@ -335,7 +336,7 @@ func TestShowTo_JSONFields(t *testing.T) {
 					t.Fatalf("status = %v, want deferred", got["status"])
 				}
 				blockingTask, ok := got["blocking_task"].(map[string]any)
-				if !ok || blockingTask["filename"] != "active.md" || blockingTask["state"] != queue.DirInProgress {
+				if !ok || blockingTask["filename"] != "active.md" || blockingTask["state"] != dirs.InProgress {
 					t.Fatalf("blocking_task = %v, want active in-progress task", got["blocking_task"])
 				}
 				affects, ok := got["conflicting_affects"].([]any)
@@ -347,7 +348,7 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "failed terminal fields",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "terminal.md", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — invalid glob syntax -->\n---\nid: terminal\n---\n# Terminal\n")
+				writeTask(t, tasksDir, dirs.Failed, "terminal.md", "<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — invalid glob syntax -->\n---\nid: terminal\n---\n# Terminal\n")
 			},
 			taskRef: "terminal",
 			assert: func(t *testing.T, got map[string]any) {
@@ -363,7 +364,7 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "failed cancelled fields",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
+				writeTask(t, tasksDir, dirs.Failed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
 			},
 			taskRef: "cancelled",
 			assert: func(t *testing.T, got map[string]any) {
@@ -376,7 +377,7 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "invalid glob fields",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirBacklog, "bad-glob.md", "---\nid: bad-glob\naffects: ['foo[']\n---\n# Bad Glob\n")
+				writeTask(t, tasksDir, dirs.Backlog, "bad-glob.md", "---\nid: bad-glob\naffects: ['foo[']\n---\n# Bad Glob\n")
 			},
 			taskRef: "bad-glob",
 			assert: func(t *testing.T, got map[string]any) {
@@ -392,7 +393,7 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "invalid parse failure fields",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirReadyReview, "broken.md", "<!-- branch: task/broken -->\n---\npriority: nope\n---\n# Broken\n")
+				writeTask(t, tasksDir, dirs.ReadyReview, "broken.md", "<!-- branch: task/broken -->\n---\npriority: nope\n---\n# Broken\n")
 			},
 			taskRef: "broken",
 			assert: func(t *testing.T, got map[string]any) {
@@ -408,7 +409,7 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "invalid cancelled parse failure fields",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n# Broken\n")
+				writeTask(t, tasksDir, dirs.Failed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n# Broken\n")
 			},
 			taskRef: "broken-cancelled",
 			assert: func(t *testing.T, got map[string]any) {
@@ -424,7 +425,7 @@ func TestShowTo_JSONFields(t *testing.T) {
 		{
 			name: "invalid ready for review exhausted budget fields",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirReadyReview, "review.md", "<!-- review-failure: a at 2026-01-01T00:00:00Z step=REVIEW error=one -->\n<!-- review-failure: b at 2026-01-01T00:01:00Z step=REVIEW error=two -->\n---\nid: review\nmax_retries: 2\n---\n# Review\n")
+				writeTask(t, tasksDir, dirs.ReadyReview, "review.md", "<!-- review-failure: a at 2026-01-01T00:00:00Z step=REVIEW error=one -->\n<!-- review-failure: b at 2026-01-01T00:01:00Z step=REVIEW error=two -->\n---\nid: review\nmax_retries: 2\n---\n# Review\n")
 			},
 			taskRef: "review",
 			assert: func(t *testing.T, got map[string]any) {
@@ -463,7 +464,7 @@ func TestShowTo_JSONFields(t *testing.T) {
 
 func TestShowTo_TextWriterError(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, queue.DirBacklog, "sample.md", "---\nid: sample\npriority: 5\n---\n# Sample\n")
+	writeTask(t, tasksDir, dirs.Backlog, "sample.md", "---\nid: sample\npriority: 5\n---\n# Sample\n")
 
 	writeErr := errors.New("broken pipe")
 	fw := &failAfterNWriter{n: 1, err: writeErr}
@@ -489,8 +490,8 @@ func TestShowTo_TaskResolutionErrors(t *testing.T) {
 
 	t.Run("ambiguous", func(t *testing.T) {
 		repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-		writeTask(t, tasksDir, queue.DirBacklog, "shared.md", "---\nid: shared-one\n---\n# Shared\n")
-		writeTask(t, tasksDir, queue.DirCompleted, "shared.md", "---\nid: shared-two\n---\n# Shared\n")
+		writeTask(t, tasksDir, dirs.Backlog, "shared.md", "---\nid: shared-one\n---\n# Shared\n")
+		writeTask(t, tasksDir, dirs.Completed, "shared.md", "---\nid: shared-two\n---\n# Shared\n")
 
 		var buf bytes.Buffer
 		err := ShowTo(&buf, repoRoot, "shared", "text")
@@ -546,14 +547,14 @@ func (w *failAfterNWriter) Write(p []byte) (int, error) {
 func TestShowTo_VerdictFallbackShowsRejectionReason(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 	}
 
 	// Task with no review-rejection marker in the file.
-	writeTask(t, tasksDir, queue.DirBacklog, "rework.md",
+	writeTask(t, tasksDir, dirs.Backlog, "rework.md",
 		"---\nid: rework\npriority: 5\n---\n# Needs Rework\n")
 	// Preserved verdict file with rejection reason.
 	writeVerdictFile(t, tasksDir, "rework.md", map[string]string{
@@ -587,14 +588,14 @@ func TestShowTo_VerdictFallbackShowsRejectionReason(t *testing.T) {
 func TestShowTo_VerdictFallbackPrefersDurableMarker(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 	}
 
 	// Task with a durable marker.
-	writeTask(t, tasksDir, queue.DirBacklog, "marked.md",
+	writeTask(t, tasksDir, dirs.Backlog, "marked.md",
 		"---\nid: marked\npriority: 5\n---\n# Marked\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — durable marker reason -->\n")
 	// And a verdict file with a different reason.
 	writeVerdictFile(t, tasksDir, "marked.md", map[string]string{
@@ -644,8 +645,8 @@ func TestShowTo_JSONBlockingDependencies(t *testing.T) {
 		{
 			name: "single blocking dependency in waiting",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "blocker.md", "---\nid: blocker\n---\n# Blocker\n<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=broken -->\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "blocked.md", "---\nid: blocked\ndepends_on: [blocker]\n---\n# Blocked\n")
+				writeTask(t, tasksDir, dirs.Failed, "blocker.md", "---\nid: blocker\n---\n# Blocker\n<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=broken -->\n")
+				writeTask(t, tasksDir, dirs.Waiting, "blocked.md", "---\nid: blocked\ndepends_on: [blocker]\n---\n# Blocked\n")
 			},
 			taskRef: "blocked",
 			assert: func(t *testing.T, deps []any) {
@@ -665,9 +666,9 @@ func TestShowTo_JSONBlockingDependencies(t *testing.T) {
 		{
 			name: "multiple blocking dependencies",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirWaiting, "dep-a.md", "---\nid: dep-a\n---\n# Dep A\n")
-				writeTask(t, tasksDir, queue.DirFailed, "dep-b.md", "---\nid: dep-b\n---\n# Dep B\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep-a, dep-b]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Waiting, "dep-a.md", "---\nid: dep-a\n---\n# Dep A\n")
+				writeTask(t, tasksDir, dirs.Failed, "dep-b.md", "---\nid: dep-b\n---\n# Dep B\n")
+				writeTask(t, tasksDir, dirs.Waiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep-a, dep-b]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			assert: func(t *testing.T, deps []any) {
@@ -693,7 +694,7 @@ func TestShowTo_JSONBlockingDependencies(t *testing.T) {
 		{
 			name: "unknown dependency in JSON",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [nonexistent]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Waiting, "consumer.md", "---\nid: consumer\ndepends_on: [nonexistent]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			assert: func(t *testing.T, deps []any) {
@@ -738,8 +739,8 @@ func TestShowTo_JSONBlockingDependencies(t *testing.T) {
 func TestShowTo_TextConflictingAffects(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirInProgress, "active.md", "---\nid: active\naffects: [pkg/api.go, pkg/handler.go]\n---\n# Active\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "deferred.md", "---\nid: deferred\naffects: [pkg/api.go, pkg/handler.go]\n---\n# Deferred\n")
+	writeTask(t, tasksDir, dirs.InProgress, "active.md", "---\nid: active\naffects: [pkg/api.go, pkg/handler.go]\n---\n# Active\n")
+	writeTask(t, tasksDir, dirs.Backlog, "deferred.md", "---\nid: deferred\naffects: [pkg/api.go, pkg/handler.go]\n---\n# Deferred\n")
 
 	var buf bytes.Buffer
 	if err := ShowTo(&buf, repoRoot, "deferred", "text"); err != nil {
@@ -770,7 +771,7 @@ func TestShowTo_TextReviewFailureCount(t *testing.T) {
 		{
 			name: "single review failure marker",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirReadyReview, "review-one.md",
+				writeTask(t, tasksDir, dirs.ReadyReview, "review-one.md",
 					"<!-- branch: task/review-one -->\n"+
 						"<!-- review-failure: agent at 2026-01-01T00:00:00Z step=REVIEW error=bad_tests -->\n"+
 						"---\nid: review-one\nmax_retries: 3\n---\n# Review One\n")
@@ -781,7 +782,7 @@ func TestShowTo_TextReviewFailureCount(t *testing.T) {
 		{
 			name: "multiple review failure markers",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirReadyReview, "review-multi.md",
+				writeTask(t, tasksDir, dirs.ReadyReview, "review-multi.md",
 					"<!-- branch: task/review-multi -->\n"+
 						"<!-- review-failure: a at 2026-01-01T00:00:00Z step=REVIEW error=first -->\n"+
 						"<!-- review-failure: b at 2026-01-01T00:01:00Z step=REVIEW error=second -->\n"+
@@ -822,7 +823,7 @@ func TestShowTo_ParseFailureStates(t *testing.T) {
 		{
 			name: "cancelled parse failure in failed",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "pf-cancelled.md",
+				writeTask(t, tasksDir, dirs.Failed, "pf-cancelled.md",
 					"<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n"+
 						"---\npriority: nope\n---\n# PF Cancelled\n")
 			},
@@ -837,7 +838,7 @@ func TestShowTo_ParseFailureStates(t *testing.T) {
 		{
 			name: "terminal failure parse failure in failed",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "pf-terminal.md",
+				writeTask(t, tasksDir, dirs.Failed, "pf-terminal.md",
 					"<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — bad glob syntax -->\n"+
 						"---\npriority: nope\n---\n# PF Terminal\n")
 			},
@@ -852,7 +853,7 @@ func TestShowTo_ParseFailureStates(t *testing.T) {
 		{
 			name: "cycle failure parse failure in failed",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "pf-cycle.md",
+				writeTask(t, tasksDir, dirs.Failed, "pf-cycle.md",
 					"<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dep -->\n"+
 						"---\npriority: nope\n---\n# PF Cycle\n")
 			},
@@ -887,7 +888,7 @@ func TestShowTo_ParseFailureStates(t *testing.T) {
 
 func TestShowTo_InvalidFormat(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, queue.DirBacklog, "sample.md", "---\nid: sample\n---\n# Sample\n")
+	writeTask(t, tasksDir, dirs.Backlog, "sample.md", "---\nid: sample\n---\n# Sample\n")
 
 	var buf bytes.Buffer
 	err := ShowTo(&buf, repoRoot, "sample", "yaml")
@@ -912,7 +913,7 @@ func TestRenderText_NoColorFallback(t *testing.T) {
 		{
 			name: "runnable status readable without color",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirBacklog, "my-task.md", "---\nid: my-task\npriority: 5\n---\n# My Task\n")
+				writeTask(t, tasksDir, dirs.Backlog, "my-task.md", "---\nid: my-task\npriority: 5\n---\n# My Task\n")
 			},
 			taskRef: "my-task",
 			want:    []string{"Task: my-task", "Status: runnable", "State: backlog"},
@@ -920,7 +921,7 @@ func TestRenderText_NoColorFallback(t *testing.T) {
 		{
 			name: "failed status with failure details readable without color",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "broken.md",
+				writeTask(t, tasksDir, dirs.Failed, "broken.md",
 					"<!-- failure: agent at 2026-01-01T00:00:00Z step=WORK error=build_failed -->\n---\nid: broken\nmax_retries: 3\n---\n# Broken\n")
 			},
 			taskRef: "broken",
@@ -929,8 +930,8 @@ func TestRenderText_NoColorFallback(t *testing.T) {
 		{
 			name: "blocked status with dependencies readable without color",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirFailed, "dep.md", "---\nid: dep\n---\n# Dep\n<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=broken -->\n")
-				writeTask(t, tasksDir, queue.DirWaiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
+				writeTask(t, tasksDir, dirs.Failed, "dep.md", "---\nid: dep\n---\n# Dep\n<!-- failure: a at 2026-01-01T00:00:00Z step=WORK error=broken -->\n")
+				writeTask(t, tasksDir, dirs.Waiting, "consumer.md", "---\nid: consumer\ndepends_on: [dep]\n---\n# Consumer\n")
 			},
 			taskRef: "consumer",
 			want:    []string{"Status: blocked", "Blocking dependencies:", "dep (failed/dep.md)"},
@@ -938,8 +939,8 @@ func TestRenderText_NoColorFallback(t *testing.T) {
 		{
 			name: "deferred status with review history readable without color",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirInProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
-				writeTask(t, tasksDir, queue.DirBacklog, "deferred.md", "---\nid: deferred\naffects: [pkg/file.go]\n---\n# Deferred\n<!-- review-rejection: r at 2026-01-01T00:00:00Z — add tests -->\n")
+				writeTask(t, tasksDir, dirs.InProgress, "active.md", "---\nid: active\naffects: [pkg/file.go]\n---\n# Active\n")
+				writeTask(t, tasksDir, dirs.Backlog, "deferred.md", "---\nid: deferred\naffects: [pkg/file.go]\n---\n# Deferred\n<!-- review-rejection: r at 2026-01-01T00:00:00Z — add tests -->\n")
 			},
 			taskRef: "deferred",
 			want:    []string{"Status: deferred", "Review history: previously rejected: add tests", "Conflicting affects: pkg/file.go"},
@@ -947,7 +948,7 @@ func TestRenderText_NoColorFallback(t *testing.T) {
 		{
 			name: "in-progress with claim info readable without color",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, queue.DirInProgress, "running.md", "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: running\n---\n# Running\n")
+				writeTask(t, tasksDir, dirs.InProgress, "running.md", "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: running\n---\n# Running\n")
 			},
 			taskRef: "running",
 			want:    []string{"Status: running", "Claimed by: agent-1 at 2026-01-01T00:00:00Z"},
@@ -979,7 +980,7 @@ func TestShowTo_TextRelativeTimeInReasonAndClaimedAt(t *testing.T) {
 	// Create a task claimed 5 minutes ago so relative time appears.
 	claimedAt := time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339)
 	content := "<!-- claimed-by: agent-1  claimed-at: " + claimedAt + " -->\n---\nid: running\n---\n# Running\n"
-	writeTask(t, tasksDir, queue.DirInProgress, "running.md", content)
+	writeTask(t, tasksDir, dirs.InProgress, "running.md", content)
 
 	// Text output should include relative time annotation.
 	var textBuf bytes.Buffer
@@ -1024,7 +1025,7 @@ func TestShowTo_TextRelativeTimeInReasonAndClaimedAt(t *testing.T) {
 func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
@@ -1034,7 +1035,7 @@ func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
 
 	// Start with task in failed/ (required for retry) with no durable
 	// rejection marker, plus a verdict file that should survive retry.
-	writeTask(t, tasksDir, queue.DirFailed, filename,
+	writeTask(t, tasksDir, dirs.Failed, filename,
 		"---\nid: retry-keeps-verdict\npriority: 10\n---\n# Retry Keeps Verdict\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=build -->\n")
 	writeVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",
@@ -1085,7 +1086,7 @@ func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
 func TestShowTo_VerdictFallbackClearedAfterCancel(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
@@ -1094,7 +1095,7 @@ func TestShowTo_VerdictFallbackClearedAfterCancel(t *testing.T) {
 	filename := "cancel-clears-verdict.md"
 
 	// Task in backlog/ with a stale verdict file (no durable marker).
-	writeTask(t, tasksDir, queue.DirBacklog, filename,
+	writeTask(t, tasksDir, dirs.Backlog, filename,
 		"---\nid: cancel-clears-verdict\npriority: 10\n---\n# Cancel Clears Verdict\n")
 	writeVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",

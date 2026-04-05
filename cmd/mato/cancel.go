@@ -149,17 +149,17 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 					if err := writef(out, "cancelled: %s (was in %s/)\n", result.Filename, result.PriorState); err != nil {
 						return err
 					}
-					if result.PriorState == queue.DirInProgress {
+					if result.PriorState == dirs.InProgress {
 						if err := ui.WarnTo(errOut, "warning: agent container for %s may still be running\n", stem); err != nil {
 							return err
 						}
 					}
-					if result.PriorState == queue.DirReadyReview {
+					if result.PriorState == dirs.ReadyReview {
 						if err := ui.WarnTo(errOut, "warning: task is in ready-for-review/ — a review agent may be running\n"); err != nil {
 							return err
 						}
 					}
-					if result.PriorState == queue.DirReadyMerge {
+					if result.PriorState == dirs.ReadyMerge {
 						if err := ui.WarnTo(errOut, "warning: merge queue may still merge %s's branch\n", stem); err != nil {
 							return err
 						}
@@ -192,7 +192,7 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
-	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirFailed}
+	cancelDirs := []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Failed}
 	cmd.ValidArgsFunction = completeTaskNames(repoFlag, cancelDirs)
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")

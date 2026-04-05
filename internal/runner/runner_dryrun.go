@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/queue"
 	"mato/internal/ui"
@@ -70,7 +71,7 @@ func (r *DryRunRenderer) RenderDependencyResolution(promotable int) {
 // RenderDependencySummary writes the === Dependency Summary === section for
 // waiting/ tasks, showing each dependency and its resolved queue state.
 func (r *DryRunRenderer) RenderDependencySummary(tasksDir string, idx *queue.PollIndex) {
-	waitingTasks := idx.TasksByState(queue.DirWaiting)
+	waitingTasks := idx.TasksByState(dirs.Waiting)
 	if len(waitingTasks) == 0 {
 		return
 	}
@@ -167,7 +168,7 @@ func (r *DryRunRenderer) RenderExecutionOrder(runnable []*queue.TaskSnapshot) {
 // RenderBacklogSummary writes the === Backlog Task Summary === section with
 // compact frontmatter for every parsed backlog task.
 func (r *DryRunRenderer) RenderBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}, blocked map[string][]queue.DependencyBlock) {
-	backlog := idx.TasksByState(queue.DirBacklog)
+	backlog := idx.TasksByState(dirs.Backlog)
 	if len(backlog) == 0 {
 		return
 	}
@@ -251,7 +252,7 @@ func resolveDepState(depID string, idx *queue.PollIndex) string {
 	seen := make(map[string]struct{})
 	matchedState := ""
 
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		for _, snap := range idx.TasksByState(dir) {
 			if snap.Meta.ID != depID && frontmatter.TaskFileStem(snap.Filename) != depID {
 				continue

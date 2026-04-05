@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/merge"
 	"mato/internal/messaging"
@@ -39,8 +40,8 @@ func markdownFileNames(t *testing.T, dir string) []string {
 
 func TestConcurrentTaskClaiming(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
-	backlogDir := filepath.Join(tasksDir, queue.DirBacklog)
-	inProgressDir := filepath.Join(tasksDir, queue.DirInProgress)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
+	inProgressDir := filepath.Join(tasksDir, dirs.InProgress)
 
 	for i := 0; i < 10; i++ {
 		testutil.WriteFile(t, filepath.Join(backlogDir, fmt.Sprintf("task-%02d.md", i)), fmt.Sprintf("# Task %d\nDo something.\n", i))
@@ -130,8 +131,8 @@ func TestConcurrentTaskClaiming(t *testing.T) {
 
 func TestConcurrentReconcileReadyQueue(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
-	waitingDir := filepath.Join(tasksDir, queue.DirWaiting)
-	backlogDir := filepath.Join(tasksDir, queue.DirBacklog)
+	waitingDir := filepath.Join(tasksDir, dirs.Waiting)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
 
 	for i := 0; i < 5; i++ {
 		testutil.WriteFile(t, filepath.Join(waitingDir, fmt.Sprintf("task-%02d.md", i)), fmt.Sprintf("# Task %d\nReady now.\n", i))
@@ -227,17 +228,17 @@ func TestConcurrentMergeQueueProcessing(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"alpha.txt": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"beta.txt": "beta\n"}, "beta change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 2 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 2", got)
 	}
 
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "alpha.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "beta.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "alpha.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "beta.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "alpha.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "beta.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "alpha.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "beta.md"))
 
 	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "mato:alpha.txt")); got != "alpha" {
 		t.Fatalf("alpha.txt contents = %q, want %q", got, "alpha")
@@ -253,17 +254,17 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha content\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"README.md": "beta content\n"}, "beta change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("first merge.ProcessQueue() = %d, want 1", got)
 	}
 
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "alpha.md"))
-	betaBacklog := filepath.Join(tasksDir, queue.DirBacklog, "beta.md")
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "alpha.md"))
+	betaBacklog := filepath.Join(tasksDir, dirs.Backlog, "beta.md")
 	mustExist(t, betaBacklog)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "beta.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "beta.md"))
 	if contents := readFile(t, betaBacklog); !strings.Contains(contents, "<!-- failure: merge-queue") {
 		t.Fatalf("beta task missing merge failure record: %q", contents)
 	}
@@ -282,7 +283,7 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 	mustGitOutput(t, redoClone, "commit", "-m", "redo beta")
 	mustGitOutput(t, redoClone, "push", "--force", "origin", "task/beta")
 
-	betaReady := filepath.Join(tasksDir, queue.DirReadyMerge, "beta.md")
+	betaReady := filepath.Join(tasksDir, dirs.ReadyMerge, "beta.md")
 	mustRename(t, betaBacklog, betaReady)
 	if err := queue.WriteBranchMarker(betaReady, "task/beta"); err != nil {
 		t.Fatalf("queue.WriteBranchMarker(%s): %v", betaReady, err)
@@ -292,7 +293,7 @@ func TestMergeConflictRecoveryAndRetry(t *testing.T) {
 		t.Fatalf("second merge.ProcessQueue() = %d, want 1", got)
 	}
 
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "beta.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "beta.md"))
 	mustNotExist(t, betaReady)
 	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "mato:README.md")); got != "alpha content\nbeta content" {
 		t.Fatalf("README on mato = %q, want %q", got, "alpha content\nbeta content")
@@ -305,21 +306,21 @@ func TestConflictRequeueThenRaceToClaim(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha content\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/conflict-task", map[string]string{"README.md": "conflict content\n"}, "conflict change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "conflict-task.md", "<!-- branch: task/conflict-task -->\n---\npriority: 10\n---\n# Conflict Task\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "conflict-task.md", "<!-- branch: task/conflict-task -->\n---\npriority: 10\n---\n# Conflict Task\n")
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "alpha.md"))
-	conflictBacklog := filepath.Join(tasksDir, queue.DirBacklog, "conflict-task.md")
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "alpha.md"))
+	conflictBacklog := filepath.Join(tasksDir, dirs.Backlog, "conflict-task.md")
 	mustExist(t, conflictBacklog)
 	if contents := readFile(t, conflictBacklog); !strings.Contains(contents, "<!-- failure: merge-queue") {
 		t.Fatalf("conflict task missing merge failure record: %q", contents)
 	}
 
-	conflictInProgress := filepath.Join(tasksDir, queue.DirInProgress, "conflict-task.md")
+	conflictInProgress := filepath.Join(tasksDir, dirs.InProgress, "conflict-task.md")
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	var successes atomic.Int32
@@ -330,8 +331,8 @@ func TestConflictRequeueThenRaceToClaim(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			src := filepath.Join(tasksDir, queue.DirBacklog, "conflict-task.md")
-			dst := filepath.Join(tasksDir, queue.DirInProgress, "conflict-task.md")
+			src := filepath.Join(tasksDir, dirs.Backlog, "conflict-task.md")
+			dst := filepath.Join(tasksDir, dirs.InProgress, "conflict-task.md")
 			if err := os.Rename(src, dst); err != nil {
 				errCh <- err
 				return
@@ -359,10 +360,10 @@ func TestConflictRequeueThenRaceToClaim(t *testing.T) {
 	mustExist(t, conflictInProgress)
 	mustNotExist(t, conflictBacklog)
 
-	if got := markdownFileNames(t, filepath.Join(tasksDir, queue.DirInProgress)); len(got) != 1 || got[0] != "conflict-task.md" {
+	if got := markdownFileNames(t, filepath.Join(tasksDir, dirs.InProgress)); len(got) != 1 || got[0] != "conflict-task.md" {
 		t.Fatalf("in-progress tasks = %v, want [conflict-task.md]", got)
 	}
-	if got := markdownFileNames(t, filepath.Join(tasksDir, queue.DirBacklog)); len(got) != 0 {
+	if got := markdownFileNames(t, filepath.Join(tasksDir, dirs.Backlog)); len(got) != 0 {
 		t.Fatalf("backlog tasks = %v, want none", got)
 	}
 }
@@ -373,8 +374,8 @@ func TestConcurrentMergeQueueTwoHosts(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"alpha.txt": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"beta.txt": "beta\n"}, "beta change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
 
 	start := make(chan struct{})
 	results := make([]int, 2)
@@ -403,10 +404,10 @@ func TestConcurrentMergeQueueTwoHosts(t *testing.T) {
 		t.Fatalf("total merged across hosts = %d, want 2 (%v)", totalMerged, results)
 	}
 
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "alpha.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "beta.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "alpha.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "beta.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "alpha.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "beta.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "alpha.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "beta.md"))
 
 	if got := strings.TrimSpace(mustGitOutput(t, repoRoot, "show", "mato:alpha.txt")); got != "alpha" {
 		t.Fatalf("alpha.txt contents = %q, want %q", got, "alpha")
@@ -444,13 +445,13 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 
 	// Place fix-bug.md directly in in-progress with a branch comment,
 	// simulating a task already claimed by agent 1.
-	writeTask(t, tasksDir, queue.DirInProgress, "fix-bug.md",
+	writeTask(t, tasksDir, dirs.InProgress, "fix-bug.md",
 		"<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 			"<!-- branch: task/fix-bug -->\n"+
 			"# Fix bug\n")
 
 	// Put fix_bug.md in backlog for agent 2 to claim.
-	writeTask(t, tasksDir, queue.DirBacklog, "fix_bug.md", "# Fix bug underscore\n")
+	writeTask(t, tasksDir, dirs.Backlog, "fix_bug.md", "# Fix bug underscore\n")
 
 	// Agent 1 pushes to task/fix-bug.
 	clone1, err := git.CreateClone(repoRoot)
@@ -505,16 +506,16 @@ func TestOrphanRecoveryDuringConcurrentWork(t *testing.T) {
 	}
 	defer cleanup()
 
-	aliveTask := writeTask(t, tasksDir, queue.DirInProgress, "alive-task.md", "<!-- claimed-by: alive-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Alive\nStill running.\n")
-	deadTask := writeTask(t, tasksDir, queue.DirInProgress, "dead-task.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Dead\nNeeds recovery.\n")
+	aliveTask := writeTask(t, tasksDir, dirs.InProgress, "alive-task.md", "<!-- claimed-by: alive-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Alive\nStill running.\n")
+	deadTask := writeTask(t, tasksDir, dirs.InProgress, "dead-task.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Dead\nNeeds recovery.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
 
 	_ = queue.RecoverOrphanedTasks(tasksDir)
 
 	mustExist(t, aliveTask)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "alive-task.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, "alive-task.md"))
 
-	deadBacklog := filepath.Join(tasksDir, queue.DirBacklog, "dead-task.md")
+	deadBacklog := filepath.Join(tasksDir, dirs.Backlog, "dead-task.md")
 	mustExist(t, deadBacklog)
 	mustNotExist(t, deadTask)
 	if contents := readFile(t, deadBacklog); !strings.Contains(contents, "<!-- failure: mato-recovery") {
@@ -691,8 +692,8 @@ func TestReadMessagesDuringCleanup(t *testing.T) {
 func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	highPath := writeTask(t, tasksDir, queue.DirBacklog, "task-high.md", "---\npriority: 5\naffects: [main.go]\n---\n# Task High\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "task-low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Task Low\n")
+	highPath := writeTask(t, tasksDir, dirs.Backlog, "task-high.md", "---\npriority: 5\naffects: [main.go]\n---\n# Task High\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task-low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Task Low\n")
 
 	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
 
@@ -703,8 +704,8 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 		t.Fatalf("deferred set missing %q: %#v", "task-low.md", deferred)
 	}
 	mustExist(t, highPath)
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-low.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-low.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "task-low.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-low.md"))
 
 	if err := queue.WriteQueueManifest(tasksDir, deferred, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest first pass: %v", err)
@@ -713,7 +714,7 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 		t.Fatalf("first queue manifest = %q, want %q", got, "task-high.md\n")
 	}
 
-	mustRename(t, highPath, filepath.Join(tasksDir, queue.DirCompleted, "task-high.md"))
+	mustRename(t, highPath, filepath.Join(tasksDir, dirs.Completed, "task-high.md"))
 
 	if got := queue.ReconcileReadyQueue(tasksDir, nil); got {
 		t.Fatalf("queue.ReconcileReadyQueue() = %v, want false", got)
@@ -724,9 +725,9 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
 	}
 
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-low.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-low.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-high.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "task-low.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-low.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, "task-high.md"))
 
 	if err := queue.WriteQueueManifest(tasksDir, deferred, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest second pass: %v", err)
@@ -744,11 +745,11 @@ func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
 	_ = repoRoot
 
 	// Task A in in-progress with overlapping affects
-	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirInProgress, "active.md"),
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.InProgress, "active.md"),
 		"---\nid: active\npriority: 1\naffects: [main.go]\n---\n# Active task\n")
 
 	// Task B in backlog with same affects — should be deferred
-	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"),
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "blocked.md"),
 		"---\nid: blocked\npriority: 10\naffects: [main.go]\n---\n# Blocked task\n")
 
 	// Compute deferred set
@@ -781,8 +782,8 @@ func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
 
 func TestConcurrentSelectAndClaimTask(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
-	backlogDir := filepath.Join(tasksDir, queue.DirBacklog)
-	inProgressDir := filepath.Join(tasksDir, queue.DirInProgress)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
+	inProgressDir := filepath.Join(tasksDir, dirs.InProgress)
 
 	const numTasks = 3
 	for i := 0; i < numTasks; i++ {
@@ -884,9 +885,9 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 
 	// ── Scenario 1: exact-path overlap ───────────────────────────────────
 	// task-A and task-B both affect src/api.go.
-	writeTask(t, tasksDir, queue.DirBacklog, "task-a.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-a.md",
 		"---\npriority: 5\naffects: [src/api.go]\n---\n# Task A\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "task-b.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-b.md",
 		"---\npriority: 20\naffects: [src/api.go]\n---\n# Task B\n")
 
 	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
@@ -899,10 +900,10 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 
 	// Simulate task-A being claimed → move to in-progress with claimed-by header.
 	mustRename(t,
-		filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"),
-		filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"))
+		filepath.Join(tasksDir, dirs.Backlog, "task-a.md"),
+		filepath.Join(tasksDir, dirs.InProgress, "task-a.md"))
 	os.WriteFile(
-		filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"),
+		filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
 		[]byte("<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: 5\naffects: [src/api.go]\n---\n# Task A\n"),
 		0o644)
 
@@ -915,8 +916,8 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 		t.Fatal("file-claims.json missing entry for src/api.go")
 	} else if c.Task != "task-a.md" {
 		t.Fatalf("src/api.go claim task = %q, want task-a.md", c.Task)
-	} else if c.Status != queue.DirInProgress {
-		t.Fatalf("src/api.go claim status = %q, want %q", c.Status, queue.DirInProgress)
+	} else if c.Status != dirs.InProgress {
+		t.Fatalf("src/api.go claim status = %q, want %q", c.Status, dirs.InProgress)
 	}
 
 	// task-B should still be deferred (task-A active in in-progress).
@@ -927,8 +928,8 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 
 	// Complete task-A → move to completed.
 	mustRename(t,
-		filepath.Join(tasksDir, queue.DirInProgress, "task-a.md"),
-		filepath.Join(tasksDir, queue.DirCompleted, "task-a.md"))
+		filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
+		filepath.Join(tasksDir, dirs.Completed, "task-a.md"))
 
 	// Rebuild deferred set and file claims.
 	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
@@ -944,14 +945,14 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	}
 
 	// Clean up for next scenario.
-	os.Remove(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"))
-	os.Remove(filepath.Join(tasksDir, queue.DirCompleted, "task-a.md"))
+	os.Remove(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"))
+	os.Remove(filepath.Join(tasksDir, dirs.Completed, "task-a.md"))
 
 	// ── Scenario 2: glob pattern overlap ─────────────────────────────────
 	// task-C affects internal/runner/*.go, task-D affects internal/runner/review.go.
-	writeTask(t, tasksDir, queue.DirBacklog, "task-c.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-c.md",
 		"---\npriority: 5\naffects: [\"internal/runner/*.go\"]\n---\n# Task C\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "task-d.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-d.md",
 		"---\npriority: 20\naffects: [internal/runner/review.go]\n---\n# Task D\n")
 
 	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
@@ -963,14 +964,14 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	}
 
 	// Clean up for next scenario.
-	os.Remove(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"))
-	os.Remove(filepath.Join(tasksDir, queue.DirBacklog, "task-d.md"))
+	os.Remove(filepath.Join(tasksDir, dirs.Backlog, "task-c.md"))
+	os.Remove(filepath.Join(tasksDir, dirs.Backlog, "task-d.md"))
 
 	// ── Scenario 3: directory prefix overlap ─────────────────────────────
 	// task-E affects pkg/client/, task-F affects pkg/client/http.go.
-	writeTask(t, tasksDir, queue.DirBacklog, "task-e.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-e.md",
 		"---\npriority: 5\naffects: [\"pkg/client/\"]\n---\n# Task E\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "task-f.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-f.md",
 		"---\npriority: 20\naffects: [pkg/client/http.go]\n---\n# Task F\n")
 
 	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
@@ -983,10 +984,10 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 
 	// Verify file-claims picks up the directory prefix claim when task-E is active.
 	mustRename(t,
-		filepath.Join(tasksDir, queue.DirBacklog, "task-e.md"),
-		filepath.Join(tasksDir, queue.DirInProgress, "task-e.md"))
+		filepath.Join(tasksDir, dirs.Backlog, "task-e.md"),
+		filepath.Join(tasksDir, dirs.InProgress, "task-e.md"))
 	os.WriteFile(
-		filepath.Join(tasksDir, queue.DirInProgress, "task-e.md"),
+		filepath.Join(tasksDir, dirs.InProgress, "task-e.md"),
 		[]byte("<!-- claimed-by: agent-3  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: 5\naffects: [\"pkg/client/\"]\n---\n# Task E\n"),
 		0o644)
 
@@ -1001,13 +1002,13 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	}
 
 	// Clean up for next scenario.
-	os.Remove(filepath.Join(tasksDir, queue.DirInProgress, "task-e.md"))
-	os.Remove(filepath.Join(tasksDir, queue.DirBacklog, "task-f.md"))
+	os.Remove(filepath.Join(tasksDir, dirs.InProgress, "task-e.md"))
+	os.Remove(filepath.Join(tasksDir, dirs.Backlog, "task-f.md"))
 
 	// ── Scenario 4: no overlap — both tasks remain runnable ──────────────
-	writeTask(t, tasksDir, queue.DirBacklog, "task-g.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-g.md",
 		"---\npriority: 5\naffects: [src/api.go]\n---\n# Task G\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "task-h.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-h.md",
 		"---\npriority: 20\naffects: [src/db.go]\n---\n# Task H\n")
 
 	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)

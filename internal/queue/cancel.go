@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
@@ -38,7 +39,7 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 	}
 
 	stem := frontmatter.TaskFileStem(match.Filename)
-	if match.State == DirCompleted {
+	if match.State == dirs.Completed {
 		return CancelResult{}, fmt.Errorf("cannot cancel %s: task has already been merged", stem)
 	}
 
@@ -48,7 +49,7 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		Warnings:   downstreamWarnings(tasksDir, idx, match),
 	}
 
-	if match.State == DirFailed {
+	if match.State == dirs.Failed {
 		if err := appendCancelledRecordFn(match.Path); err != nil {
 			return CancelResult{}, fmt.Errorf("write cancelled marker to %s: %w", match.Path, err)
 		}
@@ -56,7 +57,7 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		return result, nil
 	}
 
-	failedPath := filepath.Join(tasksDir, DirFailed, match.Filename)
+	failedPath := filepath.Join(tasksDir, dirs.Failed, match.Filename)
 	if err := AtomicMove(match.Path, failedPath); err != nil {
 		if errors.Is(err, ErrDestinationExists) {
 			return CancelResult{}, fmt.Errorf("cannot cancel %s: already exists in failed/", stem)
@@ -85,17 +86,17 @@ func downstreamWarnings(tasksDir string, idx *PollIndex, match TaskMatch) []stri
 	blockedBacklog := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
 	warnings := make(map[string]struct{})
 
-	for _, snap := range idx.TasksByState(DirWaiting) {
+	for _, snap := range idx.TasksByState(dirs.Waiting) {
 		if dependsOnCancelledTask(snap.Meta.DependsOn, stem, taskID) {
-			warnings[DirWaiting+"/"+snap.Filename] = struct{}{}
+			warnings[dirs.Waiting+"/"+snap.Filename] = struct{}{}
 		}
 	}
-	for _, snap := range idx.TasksByState(DirBacklog) {
+	for _, snap := range idx.TasksByState(dirs.Backlog) {
 		if _, blocked := blockedBacklog[snap.Filename]; !blocked {
 			continue
 		}
 		if dependsOnCancelledTask(snap.Meta.DependsOn, stem, taskID) {
-			warnings[DirBacklog+"/"+snap.Filename] = struct{}{}
+			warnings[dirs.Backlog+"/"+snap.Filename] = struct{}{}
 		}
 	}
 
