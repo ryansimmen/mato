@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
 	"mato/internal/queue"
+	"mato/internal/taskfile"
 )
 
 // ---------- F. Locks & Orphans ----------
@@ -166,8 +168,8 @@ func scanStaleReviewLocks(locksDir string, fix bool) []Finding {
 func scanOrphanedTasks(tasksDir string, fix bool) []Finding {
 	var findings []Finding
 
-	inProgress := filepath.Join(tasksDir, queue.DirInProgress)
-	names, err := queue.ListTaskFiles(inProgress)
+	inProgress := filepath.Join(tasksDir, dirs.InProgress)
+	names, err := taskfile.ListTaskFiles(inProgress)
 	if err != nil {
 		return findings
 	}
@@ -177,10 +179,10 @@ func scanOrphanedTasks(tasksDir string, fix bool) []Finding {
 
 		// Check for stale duplicate (already in a later state).
 		if laterDir, _ := queue.LaterStateDuplicateDir(name,
-			filepath.Join(tasksDir, queue.DirReadyReview),
-			filepath.Join(tasksDir, queue.DirReadyMerge),
-			filepath.Join(tasksDir, queue.DirCompleted),
-			filepath.Join(tasksDir, queue.DirFailed),
+			filepath.Join(tasksDir, dirs.ReadyReview),
+			filepath.Join(tasksDir, dirs.ReadyMerge),
+			filepath.Join(tasksDir, dirs.Completed),
+			filepath.Join(tasksDir, dirs.Failed),
 		); laterDir != "" {
 			findings = append(findings, Finding{
 				Code:     "locks.stale_duplicate",

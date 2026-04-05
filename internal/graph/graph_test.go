@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/queue"
 	"mato/internal/testutil"
 )
@@ -30,7 +31,7 @@ func writeTask(t *testing.T, tasksDir, state, filename, content string) {
 func setupTasksDir(t *testing.T) string {
 	t.Helper()
 	tasksDir := filepath.Join(t.TempDir(), ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -580,7 +581,7 @@ func TestBuild_ShowTo_DirReadError(t *testing.T) {
 	tasksDir := filepath.Join(repoDir, ".mato")
 
 	// Create only some dirs — make one unreadable to simulate dir-level error.
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -606,7 +607,7 @@ func TestBuild_ShowTo_DirReadError(t *testing.T) {
 func TestBuild_ShowTo_GlobWarningNoError(t *testing.T) {
 	repoDir := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -626,7 +627,7 @@ func TestBuild_ShowTo_GlobWarningNoError(t *testing.T) {
 func TestShowTo_TextWriteErrorPropagates(t *testing.T) {
 	repoDir := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}

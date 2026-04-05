@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/inspect"
 	"mato/internal/queue"
 	"mato/internal/status"
@@ -14,7 +15,7 @@ import (
 
 func TestCancelRetryLifecycle(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "task.md"), "---\nid: task\n---\n# Task\n")
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task.md"), "---\nid: task\n---\n# Task\n")
 
 	if _, err := queue.CancelTask(tasksDir, "task"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
@@ -50,7 +51,7 @@ func TestCancelRetryLifecycle(t *testing.T) {
 	if _, err := queue.ResolveTask(queue.BuildIndex(tasksDir), "task"); err != nil {
 		t.Fatalf("ResolveTask after retry: %v", err)
 	}
-	if snap := queue.BuildIndex(tasksDir).Snapshot(queue.DirBacklog, "task.md"); snap == nil {
+	if snap := queue.BuildIndex(tasksDir).Snapshot(dirs.Backlog, "task.md"); snap == nil {
 		t.Fatal("expected task in backlog after retry")
 	}
 }

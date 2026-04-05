@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/ui"
 )
@@ -19,7 +20,7 @@ import (
 func setupIndexDirs(t *testing.T) string {
 	t.Helper()
 	tasksDir := filepath.Join(t.TempDir(), ".mato")
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", dir, err)
 		}
@@ -53,7 +54,7 @@ func TestBuildIndex_EmptyQueue(t *testing.T) {
 
 func TestBuildIndex_BasicTask(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "add-feature.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "add-feature.md", `---
 priority: 10
 affects: [main.go, pkg/util.go]
 ---
@@ -67,7 +68,7 @@ Do the thing.
 		t.Fatalf("expected 1 task, got %d", len(idx.tasks))
 	}
 
-	snap := idx.Snapshot(DirBacklog, "add-feature.md")
+	snap := idx.Snapshot(dirs.Backlog, "add-feature.md")
 	if snap == nil {
 		t.Fatal("expected snapshot for backlog/add-feature.md, got nil")
 	}
@@ -77,19 +78,19 @@ Do the thing.
 	if !reflect.DeepEqual(snap.Meta.Affects, []string{"main.go", "pkg/util.go"}) {
 		t.Fatalf("affects = %v, want [main.go pkg/util.go]", snap.Meta.Affects)
 	}
-	if snap.State != DirBacklog {
-		t.Fatalf("state = %q, want %q", snap.State, DirBacklog)
+	if snap.State != dirs.Backlog {
+		t.Fatalf("state = %q, want %q", snap.State, dirs.Backlog)
 	}
 }
 
 func TestBuildIndex_CompletedIDs(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirCompleted, "task-a.md", `---
+	writeTask(t, tasksDir, dirs.Completed, "task-a.md", `---
 id: custom-id-a
 ---
 Done.
 `)
-	writeTask(t, tasksDir, DirCompleted, "task-b.md", "Also done.\n")
+	writeTask(t, tasksDir, dirs.Completed, "task-b.md", "Also done.\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -103,8 +104,8 @@ Done.
 
 func TestBuildIndex_NonCompletedIDs(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "task-x.md", "Work.\n")
-	writeTask(t, tasksDir, DirCompleted, "task-y.md", "Done.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task-x.md", "Work.\n")
+	writeTask(t, tasksDir, dirs.Completed, "task-y.md", "Done.\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -118,9 +119,9 @@ func TestBuildIndex_NonCompletedIDs(t *testing.T) {
 
 func TestBuildIndex_AllIDs(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "task-1.md", "Work.\n")
-	writeTask(t, tasksDir, DirCompleted, "task-2.md", "Done.\n")
-	writeTask(t, tasksDir, DirFailed, "task-3.md", "Failed.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task-1.md", "Work.\n")
+	writeTask(t, tasksDir, dirs.Completed, "task-2.md", "Done.\n")
+	writeTask(t, tasksDir, dirs.Failed, "task-3.md", "Failed.\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -135,15 +136,15 @@ func TestBuildIndex_ActiveBranches(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// Task in in-progress with a branch comment.
-	writeTask(t, tasksDir, DirInProgress, "task-a.md",
+	writeTask(t, tasksDir, dirs.InProgress, "task-a.md",
 		"<!-- claimed-by: abc  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/task-a -->\n---\npriority: 5\n---\n# A\n")
 
 	// Task in ready-for-review with a branch comment.
-	writeTask(t, tasksDir, DirReadyReview, "task-b.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "task-b.md",
 		"<!-- branch: task/task-b -->\n---\npriority: 5\n---\n# B\n")
 
 	// Task in backlog should NOT contribute to active branches.
-	writeTask(t, tasksDir, DirBacklog, "task-c.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task-c.md",
 		"<!-- branch: task/task-c -->\n---\npriority: 5\n---\n# C\n")
 
 	idx := BuildIndex(tasksDir)
@@ -163,12 +164,12 @@ func TestBuildIndex_ActiveBranches(t *testing.T) {
 func TestBuildIndex_HasActiveOverlap(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirInProgress, "active.md", `---
+	writeTask(t, tasksDir, dirs.InProgress, "active.md", `---
 affects: [main.go, pkg/util.go]
 ---
 Working.
 `)
-	writeTask(t, tasksDir, DirBacklog, "backlog.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "backlog.md", `---
 affects: [other.go]
 ---
 Waiting.
@@ -199,17 +200,17 @@ Waiting.
 func TestBuildIndex_ActiveAffects(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirInProgress, "ip-task.md", `---
+	writeTask(t, tasksDir, dirs.InProgress, "ip-task.md", `---
 affects: [main.go]
 ---
 Working.
 `)
-	writeTask(t, tasksDir, DirReadyMerge, "rm-task.md", `---
+	writeTask(t, tasksDir, dirs.ReadyMerge, "rm-task.md", `---
 affects: [main.go, other.go]
 ---
 Ready.
 `)
-	writeTask(t, tasksDir, DirBacklog, "bl-task.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "bl-task.md", `---
 affects: [main.go]
 ---
 Backlog.
@@ -235,10 +236,10 @@ Backlog.
 func TestBuildIndex_BacklogByPriority(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "low.md", "---\npriority: 99\n---\nLow.\n")
-	writeTask(t, tasksDir, DirBacklog, "high.md", "---\npriority: 1\n---\nHigh.\n")
-	writeTask(t, tasksDir, DirBacklog, "mid.md", "---\npriority: 50\n---\nMid.\n")
-	writeTask(t, tasksDir, DirBacklog, "excluded.md", "---\npriority: 0\n---\nExcluded.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "low.md", "---\npriority: 99\n---\nLow.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "high.md", "---\npriority: 1\n---\nHigh.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "mid.md", "---\npriority: 50\n---\nMid.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "excluded.md", "---\npriority: 0\n---\nExcluded.\n")
 
 	idx := BuildIndex(tasksDir)
 	exclude := map[string]struct{}{"excluded.md": {}}
@@ -261,8 +262,8 @@ func TestBuildIndex_BacklogByPriority(t *testing.T) {
 func TestBuildIndex_BacklogByPriority_TiesBreakByFilename(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "z-task.md", "---\npriority: 10\n---\nZ.\n")
-	writeTask(t, tasksDir, DirBacklog, "a-task.md", "---\npriority: 10\n---\nA.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "z-task.md", "---\npriority: 10\n---\nZ.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "a-task.md", "---\npriority: 10\n---\nA.\n")
 
 	idx := BuildIndex(tasksDir)
 	result := idx.BacklogByPriority(nil)
@@ -279,9 +280,9 @@ func TestBuildIndex_ParseFailures(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// Write a file with unterminated frontmatter.
-	writeTask(t, tasksDir, DirWaiting, "bad-task.md", "---\npriority: 5\n# No closing delimiter\n")
+	writeTask(t, tasksDir, dirs.Waiting, "bad-task.md", "---\npriority: 5\n# No closing delimiter\n")
 	// Write a good task to verify it's still indexed.
-	writeTask(t, tasksDir, DirWaiting, "good-task.md", "---\npriority: 5\n---\n# Good\n")
+	writeTask(t, tasksDir, dirs.Waiting, "good-task.md", "---\npriority: 5\n---\n# Good\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -302,7 +303,7 @@ func TestBuildIndex_ParseFailures(t *testing.T) {
 	}
 
 	// Good task should still be indexed.
-	snap := idx.Snapshot(DirWaiting, "good-task.md")
+	snap := idx.Snapshot(dirs.Waiting, "good-task.md")
 	if snap == nil {
 		t.Fatal("expected good-task.md to be indexed")
 	}
@@ -320,7 +321,7 @@ func TestBuildIndex_ParseFailurePreservesRuntimeMetadata(t *testing.T) {
 		"<!-- terminal-failure: mato at 2026-06-15T14:00:00Z — invalid glob -->\n" +
 		"---\npriority: nope\n---\n# Broken task\n"
 
-	writeTask(t, tasksDir, DirFailed, "broken-task.md", content)
+	writeTask(t, tasksDir, dirs.Failed, "broken-task.md", content)
 	idx := BuildIndex(tasksDir)
 	failures := idx.ParseFailures()
 	if len(failures) != 1 {
@@ -359,10 +360,10 @@ func TestBuildIndex_ParseFailurePreservesRuntimeMetadata(t *testing.T) {
 
 func TestBuildIndex_CancelledSnapshot(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirFailed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
+	writeTask(t, tasksDir, dirs.Failed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
 
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirFailed, "cancelled.md")
+	snap := idx.Snapshot(dirs.Failed, "cancelled.md")
 	if snap == nil {
 		t.Fatal("expected cancelled snapshot")
 	}
@@ -373,7 +374,7 @@ func TestBuildIndex_CancelledSnapshot(t *testing.T) {
 
 func TestBuildIndex_CancelledParseFailure(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirFailed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n")
+	writeTask(t, tasksDir, dirs.Failed, "broken-cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n")
 
 	idx := BuildIndex(tasksDir)
 	failures := idx.ParseFailures()
@@ -395,10 +396,10 @@ func TestBuildIndex_FailureAndReviewFailureCounts(t *testing.T) {
 	content += "\n<!-- review-failure: ghi at 2026-01-01T03:00:00Z step=REVIEW error=timeout -->"
 	content += "\n---\npriority: 5\n---\n# Counted\n"
 
-	writeTask(t, tasksDir, DirInProgress, "counted.md", content)
+	writeTask(t, tasksDir, dirs.InProgress, "counted.md", content)
 
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirInProgress, "counted.md")
+	snap := idx.Snapshot(dirs.InProgress, "counted.md")
 	if snap == nil {
 		t.Fatal("expected counted.md to be indexed")
 	}
@@ -425,9 +426,9 @@ func TestBuildIndex_SnapshotMetadataFields(t *testing.T) {
 		"<!-- terminal-failure: mato at 2026-06-15T14:00:00Z — invalid glob -->\n" +
 		"---\npriority: 10\n---\n# Meta test task\n"
 
-	writeTask(t, tasksDir, DirInProgress, "meta-test.md", content)
+	writeTask(t, tasksDir, dirs.InProgress, "meta-test.md", content)
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirInProgress, "meta-test.md")
+	snap := idx.Snapshot(dirs.InProgress, "meta-test.md")
 	if snap == nil {
 		t.Fatal("expected meta-test.md to be indexed")
 	}
@@ -454,23 +455,23 @@ func TestBuildIndex_SnapshotMetadataFields(t *testing.T) {
 
 func TestBuildIndex_TasksByState(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "a.md", "Task A.\n")
-	writeTask(t, tasksDir, DirBacklog, "b.md", "Task B.\n")
-	writeTask(t, tasksDir, DirCompleted, "c.md", "Task C.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "a.md", "Task A.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "b.md", "Task B.\n")
+	writeTask(t, tasksDir, dirs.Completed, "c.md", "Task C.\n")
 
 	idx := BuildIndex(tasksDir)
 
-	backlog := idx.TasksByState(DirBacklog)
+	backlog := idx.TasksByState(dirs.Backlog)
 	if len(backlog) != 2 {
 		t.Fatalf("expected 2 backlog tasks, got %d", len(backlog))
 	}
 
-	completed := idx.TasksByState(DirCompleted)
+	completed := idx.TasksByState(dirs.Completed)
 	if len(completed) != 1 {
 		t.Fatalf("expected 1 completed task, got %d", len(completed))
 	}
 
-	empty := idx.TasksByState(DirFailed)
+	empty := idx.TasksByState(dirs.Failed)
 	if len(empty) != 0 {
 		t.Fatalf("expected 0 failed tasks, got %d", len(empty))
 	}
@@ -479,7 +480,7 @@ func TestBuildIndex_TasksByState(t *testing.T) {
 func TestBuildIndex_NilIndexMethods(t *testing.T) {
 	var idx *PollIndex
 
-	if idx.TasksByState(DirBacklog) != nil {
+	if idx.TasksByState(dirs.Backlog) != nil {
 		t.Error("nil index TasksByState should return nil")
 	}
 	if idx.CompletedIDs() != nil {
@@ -518,7 +519,7 @@ func TestBuildIndex_NilIndexMethods(t *testing.T) {
 	if idx.ReviewParseFailures() != nil {
 		t.Error("nil index ReviewParseFailures should return nil")
 	}
-	if idx.Snapshot(DirBacklog, "x.md") != nil {
+	if idx.Snapshot(dirs.Backlog, "x.md") != nil {
 		t.Error("nil index Snapshot should return nil")
 	}
 }
@@ -536,7 +537,7 @@ func TestBuildIndex_MissingDirectories(t *testing.T) {
 
 func TestBuildIndex_ActiveBranchTrackedForMalformedActiveTask(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirReadyReview, "broken.md", strings.Join([]string{
+	writeTask(t, tasksDir, dirs.ReadyReview, "broken.md", strings.Join([]string{
 		"<!-- branch: task/broken -->",
 		"---",
 		"priority: [oops",
@@ -553,7 +554,7 @@ func TestBuildIndex_ActiveBranchTrackedForMalformedActiveTask(t *testing.T) {
 
 func TestBuildIndex_BacklogParseFailures(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "bad.md", "---\npriority: [oops\n---\n# Bad\n")
+	writeTask(t, tasksDir, dirs.Backlog, "bad.md", "---\npriority: [oops\n---\n# Bad\n")
 	idx := BuildIndex(tasksDir)
 	failures := idx.BacklogParseFailures()
 	if len(failures) != 1 {
@@ -566,8 +567,8 @@ func TestBuildIndex_BacklogParseFailures(t *testing.T) {
 
 func TestBuildIndex_ReviewParseFailures(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirReadyReview, "bad-review.md", "---\npriority: [oops\n---\n# Bad Review\n")
-	writeTask(t, tasksDir, DirReadyReview, "good-review.md", "---\npriority: 5\n---\n# Good Review\n")
+	writeTask(t, tasksDir, dirs.ReadyReview, "bad-review.md", "---\npriority: [oops\n---\n# Bad Review\n")
+	writeTask(t, tasksDir, dirs.ReadyReview, "good-review.md", "---\npriority: 5\n---\n# Good Review\n")
 	idx := BuildIndex(tasksDir)
 	failures := idx.ReviewParseFailures()
 	if len(failures) != 1 {
@@ -578,7 +579,7 @@ func TestBuildIndex_ReviewParseFailures(t *testing.T) {
 	}
 
 	// Good task should still be indexed.
-	snap := idx.Snapshot(DirReadyReview, "good-review.md")
+	snap := idx.Snapshot(dirs.ReadyReview, "good-review.md")
 	if snap == nil {
 		t.Fatal("expected good-review.md to be indexed")
 	}
@@ -596,10 +597,10 @@ affects: [main.go]
 # My Task
 Body.
 `
-	writeTask(t, tasksDir, DirInProgress, "my-task.md", content)
+	writeTask(t, tasksDir, dirs.InProgress, "my-task.md", content)
 
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirInProgress, "my-task.md")
+	snap := idx.Snapshot(dirs.InProgress, "my-task.md")
 	if snap == nil {
 		t.Fatal("expected my-task.md to be indexed")
 	}
@@ -636,15 +637,15 @@ max_retries: 5
 # Title
 Body.
 `
-	writeTask(t, tasksDir, DirBacklog, "consistency-check.md", content)
+	writeTask(t, tasksDir, dirs.Backlog, "consistency-check.md", content)
 
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirBacklog, "consistency-check.md")
+	snap := idx.Snapshot(dirs.Backlog, "consistency-check.md")
 	if snap == nil {
 		t.Fatal("expected snapshot")
 	}
 
-	meta, body, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, DirBacklog, "consistency-check.md"))
+	meta, body, err := frontmatter.ParseTaskFile(filepath.Join(tasksDir, dirs.Backlog, "consistency-check.md"))
 	if err != nil {
 		t.Fatalf("ParseTaskFile: %v", err)
 	}
@@ -664,8 +665,8 @@ func TestBuildIndex_MalformedCompletedTaskStemInIDs(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// "priority: nope" triggers a parse error (non-integer priority).
-	writeTask(t, tasksDir, DirCompleted, "broken-task.md", "---\npriority: nope\n---\nBody.\n")
-	writeTask(t, tasksDir, DirCompleted, "good-task.md", "---\npriority: 5\n---\nDone.\n")
+	writeTask(t, tasksDir, dirs.Completed, "broken-task.md", "---\npriority: nope\n---\nBody.\n")
+	writeTask(t, tasksDir, dirs.Completed, "good-task.md", "---\npriority: 5\n---\nDone.\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -694,7 +695,7 @@ func TestBuildIndex_MalformedCompletedTaskStemInIDs(t *testing.T) {
 	if _, ok := idx.CompletedIDs()["good-task"]; !ok {
 		t.Error("expected \"good-task\" stem in CompletedIDs")
 	}
-	snap := idx.Snapshot(DirCompleted, "good-task.md")
+	snap := idx.Snapshot(dirs.Completed, "good-task.md")
 	if snap == nil {
 		t.Fatal("expected good-task.md snapshot")
 	}
@@ -704,7 +705,7 @@ func TestBuildIndex_MalformedNonCompletedTaskStemInIDs(t *testing.T) {
 	// Same as above but for a non-completed directory. The filename stem
 	// should appear in NonCompletedIDs and AllIDs.
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "bad-backlog.md", "---\npriority: nope\n---\nBody.\n")
+	writeTask(t, tasksDir, dirs.Backlog, "bad-backlog.md", "---\npriority: nope\n---\nBody.\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -755,10 +756,10 @@ func TestHasActiveOverlap_PrefixMatch(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// Active task with a directory prefix.
-	writeTask(t, tasksDir, DirInProgress, "refactor-client.md",
+	writeTask(t, tasksDir, dirs.InProgress, "refactor-client.md",
 		"---\naffects:\n  - pkg/client/\n---\n# Refactor\n")
 	// Active task with an exact file.
-	writeTask(t, tasksDir, DirInProgress, "fix-merge.md",
+	writeTask(t, tasksDir, dirs.InProgress, "fix-merge.md",
 		"---\naffects:\n  - internal/merge/merge.go\n---\n# Fix\n")
 
 	idx := BuildIndex(tasksDir)
@@ -792,7 +793,7 @@ func TestHasActiveOverlap_GlobVsExact(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// Active task with a glob pattern.
-	writeTask(t, tasksDir, DirInProgress, "refactor-runner.md",
+	writeTask(t, tasksDir, dirs.InProgress, "refactor-runner.md",
 		"---\naffects:\n  - internal/runner/*.go\n---\n# Refactor\n")
 
 	idx := BuildIndex(tasksDir)
@@ -819,7 +820,7 @@ func TestHasActiveOverlap_GlobVsExact(t *testing.T) {
 func TestHasActiveOverlap_GlobVsPrefix(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirInProgress, "glob-task.md",
+	writeTask(t, tasksDir, dirs.InProgress, "glob-task.md",
 		"---\naffects:\n  - internal/runner/*.go\n---\n# Glob\n")
 
 	idx := BuildIndex(tasksDir)
@@ -846,7 +847,7 @@ func TestHasActiveOverlap_IncomingGlobVsExact(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// Active task with exact file path.
-	writeTask(t, tasksDir, DirInProgress, "fix-file.md",
+	writeTask(t, tasksDir, dirs.InProgress, "fix-file.md",
 		"---\naffects:\n  - internal/runner/task.go\n---\n# Fix\n")
 
 	idx := BuildIndex(tasksDir)
@@ -873,7 +874,7 @@ func TestHasActiveOverlap_IncomingGlobVsPrefix(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// Active task with directory prefix.
-	writeTask(t, tasksDir, DirInProgress, "refactor-client.md",
+	writeTask(t, tasksDir, dirs.InProgress, "refactor-client.md",
 		"---\naffects:\n  - pkg/client/\n---\n# Refactor\n")
 
 	idx := BuildIndex(tasksDir)
@@ -899,7 +900,7 @@ func TestHasActiveOverlap_IncomingGlobVsPrefix(t *testing.T) {
 func TestHasActiveOverlap_GlobVsGlob(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirInProgress, "glob-task.md",
+	writeTask(t, tasksDir, dirs.InProgress, "glob-task.md",
 		"---\naffects:\n  - internal/runner/*.go\n---\n# Glob\n")
 
 	idx := BuildIndex(tasksDir)
@@ -926,9 +927,9 @@ func TestHasActiveOverlap_GlobVsGlob(t *testing.T) {
 func TestHasActiveOverlap_IncomingDoublestar(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirInProgress, "fix-task.md",
+	writeTask(t, tasksDir, dirs.InProgress, "fix-task.md",
 		"---\naffects:\n  - internal/runner/task.go\n---\n# Fix\n")
-	writeTask(t, tasksDir, DirReadyReview, "prefix-task.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "prefix-task.md",
 		"---\naffects:\n  - pkg/client/\n---\n# Prefix\n")
 
 	idx := BuildIndex(tasksDir)
@@ -943,7 +944,7 @@ func TestHasActiveOverlap_ExactFastPath(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// No globs or prefixes — pure exact paths, fast path should work.
-	writeTask(t, tasksDir, DirInProgress, "exact-task.md",
+	writeTask(t, tasksDir, dirs.InProgress, "exact-task.md",
 		"---\naffects:\n  - main.go\n  - internal/foo.go\n---\n# Exact\n")
 
 	idx := BuildIndex(tasksDir)
@@ -968,9 +969,9 @@ func TestHasActiveOverlap_ExactFastPath(t *testing.T) {
 func TestBuildIndex_ActiveAffectsGlobsDeduplicated(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirInProgress, "task-a.md",
+	writeTask(t, tasksDir, dirs.InProgress, "task-a.md",
 		"---\naffects:\n  - internal/runner/*.go\n---\n# A\n")
-	writeTask(t, tasksDir, DirReadyReview, "task-b.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "task-b.md",
 		"---\naffects:\n  - internal/runner/*.go\n  - pkg/**/*.go\n---\n# B\n")
 
 	idx := BuildIndex(tasksDir)
@@ -986,9 +987,9 @@ func TestBuildIndex_ActiveAffectsGlobsDeduplicated(t *testing.T) {
 func TestBuildIndex_ActiveAffectsPrefixesDeduplicated(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirInProgress, "task-a.md",
+	writeTask(t, tasksDir, dirs.InProgress, "task-a.md",
 		"---\naffects:\n  - pkg/client/\n---\n# A\n")
-	writeTask(t, tasksDir, DirReadyReview, "task-b.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "task-b.md",
 		"---\naffects:\n  - pkg/client/\n  - internal/server/\n---\n# B\n")
 
 	idx := BuildIndex(tasksDir)
@@ -1006,13 +1007,13 @@ func TestBuildIndex_InvalidGlobStillIndexedWithWarning(t *testing.T) {
 	// Active task with an invalid glob (unclosed bracket) and a valid
 	// exact path. The task should be fully indexed (NOT a parse failure)
 	// so its affects remain visible to overlap detection.
-	writeTask(t, tasksDir, DirInProgress, "bad-glob.md",
+	writeTask(t, tasksDir, dirs.InProgress, "bad-glob.md",
 		"---\naffects:\n  - \"internal/[bad\"\n  - main.go\n---\n# Bad glob\n")
 
 	idx := BuildIndex(tasksDir)
 
 	// Task must be indexed.
-	snap := idx.Snapshot(DirInProgress, "bad-glob.md")
+	snap := idx.Snapshot(dirs.InProgress, "bad-glob.md")
 	if snap == nil {
 		t.Fatal("expected bad-glob.md to be indexed, got nil")
 	}
@@ -1053,12 +1054,12 @@ func TestBuildIndex_InvalidGlobStillIndexedWithWarning(t *testing.T) {
 func TestBuildIndex_GlobTrailingSlashStillIndexedWithWarning(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
-	writeTask(t, tasksDir, DirInProgress, "glob-slash.md",
+	writeTask(t, tasksDir, dirs.InProgress, "glob-slash.md",
 		"---\naffects:\n  - \"internal/*/\"\n---\n# Glob slash\n")
 
 	idx := BuildIndex(tasksDir)
 
-	snap := idx.Snapshot(DirInProgress, "glob-slash.md")
+	snap := idx.Snapshot(dirs.InProgress, "glob-slash.md")
 	if snap == nil {
 		t.Fatal("expected glob-slash.md to be indexed")
 	}
@@ -1081,7 +1082,7 @@ func TestHasActiveOverlap_InvalidGlobBlocksOverlapping(t *testing.T) {
 
 	// Active task with invalid glob syntax. Should conservatively block
 	// any incoming task whose affects share the static prefix.
-	writeTask(t, tasksDir, DirInProgress, "bad-glob.md",
+	writeTask(t, tasksDir, dirs.InProgress, "bad-glob.md",
 		"---\naffects:\n  - \"internal/[bad\"\n---\n# Bad glob\n")
 
 	idx := BuildIndex(tasksDir)
@@ -1110,7 +1111,7 @@ func TestHasActiveOverlap_GlobTrailingSlashBlocksOverlapping(t *testing.T) {
 
 	// Active task with glob + trailing slash (invalid combination).
 	// Should conservatively block files under the static prefix.
-	writeTask(t, tasksDir, DirInProgress, "glob-slash.md",
+	writeTask(t, tasksDir, dirs.InProgress, "glob-slash.md",
 		"---\naffects:\n  - \"internal/*/\"\n---\n# Glob slash\n")
 
 	idx := BuildIndex(tasksDir)
@@ -1136,7 +1137,7 @@ func TestHasActiveOverlap_InvalidGlobVsValidGlob(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 
 	// Active task with invalid glob syntax.
-	writeTask(t, tasksDir, DirInProgress, "bad-glob.md",
+	writeTask(t, tasksDir, dirs.InProgress, "bad-glob.md",
 		"---\naffects:\n  - \"internal/[bad\"\n---\n# Bad glob\n")
 
 	idx := BuildIndex(tasksDir)
@@ -1163,7 +1164,7 @@ func TestHasActiveOverlap_InvalidGlobVsValidGlob(t *testing.T) {
 
 func TestCompletedIDs_DefensiveCopy(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirCompleted, "done-task.md", "# Done\n")
+	writeTask(t, tasksDir, dirs.Completed, "done-task.md", "# Done\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -1188,7 +1189,7 @@ func TestCompletedIDs_DefensiveCopy(t *testing.T) {
 
 func TestNonCompletedIDs_DefensiveCopy(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "bl-task.md", "# Backlog\n")
+	writeTask(t, tasksDir, dirs.Backlog, "bl-task.md", "# Backlog\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -1211,7 +1212,7 @@ func TestNonCompletedIDs_DefensiveCopy(t *testing.T) {
 
 func TestAllIDs_DefensiveCopy(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "any-task.md", "# Any\n")
+	writeTask(t, tasksDir, dirs.Backlog, "any-task.md", "# Any\n")
 
 	idx := BuildIndex(tasksDir)
 
@@ -1234,7 +1235,7 @@ func TestAllIDs_DefensiveCopy(t *testing.T) {
 
 func TestActiveBranches_DefensiveCopy(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirInProgress, "ip-task.md",
+	writeTask(t, tasksDir, dirs.InProgress, "ip-task.md",
 		"<!-- branch: task/ip-task -->\n# In Progress\n")
 
 	idx := BuildIndex(tasksDir)
@@ -1274,7 +1275,7 @@ func writeVerdictFile(t *testing.T, tasksDir, filename string, verdict map[strin
 func TestBuildIndex_ReviewRejectionFromVerdictFallback(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	// Task has no review-rejection markers in the file.
-	writeTask(t, tasksDir, DirBacklog, "needs-rework.md", "---\npriority: 5\n---\n# Needs Rework\n")
+	writeTask(t, tasksDir, dirs.Backlog, "needs-rework.md", "---\npriority: 5\n---\n# Needs Rework\n")
 	// But a preserved verdict file exists.
 	writeVerdictFile(t, tasksDir, "needs-rework.md", map[string]string{
 		"verdict": "reject",
@@ -1282,7 +1283,7 @@ func TestBuildIndex_ReviewRejectionFromVerdictFallback(t *testing.T) {
 	})
 
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirBacklog, "needs-rework.md")
+	snap := idx.Snapshot(dirs.Backlog, "needs-rework.md")
 	if snap == nil {
 		t.Fatal("expected snapshot, got nil")
 	}
@@ -1294,7 +1295,7 @@ func TestBuildIndex_ReviewRejectionFromVerdictFallback(t *testing.T) {
 func TestBuildIndex_ReviewRejectionPrefersDurableMarker(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	// Task has a durable marker in the file.
-	writeTask(t, tasksDir, DirBacklog, "has-marker.md",
+	writeTask(t, tasksDir, dirs.Backlog, "has-marker.md",
 		"---\npriority: 5\n---\n# Has Marker\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — durable reason -->\n")
 	// And also a verdict file with a different reason.
 	writeVerdictFile(t, tasksDir, "has-marker.md", map[string]string{
@@ -1303,7 +1304,7 @@ func TestBuildIndex_ReviewRejectionPrefersDurableMarker(t *testing.T) {
 	})
 
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirBacklog, "has-marker.md")
+	snap := idx.Snapshot(dirs.Backlog, "has-marker.md")
 	if snap == nil {
 		t.Fatal("expected snapshot, got nil")
 	}
@@ -1314,10 +1315,10 @@ func TestBuildIndex_ReviewRejectionPrefersDurableMarker(t *testing.T) {
 
 func TestBuildIndex_NoVerdictFile_NoRejectionReason(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "clean.md", "---\npriority: 5\n---\n# Clean\n")
+	writeTask(t, tasksDir, dirs.Backlog, "clean.md", "---\npriority: 5\n---\n# Clean\n")
 
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirBacklog, "clean.md")
+	snap := idx.Snapshot(dirs.Backlog, "clean.md")
 	if snap == nil {
 		t.Fatal("expected snapshot, got nil")
 	}

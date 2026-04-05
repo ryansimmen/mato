@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
@@ -48,7 +47,7 @@ func CollectActiveAffects(tasksDir string) ([]ActiveTask, []CollectWarning) {
 	var warnings []CollectWarning
 	for _, dir := range activeDirs {
 		dirPath := filepath.Join(tasksDir, dir)
-		names, err := listTaskFiles(dirPath)
+		names, err := ListTaskFiles(dirPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -74,20 +73,4 @@ func CollectActiveAffects(tasksDir string) ([]ActiveTask, []CollectWarning) {
 		}
 	}
 	return active, warnings
-}
-
-// listTaskFiles returns the names of .md files in dir, sorted by name.
-func listTaskFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		names = append(names, e.Name())
-	}
-	return names, nil
 }

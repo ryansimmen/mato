@@ -111,7 +111,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 			"MATO_TASK_FILE="+claimed.Filename,
 			"MATO_TASK_BRANCH="+claimed.Branch,
 			"MATO_TASK_TITLE="+claimed.Title,
-			fmt.Sprintf("MATO_TASK_PATH=%s/%s/%s/%s", env.workdir, dirs.Root, queue.DirInProgress, claimed.Filename),
+			fmt.Sprintf("MATO_TASK_PATH=%s/%s/%s/%s", env.workdir, dirs.Root, dirs.InProgress, claimed.Filename),
 			fmt.Sprintf("MATO_FILE_CLAIMS=%s/%s/messages/file-claims.json", env.workdir, dirs.Root),
 		)
 		if depCtxPath := writeDependencyContextFile(env.tasksDir, claimed); depCtxPath != "" {
@@ -177,7 +177,7 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 	// Pre-check: verify ready-for-review/ destination is clear before pushing.
 	// If a stale file exists (e.g., from a prior incomplete cycle), skip the
 	// push to avoid corrupting its metadata.
-	if _, err := os.Stat(filepath.Join(env.tasksDir, queue.DirReadyReview, claimed.Filename)); err == nil {
+	if _, err := os.Stat(filepath.Join(env.tasksDir, dirs.ReadyReview, claimed.Filename)); err == nil {
 		ui.Warnf("warning: %s already exists in ready-for-review/; skipping push (task is likely already being reviewed)\n", claimed.Filename)
 		return fmt.Errorf("ready-for-review/%s already exists: skipping push to avoid overwriting", claimed.Filename)
 	}
@@ -255,7 +255,7 @@ func finalizePushedTask(tasksDir, targetBranch, agentID, filename, branch, curre
 // ready-for-review/ and writes the branch marker. If the marker write fails,
 // the move is rolled back by moving the file back to in-progress/.
 func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, branch string) error {
-	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, claimed.Filename)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, claimed.Filename)
 
 	// AtomicMove uses os.Link + os.Remove to prevent silently overwriting a
 	// file that appeared at the destination after the pre-check (TOCTOU defense).
@@ -293,7 +293,7 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 		return
 	}
 
-	dst := filepath.Join(tasksDir, queue.DirBacklog, claimed.Filename)
+	dst := filepath.Join(tasksDir, dirs.Backlog, claimed.Filename)
 	if err := queue.AtomicMove(claimed.TaskPath, dst); err != nil {
 		ui.Warnf("warning: could not recover stuck task %s: %v\n", claimed.Filename, err)
 		return
@@ -347,7 +347,7 @@ func loadRecoveredTargetBranch(tasksDir, filename string) string {
 }
 
 func recoveredFilesChanged(tasksDir, filename string) []string {
-	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, filename)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, filename)
 	meta, _, err := frontmatter.ParseTaskFile(readyPath)
 	if err != nil || len(meta.Affects) == 0 {
 		return nil

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/pause"
 	"mato/internal/process"
-	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
@@ -1143,7 +1143,7 @@ func TestDoctor_Dependencies_FlagsDependencyBlockedBacklogTask(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	allOK(t)
 
-	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"),
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "blocked.md"),
 		"---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
 
 	report, err := Run(context.Background(), repoRoot, Options{Format: "text", Only: []string{"deps"}})
@@ -1162,7 +1162,7 @@ func TestDoctor_Dependencies_FlagsDependencyBlockedBacklogTask(t *testing.T) {
 				if !strings.Contains(f.Message, "should be in waiting/") {
 					t.Fatalf("Message = %q, want waiting/ guidance", f.Message)
 				}
-				if f.Path != filepath.Join(tasksDir, queue.DirBacklog, "blocked.md") {
+				if f.Path != filepath.Join(tasksDir, dirs.Backlog, "blocked.md") {
 					t.Fatalf("Path = %q, want blocked backlog path", f.Path)
 				}
 			}
@@ -1178,7 +1178,7 @@ func TestDoctor_QueueLayout_DirIsFile_CoreQueue(t *testing.T) {
 	allOK(t)
 
 	// Replace the backlog directory with a regular file.
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog)
 	if err := os.RemoveAll(backlogPath); err != nil {
 		t.Fatal(err)
 	}
@@ -1194,7 +1194,7 @@ func TestDoctor_QueueLayout_DirIsFile_CoreQueue(t *testing.T) {
 	found := false
 	for _, cr := range report.Checks {
 		for _, f := range cr.Findings {
-			if f.Code == "queue.not_a_directory" && strings.Contains(f.Message, queue.DirBacklog) {
+			if f.Code == "queue.not_a_directory" && strings.Contains(f.Message, dirs.Backlog) {
 				found = true
 				if f.Severity != SeverityError {
 					t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)
@@ -1247,7 +1247,7 @@ func TestDoctor_QueueLayout_UnreadableDirStatError(t *testing.T) {
 
 	origStat := osStatFn
 	osStatFn = func(name string) (os.FileInfo, error) {
-		if name == filepath.Join(tasksDir, queue.DirBacklog) {
+		if name == filepath.Join(tasksDir, dirs.Backlog) {
 			return nil, fmt.Errorf("permission denied")
 		}
 		return origStat(name)
@@ -1262,7 +1262,7 @@ func TestDoctor_QueueLayout_UnreadableDirStatError(t *testing.T) {
 	found := false
 	for _, cr := range report.Checks {
 		for _, f := range cr.Findings {
-			if f.Code == "queue.unreadable_dir" && strings.Contains(f.Message, queue.DirBacklog) {
+			if f.Code == "queue.unreadable_dir" && strings.Contains(f.Message, dirs.Backlog) {
 				found = true
 				if f.Severity != SeverityError {
 					t.Errorf("Severity = %q, want %q", f.Severity, SeverityError)

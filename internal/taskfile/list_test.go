@@ -1,4 +1,4 @@
-package queue
+package taskfile
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 func TestListTaskFiles(t *testing.T) {
 	tests := []struct {
 		name     string
-		files    map[string]bool // filename -> isDir
+		files    map[string]bool
 		expected []string
 	}{
 		{

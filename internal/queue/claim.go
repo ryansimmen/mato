@@ -10,6 +10,7 @@ import (
 
 	"mato/internal/atomicwrite"
 	"mato/internal/config"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
@@ -113,12 +114,12 @@ func CollectActiveBranches(tasksDir string, idx *PollIndex) map[string]struct{} 
 	}
 	active := make(map[string]struct{})
 	dirs := []string{
-		filepath.Join(tasksDir, DirInProgress),
-		filepath.Join(tasksDir, DirReadyReview),
-		filepath.Join(tasksDir, DirReadyMerge),
+		filepath.Join(tasksDir, dirs.InProgress),
+		filepath.Join(tasksDir, dirs.ReadyReview),
+		filepath.Join(tasksDir, dirs.ReadyMerge),
 	}
 	for _, dir := range dirs {
-		names, err := ListTaskFiles(dir)
+		names, err := taskfile.ListTaskFiles(dir)
 		if err != nil {
 			continue
 		}
@@ -258,9 +259,9 @@ func rollbackClaimToBacklog(name, dst, src string, claimErr error) error {
 func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown time.Duration, idx *PollIndex) (*ClaimedTask, error) {
 	idx = ensureIndex(tasksDir, idx)
 
-	inProgressDir := filepath.Join(tasksDir, DirInProgress)
-	failedDir := filepath.Join(tasksDir, DirFailed)
-	backlogDir := filepath.Join(tasksDir, DirBacklog)
+	inProgressDir := filepath.Join(tasksDir, dirs.InProgress)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
 
 	activeBranches := CollectActiveBranches(tasksDir, idx)
 	depLookup := newDependencyLookup(idx)
@@ -275,7 +276,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		// Always re-read the candidate file before claiming so manual edits made
 		// after index construction cannot bypass dependency enforcement.
-		snap, snapErr := loadTaskSnapshot(tasksDir, DirBacklog, name, src)
+		snap, snapErr := loadTaskSnapshot(tasksDir, dirs.Backlog, name, src)
 		if snapErr != nil {
 			ui.Warnf("warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, snapErr)
 			continue
@@ -285,7 +286,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		retryExhausted, cooledDown := retryClaimability(snap.FailureCount, meta.MaxRetries, snap.LastFailureAt, cooldown)
 
 		if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
-			waitingPath := filepath.Join(tasksDir, DirWaiting, name)
+			waitingPath := filepath.Join(tasksDir, dirs.Waiting, name)
 			if err := AtomicMove(src, waitingPath); err != nil {
 				ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
 				continue

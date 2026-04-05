@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/merge"
-	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
@@ -36,7 +36,7 @@ func TestMergeMissingBranch_ExplicitMarker(t *testing.T) {
 		"# Missing explicit branch",
 		"This task's branch was never pushed.",
 	}, "\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "missing-explicit.md", taskContent)
+	writeTask(t, tasksDir, dirs.ReadyMerge, "missing-explicit.md", taskContent)
 
 	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
 	if merged != 0 {
@@ -44,10 +44,10 @@ func TestMergeMissingBranch_ExplicitMarker(t *testing.T) {
 	}
 
 	// Task should be in failed/, not in ready-to-merge/ or backlog/.
-	failedPath := filepath.Join(tasksDir, queue.DirFailed, "missing-explicit.md")
+	failedPath := filepath.Join(tasksDir, dirs.Failed, "missing-explicit.md")
 	mustExist(t, failedPath)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "missing-explicit.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "missing-explicit.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "missing-explicit.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, "missing-explicit.md"))
 
 	// The failure record should mention "merge-queue" and the missing branch.
 	data := readFile(t, failedPath)
@@ -96,17 +96,17 @@ func TestMergeMissingBranch_MissingMarker(t *testing.T) {
 		"# Missing derived branch",
 		"This task's branch was never pushed.",
 	}, "\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "missing-derived.md", taskContent)
+	writeTask(t, tasksDir, dirs.ReadyMerge, "missing-derived.md", taskContent)
 
 	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
 	if merged != 0 {
 		t.Fatalf("ProcessQueue() = %d, want 0", merged)
 	}
 
-	failedPath := filepath.Join(tasksDir, queue.DirFailed, "missing-derived.md")
+	failedPath := filepath.Join(tasksDir, dirs.Failed, "missing-derived.md")
 	mustExist(t, failedPath)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "missing-derived.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "missing-derived.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "missing-derived.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, "missing-derived.md"))
 
 	data := readFile(t, failedPath)
 	if !strings.Contains(data, "<!-- failure: merge-queue") {
@@ -149,7 +149,7 @@ func TestMergeMissingBranch_RetriesRemaining(t *testing.T) {
 		"---",
 		"# Retryable missing branch",
 	}, "\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "retryable-missing.md", taskContent)
+	writeTask(t, tasksDir, dirs.ReadyMerge, "retryable-missing.md", taskContent)
 
 	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
 	if merged != 0 {
@@ -157,10 +157,10 @@ func TestMergeMissingBranch_RetriesRemaining(t *testing.T) {
 	}
 
 	// With retries remaining, the task should go to backlog/ for retry.
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, "retryable-missing.md")
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, "retryable-missing.md")
 	mustExist(t, backlogPath)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "retryable-missing.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirFailed, "retryable-missing.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "retryable-missing.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Failed, "retryable-missing.md"))
 
 	data := readFile(t, backlogPath)
 	if !strings.Contains(data, "<!-- failure: merge-queue") {
@@ -199,7 +199,7 @@ func TestMergeMissingBranch_SuccessfulTaskUnaffected(t *testing.T) {
 		"add good file")
 
 	// Good task — branch exists.
-	writeTask(t, tasksDir, queue.DirReadyMerge, "good-task.md",
+	writeTask(t, tasksDir, dirs.ReadyMerge, "good-task.md",
 		"<!-- branch: task/good-task -->\n---\npriority: 1\n---\n# Good task\n")
 
 	// Bad task — branch missing, retries exhausted.
@@ -212,7 +212,7 @@ func TestMergeMissingBranch_SuccessfulTaskUnaffected(t *testing.T) {
 		"<!-- failure: prior at 2026-01-01T00:00:00Z step=WORK error=prior -->",
 		"# Bad task",
 	}, "\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "bad-task.md", badContent)
+	writeTask(t, tasksDir, dirs.ReadyMerge, "bad-task.md", badContent)
 
 	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
 	if merged != 1 {
@@ -220,10 +220,10 @@ func TestMergeMissingBranch_SuccessfulTaskUnaffected(t *testing.T) {
 	}
 
 	// Good task completed, bad task failed.
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "good-task.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirFailed, "bad-task.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "good-task.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "bad-task.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "good-task.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Failed, "bad-task.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "good-task.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "bad-task.md"))
 
 	// The good task's content should be on the target branch.
 	good, err := git.Output(repoRoot, "show", "mato:good.txt")

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
@@ -63,8 +64,8 @@ func gatherStatus(tasksDir string) (statusData, error) {
 
 	// Queue counts derived from the index snapshot.
 	// Include parse-failed files in counts to match old countMarkdownFiles behavior.
-	data.queueCounts = make(map[string]int, len(queue.AllDirs))
-	for _, dir := range queue.AllDirs {
+	data.queueCounts = make(map[string]int, len(dirs.All))
+	for _, dir := range dirs.All {
 		data.queueCounts[dir] = len(idx.TasksByState(dir))
 	}
 	for _, pf := range idx.ParseFailures() {
@@ -129,10 +130,10 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	}
 
 	// Task lists by state — derived from index.
-	data.inProgressTasks = listTasksFromIndex(idx, queue.DirInProgress)
-	data.readyForReview = listTasksFromIndex(idx, queue.DirReadyReview)
-	data.readyToMerge = listTasksFromIndex(idx, queue.DirReadyMerge)
-	data.failedTasks = listTasksFromIndex(idx, queue.DirFailed)
+	data.inProgressTasks = listTasksFromIndex(idx, dirs.InProgress)
+	data.readyForReview = listTasksFromIndex(idx, dirs.ReadyReview)
+	data.readyToMerge = listTasksFromIndex(idx, dirs.ReadyMerge)
+	data.failedTasks = listTasksFromIndex(idx, dirs.Failed)
 
 	// Reverse dependencies — derived from index.
 	data.reverseDeps = reverseDepsFromIndex(idx)

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/merge"
@@ -93,7 +94,7 @@ func createTaskBranch(t *testing.T, repoRoot, branch string, files map[string]st
 func TestFullTaskLifecycleNoDeps(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	backlogTask := writeTask(t, tasksDir, queue.DirBacklog, "add-hello.md", "# Add hello\nCreate hello.txt with \"hello world\"\n")
+	backlogTask := writeTask(t, tasksDir, dirs.Backlog, "add-hello.md", "# Add hello\nCreate hello.txt with \"hello world\"\n")
 
 	if got := queue.ReconcileReadyQueue(tasksDir, nil); got {
 		t.Fatalf("queue.ReconcileReadyQueue() = %v, want false", got)
@@ -121,7 +122,7 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 		t.Fatalf("task body = %q, want instruction text", body)
 	}
 
-	inProgressTask := filepath.Join(tasksDir, queue.DirInProgress, "add-hello.md")
+	inProgressTask := filepath.Join(tasksDir, dirs.InProgress, "add-hello.md")
 	mustRename(t, backlogTask, inProgressTask)
 
 	cloneDir, err := git.CreateClone(repoRoot)
@@ -137,7 +138,7 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 	mustGitOutput(t, cloneDir, "commit", "-m", "add hello")
 	mustGitOutput(t, cloneDir, "push", "origin", "task/add-hello")
 
-	readyTask := filepath.Join(tasksDir, queue.DirReadyMerge, "add-hello.md")
+	readyTask := filepath.Join(tasksDir, dirs.ReadyMerge, "add-hello.md")
 	mustRename(t, inProgressTask, readyTask)
 	if err := queue.WriteBranchMarker(readyTask, "task/add-hello"); err != nil {
 		t.Fatalf("queue.WriteBranchMarker(%s): %v", readyTask, err)
@@ -147,7 +148,7 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 
-	completedTask := filepath.Join(tasksDir, queue.DirCompleted, "add-hello.md")
+	completedTask := filepath.Join(tasksDir, dirs.Completed, "add-hello.md")
 	mustExist(t, completedTask)
 	mustNotExist(t, readyTask)
 
@@ -163,46 +164,46 @@ func TestFullTaskLifecycleNoDeps(t *testing.T) {
 func TestDependencyChainPromotion(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirWaiting, "task-a.md", "---\nid: task-a\npriority: 1\n---\n# Task A\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\npriority: 2\ndepends_on: [task-a]\n---\n# Task B\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\npriority: 3\ndepends_on: [task-b]\n---\n# Task C\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-a.md", "---\nid: task-a\npriority: 1\n---\n# Task A\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-b.md", "---\nid: task-b\npriority: 2\ndepends_on: [task-a]\n---\n# Task B\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-c.md", "---\nid: task-c\npriority: 3\ndepends_on: [task-b]\n---\n# Task C\n")
 
 	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
 		t.Fatal("first queue.ReconcileReadyQueue() = false, want true")
 	}
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-a.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-b.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-c.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "task-a.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-a.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-b.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-c.md"))
 
 	mustRename(t,
-		filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"),
-		filepath.Join(tasksDir, queue.DirCompleted, "task-a.md"),
+		filepath.Join(tasksDir, dirs.Backlog, "task-a.md"),
+		filepath.Join(tasksDir, dirs.Completed, "task-a.md"),
 	)
 
 	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
 		t.Fatal("second queue.ReconcileReadyQueue() = false, want true")
 	}
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-c.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "task-b.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-c.md"))
 
 	mustRename(t,
-		filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"),
-		filepath.Join(tasksDir, queue.DirCompleted, "task-b.md"),
+		filepath.Join(tasksDir, dirs.Backlog, "task-b.md"),
+		filepath.Join(tasksDir, dirs.Completed, "task-b.md"),
 	)
 
 	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
 		t.Fatal("third queue.ReconcileReadyQueue() = false, want true")
 	}
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "task-c.md"))
 }
 
 func TestOverlapPrevention(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirBacklog, "high.md", "---\npriority: 5\naffects: [main.go]\n---\n# High\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Low\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "other.md", "---\npriority: 10\naffects: [README.md]\n---\n# Other\n")
+	writeTask(t, tasksDir, dirs.Backlog, "high.md", "---\npriority: 5\naffects: [main.go]\n---\n# High\n")
+	writeTask(t, tasksDir, dirs.Backlog, "low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Low\n")
+	writeTask(t, tasksDir, dirs.Backlog, "other.md", "---\npriority: 10\naffects: [README.md]\n---\n# Other\n")
 
 	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
 
@@ -212,14 +213,14 @@ func TestOverlapPrevention(t *testing.T) {
 	if _, ok := deferred["low.md"]; !ok {
 		t.Fatalf("deferred set missing %q: %#v", "low.md", deferred)
 	}
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "high.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "other.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "low.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, "low.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "high.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "other.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "low.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Waiting, "low.md"))
 
 	mustRename(t,
-		filepath.Join(tasksDir, queue.DirBacklog, "high.md"),
-		filepath.Join(tasksDir, queue.DirCompleted, "high.md"),
+		filepath.Join(tasksDir, dirs.Backlog, "high.md"),
+		filepath.Join(tasksDir, dirs.Completed, "high.md"),
 	)
 
 	if got := queue.ReconcileReadyQueue(tasksDir, nil); got {
@@ -231,19 +232,19 @@ func TestOverlapPrevention(t *testing.T) {
 		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
 	}
 
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "low.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "other.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "low.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "other.md"))
 }
 
 func TestOrphanRecoveryAndRequeue(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	inProgressTask := writeTask(t, tasksDir, queue.DirInProgress, "recover-me.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Recover me\nTry again.\n")
+	inProgressTask := writeTask(t, tasksDir, dirs.InProgress, "recover-me.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Recover me\nTry again.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
 
 	_ = queue.RecoverOrphanedTasks(tasksDir)
 
-	backlogTask := filepath.Join(tasksDir, queue.DirBacklog, "recover-me.md")
+	backlogTask := filepath.Join(tasksDir, dirs.Backlog, "recover-me.md")
 	mustExist(t, backlogTask)
 	mustNotExist(t, inProgressTask)
 	if contents := readFile(t, backlogTask); !strings.Contains(contents, "<!-- failure: mato-recovery") {
@@ -261,25 +262,25 @@ func TestOrphanRecoveryAndRequeue(t *testing.T) {
 func TestDependencyBlockedBacklogDemotedAndRetriedTaskWaits(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirBacklog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
-	writeTask(t, tasksDir, queue.DirFailed, "retry-blocked.md", "---\nid: retry-blocked\ndepends_on: [missing]\npriority: 20\n---\n# Retry blocked\n")
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
+	writeTask(t, tasksDir, dirs.Failed, "retry-blocked.md", "---\nid: retry-blocked\ndepends_on: [missing]\npriority: 20\n---\n# Retry blocked\n")
 
 	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
 		t.Fatal("queue.ReconcileReadyQueue() = false, want true")
 	}
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "blocked.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "blocked.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, "blocked.md"))
 
 	if _, err := queue.RetryTask(tasksDir, "retry-blocked"); err != nil {
 		t.Fatalf("queue.RetryTask: %v", err)
 	}
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "retry-blocked.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "retry-blocked.md"))
 
 	if got := queue.ReconcileReadyQueue(tasksDir, nil); !got {
 		t.Fatal("second queue.ReconcileReadyQueue() = false, want true")
 	}
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "retry-blocked.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, "retry-blocked.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "retry-blocked.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, "retry-blocked.md"))
 
 	if err := queue.WriteQueueManifest(tasksDir, nil, nil); err != nil {
 		t.Fatalf("queue.WriteQueueManifest: %v", err)
@@ -295,18 +296,18 @@ func TestMergeConflictHandling(t *testing.T) {
 	createTaskBranch(t, repoRoot, "task/alpha", map[string]string{"README.md": "alpha\n"}, "alpha change")
 	createTaskBranch(t, repoRoot, "task/beta", map[string]string{"README.md": "beta\n"}, "beta change")
 
-	writeTask(t, tasksDir, queue.DirReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "alpha.md", "<!-- branch: task/alpha -->\n---\npriority: 1\n---\n# Alpha\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "beta.md", "<!-- branch: task/beta -->\n---\npriority: 10\n---\n# Beta\n")
 
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
 
-	mustExist(t, filepath.Join(tasksDir, queue.DirCompleted, "alpha.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "alpha.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "beta.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, "beta.md"))
-	if contents := readFile(t, filepath.Join(tasksDir, queue.DirBacklog, "beta.md")); !strings.Contains(contents, "<!-- failure: merge-queue") {
+	mustExist(t, filepath.Join(tasksDir, dirs.Completed, "alpha.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "alpha.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "beta.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "beta.md"))
+	if contents := readFile(t, filepath.Join(tasksDir, dirs.Backlog, "beta.md")); !strings.Contains(contents, "<!-- failure: merge-queue") {
 		t.Fatalf("beta task missing merge failure record: %q", contents)
 	}
 
@@ -388,11 +389,11 @@ func TestGlobDeferral(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// High-priority task with glob affects.
-	writeTask(t, tasksDir, queue.DirBacklog, "high.md", "---\npriority: 5\naffects:\n  - internal/runner/*.go\n---\n# High\n")
+	writeTask(t, tasksDir, dirs.Backlog, "high.md", "---\npriority: 5\naffects:\n  - internal/runner/*.go\n---\n# High\n")
 	// Low-priority task with overlapping glob.
-	writeTask(t, tasksDir, queue.DirBacklog, "low.md", "---\npriority: 20\naffects:\n  - internal/runner/*_test.go\n---\n# Low\n")
+	writeTask(t, tasksDir, dirs.Backlog, "low.md", "---\npriority: 20\naffects:\n  - internal/runner/*_test.go\n---\n# Low\n")
 	// Non-overlapping task.
-	writeTask(t, tasksDir, queue.DirBacklog, "other.md", "---\npriority: 10\naffects:\n  - pkg/client/*.go\n---\n# Other\n")
+	writeTask(t, tasksDir, dirs.Backlog, "other.md", "---\npriority: 10\naffects:\n  - pkg/client/*.go\n---\n# Other\n")
 
 	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
 
@@ -403,21 +404,21 @@ func TestGlobDeferral(t *testing.T) {
 		t.Fatalf("deferred set missing %q: %v", "low.md", deferred)
 	}
 	// All tasks stay in backlog (deferred tasks are skipped, not moved).
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "high.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "low.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "other.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "high.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "low.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "other.md"))
 }
 
 func TestMixedGlobExactOverlap(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Active task with exact file path.
-	writeTask(t, tasksDir, queue.DirInProgress, "active.md",
+	writeTask(t, tasksDir, dirs.InProgress, "active.md",
 		"<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: 1\naffects:\n  - internal/runner/task.go\n---\n# Active\n")
 	// Backlog task with glob that matches the active task's exact path.
-	writeTask(t, tasksDir, queue.DirBacklog, "glob-task.md", "---\npriority: 10\naffects:\n  - internal/runner/*.go\n---\n# Glob Task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "glob-task.md", "---\npriority: 10\naffects:\n  - internal/runner/*.go\n---\n# Glob Task\n")
 	// Backlog task with non-overlapping glob.
-	writeTask(t, tasksDir, queue.DirBacklog, "safe-task.md", "---\npriority: 10\naffects:\n  - pkg/**/*.go\n---\n# Safe\n")
+	writeTask(t, tasksDir, dirs.Backlog, "safe-task.md", "---\npriority: 10\naffects:\n  - pkg/**/*.go\n---\n# Safe\n")
 
 	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
 
@@ -432,12 +433,12 @@ func TestMixedGlobExactOverlap(t *testing.T) {
 func TestStatusWithPopulatedQueue(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirWaiting, "waiting.md", "---\nid: waiting\ndepends_on: [done]\n---\n# Waiting\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "backlog.md", "# Backlog\n")
-	writeTask(t, tasksDir, queue.DirInProgress, "working.md", "<!-- claimed-by: status-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Working\n")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "ready.md", "<!-- branch: task/ready -->\n# Ready\n")
-	writeTask(t, tasksDir, queue.DirCompleted, "done.md", "---\nid: done\n---\n# Done\n")
-	writeTask(t, tasksDir, queue.DirFailed, "failed.md", "# Failed\n")
+	writeTask(t, tasksDir, dirs.Waiting, "waiting.md", "---\nid: waiting\ndepends_on: [done]\n---\n# Waiting\n")
+	writeTask(t, tasksDir, dirs.Backlog, "backlog.md", "# Backlog\n")
+	writeTask(t, tasksDir, dirs.InProgress, "working.md", "<!-- claimed-by: status-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Working\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "ready.md", "<!-- branch: task/ready -->\n# Ready\n")
+	writeTask(t, tasksDir, dirs.Completed, "done.md", "---\nid: done\n---\n# Done\n")
+	writeTask(t, tasksDir, dirs.Failed, "failed.md", "# Failed\n")
 
 	for i := range []string{"one", "two"} {
 		msg := messaging.Message{
@@ -462,10 +463,10 @@ func TestStatusWithPopulatedQueue(t *testing.T) {
 func TestStatusWithParseFailedTasksPreservesRuntimeMetadata(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirInProgress, "broken-active.md",
+	writeTask(t, tasksDir, dirs.InProgress, "broken-active.md",
 		"<!-- claimed-by: status-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 			"---\npriority: nope\n---\n# Broken active\n")
-	writeTask(t, tasksDir, queue.DirFailed, "broken-failed.md",
+	writeTask(t, tasksDir, dirs.Failed, "broken-failed.md",
 		"<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — invalid frontmatter -->\n"+
 			"---\npriority: nope\n---\n# Broken failed\n")
 
@@ -493,17 +494,17 @@ func TestDAG_ChainPromotion(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// A is completed, B depends on A, C depends on B.
-	writeTask(t, tasksDir, queue.DirCompleted, "task-a.md", "---\nid: task-a\n---\n# A\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n")
+	writeTask(t, tasksDir, dirs.Completed, "task-a.md", "---\nid: task-a\n---\n# A\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n")
 
 	// First reconcile: promotes B only.
 	moved := queue.ReconcileReadyQueue(tasksDir, nil)
 	if !moved {
 		t.Fatal("first reconcile: moved = false, want true")
 	}
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"))
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-c.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, "task-b.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-c.md"))
 
 	// C is still blocked by B (now in backlog, not completed).
 	moved2 := queue.ReconcileReadyQueue(tasksDir, nil)
@@ -516,9 +517,9 @@ func TestDAG_CycleMovesToFailed(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// 2-node cycle: A -> B -> A. Downstream C -> A stays in waiting.
-	writeTask(t, tasksDir, queue.DirWaiting, "task-a.md", "---\nid: task-a\ndepends_on: [task-b]\n---\n# A\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-a]\n---\n# C (downstream)\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-a.md", "---\nid: task-a\ndepends_on: [task-b]\n---\n# A\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-a]\n---\n# C (downstream)\n")
 
 	moved := queue.ReconcileReadyQueue(tasksDir, nil)
 	if !moved {
@@ -527,28 +528,28 @@ func TestDAG_CycleMovesToFailed(t *testing.T) {
 
 	// Cycle members should be in failed/ with cycle-failure markers.
 	for _, name := range []string{"task-a.md", "task-b.md"} {
-		failedPath := filepath.Join(tasksDir, queue.DirFailed, name)
+		failedPath := filepath.Join(tasksDir, dirs.Failed, name)
 		mustExist(t, failedPath)
 		data := readFile(t, failedPath)
 		if !strings.Contains(data, "<!-- cycle-failure:") {
 			t.Fatalf("%s should contain cycle-failure marker", name)
 		}
-		mustNotExist(t, filepath.Join(tasksDir, queue.DirWaiting, name))
+		mustNotExist(t, filepath.Join(tasksDir, dirs.Waiting, name))
 	}
 
 	// Downstream task should remain in waiting.
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-c.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirFailed, "task-c.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-c.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Failed, "task-c.md"))
 }
 
 func TestDAG_LongCycleMovesToFailed(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// 3-node cycle: A -> C, B -> A, C -> B. Downstream D -> C.
-	writeTask(t, tasksDir, queue.DirWaiting, "task-a.md", "---\nid: task-a\ndepends_on: [task-c]\n---\n# A\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-d.md", "---\nid: task-d\ndepends_on: [task-c]\n---\n# D\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-a.md", "---\nid: task-a\ndepends_on: [task-c]\n---\n# A\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-b.md", "---\nid: task-b\ndepends_on: [task-a]\n---\n# B\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-c.md", "---\nid: task-c\ndepends_on: [task-b]\n---\n# C\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-d.md", "---\nid: task-d\ndepends_on: [task-c]\n---\n# D\n")
 
 	moved := queue.ReconcileReadyQueue(tasksDir, nil)
 	if !moved {
@@ -557,7 +558,7 @@ func TestDAG_LongCycleMovesToFailed(t *testing.T) {
 
 	// All 3 cycle members should be in failed/.
 	for _, name := range []string{"task-a.md", "task-b.md", "task-c.md"} {
-		failedPath := filepath.Join(tasksDir, queue.DirFailed, name)
+		failedPath := filepath.Join(tasksDir, dirs.Failed, name)
 		mustExist(t, failedPath)
 		data := readFile(t, failedPath)
 		if !strings.Contains(data, "<!-- cycle-failure:") {
@@ -566,19 +567,19 @@ func TestDAG_LongCycleMovesToFailed(t *testing.T) {
 	}
 
 	// Downstream D should stay in waiting.
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "task-d.md"))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirFailed, "task-d.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "task-d.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Failed, "task-d.md"))
 }
 
 func TestDAG_AmbiguousID(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// ID "shared" in both completed and waiting — ambiguous.
-	writeTask(t, tasksDir, queue.DirCompleted, "shared-done.md", "---\nid: shared\n---\n# Done\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "shared-waiting.md", "---\nid: shared\n---\n# Still waiting\n")
+	writeTask(t, tasksDir, dirs.Completed, "shared-done.md", "---\nid: shared\n---\n# Done\n")
+	writeTask(t, tasksDir, dirs.Waiting, "shared-waiting.md", "---\nid: shared\n---\n# Still waiting\n")
 
 	// dependent task depends on the ambiguous ID.
-	writeTask(t, tasksDir, queue.DirWaiting, "dependent.md", "---\nid: dependent\ndepends_on: [shared]\n---\n# Dependent\n")
+	writeTask(t, tasksDir, dirs.Waiting, "dependent.md", "---\nid: dependent\ndepends_on: [shared]\n---\n# Dependent\n")
 
 	moved := queue.ReconcileReadyQueue(tasksDir, nil)
 
@@ -588,5 +589,5 @@ func TestDAG_AmbiguousID(t *testing.T) {
 	}
 
 	// dependent should remain in waiting (ambiguous ID not satisfied).
-	mustExist(t, filepath.Join(tasksDir, queue.DirWaiting, "dependent.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.Waiting, "dependent.md"))
 }

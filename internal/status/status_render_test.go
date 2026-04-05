@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"mato/internal/dirs"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
@@ -95,7 +96,7 @@ func TestRenderQueueOverview_MergeLockActive(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		queueCounts:     map[string]int{queue.DirBacklog: 3, queue.DirInProgress: 2},
+		queueCounts:     map[string]int{dirs.Backlog: 3, dirs.InProgress: 2},
 		deferredDetail:  map[string]queue.DeferralInfo{},
 		runnable:        3,
 		mergeLockActive: true,
@@ -330,7 +331,7 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 				Name:     "wait-task.md",
 				Title:    "A waiting task",
 				Priority: 10,
-				State:    queue.DirBacklog,
+				State:    dirs.Backlog,
 				Dependencies: []waitingDep{
 					{ID: "dep-a", Status: "in-progress"},
 					{ID: "dep-b", Status: "completed"},
@@ -711,11 +712,11 @@ func TestRenderCompactQueueSummary(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{
 		queueCounts: map[string]int{
-			queue.DirBacklog:     24,
-			queue.DirInProgress:  7,
-			queue.DirReadyReview: 3,
-			queue.DirReadyMerge:  1,
-			queue.DirFailed:      2,
+			dirs.Backlog:     24,
+			dirs.InProgress:  7,
+			dirs.ReadyReview: 3,
+			dirs.ReadyMerge:  1,
+			dirs.Failed:      2,
 		},
 		runnable: 9,
 	}
@@ -1670,7 +1671,7 @@ func TestRenderDependencyBlocked_NarrowTerminalTruncates(t *testing.T) {
 		waitingTasks: []waitingTaskSummary{{
 			Name:  "implement-very-long-feature-name-that-exceeds-terminal-width.md",
 			Title: "An extremely long title",
-			State: queue.DirWaiting,
+			State: dirs.Waiting,
 			Dependencies: []waitingDep{
 				{ID: "very-long-dependency-task-name-that-also-overflows", Status: "backlog"},
 			},

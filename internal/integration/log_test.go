@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/messaging"
-	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
@@ -35,7 +35,7 @@ func TestLogCommand_MergedTaskAppears(t *testing.T) {
 
 func TestLogCommand_FailedTaskAppears(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirFailed, "cleanup-reconcile.md"), "# Cleanup reconcile\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed -->\n")
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Failed, "cleanup-reconcile.md"), "# Cleanup reconcile\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed -->\n")
 
 	out, err := runMatoCommand(t, "log", "--repo", repoRoot)
 	if err != nil {
@@ -48,7 +48,7 @@ func TestLogCommand_FailedTaskAppears(t *testing.T) {
 
 func TestLogCommand_RejectedTaskAppears(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "tighten-review-tests.md"), "# Tighten review tests\n\n<!-- review-rejection: reviewer-a at 2026-03-20T18:12:04Z — missing integration coverage -->\n")
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "tighten-review-tests.md"), "# Tighten review tests\n\n<!-- review-rejection: reviewer-a at 2026-03-20T18:12:04Z — missing integration coverage -->\n")
 
 	out, err := runMatoCommand(t, "log", "--repo", repoRoot)
 	if err != nil {

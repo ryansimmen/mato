@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 )
 
@@ -30,7 +31,7 @@ func ResolveTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
 	stemRef := strings.TrimSuffix(filenameRef, ".md")
 
 	var matches []TaskMatch
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		for _, snap := range idx.TasksByState(dir) {
 			match := TaskMatch{
 				Filename: snap.Filename,
@@ -103,10 +104,10 @@ func taskMatchID(match TaskMatch) string {
 }
 
 func resolveStateOrder(state string) int {
-	for i, dir := range AllDirs {
+	for i, dir := range dirs.All {
 		if dir == state {
 			return i
 		}
 	}
-	return len(AllDirs)
+	return len(dirs.All)
 }

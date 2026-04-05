@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/graph"
-	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
@@ -15,9 +15,9 @@ func TestGraph_LinearDependencyChain(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// A is completed, B depends on A (waiting), C depends on B (waiting).
-	writeTask(t, tasksDir, queue.DirCompleted, "task-a.md", "---\nid: task-a\npriority: 1\n---\n# Task A\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "task-b.md", "---\nid: task-b\npriority: 2\ndepends_on: [task-a]\n---\n# Task B\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "task-c.md", "---\nid: task-c\npriority: 3\ndepends_on: [task-b]\n---\n# Task C\n")
+	writeTask(t, tasksDir, dirs.Completed, "task-a.md", "---\nid: task-a\npriority: 1\n---\n# Task A\n")
+	writeTask(t, tasksDir, dirs.Waiting, "task-b.md", "---\nid: task-b\npriority: 2\ndepends_on: [task-a]\n---\n# Task B\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task-c.md", "---\nid: task-c\npriority: 3\ndepends_on: [task-b]\n---\n# Task C\n")
 
 	tests := []struct {
 		name    string
@@ -126,11 +126,11 @@ func TestGraph_AliasResolution(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Task with explicit ID different from stem.
-	writeTask(t, tasksDir, queue.DirCompleted, "setup-database.md", "---\nid: db-setup\npriority: 1\n---\n# Setup Database\n")
+	writeTask(t, tasksDir, dirs.Completed, "setup-database.md", "---\nid: db-setup\npriority: 1\n---\n# Setup Database\n")
 	// Task that depends on stem alias.
-	writeTask(t, tasksDir, queue.DirWaiting, "use-stem.md", "---\nid: use-stem\npriority: 2\ndepends_on: [setup-database]\n---\n# Use stem alias\n")
+	writeTask(t, tasksDir, dirs.Waiting, "use-stem.md", "---\nid: use-stem\npriority: 2\ndepends_on: [setup-database]\n---\n# Use stem alias\n")
 	// Task that depends on meta.ID alias.
-	writeTask(t, tasksDir, queue.DirWaiting, "use-id.md", "---\nid: use-id\npriority: 3\ndepends_on: [db-setup]\n---\n# Use meta ID\n")
+	writeTask(t, tasksDir, dirs.Waiting, "use-id.md", "---\nid: use-id\npriority: 3\ndepends_on: [db-setup]\n---\n# Use meta ID\n")
 
 	var buf bytes.Buffer
 	if err := graph.ShowTo(&buf, repoRoot, "json", true); err != nil {
@@ -163,10 +163,10 @@ func TestGraph_AmbiguousIDs(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Same ID in both completed/ and waiting/ — ambiguous.
-	writeTask(t, tasksDir, queue.DirCompleted, "shared-done.md", "---\nid: shared\n---\n# Shared done\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "shared-waiting.md", "---\nid: shared\n---\n# Shared waiting\n")
+	writeTask(t, tasksDir, dirs.Completed, "shared-done.md", "---\nid: shared\n---\n# Shared done\n")
+	writeTask(t, tasksDir, dirs.Waiting, "shared-waiting.md", "---\nid: shared\n---\n# Shared waiting\n")
 	// Task depending on the ambiguous ID.
-	writeTask(t, tasksDir, queue.DirWaiting, "dependent.md", "---\nid: dependent\ndepends_on: [shared]\n---\n# Dependent\n")
+	writeTask(t, tasksDir, dirs.Waiting, "dependent.md", "---\nid: dependent\ndepends_on: [shared]\n---\n# Dependent\n")
 
 	var buf bytes.Buffer
 	if err := graph.ShowTo(&buf, repoRoot, "json", true); err != nil {
@@ -205,10 +205,10 @@ func TestGraph_AmbiguousIDs(t *testing.T) {
 func TestGraph_AllFormatsValid(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirWaiting, "alpha.md", "---\nid: alpha\npriority: 1\ndepends_on: [beta]\n---\n# Alpha\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "beta.md", "---\nid: beta\npriority: 2\ndepends_on: [alpha]\n---\n# Beta (cycle)\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "gamma.md", "---\nid: gamma\npriority: 3\n---\n# Gamma\n")
-	writeTask(t, tasksDir, queue.DirInProgress, "delta.md", "<!-- claimed-by: test  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: delta\npriority: 4\n---\n# Delta\n")
+	writeTask(t, tasksDir, dirs.Waiting, "alpha.md", "---\nid: alpha\npriority: 1\ndepends_on: [beta]\n---\n# Alpha\n")
+	writeTask(t, tasksDir, dirs.Waiting, "beta.md", "---\nid: beta\npriority: 2\ndepends_on: [alpha]\n---\n# Beta (cycle)\n")
+	writeTask(t, tasksDir, dirs.Backlog, "gamma.md", "---\nid: gamma\npriority: 3\n---\n# Gamma\n")
+	writeTask(t, tasksDir, dirs.InProgress, "delta.md", "<!-- claimed-by: test  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: delta\npriority: 4\n---\n# Delta\n")
 
 	for _, format := range []string{"text", "dot", "json"} {
 		t.Run(format, func(t *testing.T) {
@@ -243,9 +243,9 @@ func TestGraph_AllFormatsValid(t *testing.T) {
 func TestGraph_ShowAllDifference(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirBacklog, "active.md", "---\nid: active\n---\n# Active\n")
-	writeTask(t, tasksDir, queue.DirCompleted, "done.md", "---\nid: done\n---\n# Done\n")
-	writeTask(t, tasksDir, queue.DirFailed, "broken.md", "---\nid: broken\n---\n# Broken\n")
+	writeTask(t, tasksDir, dirs.Backlog, "active.md", "---\nid: active\n---\n# Active\n")
+	writeTask(t, tasksDir, dirs.Completed, "done.md", "---\nid: done\n---\n# Done\n")
+	writeTask(t, tasksDir, dirs.Failed, "broken.md", "---\nid: broken\n---\n# Broken\n")
 
 	// showAll=false: only active tasks.
 	var bufDefault bytes.Buffer

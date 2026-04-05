@@ -105,7 +105,7 @@ func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
-	subdirs := queue.AllDirs
+	subdirs := dirs.All
 
 	// Verify directory structure
 	missingDirs := 0
@@ -187,7 +187,7 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 		return fmt.Errorf("check docker: %w", err)
 	}
 
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			return fmt.Errorf("create %s subdirectory %s: %w", dirs.Root, sub, err)
 		}

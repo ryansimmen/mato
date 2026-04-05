@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -119,7 +120,7 @@ func deferredOverlappingTasksDetailedForSnapshots(idx *PollIndex, backlogSnaps [
 			if len(overlap) > 0 {
 				blockedByDir := other.dir
 				if blockedByDir == "" {
-					blockedByDir = DirBacklog
+					blockedByDir = dirs.Backlog
 				}
 				deferred[task.name] = DeferralInfo{
 					BlockedBy:          other.name,
@@ -131,7 +132,7 @@ func deferredOverlappingTasksDetailedForSnapshots(idx *PollIndex, backlogSnaps [
 			}
 		}
 		if !isDef {
-			task.dir = DirBacklog
+			task.dir = dirs.Backlog
 			kept = append(kept, task)
 		}
 	}

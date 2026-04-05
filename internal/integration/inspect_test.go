@@ -6,16 +6,16 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/inspect"
-	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
 func TestInspect_TextAndJSON(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirInProgress, "active.md", "---\nid: active\naffects: [pkg/client.go]\n---\n# Active\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "candidate.md", "---\nid: candidate\naffects: [pkg/client.go]\n---\n# Candidate\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — add regression test -->\n")
+	writeTask(t, tasksDir, dirs.InProgress, "active.md", "---\nid: active\naffects: [pkg/client.go]\n---\n# Active\n")
+	writeTask(t, tasksDir, dirs.Backlog, "candidate.md", "---\nid: candidate\naffects: [pkg/client.go]\n---\n# Candidate\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — add regression test -->\n")
 
 	var textBuf bytes.Buffer
 	if err := inspect.ShowTo(&textBuf, repoRoot, "candidate", "text"); err != nil {

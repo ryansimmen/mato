@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
@@ -65,7 +66,7 @@ func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
 // mato instances can detect PID reuse. Falls back to PID-only when start time
 // is unavailable (non-Linux). Returns a cleanup function.
 func RegisterAgent(tasksDir, agentID string) (func(), error) {
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	return lockfile.Register(locksDir, agentID)
 }
 
@@ -78,8 +79,8 @@ func RegisterAgent(tasksDir, agentID string) (func(), error) {
 // in-progress copy is treated as stale and removed instead of recovered.
 func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 	var pushedRecoveries []PushedTaskRecovery
-	inProgress := filepath.Join(tasksDir, DirInProgress)
-	names, err := ListTaskFiles(inProgress)
+	inProgress := filepath.Join(tasksDir, dirs.InProgress)
+	names, err := taskfile.ListTaskFiles(inProgress)
 	if err != nil {
 		return nil
 	}
@@ -122,7 +123,7 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 			continue
 		}
 
-		dst := filepath.Join(tasksDir, DirBacklog, name)
+		dst := filepath.Join(tasksDir, dirs.Backlog, name)
 		if err := AtomicMove(src, dst); err != nil {
 			if !errors.Is(err, ErrDestinationExists) {
 				ui.Warnf("warning: could not recover orphaned task %s: %v\n", name, err)
@@ -166,7 +167,7 @@ func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskReco
 		return nil, true, fmt.Errorf("taskstate for %s is missing task branch", name)
 	}
 
-	dst := filepath.Join(tasksDir, DirReadyReview, name)
+	dst := filepath.Join(tasksDir, dirs.ReadyReview, name)
 	if err := AtomicMove(src, dst); err != nil {
 		return nil, true, fmt.Errorf("move task to ready-for-review: %w", err)
 	}
@@ -293,10 +294,10 @@ func LaterStateDuplicateDir(filename string, dirs ...string) (string, []error) {
 // tasksDir. Used by callers that need the standard set of directories.
 func laterStateDirs(tasksDir string) []string {
 	return []string{
-		filepath.Join(tasksDir, DirReadyReview),
-		filepath.Join(tasksDir, DirReadyMerge),
-		filepath.Join(tasksDir, DirCompleted),
-		filepath.Join(tasksDir, DirFailed),
+		filepath.Join(tasksDir, dirs.ReadyReview),
+		filepath.Join(tasksDir, dirs.ReadyMerge),
+		filepath.Join(tasksDir, dirs.Completed),
+		filepath.Join(tasksDir, dirs.Failed),
 	}
 }
 

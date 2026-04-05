@@ -112,13 +112,13 @@ func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTas
 	if idx == nil {
 		idx = queue.BuildIndex(tasksDir)
 	}
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 
-	candidates := make([]reviewCandidate, 0, len(idx.TasksByState(queue.DirReadyReview)))
+	candidates := make([]reviewCandidate, 0, len(idx.TasksByState(dirs.ReadyReview)))
 	for _, pf := range idx.ReviewParseFailures() {
 		quarantineMalformedReviewTask(tasksDir, failedDir, pf)
 	}
-	for _, snap := range idx.TasksByState(queue.DirReadyReview) {
+	for _, snap := range idx.TasksByState(dirs.ReadyReview) {
 		candidate, ok := buildReviewCandidate(tasksDir, failedDir, snap)
 		if ok {
 			candidates = append(candidates, *candidate)
@@ -160,7 +160,7 @@ func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
 // tasks. A task missing the branch marker will never be selected by
 // reviewCandidates, so counting it here would prevent idle detection.
 func hasReviewCandidates(tasksDir string) bool {
-	for _, snap := range queue.BuildIndex(tasksDir).TasksByState(queue.DirReadyReview) {
+	for _, snap := range queue.BuildIndex(tasksDir).TasksByState(dirs.ReadyReview) {
 		if reviewTaskReady(snap) && strings.TrimSpace(snap.Branch) != "" {
 			return true
 		}
@@ -252,7 +252,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 		"MATO_TASK_FILE=" + task.Filename,
 		"MATO_TASK_BRANCH=" + task.Branch,
 		"MATO_TASK_TITLE=" + task.Title,
-		fmt.Sprintf("MATO_TASK_PATH=%s/%s/%s/%s", env.workdir, dirs.Root, queue.DirReadyReview, task.Filename),
+		fmt.Sprintf("MATO_TASK_PATH=%s/%s/%s/%s", env.workdir, dirs.Root, dirs.ReadyReview, task.Filename),
 		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/%s/messages/verdict-%s.json", env.workdir, dirs.Root, task.Filename),
 	}
 
@@ -273,13 +273,13 @@ type reviewDisposition struct {
 }
 
 var approveDisposition = reviewDisposition{
-	dir:         queue.DirReadyMerge,
+	dir:         dirs.ReadyMerge,
 	messageBody: "Review approved, ready for merge",
 	logPrefix:   "Review approved",
 }
 
 var rejectDisposition = reviewDisposition{
-	dir:         queue.DirBacklog,
+	dir:         dirs.Backlog,
 	messageBody: "Review rejected",
 	logPrefix:   "Review rejected",
 }
@@ -429,7 +429,7 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 			// reviewer feedback that feeds MATO_REVIEW_FEEDBACK. Try a
 			// fallback write (read-modify-write) using a different I/O
 			// path before giving up.
-			if disp.dir == queue.DirBacklog {
+			if disp.dir == dirs.Backlog {
 				if fallbackErr := fallbackMarkerWrite(dst, marker); fallbackErr != nil {
 					ui.Warnf("warning: fallback marker write also failed for %s: %v\n", task.Filename, fallbackErr)
 					return false
@@ -439,7 +439,7 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 		}
 	}
 	outcome := runtimedata.OutcomeReviewRejected
-	if disp.dir == queue.DirReadyMerge {
+	if disp.dir == dirs.ReadyMerge {
 		outcome = runtimedata.OutcomeReviewApproved
 	}
 	recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {

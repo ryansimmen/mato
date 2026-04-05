@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
@@ -33,7 +34,7 @@ func resolvePromotableTasks(tasksDir string, idx *PollIndex) []promotableTask {
 		satisfiedSet[id] = struct{}{}
 	}
 
-	waitingTasks := idx.TasksByState(DirWaiting)
+	waitingTasks := idx.TasksByState(dirs.Waiting)
 	var result []promotableTask
 	for _, snap := range waitingTasks {
 		// Only operate on retained files; skip duplicates.
@@ -112,7 +113,7 @@ func failUnparseableTasks(tasksDir string, idx *PollIndex) bool {
 		if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter: %v", pf.Err)); err != nil {
 			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
 		}
-		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
+		failedPath := filepath.Join(tasksDir, dirs.Failed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			ui.Warnf("warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
 		} else {
@@ -125,7 +126,7 @@ func failUnparseableTasks(tasksDir string, idx *PollIndex) bool {
 		if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter: %v", pf.Err)); err != nil {
 			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", pf.Filename, err)
 		}
-		failedPath := filepath.Join(tasksDir, DirFailed, pf.Filename)
+		failedPath := filepath.Join(tasksDir, dirs.Failed, pf.Filename)
 		if moveErr := AtomicMove(pf.Path, failedPath); moveErr != nil {
 			ui.Warnf("warning: could not move %s to failed/: %v\n", pf.Filename, moveErr)
 		} else {
@@ -140,13 +141,13 @@ func failUnparseableTasks(tasksDir string, idx *PollIndex) bool {
 // affects field to failed/. Returns true if any task was moved.
 func failInvalidGlobBacklog(tasksDir string, idx *PollIndex) bool {
 	moved := false
-	for _, snap := range idx.TasksByState(DirBacklog) {
+	for _, snap := range idx.TasksByState(dirs.Backlog) {
 		if snap.GlobError != nil {
 			ui.Warnf("warning: moving backlog task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
 			if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", snap.GlobError)); appendErr != nil {
 				ui.Warnf("warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
 			}
-			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+			failedPath := filepath.Join(tasksDir, dirs.Failed, snap.Filename)
 			if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 				ui.Warnf("warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 			} else {
@@ -168,12 +169,12 @@ func demoteBlockedBacklog(tasksDir string, idx *PollIndex) (int, bool) {
 	}
 	demoted := 0
 	moved := false
-	for _, snap := range idx.TasksByState(DirBacklog) {
+	for _, snap := range idx.TasksByState(dirs.Backlog) {
 		blocks, blocked := blockedBacklog[snap.Filename]
 		if !blocked {
 			continue
 		}
-		waitingPath := filepath.Join(tasksDir, DirWaiting, snap.Filename)
+		waitingPath := filepath.Join(tasksDir, dirs.Waiting, snap.Filename)
 		if err := AtomicMove(snap.Path, waitingPath); err != nil {
 			ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", snap.Filename, err)
 			continue
@@ -210,7 +211,7 @@ func emitDependencyWarnings(diag DependencyDiagnostics) {
 // any task was moved.
 func failDuplicateWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnostics) bool {
 	moved := false
-	for _, snap := range idx.TasksByState(DirWaiting) {
+	for _, snap := range idx.TasksByState(dirs.Waiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile == snap.Filename {
 			continue // retained copy or unknown ID — skip
@@ -220,7 +221,7 @@ func failDuplicateWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagno
 		if err := taskfile.AppendTerminalFailureRecord(snap.Path, reason); err != nil {
 			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", snap.Filename, err)
 		}
-		failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+		failedPath := filepath.Join(tasksDir, dirs.Failed, snap.Filename)
 		if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 			ui.Warnf("warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 		} else {
@@ -238,7 +239,7 @@ func failDuplicateWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagno
 func failInvalidGlobWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnostics) (map[string]struct{}, bool) {
 	quarantined := make(map[string]struct{})
 	moved := false
-	for _, snap := range idx.TasksByState(DirWaiting) {
+	for _, snap := range idx.TasksByState(dirs.Waiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile != snap.Filename {
 			continue
@@ -250,7 +251,7 @@ func failInvalidGlobWaiting(tasksDir string, idx *PollIndex, diag DependencyDiag
 		if appendErr := taskfile.AppendTerminalFailureRecord(snap.Path, fmt.Sprintf("invalid glob syntax: %v", snap.GlobError)); appendErr != nil {
 			ui.Warnf("warning: could not append terminal-failure to %s: %v\n", snap.Filename, appendErr)
 		}
-		failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+		failedPath := filepath.Join(tasksDir, dirs.Failed, snap.Filename)
 		if moveErr := AtomicMove(snap.Path, failedPath); moveErr != nil {
 			ui.Warnf("warning: could not move %s to failed/: %v\n", snap.Filename, moveErr)
 		} else {
@@ -270,7 +271,7 @@ func failInvalidGlobWaiting(tasksDir string, idx *PollIndex, diag DependencyDiag
 func failCyclicWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnostics, quarantined map[string]struct{}) bool {
 	// Build a lookup from retained task ID to waiting snapshot.
 	waitingByID := make(map[string]*TaskSnapshot)
-	for _, snap := range idx.TasksByState(DirWaiting) {
+	for _, snap := range idx.TasksByState(dirs.Waiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile != snap.Filename {
 			continue
@@ -300,7 +301,7 @@ func failCyclicWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnosti
 					continue
 				}
 			}
-			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
+			failedPath := filepath.Join(tasksDir, dirs.Failed, snap.Filename)
 			if err := AtomicMove(snap.Path, failedPath); err != nil {
 				// The idempotency check prevents duplicate records on the next pass.
 				ui.Warnf("warning: could not move cycle member %s to failed/: %v\n", snap.Filename, err)
@@ -323,7 +324,7 @@ func promoteReadyWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnos
 	}
 
 	moved := false
-	for _, snap := range idx.TasksByState(DirWaiting) {
+	for _, snap := range idx.TasksByState(dirs.Waiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile != snap.Filename {
 			continue
@@ -337,7 +338,7 @@ func promoteReadyWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnos
 		if idx.HasActiveOverlap(snap.Meta.Affects) {
 			continue
 		}
-		dst := filepath.Join(tasksDir, DirBacklog, snap.Filename)
+		dst := filepath.Join(tasksDir, dirs.Backlog, snap.Filename)
 		if err := AtomicMove(snap.Path, dst); err != nil {
 			ui.Warnf("warning: could not promote waiting task %s: %v\n", snap.Filename, err)
 			continue

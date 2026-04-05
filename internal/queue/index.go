@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/taskfile"
 )
@@ -132,10 +133,10 @@ type PollIndex struct {
 }
 
 // activeDirs are the directories representing tasks actively being worked on.
-var activeDirs = []string{DirInProgress, DirReadyReview, DirReadyMerge}
+var activeDirs = []string{dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge}
 
 // nonCompletedDirs are all directories except completed/.
-var nonCompletedDirs = []string{DirWaiting, DirBacklog, DirInProgress, DirReadyReview, DirReadyMerge, DirFailed}
+var nonCompletedDirs = []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Failed}
 
 type taskFileMetadata struct {
 	branch                    string
@@ -223,7 +224,7 @@ func loadTaskSnapshot(tasksDir, state, filename, path string) (*TaskSnapshot, er
 func BuildIndex(tasksDir string) *PollIndex {
 	idx := &PollIndex{
 		tasks:           make(map[string]*TaskSnapshot),
-		byState:         make(map[string][]*TaskSnapshot, len(AllDirs)),
+		byState:         make(map[string][]*TaskSnapshot, len(dirs.All)),
 		completedIDs:    make(map[string]struct{}),
 		nonCompletedIDs: make(map[string]struct{}),
 		allIDs:          make(map[string]struct{}),
@@ -242,9 +243,9 @@ func BuildIndex(tasksDir string) *PollIndex {
 		isNonCompleted[d] = true
 	}
 
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		dirPath := filepath.Join(tasksDir, dir)
-		names, err := ListTaskFiles(dirPath)
+		names, err := taskfile.ListTaskFiles(dirPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				// Directory may not exist yet (e.g. first run). Skip.
@@ -264,7 +265,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 			// parse below.
 			stem := frontmatter.TaskFileStem(name)
 			idx.allIDs[stem] = struct{}{}
-			if dir == DirCompleted {
+			if dir == dirs.Completed {
 				idx.completedIDs[stem] = struct{}{}
 			}
 			if isNonCompleted[dir] {
@@ -329,7 +330,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 
 			// Register frontmatter meta.ID (may differ from stem).
 			idx.allIDs[meta.ID] = struct{}{}
-			if dir == DirCompleted {
+			if dir == dirs.Completed {
 				idx.completedIDs[meta.ID] = struct{}{}
 			}
 			if isNonCompleted[dir] {
@@ -545,7 +546,7 @@ func (idx *PollIndex) BacklogByPriority(exclude map[string]struct{}) []*TaskSnap
 	if idx == nil {
 		return nil
 	}
-	backlog := idx.byState[DirBacklog]
+	backlog := idx.byState[dirs.Backlog]
 	result := make([]*TaskSnapshot, 0, len(backlog))
 	for _, snap := range backlog {
 		if exclude != nil {
@@ -580,7 +581,7 @@ func (idx *PollIndex) WaitingParseFailures() []ParseFailure {
 	}
 	var result []ParseFailure
 	for _, pf := range idx.parseFailures {
-		if pf.State == DirWaiting {
+		if pf.State == dirs.Waiting {
 			result = append(result, pf)
 		}
 	}
@@ -594,7 +595,7 @@ func (idx *PollIndex) BacklogParseFailures() []ParseFailure {
 	}
 	var result []ParseFailure
 	for _, pf := range idx.parseFailures {
-		if pf.State == DirBacklog {
+		if pf.State == dirs.Backlog {
 			result = append(result, pf)
 		}
 	}
@@ -608,7 +609,7 @@ func (idx *PollIndex) ReviewParseFailures() []ParseFailure {
 	}
 	var result []ParseFailure
 	for _, pf := range idx.parseFailures {
-		if pf.State == DirReadyReview {
+		if pf.State == dirs.ReadyReview {
 			result = append(result, pf)
 		}
 	}

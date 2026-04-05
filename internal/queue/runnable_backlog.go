@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 )
 
@@ -47,7 +48,7 @@ func DependencyBlockedBacklogTasksDetailed(tasksDir string, idx *PollIndex) map[
 	idx = ensureIndex(tasksDir, idx)
 	lookup := newDependencyLookup(idx)
 	blocked := make(map[string][]DependencyBlock)
-	for _, snap := range idx.TasksByState(DirBacklog) {
+	for _, snap := range idx.TasksByState(dirs.Backlog) {
 		blocks := lookup.blockedDependencies(snap.Meta.DependsOn)
 		if len(blocks) == 0 {
 			continue
@@ -64,8 +65,8 @@ func ComputeRunnableBacklogView(tasksDir string, idx *PollIndex) RunnableBacklog
 	idx = ensureIndex(tasksDir, idx)
 
 	dependencyBlocked := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
-	candidates := make([]*TaskSnapshot, 0, len(idx.TasksByState(DirBacklog)))
-	for _, snap := range idx.TasksByState(DirBacklog) {
+	candidates := make([]*TaskSnapshot, 0, len(idx.TasksByState(dirs.Backlog)))
+	for _, snap := range idx.TasksByState(dirs.Backlog) {
 		if _, blocked := dependencyBlocked[snap.Filename]; blocked {
 			continue
 		}
@@ -129,7 +130,7 @@ func newDependencyLookup(idx *PollIndex) dependencyLookup {
 	}
 
 	statesByID := make(map[string]map[string]struct{})
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		for _, snap := range idx.TasksByState(dir) {
 			registerState(statesByID, frontmatter.TaskFileStem(snap.Filename), dir)
 			if snap.Meta.ID != "" {

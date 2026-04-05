@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"mato/internal/dag"
+	"mato/internal/dirs"
 	"mato/internal/queue"
 )
 
@@ -56,7 +57,7 @@ func checkDependencies(cc *checkContext) CheckReport {
 			Message:  msg,
 		}
 		if issue.Filename != "" {
-			f.Path = filepath.Join(cc.tasksDir, queue.DirWaiting, issue.Filename)
+			f.Path = filepath.Join(cc.tasksDir, dirs.Waiting, issue.Filename)
 		}
 		cr.Findings = append(cr.Findings, f)
 	}
@@ -93,7 +94,7 @@ func checkDependencies(cc *checkContext) CheckReport {
 			Code:     "deps.backlog_blocked",
 			Severity: SeverityWarning,
 			Message:  fmt.Sprintf("backlog task %q is dependency-blocked and should be in waiting/ (blocked by %s)", name, queue.FormatDependencyBlocks(details)),
-			Path:     filepath.Join(cc.tasksDir, queue.DirBacklog, name),
+			Path:     filepath.Join(cc.tasksDir, dirs.Backlog, name),
 		})
 	}
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/messaging"
 	"mato/internal/pause"
@@ -22,7 +23,7 @@ import (
 func setupTasksDir(t *testing.T) string {
 	t.Helper()
 	tasksDir := t.TempDir()
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", dir, err)
 		}
@@ -73,10 +74,10 @@ func TestListTasksFromIndex_CountsViaIndex(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tasksDir := setupTasksDir(t)
 			for _, f := range tt.files {
-				os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, f), []byte("# Task\n"), 0o644)
+				os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, f), []byte("# Task\n"), 0o644)
 			}
 			idx := queue.BuildIndex(tasksDir)
-			got := len(idx.TasksByState(queue.DirBacklog))
+			got := len(idx.TasksByState(dirs.Backlog))
 			if got != tt.want {
 				t.Errorf("len(idx.TasksByState) = %d, want %d", got, tt.want)
 			}
@@ -87,7 +88,7 @@ func TestListTasksFromIndex_CountsViaIndex(t *testing.T) {
 func TestListTasksFromIndex_MissingDir(t *testing.T) {
 	// With PollIndex, missing directories result in zero-length slices.
 	idx := queue.BuildIndex(filepath.Join(t.TempDir(), "nonexistent"))
-	got := len(idx.TasksByState(queue.DirBacklog))
+	got := len(idx.TasksByState(dirs.Backlog))
 	if got != 0 {
 		t.Errorf("len(idx.TasksByState(missing dir)) = %d, want 0", got)
 	}
@@ -96,7 +97,7 @@ func TestListTasksFromIndex_MissingDir(t *testing.T) {
 func TestListTasksFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	idx := queue.BuildIndex(tasksDir)
-	tasks := listTasksFromIndex(idx, queue.DirBacklog)
+	tasks := listTasksFromIndex(idx, dirs.Backlog)
 	if len(tasks) != 0 {
 		t.Errorf("listTasksFromIndex(empty) returned %d tasks, want 0", len(tasks))
 	}
@@ -104,12 +105,12 @@ func TestListTasksFromIndex_Empty(t *testing.T) {
 
 func TestListTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirBacklog, "z-task.md", "---\nid: z-task\npriority: 20\n---\n# Z task\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "a-task.md", "---\nid: a-task\npriority: 10\n---\n# A task\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "b-task.md", "---\nid: b-task\npriority: 10\n---\n# B task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "z-task.md", "---\nid: z-task\npriority: 20\n---\n# Z task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "a-task.md", "---\nid: a-task\npriority: 10\n---\n# A task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "b-task.md", "---\nid: b-task\npriority: 10\n---\n# B task\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := listTasksFromIndex(idx, queue.DirBacklog)
+	tasks := listTasksFromIndex(idx, dirs.Backlog)
 	if len(tasks) != 3 {
 		t.Fatalf("listTasksFromIndex returned %d tasks, want 3", len(tasks))
 	}
@@ -127,10 +128,10 @@ func TestListTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 
 func TestListTasksFromIndex_ExtractsTitleAndMeta(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirBacklog, "my-task.md", "---\nid: my-task\npriority: 15\nmax_retries: 5\n---\n# My fancy title\n")
+	writeTask(t, tasksDir, dirs.Backlog, "my-task.md", "---\nid: my-task\npriority: 15\nmax_retries: 5\n---\n# My fancy title\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := listTasksFromIndex(idx, queue.DirBacklog)
+	tasks := listTasksFromIndex(idx, dirs.Backlog)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
@@ -150,11 +151,11 @@ func TestListTasksFromIndex_ExtractsTitleAndMeta(t *testing.T) {
 
 func TestListTasksFromIndex_MalformedFrontmatter(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirBacklog, "bad.md", "---\n: invalid yaml [\n---\n# Title\n")
+	writeTask(t, tasksDir, dirs.Backlog, "bad.md", "---\n: invalid yaml [\n---\n# Title\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	// Parse failures are included with default metadata so they remain visible.
-	tasks := listTasksFromIndex(idx, queue.DirBacklog)
+	tasks := listTasksFromIndex(idx, dirs.Backlog)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
@@ -176,10 +177,10 @@ func TestListTasksFromIndex_SnapshotMetadata(t *testing.T) {
 		"<!-- cycle-failure: mato at 2026-06-15T13:00:00Z — circular dep -->\n" +
 		"<!-- terminal-failure: mato at 2026-06-15T14:00:00Z — invalid glob -->\n" +
 		"---\nid: my-task\npriority: 10\nmax_retries: 5\n---\n# My task\n"
-	writeTask(t, tasksDir, queue.DirInProgress, "my-task.md", content)
+	writeTask(t, tasksDir, dirs.InProgress, "my-task.md", content)
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := listTasksFromIndex(idx, queue.DirInProgress)
+	tasks := listTasksFromIndex(idx, dirs.InProgress)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
@@ -211,10 +212,10 @@ func TestListTasksFromIndex_SnapshotMetadata(t *testing.T) {
 func TestListTasksFromIndex_ParseFailureBranch(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	content := "<!-- branch: task/bad-task -->\n---\n: invalid yaml [\n---\n"
-	writeTask(t, tasksDir, queue.DirReadyReview, "bad.md", content)
+	writeTask(t, tasksDir, dirs.ReadyReview, "bad.md", content)
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := listTasksFromIndex(idx, queue.DirReadyReview)
+	tasks := listTasksFromIndex(idx, dirs.ReadyReview)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
@@ -225,11 +226,11 @@ func TestListTasksFromIndex_ParseFailureBranch(t *testing.T) {
 
 func TestListTasksFromIndex_CancelledPropagation(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirFailed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
-	writeTask(t, tasksDir, queue.DirFailed, "broken.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n")
+	writeTask(t, tasksDir, dirs.Failed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
+	writeTask(t, tasksDir, dirs.Failed, "broken.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n")
 
 	idx := queue.BuildIndex(tasksDir)
-	tasks := listTasksFromIndex(idx, queue.DirFailed)
+	tasks := listTasksFromIndex(idx, dirs.Failed)
 	if len(tasks) != 2 {
 		t.Fatalf("got %d tasks, want 2", len(tasks))
 	}
@@ -554,8 +555,8 @@ func TestPluralize(t *testing.T) {
 
 func TestReverseDepsFromIndex_MultipleDeps(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirWaiting, "a.md", "---\nid: a\ndepends_on: [x, y]\n---\n# A\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "b.md", "---\nid: b\ndepends_on: [x]\n---\n# B\n")
+	writeTask(t, tasksDir, dirs.Waiting, "a.md", "---\nid: a\ndepends_on: [x, y]\n---\n# A\n")
+	writeTask(t, tasksDir, dirs.Waiting, "b.md", "---\nid: b\ndepends_on: [x]\n---\n# B\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	result := reverseDepsFromIndex(idx)
@@ -578,7 +579,7 @@ func TestReverseDepsFromIndex_EmptyWaiting(t *testing.T) {
 
 func TestReverseDepsFromIndex_NoDependencies(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirWaiting, "standalone.md", "---\nid: standalone\n---\n# Standalone\n")
+	writeTask(t, tasksDir, dirs.Waiting, "standalone.md", "---\nid: standalone\n---\n# Standalone\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	result := reverseDepsFromIndex(idx)
@@ -589,20 +590,20 @@ func TestReverseDepsFromIndex_NoDependencies(t *testing.T) {
 
 func TestTaskStatesByIDFromIndex(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirBacklog, "task-a.md", "---\nid: task-a\n---\n# A\n")
-	writeTask(t, tasksDir, queue.DirInProgress, "task-b.md", "---\nid: task-b\n---\n# B\n")
-	writeTask(t, tasksDir, queue.DirCompleted, "task-c.md", "---\nid: task-c\n---\n# C\n")
-	writeTask(t, tasksDir, queue.DirFailed, "task-d.md", "---\nid: task-d\n---\n# D\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task-a.md", "---\nid: task-a\n---\n# A\n")
+	writeTask(t, tasksDir, dirs.InProgress, "task-b.md", "---\nid: task-b\n---\n# B\n")
+	writeTask(t, tasksDir, dirs.Completed, "task-c.md", "---\nid: task-c\n---\n# C\n")
+	writeTask(t, tasksDir, dirs.Failed, "task-d.md", "---\nid: task-d\n---\n# D\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	states := taskStatesByIDFromIndex(idx)
 
 	// Both the ID and the filename stem should be mapped.
 	expectations := map[string]string{
-		"task-a": queue.DirBacklog,
-		"task-b": queue.DirInProgress,
-		"task-c": queue.DirCompleted,
-		"task-d": queue.DirFailed,
+		"task-a": dirs.Backlog,
+		"task-b": dirs.InProgress,
+		"task-c": dirs.Completed,
+		"task-d": dirs.Failed,
 	}
 	for id, wantState := range expectations {
 		if got := states[id]; got != wantState {
@@ -623,24 +624,24 @@ func TestTaskStatesByIDFromIndex_Empty(t *testing.T) {
 func TestTaskStatesByIDFromIndex_FileStemKey(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	// Task with no explicit id — should be keyed by filename stem.
-	writeTask(t, tasksDir, queue.DirBacklog, "no-id-task.md", "---\npriority: 10\n---\n# No ID\n")
+	writeTask(t, tasksDir, dirs.Backlog, "no-id-task.md", "---\npriority: 10\n---\n# No ID\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	states := taskStatesByIDFromIndex(idx)
 	stem := frontmatter.TaskFileStem("no-id-task.md")
-	if got := states[stem]; got != queue.DirBacklog {
-		t.Errorf("states[%q] = %q, want %q", stem, got, queue.DirBacklog)
+	if got := states[stem]; got != dirs.Backlog {
+		t.Errorf("states[%q] = %q, want %q", stem, got, dirs.Backlog)
 	}
 }
 
 func TestTaskStatesByIDFromIndex_ParseFailureStemKey(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirFailed, "broken.md", "---\npriority: nope\n---\n# Broken\n")
+	writeTask(t, tasksDir, dirs.Failed, "broken.md", "---\npriority: nope\n---\n# Broken\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	states := taskStatesByIDFromIndex(idx)
-	if got := states["broken"]; got != queue.DirFailed {
-		t.Errorf("states[%q] = %q, want %q", "broken", got, queue.DirFailed)
+	if got := states["broken"]; got != dirs.Failed {
+		t.Errorf("states[%q] = %q, want %q", "broken", got, dirs.Failed)
 	}
 }
 
@@ -656,7 +657,7 @@ func TestGatherStatus_EmptyTasksDir(t *testing.T) {
 	}
 
 	// All queue counts should be zero.
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if data.queueCounts[dir] != 0 {
 			t.Errorf("queueCounts[%q] = %d, want 0", dir, data.queueCounts[dir])
 		}
@@ -687,28 +688,28 @@ func TestGatherStatus_PopulatedQueue(t *testing.T) {
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
-	writeTask(t, tasksDir, queue.DirBacklog, "b1.md", "---\nid: b1\npriority: 10\n---\n# Backlog 1\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "b2.md", "---\nid: b2\npriority: 20\n---\n# Backlog 2\n")
-	writeTask(t, tasksDir, queue.DirInProgress, "ip.md", "<!-- claimed-by: agent1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: ip\n---\n# In Progress\n")
-	writeTask(t, tasksDir, queue.DirCompleted, "done.md", "---\nid: done\n---\n# Done\n")
-	writeTask(t, tasksDir, queue.DirFailed, "fail.md", "<!-- failure: a1 at 2026-01-01T00:01:00Z — broken -->\n---\nid: fail\nmax_retries: 3\n---\n# Fail\n")
+	writeTask(t, tasksDir, dirs.Backlog, "b1.md", "---\nid: b1\npriority: 10\n---\n# Backlog 1\n")
+	writeTask(t, tasksDir, dirs.Backlog, "b2.md", "---\nid: b2\npriority: 20\n---\n# Backlog 2\n")
+	writeTask(t, tasksDir, dirs.InProgress, "ip.md", "<!-- claimed-by: agent1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: ip\n---\n# In Progress\n")
+	writeTask(t, tasksDir, dirs.Completed, "done.md", "---\nid: done\n---\n# Done\n")
+	writeTask(t, tasksDir, dirs.Failed, "fail.md", "<!-- failure: a1 at 2026-01-01T00:01:00Z — broken -->\n---\nid: fail\nmax_retries: 3\n---\n# Fail\n")
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
 		t.Fatalf("gatherStatus: %v", err)
 	}
 
-	if data.queueCounts[queue.DirBacklog] != 2 {
-		t.Errorf("backlog count = %d, want 2", data.queueCounts[queue.DirBacklog])
+	if data.queueCounts[dirs.Backlog] != 2 {
+		t.Errorf("backlog count = %d, want 2", data.queueCounts[dirs.Backlog])
 	}
-	if data.queueCounts[queue.DirInProgress] != 1 {
-		t.Errorf("in-progress count = %d, want 1", data.queueCounts[queue.DirInProgress])
+	if data.queueCounts[dirs.InProgress] != 1 {
+		t.Errorf("in-progress count = %d, want 1", data.queueCounts[dirs.InProgress])
 	}
-	if data.queueCounts[queue.DirCompleted] != 1 {
-		t.Errorf("completed count = %d, want 1", data.queueCounts[queue.DirCompleted])
+	if data.queueCounts[dirs.Completed] != 1 {
+		t.Errorf("completed count = %d, want 1", data.queueCounts[dirs.Completed])
 	}
-	if data.queueCounts[queue.DirFailed] != 1 {
-		t.Errorf("failed count = %d, want 1", data.queueCounts[queue.DirFailed])
+	if data.queueCounts[dirs.Failed] != 1 {
+		t.Errorf("failed count = %d, want 1", data.queueCounts[dirs.Failed])
 	}
 	if len(data.inProgressTasks) != 1 {
 		t.Errorf("inProgressTasks = %d, want 1", len(data.inProgressTasks))
@@ -753,9 +754,9 @@ func TestGatherStatus_RunnableExcludesDeferred(t *testing.T) {
 	}
 
 	// Create two backlog tasks that overlap on affects with an in-progress task.
-	writeTask(t, tasksDir, queue.DirInProgress, "active.md", "<!-- claimed-by: a1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: active\naffects:\n  - src/main.go\n---\n# Active\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "deferred.md", "---\nid: deferred\naffects:\n  - src/main.go\n---\n# Deferred\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "runnable.md", "---\nid: runnable\naffects:\n  - src/other.go\n---\n# Runnable\n")
+	writeTask(t, tasksDir, dirs.InProgress, "active.md", "<!-- claimed-by: a1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: active\naffects:\n  - src/main.go\n---\n# Active\n")
+	writeTask(t, tasksDir, dirs.Backlog, "deferred.md", "---\nid: deferred\naffects:\n  - src/main.go\n---\n# Deferred\n")
+	writeTask(t, tasksDir, dirs.Backlog, "runnable.md", "---\nid: runnable\naffects:\n  - src/other.go\n---\n# Runnable\n")
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
@@ -763,8 +764,8 @@ func TestGatherStatus_RunnableExcludesDeferred(t *testing.T) {
 	}
 
 	// Total backlog is 2, but 1 is deferred — runnable should be 1.
-	if data.queueCounts[queue.DirBacklog] != 2 {
-		t.Errorf("backlog count = %d, want 2", data.queueCounts[queue.DirBacklog])
+	if data.queueCounts[dirs.Backlog] != 2 {
+		t.Errorf("backlog count = %d, want 2", data.queueCounts[dirs.Backlog])
 	}
 	if data.runnable != 1 {
 		t.Errorf("runnable = %d, want 1", data.runnable)
@@ -777,8 +778,8 @@ func TestGatherStatus_DependencyBlockedBacklogExcludedFromRunnable(t *testing.T)
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
-	writeTask(t, tasksDir, queue.DirBacklog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "runnable.md", "---\nid: runnable\npriority: 20\n---\n# Runnable\n")
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
+	writeTask(t, tasksDir, dirs.Backlog, "runnable.md", "---\nid: runnable\npriority: 20\n---\n# Runnable\n")
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
@@ -794,7 +795,7 @@ func TestGatherStatus_DependencyBlockedBacklogExcludedFromRunnable(t *testing.T)
 	if len(data.waitingTasks) != 1 {
 		t.Fatalf("waitingTasks = %d, want 1", len(data.waitingTasks))
 	}
-	if data.waitingTasks[0].Name != "blocked.md" || data.waitingTasks[0].State != queue.DirBacklog {
+	if data.waitingTasks[0].Name != "blocked.md" || data.waitingTasks[0].State != dirs.Backlog {
 		t.Fatalf("waitingTasks[0] = %#v, want blocked backlog task", data.waitingTasks[0])
 	}
 }
@@ -825,9 +826,9 @@ func TestWaitingTasksFromIndex_Empty(t *testing.T) {
 
 func TestWaitingTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirWaiting, "z-wait.md", "---\nid: z-wait\npriority: 20\ndepends_on: [dep-x]\n---\n# Z waiting\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "a-wait.md", "---\nid: a-wait\npriority: 10\ndepends_on: [dep-y]\n---\n# A waiting\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "b-wait.md", "---\nid: b-wait\npriority: 10\ndepends_on: [dep-z]\n---\n# B waiting\n")
+	writeTask(t, tasksDir, dirs.Waiting, "z-wait.md", "---\nid: z-wait\npriority: 20\ndepends_on: [dep-x]\n---\n# Z waiting\n")
+	writeTask(t, tasksDir, dirs.Waiting, "a-wait.md", "---\nid: a-wait\npriority: 10\ndepends_on: [dep-y]\n---\n# A waiting\n")
+	writeTask(t, tasksDir, dirs.Waiting, "b-wait.md", "---\nid: b-wait\npriority: 10\ndepends_on: [dep-z]\n---\n# B waiting\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	tasks := waitingTasksFromIndex(idx, nil)
@@ -847,8 +848,8 @@ func TestWaitingTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 
 func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirCompleted, "dep-done.md", "---\nid: dep-done\n---\n# Done\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-done]\n---\n# Waiter\n")
+	writeTask(t, tasksDir, dirs.Completed, "dep-done.md", "---\nid: dep-done\n---\n# Done\n")
+	writeTask(t, tasksDir, dirs.Waiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-done]\n---\n# Waiter\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	tasks := waitingTasksFromIndex(idx, nil)
@@ -859,14 +860,14 @@ func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	if dep.ID != "dep-done" {
 		t.Errorf("dep ID = %q, want %q", dep.ID, "dep-done")
 	}
-	if dep.Status != queue.DirCompleted {
-		t.Errorf("dep Status = %q, want %q", dep.Status, queue.DirCompleted)
+	if dep.Status != dirs.Completed {
+		t.Errorf("dep Status = %q, want %q", dep.Status, dirs.Completed)
 	}
 }
 
 func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [nonexistent]\n---\n# Waiter\n")
+	writeTask(t, tasksDir, dirs.Waiting, "waiter.md", "---\nid: waiter\ndepends_on: [nonexistent]\n---\n# Waiter\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	tasks := waitingTasksFromIndex(idx, nil)
@@ -884,7 +885,7 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 
 func TestWaitingTasksFromIndex_IncludesBlockedBacklogFromSharedMap(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	writeTask(t, tasksDir, queue.DirBacklog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
 
 	idx := queue.BuildIndex(tasksDir)
 	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
@@ -895,8 +896,8 @@ func TestWaitingTasksFromIndex_IncludesBlockedBacklogFromSharedMap(t *testing.T)
 	if tasks[0].Name != "blocked.md" {
 		t.Fatalf("tasks[0].Name = %q, want %q", tasks[0].Name, "blocked.md")
 	}
-	if tasks[0].State != queue.DirBacklog {
-		t.Fatalf("tasks[0].State = %q, want %q", tasks[0].State, queue.DirBacklog)
+	if tasks[0].State != dirs.Backlog {
+		t.Fatalf("tasks[0].State = %q, want %q", tasks[0].State, dirs.Backlog)
 	}
 	if len(tasks[0].Dependencies) != 1 || tasks[0].Dependencies[0].Status != "unknown" {
 		t.Fatalf("Dependencies = %#v, want unknown blocked dependency", tasks[0].Dependencies)
@@ -1129,7 +1130,7 @@ func TestStatusDataToJSON_ZeroDependencyWaitingTask(t *testing.T) {
 				Name:         "no-deps.md",
 				Title:        "No deps",
 				Priority:     10,
-				State:        queue.DirWaiting,
+				State:        dirs.Waiting,
 				Dependencies: nil,
 			},
 		},
@@ -1152,10 +1153,10 @@ func TestWaitingTasks_TextAndJSONConsistency(t *testing.T) {
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
-	writeTask(t, tasksDir, queue.DirCompleted, "setup.md", "---\nid: setup\n---\n# Setup\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "auth.md", "---\nid: auth\npriority: 10\n---\n# Auth\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "api.md", "---\nid: api\npriority: 20\ndepends_on: [setup, auth, nonexistent]\n---\n# API\n")
-	writeTask(t, tasksDir, queue.DirWaiting, "docs.md", "---\nid: docs\npriority: 30\ndepends_on: [api]\n---\n# Docs\n")
+	writeTask(t, tasksDir, dirs.Completed, "setup.md", "---\nid: setup\n---\n# Setup\n")
+	writeTask(t, tasksDir, dirs.Backlog, "auth.md", "---\nid: auth\npriority: 10\n---\n# Auth\n")
+	writeTask(t, tasksDir, dirs.Waiting, "api.md", "---\nid: api\npriority: 20\ndepends_on: [setup, auth, nonexistent]\n---\n# API\n")
+	writeTask(t, tasksDir, dirs.Waiting, "docs.md", "---\nid: docs\npriority: 30\ndepends_on: [api]\n---\n# Docs\n")
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
@@ -1211,11 +1212,11 @@ func TestWaitingTasks_TextAndJSONConsistency(t *testing.T) {
 	for _, d := range apiTask.Dependencies {
 		depMap[d.ID] = d.Status
 	}
-	if depMap["setup"] != queue.DirCompleted {
-		t.Errorf("setup dep status = %q, want %q", depMap["setup"], queue.DirCompleted)
+	if depMap["setup"] != dirs.Completed {
+		t.Errorf("setup dep status = %q, want %q", depMap["setup"], dirs.Completed)
 	}
-	if depMap["auth"] != queue.DirBacklog {
-		t.Errorf("auth dep status = %q, want %q", depMap["auth"], queue.DirBacklog)
+	if depMap["auth"] != dirs.Backlog {
+		t.Errorf("auth dep status = %q, want %q", depMap["auth"], dirs.Backlog)
 	}
 	if depMap["nonexistent"] != "missing" {
 		t.Errorf("nonexistent dep status = %q, want %q", depMap["nonexistent"], "missing")
