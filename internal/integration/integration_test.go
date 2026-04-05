@@ -359,8 +359,21 @@ func TestMessagingLifecycle(t *testing.T) {
 		t.Fatalf("messages after first = [%s %s], want [msg-2 msg-3]", afterFirst[0].ID, afterFirst[1].ID)
 	}
 
-	time.Sleep(10 * time.Millisecond)
-	messaging.CleanOldMessages(tasksDir, 0)
+	eventsDir := filepath.Join(tasksDir, "messages", "events")
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%s): %v", eventsDir, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(eventsDir, entry.Name())
+		if err := os.Chtimes(path, base, base); err != nil {
+			t.Fatalf("os.Chtimes(%s): %v", path, err)
+		}
+	}
+	messaging.CleanOldMessages(tasksDir, time.Hour)
 
 	remaining, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
