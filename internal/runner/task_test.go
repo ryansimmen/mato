@@ -123,11 +123,9 @@ func TestMoveTaskToReviewWithMarker_AppendFailsRollback(t *testing.T) {
 		TaskPath: inProgressPath,
 	}
 
-	origWriteBranchMarker := writeBranchMarkerFn
-	t.Cleanup(func() { writeBranchMarkerFn = origWriteBranchMarker })
-	writeBranchMarkerFn = func(path, branch string) error {
+	setHook(t, &writeBranchMarkerFn, func(path, branch string) error {
 		return fmt.Errorf("simulated write error")
-	}
+	})
 
 	err := moveTaskToReviewWithMarker(tasksDir, claimed, "task/rollback")
 	if err == nil {
@@ -321,30 +319,19 @@ func TestPostAgentPush_RecordsWorkSessionHead(t *testing.T) {
 }
 
 func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
-	origExecCommandContext := execCommandContext
-	origCreateClone := createCloneFn
-	origRemoveClone := removeCloneFn
-	origEnsureBranch := ensureBranchFn
-	t.Cleanup(func() {
-		execCommandContext = origExecCommandContext
-		createCloneFn = origCreateClone
-		removeCloneFn = origRemoveClone
-		ensureBranchFn = origEnsureBranch
-	})
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	cloneDir, err := git.CreateClone(repoRoot)
 	if err != nil {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
-	createCloneFn = func(string) (string, error) { return cloneDir, nil }
-	removeCloneFn = func(string) {}
-	ensureBranchFn = func(cloneDir, branch string) (git.EnsureBranchResult, error) {
+	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
+	setHook(t, &removeCloneFn, func(string) {})
+	setHook(t, &ensureBranchFn, func(cloneDir, branch string) (git.EnsureBranchResult, error) {
 		if _, err := git.Output(cloneDir, "checkout", "-b", branch); err != nil {
 			return git.EnsureBranchResult{}, err
 		}
 		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceLocal}, nil
-	}
+	})
 	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, "task.md", func(session *sessionmeta.Session) {
 		session.CopilotSessionID = "work-session-123"
 		session.TaskBranch = "task/task"
@@ -353,13 +340,13 @@ func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
 	}
 
 	var capturedArgs []string
-	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		capturedArgs = append([]string{name}, args...)
 		cmd := exec.CommandContext(ctx, "true")
 		cmd.Cancel = func() error { return nil }
 		cmd.WaitDelay = gracefulShutdownDelay
 		return cmd
-	}
+	})
 
 	taskPath := filepath.Join(tasksDir, queue.DirInProgress, "task.md")
 	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
@@ -393,30 +380,19 @@ func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
 }
 
 func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
-	origExecCommandContext := execCommandContext
-	origCreateClone := createCloneFn
-	origRemoveClone := removeCloneFn
-	origEnsureBranch := ensureBranchFn
-	t.Cleanup(func() {
-		execCommandContext = origExecCommandContext
-		createCloneFn = origCreateClone
-		removeCloneFn = origRemoveClone
-		ensureBranchFn = origEnsureBranch
-	})
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	cloneDir, err := git.CreateClone(repoRoot)
 	if err != nil {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
-	createCloneFn = func(string) (string, error) { return cloneDir, nil }
-	removeCloneFn = func(string) {}
-	ensureBranchFn = func(cloneDir, branch string) (git.EnsureBranchResult, error) {
+	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
+	setHook(t, &removeCloneFn, func(string) {})
+	setHook(t, &ensureBranchFn, func(cloneDir, branch string) (git.EnsureBranchResult, error) {
 		if _, err := git.Output(cloneDir, "checkout", "-b", branch); err != nil {
 			return git.EnsureBranchResult{}, err
 		}
 		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceLocal}, nil
-	}
+	})
 
 	// Seed a work session on the OLD branch with a known session ID.
 	oldSessionID := "stale-session-from-old-branch"
@@ -428,13 +404,13 @@ func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
 	}
 
 	var capturedArgs []string
-	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		capturedArgs = append([]string{name}, args...)
 		cmd := exec.CommandContext(ctx, "true")
 		cmd.Cancel = func() error { return nil }
 		cmd.WaitDelay = gracefulShutdownDelay
 		return cmd
-	}
+	})
 
 	taskPath := filepath.Join(tasksDir, queue.DirInProgress, "task.md")
 	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
@@ -489,25 +465,16 @@ func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
 }
 
 func TestRunOnce_BranchSetupFailureDoesNotCreateWorkSession(t *testing.T) {
-	origCreateClone := createCloneFn
-	origRemoveClone := removeCloneFn
-	origEnsureBranch := ensureBranchFn
-	t.Cleanup(func() {
-		createCloneFn = origCreateClone
-		removeCloneFn = origRemoveClone
-		ensureBranchFn = origEnsureBranch
-	})
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	cloneDir, err := git.CreateClone(repoRoot)
 	if err != nil {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
-	createCloneFn = func(string) (string, error) { return cloneDir, nil }
-	removeCloneFn = func(string) {}
-	ensureBranchFn = func(string, string) (git.EnsureBranchResult, error) {
+	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
+	setHook(t, &removeCloneFn, func(string) {})
+	setHook(t, &ensureBranchFn, func(string, string) (git.EnsureBranchResult, error) {
 		return git.EnsureBranchResult{}, fmt.Errorf("simulated branch setup failure")
-	}
+	})
 
 	taskPath := filepath.Join(tasksDir, queue.DirInProgress, "task.md")
 	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
@@ -571,19 +538,8 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	cloneRoot := t.TempDir()
 
-	origCreate := createCloneFn
-	origRemove := removeCloneFn
-	origWriteBranchMarker := writeBranchMarkerFn
-	origExecCommandContext := execCommandContext
-	t.Cleanup(func() {
-		createCloneFn = origCreate
-		removeCloneFn = origRemove
-		writeBranchMarkerFn = origWriteBranchMarker
-		execCommandContext = origExecCommandContext
-	})
-
 	var createdClone string
-	createCloneFn = func(repo string) (string, error) {
+	setHook(t, &createCloneFn, func(repo string) (string, error) {
 		if repo != repoRoot {
 			t.Fatalf("createCloneFn repo = %q, want %q", repo, repoRoot)
 		}
@@ -596,22 +552,22 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 		}
 		createdClone = cloneDir
 		return cloneDir, nil
-	}
+	})
 	removeCalled := false
-	removeCloneFn = func(dir string) {
+	setHook(t, &removeCloneFn, func(dir string) {
 		removeCalled = true
 		os.RemoveAll(dir)
-	}
-	writeBranchMarkerFn = func(path, branch string) error {
+	})
+	setHook(t, &writeBranchMarkerFn, func(path, branch string) error {
 		return fmt.Errorf("simulated branch marker failure")
-	}
-	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	})
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		cmd := exec.CommandContext(ctx, "sh", "-c", "printf 'agent work\n' > repo-change.txt && git add repo-change.txt && git commit -m 'agent work' >/dev/null 2>&1")
 		cmd.Dir = createdClone
 		cmd.Cancel = func() error { return nil }
 		cmd.WaitDelay = gracefulShutdownDelay
 		return cmd
-	}
+	})
 
 	taskFile := "preserve-clone.md"
 	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
@@ -1599,11 +1555,9 @@ func TestPostAgentPush_BranchMarkerWriteFailureLeavesPushedTaskState(t *testing.
 
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/marker-state", Title: "Marker State", TaskPath: inProgressPath}
 	env := envConfig{tasksDir: tasksDir, targetBranch: "main"}
-	origWriteBranchMarker := writeBranchMarkerFn
-	t.Cleanup(func() { writeBranchMarkerFn = origWriteBranchMarker })
-	writeBranchMarkerFn = func(path, branch string) error {
+	setHook(t, &writeBranchMarkerFn, func(path, branch string) error {
 		return fmt.Errorf("simulated disk full")
-	}
+	})
 
 	err = postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
 	if err == nil {
@@ -1631,11 +1585,9 @@ func TestRunOnce_RecordedBranchResumeRequiresLocalOrRemoteSource(t *testing.T) {
 	os.WriteFile(taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-guard -->\n# Resume Guard\n"), 0o644)
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/resume-guard", Title: "Resume Guard", TaskPath: taskPath, HadRecordedBranchMark: true}
 
-	origEnsure := ensureBranchFn
-	t.Cleanup(func() { ensureBranchFn = origEnsure })
-	ensureBranchFn = func(repoRoot, branch string) (git.EnsureBranchResult, error) {
+	setHook(t, &ensureBranchFn, func(repoRoot, branch string) (git.EnsureBranchResult, error) {
 		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceHeadRemoteMissing}, nil
-	}
+	})
 
 	dockerDir := t.TempDir()
 	dockerScript := filepath.Join(dockerDir, "docker")
@@ -1663,16 +1615,14 @@ func TestRunOnce_UsesEnsureBranchForRecordedResume(t *testing.T) {
 	os.WriteFile(taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-ok -->\n# Resume OK\n"), 0o644)
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/resume-ok", Title: "Resume OK", TaskPath: taskPath, HadRecordedBranchMark: true}
 
-	origEnsure := ensureBranchFn
-	t.Cleanup(func() { ensureBranchFn = origEnsure })
 	called := false
-	ensureBranchFn = func(repoRoot, branch string) (git.EnsureBranchResult, error) {
+	setHook(t, &ensureBranchFn, func(repoRoot, branch string) (git.EnsureBranchResult, error) {
 		called = true
 		if _, err := git.Output(repoRoot, "checkout", "-b", branch); err != nil {
 			return git.EnsureBranchResult{}, err
 		}
 		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceRemote}, nil
-	}
+	})
 
 	dockerDir := t.TempDir()
 	dockerLog := filepath.Join(dockerDir, "docker.log")

@@ -23,6 +23,9 @@ import (
 	"mato/internal/ui"
 )
 
+// NOTE: The hook variables below are package-level mutable state used as test
+// seams. They prevent t.Parallel() within this package. Struct-based
+// dependency injection would be needed for true parallel test safety.
 var createCloneFn = git.CreateClone
 var removeCloneFn = git.RemoveClone
 var ensureBranchFn = git.EnsureBranch

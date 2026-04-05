@@ -20,6 +20,10 @@ import (
 // provided via MATO_DOCKER_IMAGE or .mato.yaml configuration.
 const DefaultDockerImage = "ubuntu:24.04"
 
+// statPathFn wraps os.Stat for test injection.
+//
+// NOTE: Package-level test seam — prevents t.Parallel(). Struct-based
+// dependency injection would be needed for true parallel test safety.
 var statPathFn = os.Stat
 
 // checkDocker verifies that Docker is installed and the daemon is running
@@ -43,6 +47,8 @@ func checkDocker() error {
 
 // dockerImageInspectFn checks whether a Docker image is available locally.
 // It is a variable so tests can inject a stub without calling Docker.
+//
+// NOTE: Package-level test seam — prevents t.Parallel(). See statPathFn.
 var dockerImageInspectFn = func(image string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -57,6 +63,8 @@ var dockerPullTimeout = 10 * time.Minute
 // dockerPullFn pulls a Docker image. It accepts a context for cancellation
 // and timeout support. It is a variable so tests can inject a stub without
 // calling Docker.
+//
+// NOTE: Package-level test seam — prevents t.Parallel(). See statPathFn.
 var dockerPullFn = func(ctx context.Context, image string) error {
 	cmd := exec.CommandContext(ctx, "docker", "pull", image)
 	cmd.Stdout = os.Stdout

@@ -58,6 +58,12 @@ func (b *resumeDetectionBuffer) Matched() bool {
 	return b.matched || resumeRejectedBytes(b.buf.Bytes())
 }
 
+// execCommandContext creates an *exec.Cmd bound to a context. It is a
+// variable so tests can inject a stub without spawning real processes.
+//
+// NOTE: This is a package-level mutable variable used as a test seam.
+// It prevents t.Parallel() within this package. Struct-based dependency
+// injection would be needed for true parallel test safety.
 var execCommandContext = exec.CommandContext
 
 //go:embed task-instructions.md
@@ -267,6 +273,8 @@ const defaultDryRunWidth = 80
 
 // writerWidthFn resolves the terminal width for an io.Writer. Defaults
 // to ui.WriterWidth; tests replace it to inject a narrow width.
+//
+// NOTE: Package-level test seam — prevents t.Parallel(). See execCommandContext.
 var writerWidthFn = ui.WriterWidth
 
 // header writes a bold section header with a leading blank line.
@@ -902,6 +910,11 @@ func pollReconcile(tasksDir string) (*queue.PollIndex, bool) {
 
 // pauseReadFn reads the current pause state. Tests override it to inject
 // deterministic paused, malformed, and hard-error states.
+//
+// NOTE: The poll-loop hook variables below are package-level mutable state
+// used as test seams. They prevent t.Parallel() within this package.
+// Struct-based dependency injection would be needed for true parallel
+// test safety.
 var pauseReadFn = pause.Read
 
 // pollWriteManifestFn refreshes .queue from a precomputed backlog view. Tests
@@ -1266,6 +1279,8 @@ func surfaceBuildWarnings(idx *queue.PollIndex) bool {
 
 // appendToFileFn is the function used to append text to files in post-agent
 // and review flows. It is a variable so tests can inject failures.
+//
+// NOTE: Package-level test seam — prevents t.Parallel(). See execCommandContext.
 var appendToFileFn = atomicwrite.AppendToFile
 
 func recordTaskStateUpdate(tasksDir, filename, action string, fn func(*taskstate.TaskState)) {
