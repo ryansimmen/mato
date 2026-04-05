@@ -1531,7 +1531,7 @@ func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 	}{
 		{
 			name: "default when unset",
-			want: defaultAgentTimeout,
+			want: DefaultAgentTimeout,
 		},
 		{
 			name: "valid duration 1h",
@@ -1571,8 +1571,8 @@ func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 }
 
 func TestDefaultAgentTimeout(t *testing.T) {
-	if defaultAgentTimeout != 30*time.Minute {
-		t.Fatalf("expected default timeout of 30m, got %v", defaultAgentTimeout)
+	if DefaultAgentTimeout != 30*time.Minute {
+		t.Fatalf("expected default timeout of 30m, got %v", DefaultAgentTimeout)
 	}
 }
 
