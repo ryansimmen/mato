@@ -154,7 +154,7 @@ func Update(tasksDir, kind, taskFilename string, fn func(*Session)) error {
 	if strings.TrimSpace(session.CopilotSessionID) == "" {
 		sessionID, err := newSessionID()
 		if err != nil {
-			return fmt.Errorf("generate session ID: %w", err)
+			return err
 		}
 		session.CopilotSessionID = sessionID
 	}
