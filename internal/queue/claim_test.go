@@ -1671,10 +1671,10 @@ func TestRetryCooldown(t *testing.T) {
 		cooldown time.Duration
 		want     time.Duration
 	}{
-		{"default", 0, defaultRetryCooldown},
+		{"default", 0, DefaultRetryCooldown},
 		{"custom valid", 5 * time.Minute, 5 * time.Minute},
 		{"custom seconds", 30 * time.Second, 30 * time.Second},
-		{"negative falls back", -1 * time.Minute, defaultRetryCooldown},
+		{"negative falls back", -1 * time.Minute, DefaultRetryCooldown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
