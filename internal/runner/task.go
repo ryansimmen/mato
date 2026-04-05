@@ -200,7 +200,7 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 
 	// Move task to ready-for-review/ and write branch marker.
 	if err := moveTaskToReviewWithMarker(env.tasksDir, claimed, claimed.Branch); err != nil {
-		return err
+		return fmt.Errorf("move task to review: %w", err)
 	}
 	finalizePushedTask(env.tasksDir, env.targetBranch, agentID, claimed.Filename, claimed.Branch, currentTip, changedFilesSinceTarget(cloneDir, env.targetBranch), true)
 	return nil
