@@ -81,8 +81,6 @@ func immediatelyClaimableTask(snap *TaskSnapshot, depLookup dependencyLookup, co
 // the task becomes eligible for claiming again.
 const DefaultRetryCooldown = 2 * time.Minute
 
-const defaultRetryCooldown = DefaultRetryCooldown
-
 // Testing hooks for the claim path. Default to real implementations.
 // Tests can override these to inject failures without filesystem permission
 // tricks.
@@ -430,12 +428,12 @@ func CountReviewFailureLines(taskPath string) (int, error) {
 }
 
 // retryCooldown resolves the effective retry cooldown duration, defaulting to
-// defaultRetryCooldown when cooldown is zero or negative.
+// DefaultRetryCooldown when cooldown is zero or negative.
 func retryCooldown(cooldown time.Duration) time.Duration {
 	if cooldown > 0 {
 		return cooldown
 	}
-	return defaultRetryCooldown
+	return DefaultRetryCooldown
 }
 
 // lastFailureTime extracts the timestamp from the most recent standalone

@@ -10,6 +10,10 @@ import (
 )
 
 // Test seams for controlling tool lookups in tests.
+//
+// NOTE: These package-level mutable variables prevent t.Parallel() within
+// this package. Struct-based dependency injection would be needed for true
+// parallel test safety.
 var lookPathFn = exec.LookPath
 var statFn = os.Stat
 var mkdirAllFn = os.MkdirAll
