@@ -6,6 +6,18 @@ The goal is to make dependencies flow downward more consistently, remove thin
 glue packages, eliminate duplicated helpers, and create clearer seams around
 the broadest packages before they become harder to change.
 
+## Status
+
+- Phase 1 is complete: built-in defaults now live in `internal/config/`,
+  `configresolve` no longer imports `runner` or `queue`, and `cmd/mato/`
+  performs the `RunConfig` to `runner.RunOptions` conversion.
+- Phase 2 is complete: `internal/runtimedata/` now owns runtime sidecar state,
+  `internal/taskstate/`, `internal/sessionmeta/`, and
+  `internal/runtimecleanup/` have been removed, and the existing on-disk
+  runtime layout was preserved.
+- The remaining active work in this proposal is Phase 3 helper ownership
+  cleanup, Phase 4 `queueview` extraction, and Phase 5 `runner` reassessment.
+
 ## 1. Goals
 
 - Remove upward dependencies from low-level packages into orchestration code.
@@ -24,30 +36,33 @@ the broadest packages before they become harder to change.
 - No broad rename campaign unless a specific boundary change requires it.
 - No `timeutil` package changes in this proposal.
 
-## 3. Current Problems
+## 3. Problem Summary
 
-### 3.1 `configresolve` depends upward on orchestration packages
+### 3.1 Phase 1 resolved: `configresolve` no longer depends upward on orchestration packages
 
-`internal/configresolve/` currently imports both `internal/runner/` and
-`internal/queue/` to obtain built-in defaults, and it also exposes a helper
-that returns `runner.RunOptions`.
+`internal/configresolve/` previously imported both `internal/runner/` and
+`internal/queue/` to obtain built-in defaults, and it exposed a helper that
+returned `runner.RunOptions`.
 
-This is the clearest dependency-direction problem in the current design:
+Phase 1 resolved this by moving built-in defaults into `internal/config/` and
+moving the `RunConfig` to `runner.RunOptions` conversion into `cmd/mato/`.
+
+This was the clearest dependency-direction problem in the design:
 
 - config resolution should be reusable by commands and operators
 - config resolution should not depend on the runtime orchestration layer
 - default values should not be owned only by packages that sit above the
   resolver in the dependency graph
 
-### 3.2 Runtime sidecar state is split across three packages
+### 3.2 Phase 2 resolved: runtime sidecar state is no longer split across three packages
 
-`internal/taskstate/` and `internal/sessionmeta/` both manage JSON files under
-`.mato/runtime/` with very similar CRUD and sweep behavior. The separate
-`internal/runtimecleanup/` package exists mainly to coordinate deletion across
+`internal/taskstate/` and `internal/sessionmeta/` previously managed JSON files
+under `.mato/runtime/` with very similar CRUD and sweep behavior. The separate
+`internal/runtimecleanup/` package existed mainly to coordinate deletion across
 them.
 
-That package split increases indirection without creating a strong conceptual
-boundary.
+Phase 2 resolved this by consolidating that ownership into
+`internal/runtimedata/` while preserving the existing on-disk runtime layout.
 
 ### 3.3 Some helper logic is duplicated or re-exported unnecessarily
 
@@ -88,9 +103,9 @@ subdomains.
 
 ## 4. Decisions
 
-### 4.1 Move built-in config defaults into `internal/config`
+### 4.1 Built-in config defaults live in `internal/config`
 
-Move built-in configuration defaults into `internal/config/`, alongside the
+Built-in configuration defaults now live in `internal/config/`, alongside the
 `Config` schema they describe.
 
 Responsibilities:
@@ -101,9 +116,9 @@ Responsibilities:
 - default reasoning effort
 - default agent timeout
 - default retry cooldown
-- default branch name if we decide to centralize it there as well
+- default branch name
 
-After this change:
+After Phase 1:
 
 - `configresolve` depends on `config` and validation helpers
 - `runner` consumes resolved config and may still reference `config` defaults
@@ -114,26 +129,25 @@ After this change:
 The important outcome is that `configresolve` stops importing `runner` and
 `queue`.
 
-### 4.2 Make `configresolve` independent of `runner`
+### 4.2 `configresolve` is independent of `runner`
 
-`configresolve` should stop returning `runner.RunOptions` directly.
+`configresolve` no longer returns `runner.RunOptions` directly.
 
-Instead, `configresolve` should own its own resolved config model and expose a
-small conversion seam used by the command layer or `runner`.
+Instead, `configresolve` owns its own resolved config model and the conversion
+seam lives in the command layer.
 
 Recommended direction:
 
 - keep `RunConfig` in `configresolve`
 - remove direct import of `runner`
-- add a command-layer or runner-layer adapter that converts resolved config into
-  `runner.RunOptions`
+- convert resolved config into `runner.RunOptions` in `cmd/mato/`
 
 This keeps the resolver reusable and prevents configuration code from depending
 on the main runtime package just for a result type.
 
-### 4.3 Merge `taskstate`, `sessionmeta`, and `runtimecleanup`
+### 4.3 `taskstate`, `sessionmeta`, and `runtimecleanup` are merged
 
-Create a single runtime-state package to own host-managed sidecar files under
+A single runtime-state package now owns the host-managed sidecar files under
 `.mato/runtime/`.
 
 Suggested package name:
@@ -148,7 +162,7 @@ Keep separate files and types inside the package:
 - `session.go`
 - `cleanup.go`
 
-Recommended exported surface:
+Exported surface:
 
 - task state load/update/delete/sweep helpers
 - session metadata load/update/delete/sweep helpers
@@ -156,10 +170,10 @@ Recommended exported surface:
   duplication
 - session-ID reset helpers used when a stale Copilot session must be rotated
 - cleanup helpers that remove one or both runtime record types
-- optional best-effort cleanup wrappers that also call into `taskfile` for
-  verdict-file deletion when a terminal transition needs both operations
+- best-effort cleanup wrappers that also call into `taskfile` for verdict-file
+  deletion when a terminal transition needs both operations
 
-This merges one cohesive concern while preserving conceptual clarity inside the
+This merged one cohesive concern while preserving conceptual clarity inside the
 package.
 
 ### 4.4 Keep `process` as a separate leaf package
@@ -297,7 +311,7 @@ package split later. It is not a current priority.
 
 Use this sequence to minimize churn and keep behavior changes low-risk.
 
-### Phase 1: Fix the clearest dependency smell
+### Phase 1: Fix the clearest dependency smell (completed)
 
 1. Move built-in config defaults from `runner` and `queue` into
    `internal/config`.
@@ -308,7 +322,7 @@ Use this sequence to minimize churn and keep behavior changes low-risk.
 4. Keep command and runtime behavior unchanged while updating tests around
    config resolution.
 
-### Phase 2: Collapse runtime-sidecar ownership
+### Phase 2: Collapse runtime-sidecar ownership (completed)
 
 5. Add `internal/runtimedata/`.
 6. Move task-state logic into `runtimedata`.
@@ -325,31 +339,35 @@ Use this sequence to minimize churn and keep behavior changes low-risk.
 
 12. Consolidate task-file listing into one helper.
 13. Update queue and taskfile callers to use the single helper.
-14. Remove `internal/queue/dirs.go` re-exports.
+14. Remove `internal/queue/dirs.go` re-exports. These compatibility shims still
+    exist after Phase 2 and are one of the main remaining transitional
+    artifacts.
 15. Update call sites to use `internal/dirs` directly for both `Dir*`
     constants and the ordered directory list.
-16. Decide whether fence-line detection should remain duplicated or be moved to
+16. Remove `internal/queue/taskfiles.go` by consolidating callers onto the
+    shared task-file listing helper.
+17. Decide whether fence-line detection should remain duplicated or be moved to
     a shared existing package after checking for dependency-cycle risk.
 
 ### Phase 4: Extract the `queue` read model
 
-17. Create `internal/queueview/` for read-only queue index and diagnostic APIs.
-18. Move explicitly named read-model types and functions into `queueview`:
+18. Create `internal/queueview/` for read-only queue index and diagnostic APIs.
+19. Move explicitly named read-model types and functions into `queueview`:
     `TaskSnapshot`, `ParseFailure`, `BuildWarning`, `PollIndex`, `BuildIndex`,
     `ResolveTask`, runnable backlog views, overlap helpers, dependency-view
     types, and diagnostics.
-19. Keep mutation APIs in `queue`: claim, reconcile, cancel, retry, recovery,
+20. Keep mutation APIs in `queue`: claim, reconcile, cancel, retry, recovery,
     transitions, and mutation-only lock/manifest logic.
-20. Update mutation code in `queue` to depend on `queueview`.
-21. Update read-only consumers such as `status`, `doctor`, `graph`, `inspect`,
+21. Update mutation code in `queue` to depend on `queueview`.
+22. Update read-only consumers such as `status`, `doctor`, `graph`, `inspect`,
     `history`, `merge`, `runner`, and any command-layer callers to use
     `queueview` directly where appropriate.
-22. Keep `configresolve` out of scope for this phase; its queue dependency
+23. Keep `configresolve` out of scope for this phase; its queue dependency
     should already be removed in Phase 1.
 
 ### Phase 5: Reassess `runner`, but defer package extraction by default
 
-23. Keep `runner` as one package unless post-refactor growth or coupling makes a
+24. Keep `runner` as one package unless post-refactor growth or coupling makes a
     real split clearly worthwhile.
 
 ## 6. Detailed Plan
@@ -358,8 +376,8 @@ Use this sequence to minimize churn and keep behavior changes low-risk.
 
 #### Move defaults into `internal/config/`
 
-Add built-in config defaults to `internal/config/`, which already owns the
-config schema and loading logic.
+This landed in `internal/config/`, which already owns the config schema and
+loading logic.
 
 Suggested API:
 
@@ -380,13 +398,13 @@ const (
 )
 ```
 
-If a default is already part of another package's public contract and cannot be
-removed immediately, keep a forwarding constant there for one migration step,
-then remove it in a follow-up cleanup.
+The current code no longer needs `configresolve` to import `runner` or `queue`
+for defaults. `runner` and `queue` may still reference `config` defaults where
+they remain the local owner of fallback behavior.
 
 #### `configresolve` migration
 
-Update `internal/configresolve/` so it:
+This landed in `internal/configresolve/`:
 
 - imports `config` instead of `runner` and `queue` for defaults
 - resolves values into its own `RunConfig`
@@ -407,19 +425,19 @@ type RunConfig struct {
 }
 ```
 
-Then add a converter in `cmd/mato/` that builds `runner.RunOptions`.
+`cmd/mato/` now contains the converter that builds `runner.RunOptions`.
 
 Do not keep the conversion method inside `configresolve` if it requires the
 resolver to import `runner`.
 
 #### Validation path
 
-Update `internal/configresolve/validate.go` to use the same lower-level default
+`internal/configresolve/validate.go` now uses the same lower-level default
 package so validation does not keep the old upward imports alive.
 
 ### 6.2 Phase 2: runtime-state merge
 
-Create `internal/runtimedata/` and migrate functionality from:
+This landed in `internal/runtimedata/`, which now owns functionality from:
 
 - `internal/taskstate/`
 - `internal/sessionmeta/`
@@ -460,32 +478,35 @@ func DeleteRuntimeArtifactsPreservingVerdict(tasksDir, filename string)
 These names are intentionally explicit so one package can hold both runtime-data
 concerns without creating ambiguous `Load` and `Delete` APIs.
 
-Preserve the current runtime behavior while moving package ownership:
+The runtime behavior remained unchanged while package ownership moved:
 
-- keep the current on-disk paths under `.mato/runtime/`
+- keep the current on-disk paths under `.mato/runtime/taskstate/` and
+  `.mato/runtime/sessionmeta/`
 - keep the session-kind contract stable for `runner`, tests, and integration
   flows
 - preserve session reset semantics for stale-resume recovery
 
 Boundary note:
 
-- task state and session metadata live under `.mato/runtime/`
+- task state and session metadata live under `.mato/runtime/`, with their
+  existing `taskstate/` and `sessionmeta/` subdirectories preserved
 - preserved review verdict files live under `.mato/messages/` and still belong
   to `taskfile`
 - `runtimedata` importing `taskfile` for terminal-transition verdict cleanup is
   acceptable and expected because that remains a downward coordination
   dependency
 
-If we keep a convenience cleanup wrapper in `runtimedata`, it should be
-documented as coordination logic that delegates verdict deletion to `taskfile`,
-not as proof that verdict files moved into the runtime-data boundary.
+The cleanup wrappers in `runtimedata` should be understood as coordination
+logic that delegates verdict deletion to `taskfile`, not as proof that verdict
+files moved into the runtime-data boundary.
 
 Migration guidance:
 
 - move code first, behavior unchanged
 - update call sites
 - delete old packages only after imports are clean
-- preserve current on-disk paths under `.mato/runtime/`
+- preserve current on-disk paths under `.mato/runtime/taskstate/` and
+  `.mato/runtime/sessionmeta/`
 
 ### 6.3 Phase 3: helper deduplication
 
@@ -661,6 +682,8 @@ Do not take this extraction as part of this proposal.
 
 ### Phase 1
 
+Status: completed.
+
 Modify:
 
 ```text
@@ -675,6 +698,8 @@ internal/queue/*.go (only if forwarding constants remain temporarily)
 ```
 
 ### Phase 2
+
+Status: completed.
 
 Create:
 
@@ -699,7 +724,7 @@ internal/integration/*.go
 Also migrate the existing `internal/taskstate/*_test.go` and
 `internal/sessionmeta/*_test.go` coverage into `internal/runtimedata/*_test.go`.
 
-Delete after migration:
+Deleted after migration:
 
 ```text
 internal/taskstate/
@@ -815,17 +840,14 @@ show that the package boundary is genuinely blocking maintainability.
 
 ## 10. Recommended PR Breakdown
 
-Use five PRs at most, with the first four being the actual refactor work and
-the fifth only if later evidence justifies revisiting `runner`.
+The remaining refactor work should fit in at most three PRs, with the third
+only if later evidence justifies revisiting `runner`.
 
-1. `configresolve` decoupling via `internal/config`
-2. runtime-state merge into `runtimedata`
-3. helper dedup and `dirs` re-export removal
-4. `queueview` extraction for the queue read model
-5. optional later reassessment of `runner`, with no package split by default
+1. helper dedup and `dirs` re-export removal
+2. `queueview` extraction for the queue read model
+3. optional later reassessment of `runner`, with no package split by default
 
-Do not combine phases 1 and 2 in one PR. Each is conceptually clean on its own
-and easier to review separately.
+Phases 1 and 2 already landed separately.
 
 ## 11. Acceptance Criteria
 
