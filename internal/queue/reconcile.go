@@ -63,7 +63,50 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 
 	moved := false
 
-	// Move unparseable waiting/backlog tasks to failed/ using index parse failures.
+	if failUnparseableTasks(tasksDir, idx) {
+		moved = true
+	}
+
+	if failInvalidGlobBacklog(tasksDir, idx) {
+		moved = true
+	}
+
+	demoted, demoteMoved := demoteBlockedBacklog(tasksDir, idx)
+	if demoteMoved {
+		moved = true
+	}
+	if demoted > 0 {
+		idx = ensureIndex(tasksDir, nil)
+	}
+
+	diag := DiagnoseDependencies(tasksDir, idx)
+
+	emitDependencyWarnings(diag)
+
+	if failDuplicateWaiting(tasksDir, idx, diag) {
+		moved = true
+	}
+
+	quarantined, globMoved := failInvalidGlobWaiting(tasksDir, idx, diag)
+	if globMoved {
+		moved = true
+	}
+
+	if failCyclicWaiting(tasksDir, idx, diag, quarantined) {
+		moved = true
+	}
+
+	if promoteReadyWaiting(tasksDir, idx, diag, quarantined) {
+		moved = true
+	}
+
+	return moved
+}
+
+// failUnparseableTasks moves waiting and backlog tasks with frontmatter parse
+// failures to failed/. Returns true if any task was moved.
+func failUnparseableTasks(tasksDir string, idx *PollIndex) bool {
+	moved := false
 	for _, pf := range idx.WaitingParseFailures() {
 		ui.Warnf("warning: moving unparseable waiting task %s to failed/: %v\n", pf.Filename, pf.Err)
 		if err := taskfile.AppendTerminalFailureRecord(pf.Path, fmt.Sprintf("unparseable frontmatter: %v", pf.Err)); err != nil {
@@ -90,8 +133,13 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			moved = true
 		}
 	}
+	return moved
+}
 
-	// Move backlog tasks with invalid glob syntax to failed/.
+// failInvalidGlobBacklog moves backlog tasks with invalid glob syntax in their
+// affects field to failed/. Returns true if any task was moved.
+func failInvalidGlobBacklog(tasksDir string, idx *PollIndex) bool {
+	moved := false
 	for _, snap := range idx.TasksByState(DirBacklog) {
 		if snap.GlobError != nil {
 			ui.Warnf("warning: moving backlog task %s with invalid glob to failed/: %v\n", snap.Filename, snap.GlobError)
@@ -107,33 +155,39 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			}
 		}
 	}
+	return moved
+}
 
+// demoteBlockedBacklog moves backlog tasks with unsatisfied dependencies back
+// to waiting/. It returns the number of demoted tasks and whether any task was
+// moved.
+func demoteBlockedBacklog(tasksDir string, idx *PollIndex) (int, bool) {
 	blockedBacklog := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
-	if len(blockedBacklog) > 0 {
-		demoted := 0
-		for _, snap := range idx.TasksByState(DirBacklog) {
-			blocks, blocked := blockedBacklog[snap.Filename]
-			if !blocked {
-				continue
-			}
-			waitingPath := filepath.Join(tasksDir, DirWaiting, snap.Filename)
-			if err := AtomicMove(snap.Path, waitingPath); err != nil {
-				ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", snap.Filename, err)
-				continue
-			}
-			ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", snap.Filename, FormatDependencyBlocks(blocks))
-			moved = true
-			demoted++
-		}
-		if demoted > 0 {
-			idx = ensureIndex(tasksDir, nil)
-		}
+	if len(blockedBacklog) == 0 {
+		return 0, false
 	}
+	demoted := 0
+	moved := false
+	for _, snap := range idx.TasksByState(DirBacklog) {
+		blocks, blocked := blockedBacklog[snap.Filename]
+		if !blocked {
+			continue
+		}
+		waitingPath := filepath.Join(tasksDir, DirWaiting, snap.Filename)
+		if err := AtomicMove(snap.Path, waitingPath); err != nil {
+			ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", snap.Filename, err)
+			continue
+		}
+		ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", snap.Filename, FormatDependencyBlocks(blocks))
+		moved = true
+		demoted++
+	}
+	return demoted, moved
+}
 
-	// Run DAG-based dependency analysis.
-	diag := DiagnoseDependencies(tasksDir, idx)
-
-	// Emit structured warnings from diagnostics issues.
+// emitDependencyWarnings logs structured warnings from dependency diagnostics
+// issues (ambiguous IDs, duplicates, self-cycles, cycles, unknown IDs).
+func emitDependencyWarnings(diag DependencyDiagnostics) {
 	for _, issue := range diag.Issues {
 		switch issue.Kind {
 		case DependencyAmbiguousID:
@@ -148,11 +202,14 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			ui.Warnf("warning: waiting task %s depends on unknown task ID %q (not found in any queue directory)\n", issue.Filename, issue.DependsOn)
 		}
 	}
+}
 
-	// Move duplicate waiting files to failed/ with terminal-failure markers.
-	// A file is a duplicate if its task ID appears in RetainedFiles but
-	// its filename is not the retained copy. The first file (by filename
-	// sort) is kept; every subsequent copy is failed.
+// failDuplicateWaiting moves duplicate waiting files to failed/ with
+// terminal-failure markers. A file is a duplicate if its task ID appears in
+// RetainedFiles but its filename is not the retained copy. Returns true if
+// any task was moved.
+func failDuplicateWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnostics) bool {
+	moved := false
 	for _, snap := range idx.TasksByState(DirWaiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile == snap.Filename {
@@ -171,14 +228,16 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			moved = true
 		}
 	}
+	return moved
+}
 
-	// Move waiting tasks with invalid glob syntax to failed/ regardless of
-	// dependency satisfaction or active overlap state. Invalid affects globs
-	// are a terminal metadata error per docs/task-format.md.
-	//
-	// Track quarantined filenames so later passes (cycle detection, promotion)
-	// skip already-moved tasks instead of operating on stale snapshots.
+// failInvalidGlobWaiting moves retained waiting tasks with invalid glob syntax
+// to failed/. It returns a set of quarantined filenames so later phases (cycle
+// detection, promotion) skip already-moved tasks, and a boolean indicating
+// whether any task was actually moved.
+func failInvalidGlobWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnostics) (map[string]struct{}, bool) {
 	quarantined := make(map[string]struct{})
+	moved := false
 	for _, snap := range idx.TasksByState(DirWaiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile != snap.Filename {
@@ -202,10 +261,14 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		// task even when the move to failed/ did not succeed.
 		quarantined[snap.Filename] = struct{}{}
 	}
+	return quarantined, moved
+}
 
-	// Move cycle members to failed/ using the cycle-to-failed sequence.
-	// Build a lookup from retained task ID to waiting snapshot for cycle processing.
-	// Only retained files (from deduped diagnostics) are eligible; duplicates are skipped.
+// failCyclicWaiting moves waiting tasks that are part of dependency cycles to
+// failed/ with cycle-failure markers. It skips quarantined and duplicate files.
+// Returns true if any task was moved.
+func failCyclicWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnostics, quarantined map[string]struct{}) bool {
+	// Build a lookup from retained task ID to waiting snapshot.
 	waitingByID := make(map[string]*TaskSnapshot)
 	for _, snap := range idx.TasksByState(DirWaiting) {
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
@@ -218,30 +281,28 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		waitingByID[snap.Meta.ID] = snap
 	}
 
+	moved := false
 	for _, scc := range diag.Analysis.Cycles {
 		for _, id := range scc {
 			snap, ok := waitingByID[id]
 			if !ok {
 				continue
 			}
-			// Step 1: Check for existing cycle-failure marker (idempotency).
+			// Check for existing cycle-failure marker (idempotency).
 			data, err := os.ReadFile(snap.Path)
 			if err != nil {
 				ui.Warnf("warning: could not read %s for cycle-failure check: %v\n", snap.Filename, err)
 				continue
 			}
 			if !taskfile.ContainsCycleFailure(data) {
-				// Step 2: Append cycle-failure record before moving.
 				if err := taskfile.AppendCycleFailureRecord(snap.Path); err != nil {
 					ui.Warnf("warning: could not append cycle-failure record to %s: %v\n", snap.Filename, err)
 					continue
 				}
 			}
-			// Step 3: Move to failed/.
 			failedPath := filepath.Join(tasksDir, DirFailed, snap.Filename)
 			if err := AtomicMove(snap.Path, failedPath); err != nil {
-				// Step 4: If move fails, warn and continue. The idempotency
-				// check in step 1 prevents duplicate records on the next pass.
+				// The idempotency check prevents duplicate records on the next pass.
 				ui.Warnf("warning: could not move cycle member %s to failed/: %v\n", snap.Filename, err)
 			} else {
 				deleteTaskState(tasksDir, snap.Filename)
@@ -249,15 +310,20 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 			}
 		}
 	}
+	return moved
+}
 
-	// Promote deps-satisfied tasks to backlog/.
+// promoteReadyWaiting moves waiting tasks whose dependencies are satisfied and
+// have no active-affects overlap to backlog/. It skips quarantined and
+// duplicate files. Returns true if any task was moved.
+func promoteReadyWaiting(tasksDir string, idx *PollIndex, diag DependencyDiagnostics, quarantined map[string]struct{}) bool {
 	satisfiedSet := make(map[string]struct{}, len(diag.Analysis.DepsSatisfied))
 	for _, id := range diag.Analysis.DepsSatisfied {
 		satisfiedSet[id] = struct{}{}
 	}
 
+	moved := false
 	for _, snap := range idx.TasksByState(DirWaiting) {
-		// Only operate on retained files; skip duplicates.
 		retainedFile, ok := diag.RetainedFiles[snap.Meta.ID]
 		if !ok || retainedFile != snap.Filename {
 			continue
@@ -278,7 +344,6 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		}
 		moved = true
 	}
-
 	return moved
 }
 
