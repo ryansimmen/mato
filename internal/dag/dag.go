@@ -110,11 +110,21 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 		waiting[i].DependsOn = dedup(waiting[i].DependsOn)
 	}
 
-	// Build adjacency list and in-degree map for Kahn's algorithm.
-	// Only edges to other waiting tasks are graph edges.
-	adj := make(map[string][]string, len(waiting))      // from -> [to] (dependency direction: "to" depends on "from")
-	inDeg := make(map[string]int, len(waiting))         // number of waiting-task dependencies
-	depEdges := make(map[string][]string, len(waiting)) // task -> waiting deps (for SCC)
+	adj, depEdges, inDeg := buildGraph(waiting, waitingSet)
+	kahnResolved := kahnResolve(waiting, adj, inDeg)
+	classifyResolved(waiting, kahnResolved, completedIDs, waitingSet, knownIDs, ambiguousIDs, &result)
+	findCyclesAndBlocked(waiting, kahnResolved, depEdges, completedIDs, waitingSet, knownIDs, ambiguousIDs, &result)
+	sortAnalysis(&result)
+
+	return result
+}
+
+// buildGraph constructs the adjacency list, dependency edges, and in-degree
+// map used by Kahn's algorithm. Only edges between waiting tasks are included.
+func buildGraph(waiting []Node, waitingSet map[string]struct{}) (adj, depEdges map[string][]string, inDeg map[string]int) {
+	adj = make(map[string][]string, len(waiting))      // from -> [to] (dependency direction: "to" depends on "from")
+	inDeg = make(map[string]int, len(waiting))          // number of waiting-task dependencies
+	depEdges = make(map[string][]string, len(waiting))  // task -> waiting deps (for SCC)
 
 	for _, n := range waiting {
 		if _, exists := inDeg[n.ID]; !exists {
@@ -125,15 +135,18 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 				continue
 			}
 			if _, isWaiting := waitingSet[dep]; isWaiting {
-				// dep -> n.ID edge: n.ID depends on dep (which is also waiting)
 				adj[dep] = append(adj[dep], n.ID)
 				depEdges[n.ID] = append(depEdges[n.ID], dep)
 				inDeg[n.ID]++
 			}
 		}
 	}
+	return adj, depEdges, inDeg
+}
 
-	// --- Kahn's algorithm: find nodes not blocked by waiting-task edges ---
+// kahnResolve runs Kahn's algorithm over the waiting-task graph and returns
+// the set of node IDs that are not blocked by any waiting-task dependency edge.
+func kahnResolve(waiting []Node, adj map[string][]string, inDeg map[string]int) map[string]struct{} {
 	h := &stringHeap{}
 	for _, n := range waiting {
 		if inDeg[n.ID] == 0 {
@@ -142,12 +155,11 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 	}
 	heap.Init(h)
 
-	kahnResolved := make(map[string]struct{}, len(waiting))
+	resolved := make(map[string]struct{}, len(waiting))
 	for h.Len() > 0 {
 		id := heap.Pop(h).(string)
-		kahnResolved[id] = struct{}{}
+		resolved[id] = struct{}{}
 
-		// Collect and sort neighbors for deterministic processing.
 		neighbors := adj[id]
 		sorted := make([]string, len(neighbors))
 		copy(sorted, neighbors)
@@ -159,14 +171,16 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 			}
 		}
 	}
+	return resolved
+}
 
-	// --- Classify Kahn-resolved nodes ---
+// classifyResolved checks each Kahn-resolved node's full dependency list
+// against completedIDs and classifies it as deps-satisfied or blocked.
+func classifyResolved(waiting []Node, kahnResolved map[string]struct{}, completedIDs, waitingSet, knownIDs, ambiguousIDs map[string]struct{}, result *Analysis) {
 	for _, n := range waiting {
 		if _, resolved := kahnResolved[n.ID]; !resolved {
 			continue
 		}
-		// This node has no waiting-task edges blocking it. Check all deps
-		// against completedIDs, knownIDs, and ambiguousIDs.
 		satisfied := true
 		var details []BlockDetail
 		for _, dep := range n.DependsOn {
@@ -185,8 +199,11 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 			result.Blocked[n.ID] = details
 		}
 	}
+}
 
-	// --- SCC detection on residual graph (nodes not resolved by Kahn) ---
+// findCyclesAndBlocked detects strongly connected components in the residual
+// graph (nodes not resolved by Kahn) and classifies downstream nodes as blocked.
+func findCyclesAndBlocked(waiting []Node, kahnResolved map[string]struct{}, depEdges map[string][]string, completedIDs, waitingSet, knownIDs, ambiguousIDs map[string]struct{}, result *Analysis) {
 	residual := make([]string, 0)
 	for _, n := range waiting {
 		if _, resolved := kahnResolved[n.ID]; !resolved {
@@ -194,106 +211,104 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 		}
 	}
 
-	if len(residual) > 0 {
-		// Build residual adjacency for Tarjan's.
-		residualAdj := make(map[string][]string, len(residual))
-		residualSet := make(map[string]struct{}, len(residual))
-		for _, id := range residual {
-			residualSet[id] = struct{}{}
-		}
-		for _, id := range residual {
-			for _, dep := range depEdges[id] {
-				if _, ok := residualSet[dep]; ok {
-					residualAdj[id] = append(residualAdj[id], dep)
-				}
-			}
-			// Sort for determinism.
-			sort.Strings(residualAdj[id])
-		}
+	if len(residual) == 0 {
+		return
+	}
 
-		// Determine self-edges for SCC classification.
-		selfEdge := make(map[string]bool)
-		for _, n := range waiting {
-			for _, dep := range n.DependsOn {
-				if dep == n.ID {
-					selfEdge[n.ID] = true
-				}
+	// Build residual adjacency for Tarjan's.
+	residualAdj := make(map[string][]string, len(residual))
+	residualSet := make(map[string]struct{}, len(residual))
+	for _, id := range residual {
+		residualSet[id] = struct{}{}
+	}
+	for _, id := range residual {
+		for _, dep := range depEdges[id] {
+			if _, ok := residualSet[dep]; ok {
+				residualAdj[id] = append(residualAdj[id], dep)
 			}
 		}
+		sort.Strings(residualAdj[id])
+	}
 
-		sccs := tarjan(residual, residualAdj)
-
-		cycleMembers := make(map[string]struct{})
-		for _, scc := range sccs {
-			isCycle := len(scc) > 1 || (len(scc) == 1 && selfEdge[scc[0]])
-			if isCycle {
-				sort.Strings(scc)
-				result.Cycles = append(result.Cycles, scc)
-				for _, id := range scc {
-					cycleMembers[id] = struct{}{}
-				}
-			}
-		}
-
-		// Downstream of cycle: blocked by waiting.
-		for _, id := range residual {
-			if _, isCycleMember := cycleMembers[id]; isCycleMember {
-				continue
-			}
-			// This node is downstream of a cycle — find its blocking deps.
-			var details []BlockDetail
-			for _, dep := range depEdges[id] {
-				if _, ok := residualSet[dep]; ok {
-					details = append(details, BlockDetail{
-						DependencyID: dep,
-						Reason:       BlockedByWaiting,
-					})
-				}
-			}
-			// Also check non-waiting deps.
-			nodeIdx := -1
-			for i, n := range waiting {
-				if n.ID == id {
-					nodeIdx = i
-					break
-				}
-			}
-			if nodeIdx >= 0 {
-				for _, dep := range waiting[nodeIdx].DependsOn {
-					if dep == "" {
-						continue
-					}
-					if _, isWaiting := waitingSet[dep]; isWaiting {
-						continue // already handled above
-					}
-					if _, ok := completedIDs[dep]; ok {
-						continue
-					}
-					details = append(details, classifyBlock(dep, waitingSet, knownIDs, ambiguousIDs))
-				}
-			}
-			if len(details) > 0 {
-				sortBlockDetails(details)
-				result.Blocked[id] = details
+	// Determine self-edges for SCC classification.
+	selfEdge := make(map[string]bool)
+	for _, n := range waiting {
+		for _, dep := range n.DependsOn {
+			if dep == n.ID {
+				selfEdge[n.ID] = true
 			}
 		}
 	}
 
-	// --- Sort all output for determinism ---
+	sccs := tarjan(residual, residualAdj)
+
+	cycleMembers := make(map[string]struct{})
+	for _, scc := range sccs {
+		isCycle := len(scc) > 1 || (len(scc) == 1 && selfEdge[scc[0]])
+		if isCycle {
+			sort.Strings(scc)
+			result.Cycles = append(result.Cycles, scc)
+			for _, id := range scc {
+				cycleMembers[id] = struct{}{}
+			}
+		}
+	}
+
+	// Downstream of cycle: blocked by waiting.
+	for _, id := range residual {
+		if _, isCycleMember := cycleMembers[id]; isCycleMember {
+			continue
+		}
+		var details []BlockDetail
+		for _, dep := range depEdges[id] {
+			if _, ok := residualSet[dep]; ok {
+				details = append(details, BlockDetail{
+					DependencyID: dep,
+					Reason:       BlockedByWaiting,
+				})
+			}
+		}
+		// Also check non-waiting deps.
+		nodeIdx := -1
+		for i, n := range waiting {
+			if n.ID == id {
+				nodeIdx = i
+				break
+			}
+		}
+		if nodeIdx >= 0 {
+			for _, dep := range waiting[nodeIdx].DependsOn {
+				if dep == "" {
+					continue
+				}
+				if _, isWaiting := waitingSet[dep]; isWaiting {
+					continue
+				}
+				if _, ok := completedIDs[dep]; ok {
+					continue
+				}
+				details = append(details, classifyBlock(dep, waitingSet, knownIDs, ambiguousIDs))
+			}
+		}
+		if len(details) > 0 {
+			sortBlockDetails(details)
+			result.Blocked[id] = details
+		}
+	}
+}
+
+// sortAnalysis sorts all output fields for deterministic results.
+func sortAnalysis(result *Analysis) {
 	sort.Strings(result.DepsSatisfied)
 
-	// Sort cycles: each inner slice is already sorted; sort outer by first element.
 	sort.Slice(result.Cycles, func(i, j int) bool {
 		return result.Cycles[i][0] < result.Cycles[j][0]
 	})
 
-	// Sort block details within each blocked entry.
 	for id, details := range result.Blocked {
 		sortBlockDetails(details)
 		result.Blocked[id] = details
 	}
-
-	return result
 }
 
 // classifyBlock determines the BlockReason for a dependency that is not
