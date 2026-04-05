@@ -23,6 +23,9 @@ import (
 	"mato/internal/ui"
 )
 
+// NOTE: The hook variables below are package-level mutable state used as test
+// seams. They prevent t.Parallel() within this package. Struct-based
+// dependency injection would be needed for true parallel test safety.
 var createCloneFn = git.CreateClone
 var removeCloneFn = git.RemoveClone
 var ensureBranchFn = git.EnsureBranch
@@ -197,7 +200,7 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 
 	// Move task to ready-for-review/ and write branch marker.
 	if err := moveTaskToReviewWithMarker(env.tasksDir, claimed, claimed.Branch); err != nil {
-		return err
+		return fmt.Errorf("move task to review: %w", err)
 	}
 	finalizePushedTask(env.tasksDir, env.targetBranch, agentID, claimed.Filename, claimed.Branch, currentTip, changedFilesSinceTarget(cloneDir, env.targetBranch), true)
 	return nil
