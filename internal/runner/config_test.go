@@ -10,11 +10,10 @@ import (
 	"time"
 )
 
+// withStatPathFn is a convenience wrapper around setHook for statPathFn.
 func withStatPathFn(t *testing.T, fn func(string) (os.FileInfo, error)) {
 	t.Helper()
-	orig := statPathFn
-	statPathFn = fn
-	t.Cleanup(func() { statPathFn = orig })
+	setHook(t, &statPathFn, fn)
 }
 
 func TestBuildDockerArgs_GhConfigMount(t *testing.T) {
@@ -428,17 +427,14 @@ func TestIsTerminal_RegularFile(t *testing.T) {
 // ---------- ensureDockerImage ----------
 
 func TestEnsureDockerImage_Found(t *testing.T) {
-	origInspect := dockerImageInspectFn
-	t.Cleanup(func() { dockerImageInspectFn = origInspect })
-
 	inspectCalled := false
-	dockerImageInspectFn = func(image string) error {
+	setHook(t, &dockerImageInspectFn, func(image string) error {
 		inspectCalled = true
 		if image != "test:latest" {
 			t.Errorf("expected image %q, got %q", "test:latest", image)
 		}
 		return nil
-	}
+	})
 
 	if err := ensureDockerImage(context.Background(), "test:latest"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -449,24 +445,17 @@ func TestEnsureDockerImage_Found(t *testing.T) {
 }
 
 func TestEnsureDockerImage_NotFound_PullSucceeds(t *testing.T) {
-	origInspect := dockerImageInspectFn
-	origPull := dockerPullFn
-	t.Cleanup(func() {
-		dockerImageInspectFn = origInspect
-		dockerPullFn = origPull
-	})
-
-	dockerImageInspectFn = func(image string) error {
+	setHook(t, &dockerImageInspectFn, func(image string) error {
 		return fmt.Errorf("No such image: %s", image)
-	}
+	})
 	pullCalled := false
-	dockerPullFn = func(_ context.Context, image string) error {
+	setHook(t, &dockerPullFn, func(_ context.Context, image string) error {
 		pullCalled = true
 		if image != "myimage:v1" {
 			t.Errorf("expected image %q, got %q", "myimage:v1", image)
 		}
 		return nil
-	}
+	})
 
 	stdout, _ := captureStdoutStderr(t, func() {
 		if err := ensureDockerImage(context.Background(), "myimage:v1"); err != nil {
@@ -486,19 +475,12 @@ func TestEnsureDockerImage_NotFound_PullSucceeds(t *testing.T) {
 }
 
 func TestEnsureDockerImage_NotFound_PullFails(t *testing.T) {
-	origInspect := dockerImageInspectFn
-	origPull := dockerPullFn
-	t.Cleanup(func() {
-		dockerImageInspectFn = origInspect
-		dockerPullFn = origPull
-	})
-
-	dockerImageInspectFn = func(image string) error {
+	setHook(t, &dockerImageInspectFn, func(image string) error {
 		return fmt.Errorf("No such image: %s", image)
-	}
-	dockerPullFn = func(_ context.Context, image string) error {
+	})
+	setHook(t, &dockerPullFn, func(_ context.Context, image string) error {
 		return fmt.Errorf("network timeout")
-	}
+	})
 
 	_, _ = captureStdoutStderr(t, func() {
 		err := ensureDockerImage(context.Background(), "bad:image")
@@ -515,20 +497,13 @@ func TestEnsureDockerImage_NotFound_PullFails(t *testing.T) {
 }
 
 func TestEnsureDockerImage_PullCancelled(t *testing.T) {
-	origInspect := dockerImageInspectFn
-	origPull := dockerPullFn
-	t.Cleanup(func() {
-		dockerImageInspectFn = origInspect
-		dockerPullFn = origPull
-	})
-
-	dockerImageInspectFn = func(image string) error {
+	setHook(t, &dockerImageInspectFn, func(image string) error {
 		return fmt.Errorf("No such image: %s", image)
-	}
-	dockerPullFn = func(ctx context.Context, image string) error {
+	})
+	setHook(t, &dockerPullFn, func(ctx context.Context, image string) error {
 		<-ctx.Done()
 		return ctx.Err()
-	}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -545,24 +520,14 @@ func TestEnsureDockerImage_PullCancelled(t *testing.T) {
 }
 
 func TestEnsureDockerImage_PullTimeout(t *testing.T) {
-	origInspect := dockerImageInspectFn
-	origPull := dockerPullFn
-	origTimeout := dockerPullTimeout
-	t.Cleanup(func() {
-		dockerImageInspectFn = origInspect
-		dockerPullFn = origPull
-		dockerPullTimeout = origTimeout
-	})
-
-	dockerPullTimeout = 50 * time.Millisecond
-
-	dockerImageInspectFn = func(image string) error {
+	setHook(t, &dockerPullTimeout, 50*time.Millisecond)
+	setHook(t, &dockerImageInspectFn, func(image string) error {
 		return fmt.Errorf("No such image: %s", image)
-	}
-	dockerPullFn = func(ctx context.Context, image string) error {
+	})
+	setHook(t, &dockerPullFn, func(ctx context.Context, image string) error {
 		<-ctx.Done()
 		return ctx.Err()
-	}
+	})
 
 	_, _ = captureStdoutStderr(t, func() {
 		err := ensureDockerImage(context.Background(), "slow:image")
@@ -576,22 +541,15 @@ func TestEnsureDockerImage_PullTimeout(t *testing.T) {
 }
 
 func TestEnsureDockerImage_PullReceivesContext(t *testing.T) {
-	origInspect := dockerImageInspectFn
-	origPull := dockerPullFn
-	t.Cleanup(func() {
-		dockerImageInspectFn = origInspect
-		dockerPullFn = origPull
+	setHook(t, &dockerImageInspectFn, func(image string) error {
+		return fmt.Errorf("No such image: %s", image)
 	})
 
-	dockerImageInspectFn = func(image string) error {
-		return fmt.Errorf("No such image: %s", image)
-	}
-
 	var receivedCtx context.Context
-	dockerPullFn = func(ctx context.Context, image string) error {
+	setHook(t, &dockerPullFn, func(ctx context.Context, image string) error {
 		receivedCtx = ctx
 		return nil
-	}
+	})
 
 	_, _ = captureStdoutStderr(t, func() {
 		if err := ensureDockerImage(context.Background(), "test:latest"); err != nil {

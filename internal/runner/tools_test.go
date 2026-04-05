@@ -53,29 +53,21 @@ func (f fakeFileInfo) IsDir() bool        { return f.isDir }
 func (f fakeFileInfo) Sys() any           { return nil }
 
 // setTestSeams replaces package-level function variables with test doubles
-// and restores originals via t.Cleanup.
+// and restores originals via t.Cleanup (using the generic setHook helper).
 func setTestSeams(t *testing.T, lp func(string) (string, error), st func(string) (os.FileInfo, error), home func() (string, error), gep func() (string, error)) {
 	t.Helper()
-	origLP, origSt, origHome, origGEP, origMkdir := lookPathFn, statFn, userHomeDirFn, gitExecPathFn, mkdirAllFn
-	t.Cleanup(func() {
-		lookPathFn = origLP
-		statFn = origSt
-		userHomeDirFn = origHome
-		gitExecPathFn = origGEP
-		mkdirAllFn = origMkdir
-	})
-	mkdirAllFn = func(string, os.FileMode) error { return nil }
+	setHook(t, &mkdirAllFn, func(string, os.FileMode) error { return nil })
 	if lp != nil {
-		lookPathFn = lp
+		setHook(t, &lookPathFn, lp)
 	}
 	if st != nil {
-		statFn = st
+		setHook(t, &statFn, st)
 	}
 	if home != nil {
-		userHomeDirFn = home
+		setHook(t, &userHomeDirFn, home)
 	}
 	if gep != nil {
-		gitExecPathFn = gep
+		setHook(t, &gitExecPathFn, gep)
 	}
 }
 
