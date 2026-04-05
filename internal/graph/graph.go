@@ -111,7 +111,7 @@ func classifyRef(ref string, safeCompleted, ambiguousIDs, allIDs map[string]stru
 func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 	diag := queue.DiagnoseDependencies(tasksDir, idx)
 
-	// Build safeCompleted and ambiguousIDs (same derivation as DiagnoseDependencies).
+	// Derive safeCompleted and ambiguousIDs (same logic as DiagnoseDependencies).
 	completedIDs := idx.CompletedIDs()
 	nonCompletedIDs := idx.NonCompletedIDs()
 	safeCompleted := copySet(completedIDs)
@@ -131,16 +131,24 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 	}
 
 	var data GraphData
+	aliasMap := buildNodes(&data, idx, &diag, showAll)
+	resolveEdges(&data, aliasMap, safeCompleted, ambiguousIDs, allIDs)
+	attachBlockDetails(&data, &diag)
+	annotateCycles(&data, &diag)
+	appendParseFailures(&data, idx, showAll)
+	sortGraphData(&data, stateOrder)
+
+	return data
+}
+
+// buildNodes iterates queue directories, constructs GraphNode entries, populates
+// the alias map used for edge resolution, and emits duplicate warnings for
+// waiting tasks that share a meta.ID.
+func buildNodes(data *GraphData, idx *queue.PollIndex, diag *queue.DependencyDiagnostics, showAll bool) map[string][]string {
 	aliasMap := make(map[string][]string) // ref → []nodeKey
+	retainedWaitingIDs := diag.RetainedFiles
+	seenWaitingIDs := make(map[string]string) // meta.ID → retained filename
 
-	// Track which waiting IDs are retained (for duplicate detection).
-	retainedWaitingIDs := diag.RetainedFiles // id → filename
-
-	// Track duplicate waiting files for DuplicateWarning emission.
-	// seenWaitingIDs maps meta.ID → retained filename for waiting tasks.
-	seenWaitingIDs := make(map[string]string)
-
-	// Step 3: Iterate all dirs, build nodes.
 	for _, dir := range queue.AllDirs {
 		if !showAll && (dir == queue.DirCompleted || dir == queue.DirFailed) {
 			continue
@@ -162,7 +170,6 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 
 			data.Nodes = append(data.Nodes, node)
 
-			// Step 4: Build alias map.
 			stem := frontmatter.TaskFileStem(snap.Filename)
 
 			if dir == queue.DirWaiting {
@@ -180,9 +187,6 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 						DuplicateOf: seenWaitingIDs[snap.Meta.ID],
 						SharedID:    snap.Meta.ID,
 					})
-					// Do NOT add to aliasMap — only retained file is
-					// aliased. The duplicate is a node but should not be
-					// a target for dependency resolution.
 				} else {
 					// First time seeing this ID in waiting (retained).
 					aliasMap[snap.Meta.ID] = appendUnique(aliasMap[snap.Meta.ID], key)
@@ -198,9 +202,12 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 		}
 	}
 
-	// Step 5: For each node with depends_on, resolve edges and hidden deps.
-	// Deduplicate refs so repeated depends_on entries produce a single
-	// edge or hidden dependency per unique reference.
+	return aliasMap
+}
+
+// resolveEdges deduplicates depends_on refs for each node and creates Edge
+// entries for in-graph targets or HiddenDep entries for out-of-graph refs.
+func resolveEdges(data *GraphData, aliasMap map[string][]string, safeCompleted, ambiguousIDs, allIDs map[string]struct{}) {
 	for i := range data.Nodes {
 		node := &data.Nodes[i]
 		seenRefs := make(map[string]struct{})
@@ -235,8 +242,12 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 			}
 		}
 	}
+}
 
-	// Step 6: Attach BlockDetails from diag.Analysis.Blocked for waiting nodes.
+// attachBlockDetails populates BlockDetail entries on waiting nodes from
+// the dependency diagnosis results.
+func attachBlockDetails(data *GraphData, diag *queue.DependencyDiagnostics) {
+	retainedWaitingIDs := diag.RetainedFiles
 	for i := range data.Nodes {
 		node := &data.Nodes[i]
 		if node.State != StateWaiting {
@@ -254,8 +265,12 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 			}
 		}
 	}
+}
 
-	// Step 7: Map cycle IDs to node keys via waitingIDToKey.
+// annotateCycles maps cycle member IDs to node keys, records cycle groups,
+// and sets IsCycleMember on the corresponding nodes.
+func annotateCycles(data *GraphData, diag *queue.DependencyDiagnostics) {
+	retainedWaitingIDs := diag.RetainedFiles
 	waitingIDToKey := make(map[string]string)
 	for id, filename := range retainedWaitingIDs {
 		waitingIDToKey[id] = queue.DirWaiting + "/" + filename
@@ -276,14 +291,16 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 		}
 	}
 
-	// Set IsCycleMember on corresponding nodes.
 	for i := range data.Nodes {
 		if _, ok := cycleMemberKeys[data.Nodes[i].Key]; ok {
 			data.Nodes[i].IsCycleMember = true
 		}
 	}
+}
 
-	// Collect parse failures.
+// appendParseFailures collects task files that could not be parsed from
+// the index.
+func appendParseFailures(data *GraphData, idx *queue.PollIndex, showAll bool) {
 	for _, pf := range idx.ParseFailures() {
 		if !showAll && (pf.State == queue.DirCompleted || pf.State == queue.DirFailed) {
 			continue
@@ -294,8 +311,11 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 			Error:    pf.Err.Error(),
 		})
 	}
+}
 
-	// Step 8: Sort everything deterministically.
+// sortGraphData applies deterministic ordering to nodes, edges, cycles,
+// and hidden deps.
+func sortGraphData(data *GraphData, stateOrder map[string]int) {
 	sort.Slice(data.Nodes, func(i, j int) bool {
 		si := stateOrder[string(data.Nodes[i].State)]
 		sj := stateOrder[string(data.Nodes[j].State)]
@@ -319,7 +339,6 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 		return data.Cycles[i][0] < data.Cycles[j][0]
 	})
 
-	// Sort HiddenDeps within each node.
 	for i := range data.Nodes {
 		if len(data.Nodes[i].HiddenDeps) > 1 {
 			sort.Slice(data.Nodes[i].HiddenDeps, func(a, b int) bool {
@@ -327,8 +346,6 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 			})
 		}
 	}
-
-	return data
 }
 
 // Show writes the dependency graph to os.Stdout.
