@@ -10,8 +10,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
-	"mato/internal/sessionmeta"
-	"mato/internal/taskstate"
+	"mato/internal/runtimedata"
 	"mato/internal/ui"
 )
 
@@ -84,10 +83,10 @@ func pollCleanup(tasksDir string) {
 	queue.CleanStaleReviewLocks(tasksDir)
 	messaging.CleanStalePresence(tasksDir)
 	messaging.CleanOldMessages(tasksDir, 24*time.Hour)
-	if err := taskstate.Sweep(tasksDir); err != nil {
+	if err := runtimedata.SweepTaskState(tasksDir); err != nil {
 		ui.Warnf("warning: could not clean stale taskstate: %v\n", err)
 	}
-	if err := sessionmeta.Sweep(tasksDir); err != nil {
+	if err := runtimedata.SweepSessions(tasksDir); err != nil {
 		ui.Warnf("warning: could not clean stale sessionmeta: %v\n", err)
 	}
 }

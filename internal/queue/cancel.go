@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"mato/internal/frontmatter"
-	"mato/internal/runtimecleanup"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 )
 
@@ -52,7 +52,7 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		if err := appendCancelledRecordFn(match.Path); err != nil {
 			return CancelResult{}, fmt.Errorf("write cancelled marker to %s: %w", match.Path, err)
 		}
-		runtimecleanup.DeleteAll(tasksDir, match.Filename)
+		runtimedata.DeleteRuntimeArtifacts(tasksDir, match.Filename)
 		return result, nil
 	}
 
@@ -71,7 +71,7 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		}
 		return CancelResult{}, fmt.Errorf("write cancelled marker to %s: %w (rolled back to %s/)", failedPath, err, match.State)
 	}
-	runtimecleanup.DeleteAll(tasksDir, match.Filename)
+	runtimedata.DeleteRuntimeArtifacts(tasksDir, match.Filename)
 
 	return result, nil
 }

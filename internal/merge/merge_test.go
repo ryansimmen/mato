@@ -15,8 +15,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
-	"mato/internal/sessionmeta"
-	"mato/internal/taskstate"
+	"mato/internal/runtimedata"
 	"mato/internal/testutil"
 )
 
@@ -199,13 +198,13 @@ func TestProcessQueue_AlreadyMergedDuplicateDestinationCleansRuntimeState(t *tes
 	if err := os.WriteFile(completedPath, []byte("already moved\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile completed task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, taskName, func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewApproved
+	if err := runtimedata.UpdateTaskState(tasksDir, taskName, func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewApproved
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, taskName, taskBranch); err != nil {
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		if _, err := runtimedata.LoadOrCreateSession(tasksDir, kind, taskName, taskBranch); err != nil {
 			t.Fatalf("seed %s session: %v", kind, err)
 		}
 	}
@@ -213,15 +212,15 @@ func TestProcessQueue_AlreadyMergedDuplicateDestinationCleansRuntimeState(t *tes
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("ProcessQueue() = %d, want 1", got)
 	}
-	state, err := taskstate.Load(tasksDir, taskName)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskName)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
 	if state != nil {
 		t.Fatalf("taskstate should be deleted, got %+v", state)
 	}
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		session, err := sessionmeta.Load(tasksDir, kind, taskName)
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		session, err := runtimedata.LoadSession(tasksDir, kind, taskName)
 		if err != nil {
 			t.Fatalf("Load %s session: %v", kind, err)
 		}

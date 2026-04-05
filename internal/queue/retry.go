@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"mato/internal/frontmatter"
-	"mato/internal/runtimecleanup"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 )
 
@@ -132,7 +132,7 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 
 	// Clean up stale runtime state (taskstate, sessionmeta) from the
 	// previous failed attempt so a fresh agent run starts clean.
-	runtimecleanup.DeleteAllPreservingVerdict(tasksDir, match.Filename)
+	runtimedata.DeleteRuntimeArtifactsPreservingVerdict(tasksDir, match.Filename)
 
 	result := RetryResult{Filename: match.Filename}
 	if removeWarning != "" {

@@ -11,9 +11,8 @@ import (
 	"mato/internal/atomicwrite"
 	"mato/internal/frontmatter"
 	"mato/internal/queue"
-	"mato/internal/runtimecleanup"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/ui"
 )
 
@@ -27,7 +26,7 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 		return err
 	}
 	if filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirFailed) {
-		runtimecleanup.DeleteAll(tasksDir, task.name)
+		runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
 		cleanupTaskBranchFn(repoRoot, taskBranchName(task))
 	}
 	if errors.Is(mergeErr, errSquashMergeConflict) && filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirBacklog) {
@@ -35,9 +34,9 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 		if err := removeBranchMarkerFn(dst); err != nil {
 			ui.Warnf("warning: could not clear branch marker after merge-conflict cleanup for %s: %v\n", task.name, err)
 		}
-		if err := taskstate.Update(tasksDir, task.name, func(state *taskstate.TaskState) {
+		if err := runtimedata.UpdateTaskState(tasksDir, task.name, func(state *runtimedata.TaskState) {
 			state.TaskBranch = taskBranchName(task)
-			state.LastOutcome = taskstate.OutcomeMergeConflictCleanup
+			state.LastOutcome = runtimedata.OutcomeMergeConflictCleanup
 		}); err != nil {
 			ui.Warnf("warning: could not record merge-conflict cleanup taskstate for %s: %v\n", task.name, err)
 		}

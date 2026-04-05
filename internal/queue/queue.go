@@ -17,8 +17,8 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/ui"
 )
 
@@ -153,11 +153,11 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 }
 
 func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskRecovery, bool, error) {
-	state, err := taskstate.Load(tasksDir, name)
+	state, err := runtimedata.LoadTaskState(tasksDir, name)
 	if err != nil {
 		return nil, false, fmt.Errorf("load taskstate: %w", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
+	if state == nil || state.LastOutcome != runtimedata.OutcomeWorkBranchPushed {
 		return nil, false, nil
 	}
 
@@ -178,11 +178,11 @@ func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskReco
 	}
 	targetBranch := strings.TrimSpace(state.TargetBranch)
 	lastHeadSHA := strings.TrimSpace(state.LastHeadSHA)
-	if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
 		state.TaskBranch = branch
 		state.TargetBranch = targetBranch
 		state.LastHeadSHA = lastHeadSHA
-		state.LastOutcome = taskstate.OutcomeWorkPushed
+		state.LastOutcome = runtimedata.OutcomeWorkPushed
 	}); err != nil {
 		ui.Warnf("warning: could not record recovered pushed taskstate for %s: %v\n", name, err)
 	}

@@ -1,5 +1,5 @@
-// Package taskstate stores lightweight host-owned runtime metadata for tasks.
-package taskstate
+// Package runtimedata stores host-owned runtime metadata under .mato/runtime/.
+package runtimedata
 
 import (
 	"encoding/json"
@@ -14,7 +14,7 @@ import (
 	"mato/internal/dirs"
 )
 
-const version = 1
+const taskStateVersion = 1
 
 // Outcome constants for TaskState.LastOutcome. These cover the full task
 // lifecycle so callers never need raw strings.
@@ -49,10 +49,10 @@ type TaskState struct {
 	UpdatedAt       string `json:"updated_at"`
 }
 
-// Load returns the stored runtime state for a task. Missing files return
-// (nil, nil).
-func Load(tasksDir, taskFilename string) (*TaskState, error) {
-	statePath, err := pathFor(tasksDir, taskFilename)
+// LoadTaskState returns the stored runtime state for a task. Missing files
+// return (nil, nil).
+func LoadTaskState(tasksDir, taskFilename string) (*TaskState, error) {
+	statePath, err := taskStatePathFor(tasksDir, taskFilename)
 	if err != nil {
 		return nil, err
 	}
@@ -71,19 +71,19 @@ func Load(tasksDir, taskFilename string) (*TaskState, error) {
 		state.TaskFile = taskFilename
 	}
 	if state.Version == 0 {
-		state.Version = version
+		state.Version = taskStateVersion
 	}
 	return &state, nil
 }
 
-// Update applies a load-modify-save update to a task's runtime state. Corrupt
-// files are replaced with a fresh state.
-func Update(tasksDir, taskFilename string, fn func(*TaskState)) error {
-	statePath, err := pathFor(tasksDir, taskFilename)
+// UpdateTaskState applies a load-modify-save update to a task's runtime state.
+// Corrupt files are replaced with a fresh state.
+func UpdateTaskState(tasksDir, taskFilename string, fn func(*TaskState)) error {
+	statePath, err := taskStatePathFor(tasksDir, taskFilename)
 	if err != nil {
 		return err
 	}
-	state := TaskState{Version: version, TaskFile: taskFilename}
+	state := TaskState{Version: taskStateVersion, TaskFile: taskFilename}
 	if data, err := os.ReadFile(statePath); err == nil {
 		var loaded TaskState
 		if jsonErr := json.Unmarshal(data, &loaded); jsonErr == nil {
@@ -92,7 +92,7 @@ func Update(tasksDir, taskFilename string, fn func(*TaskState)) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read taskstate %s: %w", statePath, err)
 	}
-	state.Version = version
+	state.Version = taskStateVersion
 	state.TaskFile = taskFilename
 	if fn != nil {
 		fn(&state)
@@ -111,9 +111,10 @@ func Update(tasksDir, taskFilename string, fn func(*TaskState)) error {
 	return nil
 }
 
-// Delete removes a task's runtime state file. Missing files are ignored.
-func Delete(tasksDir, taskFilename string) error {
-	statePath, err := pathFor(tasksDir, taskFilename)
+// DeleteTaskState removes a task's runtime state file. Missing files are
+// ignored.
+func DeleteTaskState(tasksDir, taskFilename string) error {
+	statePath, err := taskStatePathFor(tasksDir, taskFilename)
 	if err != nil {
 		return err
 	}
@@ -123,10 +124,10 @@ func Delete(tasksDir, taskFilename string) error {
 	return nil
 }
 
-// Sweep removes runtime state for tasks that are no longer in non-terminal
-// queue directories.
-func Sweep(tasksDir string) error {
-	runtimeDir := runtimeDir(tasksDir)
+// SweepTaskState removes runtime state for tasks that are no longer in
+// non-terminal queue directories.
+func SweepTaskState(tasksDir string) error {
+	runtimeDir := taskStateRuntimeDir(tasksDir)
 	entries, err := os.ReadDir(runtimeDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -156,7 +157,7 @@ func Sweep(tasksDir string) error {
 	return nil
 }
 
-func pathFor(tasksDir, taskFilename string) (string, error) {
+func taskStatePathFor(tasksDir, taskFilename string) (string, error) {
 	tasksDir = strings.TrimSpace(tasksDir)
 	if tasksDir == "" {
 		return "", fmt.Errorf("tasks directory must not be empty")
@@ -168,9 +169,9 @@ func pathFor(tasksDir, taskFilename string) (string, error) {
 	if filepath.Base(taskFilename) != taskFilename {
 		return "", fmt.Errorf("task filename %q must be a base name", taskFilename)
 	}
-	return filepath.Join(runtimeDir(tasksDir), taskFilename+".json"), nil
+	return filepath.Join(taskStateRuntimeDir(tasksDir), taskFilename+".json"), nil
 }
 
-func runtimeDir(tasksDir string) string {
+func taskStateRuntimeDir(tasksDir string) string {
 	return filepath.Join(tasksDir, "runtime", "taskstate")
 }
