@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -18,15 +17,12 @@ func runMatoCommand(t *testing.T, args ...string) (string, error) {
 func runMatoCommandWithEnv(t *testing.T, env []string, args ...string) (string, error) {
 	t.Helper()
 
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	if matoBinaryPath == "" {
+		t.Fatal("mato test binary was not built")
 	}
-	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 
-	cmdArgs := append([]string{"run", "./cmd/mato"}, args...)
-	cmd := exec.Command("go", cmdArgs...)
-	cmd.Dir = moduleRoot
+	cmd := exec.Command(matoBinaryPath, args...)
+	cmd.Dir = integrationModuleRoot()
 	cmd.Env = append(filteredHostEnv(
 		"MATO_BRANCH",
 		"MATO_DOCKER_IMAGE",
