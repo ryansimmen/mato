@@ -299,7 +299,7 @@ func (r *DryRunRenderer) valueWidth(indent, labelCol int) int {
 func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 	opts, err = normalizeAndValidateRunOptions(opts)
 	if err != nil {
@@ -618,7 +618,7 @@ func resolveDepState(depID string, idx *queue.PollIndex) string {
 func Run(repoRoot, branch string, opts RunOptions) error {
 	repoRoot, err := git.ResolveRepoRoot(repoRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 	opts, err = normalizeAndValidateRunOptions(opts)
 	if err != nil {
@@ -634,7 +634,7 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
 	if err := checkDocker(); err != nil {
-		return err
+		return fmt.Errorf("check docker: %w", err)
 	}
 
 	for _, sub := range queue.AllDirs {
@@ -681,7 +681,7 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 	defer signal.Stop(signalChan(ctx))
 
 	if err := ensureDockerImage(ctx, cfg.image); err != nil {
-		return err
+		return fmt.Errorf("ensure docker image: %w", err)
 	}
 
 	cleanStaleClones(os.TempDir(), time.Now(), staleCloneMaxAge)

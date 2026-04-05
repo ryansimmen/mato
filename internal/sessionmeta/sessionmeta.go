@@ -136,7 +136,7 @@ func ResetSessionID(tasksDir, kind, taskFilename, taskBranch string) (*Session, 
 func Update(tasksDir, kind, taskFilename string, fn func(*Session)) error {
 	statePath, err := pathFor(tasksDir, kind, taskFilename)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve session path: %w", err)
 	}
 	session := Session{}
 	if data, err := os.ReadFile(statePath); err == nil {
@@ -154,7 +154,7 @@ func Update(tasksDir, kind, taskFilename string, fn func(*Session)) error {
 	if strings.TrimSpace(session.CopilotSessionID) == "" {
 		sessionID, err := newSessionID()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate session ID: %w", err)
 		}
 		session.CopilotSessionID = sessionID
 	}
@@ -166,7 +166,7 @@ func Update(tasksDir, kind, taskFilename string, fn func(*Session)) error {
 func Delete(tasksDir, kind, taskFilename string) error {
 	statePath, err := pathFor(tasksDir, kind, taskFilename)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve session path: %w", err)
 	}
 	if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete sessionmeta %s: %w", statePath, err)
