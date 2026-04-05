@@ -152,6 +152,9 @@ Recommended exported surface:
 
 - task state load/update/delete/sweep helpers
 - session metadata load/update/delete/sweep helpers
+- session kind constants (`work`, `review`) so callers do not need local string
+  duplication
+- session-ID reset helpers used when a stale Copilot session must be rotated
 - cleanup helpers that remove one or both runtime record types
 - optional best-effort cleanup wrappers that also call into `taskfile` for
   verdict-file deletion when a terminal transition needs both operations
@@ -193,8 +196,8 @@ Make these targeted changes:
 
 - keep one task-file listing helper and reuse it from callers that need sorted
   `.md` task names
-- remove queue's re-exported `Dir*` constants and import `internal/dirs`
-  directly at call sites
+- remove queue's re-exported `Dir*` constants and ordered directory list, and
+  import `internal/dirs` directly at call sites
 - only deduplicate fence detection if there is a natural home that does not
   create a new dependency cycle or a new package solely for one helper
 
@@ -230,6 +233,32 @@ If extracted, the likely direction is:
 internal/queue/      // mutations and transitions
 internal/queueview/  // read-only index, diagnostics, runnable views
 ```
+
+Before implementation, define the exported move/stay boundary explicitly rather
+than inferring it from filenames alone.
+
+Expected `queueview` ownership:
+
+- `TaskSnapshot`
+- `ParseFailure`
+- `BuildWarning`
+- `PollIndex`
+- `BuildIndex`
+- task-resolution helpers such as `ResolveTask`
+- dependency and runnable-view types such as `DependencyBlock`,
+  `RunnableBacklogView`, and `DeferralInfo`
+- dependency diagnostics, overlap analysis, runnable backlog calculation, and
+  other read-only query APIs
+
+Expected `queue` ownership:
+
+- claim / reconcile / cancel / retry mutations
+- recovery and queue transitions
+- atomic move helpers and mutation-only filesystem operations
+- lock and manifest writes that are part of mutation paths
+
+`internal/dirs` should continue owning queue directory names and the ordered
+directory list.
 
 Do not take this extraction first. First remove the simpler dependency smells
 and redundant re-exports, then extract the read model once the remaining seam is
@@ -286,34 +315,41 @@ Use this sequence to minimize churn and keep behavior changes low-risk.
 7. Move session-metadata logic into `runtimedata`.
 8. Move cleanup helpers into `runtimedata` and delete
    `internal/runtimecleanup/`.
-9. Update imports in `queue`, `runner`, and `merge`.
-10. Verify sweep and cleanup behavior stays identical.
+9. Preserve the current session-kind constants and session-reset behavior while
+   moving APIs into `runtimedata`.
+10. Update imports in `queue`, `runner`, `merge`, integration tests, and any
+    other runtime-state consumers.
+11. Verify sweep and cleanup behavior stays identical.
 
 ### Phase 3: Remove duplicated helper ownership and redundant re-exports
 
-11. Consolidate task-file listing into one helper.
-12. Update queue and taskfile callers to use the single helper.
-13. Remove `internal/queue/dirs.go` re-exports.
-14. Update call sites to use `internal/dirs` directly.
-15. Decide whether fence-line detection should remain duplicated or be moved to
+12. Consolidate task-file listing into one helper.
+13. Update queue and taskfile callers to use the single helper.
+14. Remove `internal/queue/dirs.go` re-exports.
+15. Update call sites to use `internal/dirs` directly for both `Dir*`
+    constants and the ordered directory list.
+16. Decide whether fence-line detection should remain duplicated or be moved to
     a shared existing package after checking for dependency-cycle risk.
 
 ### Phase 4: Extract the `queue` read model
 
-16. Create `internal/queueview/` for read-only queue index and diagnostic APIs.
-17. Move `TaskSnapshot`, `PollIndex`, runnable backlog views, overlap helpers,
-    dependency-resolution helpers, task resolution helpers, and diagnostics into
-    `queueview`.
-18. Update mutation code in `queue` to depend on `queueview`.
-19. Update read-only consumers such as `status`, `doctor`, `graph`, `inspect`,
+17. Create `internal/queueview/` for read-only queue index and diagnostic APIs.
+18. Move explicitly named read-model types and functions into `queueview`:
+    `TaskSnapshot`, `ParseFailure`, `BuildWarning`, `PollIndex`, `BuildIndex`,
+    `ResolveTask`, runnable backlog views, overlap helpers, dependency-view
+    types, and diagnostics.
+19. Keep mutation APIs in `queue`: claim, reconcile, cancel, retry, recovery,
+    transitions, and mutation-only lock/manifest logic.
+20. Update mutation code in `queue` to depend on `queueview`.
+21. Update read-only consumers such as `status`, `doctor`, `graph`, `inspect`,
     `history`, `merge`, `runner`, and any command-layer callers to use
     `queueview` directly where appropriate.
-20. Keep `configresolve` out of scope for this phase; its queue dependency
+22. Keep `configresolve` out of scope for this phase; its queue dependency
     should already be removed in Phase 1.
 
 ### Phase 5: Reassess `runner`, but defer package extraction by default
 
-21. Keep `runner` as one package unless post-refactor growth or coupling makes a
+23. Keep `runner` as one package unless post-refactor growth or coupling makes a
     real split clearly worthwhile.
 
 ## 6. Detailed Plan
@@ -404,8 +440,14 @@ func UpdateTaskState(tasksDir, taskFilename string, fn func(*TaskState)) error
 func DeleteTaskState(tasksDir, taskFilename string) error
 func SweepTaskState(tasksDir string) error
 
+const (
+    KindWork   = "work"
+    KindReview = "review"
+)
+
 func LoadSession(tasksDir, kind, taskFilename string) (*Session, error)
 func LoadOrCreateSession(tasksDir, kind, taskFilename, taskBranch string) (*Session, error)
+func ResetSessionID(tasksDir, kind, taskFilename, taskBranch string) (*Session, error)
 func UpdateSession(tasksDir, kind, taskFilename string, fn func(*Session)) error
 func DeleteSession(tasksDir, kind, taskFilename string) error
 func DeleteAllSessions(tasksDir, taskFilename string) error
@@ -417,6 +459,13 @@ func DeleteRuntimeArtifactsPreservingVerdict(tasksDir, filename string)
 
 These names are intentionally explicit so one package can hold both runtime-data
 concerns without creating ambiguous `Load` and `Delete` APIs.
+
+Preserve the current runtime behavior while moving package ownership:
+
+- keep the current on-disk paths under `.mato/runtime/`
+- keep the session-kind contract stable for `runner`, tests, and integration
+  flows
+- preserve session reset semantics for stale-resume recovery
 
 Boundary note:
 
@@ -477,6 +526,15 @@ Then:
 
 Delete `internal/queue/dirs.go` and update all call sites to use `internal/dirs`
 directly.
+
+This includes both the `queue.Dir*` constants and the ordered directory list
+currently exposed as `queue.AllDirs`.
+
+Preferred ownership:
+
+```text
+internal/dirs.All
+```
 
 This removes redundant API surface and makes ownership explicit.
 
@@ -545,9 +603,30 @@ types and functions are interleaved across current queue files:
 - `DeferralInfo` lives in `overlap.go`
 - `immediatelyClaimableTask` lives in `claim.go`
 
+Current read-model consumers already include:
+
+- `runner`
+- `status`
+- `doctor`
+- `graph`
+- `inspect`
+- `history`
+- `merge`
+- command-layer callers
+- tests
+
 Phase 4 should therefore start by moving or duplicating these small supporting
 helpers so `queueview` can become a true read-only package without depending
 back on queue mutation code. Do not assume the extraction is purely a file move.
+
+Readiness note:
+
+- Phase 1 is ready immediately.
+- Phase 2 is ready once the runtime-session API surface above is preserved.
+- Phase 3 is ready once `AllDirs` ownership is migrated alongside `Dir*`
+  constants.
+- Phase 4 should not start until the explicit move/stay surface is agreed and
+  documented.
 
 After Phase 3, `queueview` should import `taskfile` for `ListTaskFiles` rather
 than reintroducing a queue-specific directory-scanning helper.
@@ -614,7 +693,11 @@ Modify:
 internal/runner/*.go
 internal/merge/*.go
 internal/queue/*.go
+internal/integration/*.go
 ```
+
+Also migrate the existing `internal/taskstate/*_test.go` and
+`internal/sessionmeta/*_test.go` coverage into `internal/runtimedata/*_test.go`.
 
 Delete after migration:
 
@@ -631,6 +714,7 @@ Modify:
 ```text
 cmd/mato/*.go
 internal/doctor/*.go
+internal/dirs/*.go
 internal/frontmatter/*.go (only if fence helper is consolidated)
 internal/graph/*.go
 internal/history/*.go
@@ -666,6 +750,7 @@ Modify:
 cmd/mato/*.go
 internal/integration/*.go
 internal/queue/*.go
+internal/dirs/*.go (only if queueview migration needs supporting ownership cleanup)
 internal/status/*.go
 internal/doctor/*.go
 internal/graph/*.go
