@@ -393,10 +393,10 @@ func TestRunCmd_HelpDocumentsResolvedDefaults(t *testing.T) {
 	help := out.String()
 	for _, want := range []string{
 		"Target branch for merging (default: mato)",
-		"Copilot model for task agents (default: " + runner.DefaultTaskModel + ")",
-		"Copilot model for review agents (default: " + runner.DefaultReviewModel + ")",
-		"Reasoning effort for task agents (default: " + runner.DefaultReasoningEffort + ")",
-		"Reasoning effort for review agents (default: " + runner.DefaultReasoningEffort + ")",
+		"Copilot model for task agents (default: " + config.DefaultTaskModel + ")",
+		"Copilot model for review agents (default: " + config.DefaultReviewModel + ")",
+		"Reasoning effort for task agents (default: " + config.DefaultReasoningEffort + ")",
+		"Reasoning effort for review agents (default: " + config.DefaultReasoningEffort + ")",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("expected run help to contain %q, got:\n%s", want, help)
@@ -1232,8 +1232,8 @@ func TestDoctorCmd_IgnoresUnrelatedInvalidRunSettings(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if capturedOpts.DockerImage != runner.DefaultDockerImage {
-		t.Fatalf("DockerImage = %q, want %q", capturedOpts.DockerImage, runner.DefaultDockerImage)
+	if capturedOpts.DockerImage != config.DefaultDockerImage {
+		t.Fatalf("DockerImage = %q, want %q", capturedOpts.DockerImage, config.DefaultDockerImage)
 	}
 }
 
@@ -2716,7 +2716,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
@@ -2728,7 +2728,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.DockerImage != "from-config:1.0" {
 			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-config:1.0")
 		}
@@ -2740,7 +2740,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.DockerImage != "from-env:2.0" {
 			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-env:2.0")
 		}
@@ -2753,7 +2753,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.AgentTimeout != time.Hour || opts.RetryCooldown != 90*time.Second {
 			t.Fatalf("opts = %+v", opts)
 		}
@@ -2771,7 +2771,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if !opts.ReviewSessionResumeEnabled {
 			t.Fatal("ReviewSessionResumeEnabled should default to true")
 		}
@@ -2784,7 +2784,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.ReviewSessionResumeEnabled {
 			t.Fatal("ReviewSessionResumeEnabled should respect env override")
 		}
@@ -3136,14 +3136,14 @@ func TestRunCmd_TaskModelFlagOverridesResolvedOptions(t *testing.T) {
 		if opts.TaskModel != "claude-sonnet-4" {
 			t.Fatalf("TaskModel = %q, want %q", opts.TaskModel, "claude-sonnet-4")
 		}
-		if opts.ReviewModel != runner.DefaultReviewModel {
-			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, runner.DefaultReviewModel)
+		if opts.ReviewModel != config.DefaultReviewModel {
+			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, config.DefaultReviewModel)
 		}
-		if opts.TaskReasoningEffort != runner.DefaultReasoningEffort {
-			t.Fatalf("TaskReasoningEffort = %q, want %q", opts.TaskReasoningEffort, runner.DefaultReasoningEffort)
+		if opts.TaskReasoningEffort != config.DefaultReasoningEffort {
+			t.Fatalf("TaskReasoningEffort = %q, want %q", opts.TaskReasoningEffort, config.DefaultReasoningEffort)
 		}
-		if opts.ReviewReasoningEffort != runner.DefaultReasoningEffort {
-			t.Fatalf("ReviewReasoningEffort = %q, want %q", opts.ReviewReasoningEffort, runner.DefaultReasoningEffort)
+		if opts.ReviewReasoningEffort != config.DefaultReasoningEffort {
+			t.Fatalf("ReviewReasoningEffort = %q, want %q", opts.ReviewReasoningEffort, config.DefaultReasoningEffort)
 		}
 		return nil
 	}
@@ -3352,14 +3352,46 @@ func configFixture(branch *string) config.Config {
 
 func defaultResolvedRunOptions() runner.RunOptions {
 	return runner.RunOptions{
-		DockerImage:                runner.DefaultDockerImage,
-		TaskModel:                  runner.DefaultTaskModel,
-		ReviewModel:                runner.DefaultReviewModel,
+		DockerImage:                config.DefaultDockerImage,
+		TaskModel:                  config.DefaultTaskModel,
+		ReviewModel:                config.DefaultReviewModel,
 		ReviewSessionResumeEnabled: true,
-		TaskReasoningEffort:        runner.DefaultReasoningEffort,
-		ReviewReasoningEffort:      runner.DefaultReasoningEffort,
-		AgentTimeout:               runner.DefaultAgentTimeout,
-		RetryCooldown:              queue.DefaultRetryCooldown,
+		TaskReasoningEffort:        config.DefaultReasoningEffort,
+		ReviewReasoningEffort:      config.DefaultReasoningEffort,
+		AgentTimeout:               config.DefaultAgentTimeout,
+		RetryCooldown:              config.DefaultRetryCooldown,
+	}
+}
+
+func resolvedRunConfigFixture(dockerImage, taskModel, reviewModel string, reviewSessionResumeEnabled bool, taskReasoningEffort, reviewReasoningEffort string, agentTimeout, retryCooldown time.Duration) configresolve.RunConfig {
+	return configresolve.RunConfig{
+		DockerImage:                configresolve.Resolved[string]{Value: dockerImage},
+		TaskModel:                  configresolve.Resolved[string]{Value: taskModel},
+		ReviewModel:                configresolve.Resolved[string]{Value: reviewModel},
+		ReviewSessionResumeEnabled: configresolve.Resolved[bool]{Value: reviewSessionResumeEnabled},
+		TaskReasoningEffort:        configresolve.Resolved[string]{Value: taskReasoningEffort},
+		ReviewReasoningEffort:      configresolve.Resolved[string]{Value: reviewReasoningEffort},
+		AgentTimeout:               configresolve.Resolved[time.Duration]{Value: agentTimeout},
+		RetryCooldown:              configresolve.Resolved[time.Duration]{Value: retryCooldown},
+	}
+}
+
+func TestRunOptionsFromResolvedConfig(t *testing.T) {
+	runCfg := resolvedRunConfigFixture("custom:latest", "claude-sonnet-4", "gpt-5.4", false, "medium", "xhigh", 45*time.Minute, 90*time.Second)
+
+	got := runOptionsFromResolvedConfig(runCfg)
+	want := runner.RunOptions{
+		DockerImage:                "custom:latest",
+		TaskModel:                  "claude-sonnet-4",
+		ReviewModel:                "gpt-5.4",
+		ReviewSessionResumeEnabled: false,
+		TaskReasoningEffort:        "medium",
+		ReviewReasoningEffort:      "xhigh",
+		AgentTimeout:               45 * time.Minute,
+		RetryCooldown:              90 * time.Second,
+	}
+	if got != want {
+		t.Fatalf("runOptionsFromResolvedConfig() = %+v, want %+v", got, want)
 	}
 }
 

@@ -70,7 +70,7 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			opts := runCfg.RunOptions()
+			opts := runOptionsFromResolvedConfig(runCfg)
 			switch {
 			case once:
 				opts.Mode = runner.RunModeOnce
@@ -86,13 +86,26 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 		},
 	}
 	configureCommand(cmd)
-	cmd.Flags().StringVar(&branch, "branch", "", "Target branch for merging (default: mato)")
+	cmd.Flags().StringVar(&branch, "branch", "", "Target branch for merging (default: "+config.DefaultBranch+")")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate queue setup without launching Docker containers")
 	cmd.Flags().BoolVar(&once, "once", false, "Run exactly one poll iteration, then exit")
 	cmd.Flags().BoolVar(&untilIdle, "until-idle", false, "Keep polling until no actionable work remains, then exit")
-	cmd.Flags().StringVar(&flags.TaskModel, "task-model", "", "Copilot model for task agents (default: "+runner.DefaultTaskModel+")")
-	cmd.Flags().StringVar(&flags.ReviewModel, "review-model", "", "Copilot model for review agents (default: "+runner.DefaultReviewModel+")")
-	cmd.Flags().StringVar(&flags.TaskReasoningEffort, "task-reasoning-effort", "", "Reasoning effort for task agents (default: "+runner.DefaultReasoningEffort+")")
-	cmd.Flags().StringVar(&flags.ReviewReasoningEffort, "review-reasoning-effort", "", "Reasoning effort for review agents (default: "+runner.DefaultReasoningEffort+")")
+	cmd.Flags().StringVar(&flags.TaskModel, "task-model", "", "Copilot model for task agents (default: "+config.DefaultTaskModel+")")
+	cmd.Flags().StringVar(&flags.ReviewModel, "review-model", "", "Copilot model for review agents (default: "+config.DefaultReviewModel+")")
+	cmd.Flags().StringVar(&flags.TaskReasoningEffort, "task-reasoning-effort", "", "Reasoning effort for task agents (default: "+config.DefaultReasoningEffort+")")
+	cmd.Flags().StringVar(&flags.ReviewReasoningEffort, "review-reasoning-effort", "", "Reasoning effort for review agents (default: "+config.DefaultReasoningEffort+")")
 	return cmd
+}
+
+func runOptionsFromResolvedConfig(runCfg configresolve.RunConfig) runner.RunOptions {
+	return runner.RunOptions{
+		DockerImage:                runCfg.DockerImage.Value,
+		TaskModel:                  runCfg.TaskModel.Value,
+		ReviewModel:                runCfg.ReviewModel.Value,
+		ReviewSessionResumeEnabled: runCfg.ReviewSessionResumeEnabled.Value,
+		TaskReasoningEffort:        runCfg.TaskReasoningEffort.Value,
+		ReviewReasoningEffort:      runCfg.ReviewReasoningEffort.Value,
+		AgentTimeout:               runCfg.AgentTimeout.Value,
+		RetryCooldown:              runCfg.RetryCooldown.Value,
+	}
 }

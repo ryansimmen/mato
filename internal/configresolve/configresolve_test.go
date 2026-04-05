@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"mato/internal/config"
-	"mato/internal/queue"
-	"mato/internal/runner"
 	"mato/internal/testutil"
 )
 
@@ -19,16 +17,16 @@ func TestResolveRepoDefaults_DefaultsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRepoDefaults: %v", err)
 	}
-	if resolved.Branch.Value != "mato" || resolved.Branch.Source != SourceDefault {
+	if resolved.Branch.Value != config.DefaultBranch || resolved.Branch.Source != SourceDefault {
 		t.Fatalf("Branch = %+v, want default mato", resolved.Branch)
 	}
-	if resolved.DockerImage.Value != runner.DefaultDockerImage || resolved.DockerImage.Source != SourceDefault {
+	if resolved.DockerImage.Value != config.DefaultDockerImage || resolved.DockerImage.Source != SourceDefault {
 		t.Fatalf("DockerImage = %+v", resolved.DockerImage)
 	}
-	if resolved.AgentTimeout.Value != runner.DefaultAgentTimeout.String() || resolved.AgentTimeout.Source != SourceDefault {
+	if resolved.AgentTimeout.Value != config.DefaultAgentTimeout.String() || resolved.AgentTimeout.Source != SourceDefault {
 		t.Fatalf("AgentTimeout = %+v", resolved.AgentTimeout)
 	}
-	if resolved.RetryCooldown.Value != queue.DefaultRetryCooldown.String() || resolved.RetryCooldown.Source != SourceDefault {
+	if resolved.RetryCooldown.Value != config.DefaultRetryCooldown.String() || resolved.RetryCooldown.Source != SourceDefault {
 		t.Fatalf("RetryCooldown = %+v", resolved.RetryCooldown)
 	}
 	if resolved.ConfigExists || resolved.ConfigPath != "" {
@@ -95,8 +93,8 @@ func TestResolveRunConfig(t *testing.T) {
 		if resolved.DockerImage.Source != SourceConfig || resolved.TaskModel.Source != SourceConfig || resolved.AgentTimeout.Source != SourceConfig {
 			t.Fatalf("unexpected sources: %+v", resolved)
 		}
-		if got := resolved.RunOptions(); got.DockerImage != "custom:latest" || got.TaskModel != "claude-sonnet-4" || got.AgentTimeout != 45*time.Minute || got.RetryCooldown != 5*time.Minute {
-			t.Fatalf("RunOptions = %+v", got)
+		if resolved.DockerImage.Value != "custom:latest" || resolved.TaskModel.Value != "claude-sonnet-4" || resolved.AgentTimeout.Value != 45*time.Minute || resolved.RetryCooldown.Value != 5*time.Minute {
+			t.Fatalf("resolved = %+v", resolved)
 		}
 	})
 
@@ -207,7 +205,7 @@ func TestResolveDoctorDockerImage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ResolveDoctorDockerImage: %v", err)
 		}
-		if resolved.Value != runner.DefaultDockerImage || resolved.Source != SourceDefault {
+		if resolved.Value != config.DefaultDockerImage || resolved.Source != SourceDefault {
 			t.Fatalf("resolved = %+v", resolved)
 		}
 	})
@@ -217,7 +215,7 @@ func TestResolveDoctorDockerImage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ResolveDoctorDockerImage: %v", err)
 		}
-		if resolved.Value != runner.DefaultDockerImage || resolved.Source != SourceDefault {
+		if resolved.Value != config.DefaultDockerImage || resolved.Source != SourceDefault {
 			t.Fatalf("resolved = %+v", resolved)
 		}
 	})

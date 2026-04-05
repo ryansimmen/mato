@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/config"
 	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/identity"
@@ -26,14 +27,6 @@ var taskInstructions string
 
 //go:embed review-instructions.md
 var reviewInstructions string
-
-// DefaultAgentTimeout is the default execution timeout for Docker agent
-// containers.
-const DefaultAgentTimeout = 30 * time.Minute
-
-const DefaultTaskModel = "claude-opus-4.6"
-const DefaultReviewModel = "gpt-5.4"
-const DefaultReasoningEffort = "high"
 
 // gracefulShutdownDelay is the time to wait after sending SIGTERM to a
 // Docker container before escalating to SIGKILL.
@@ -251,11 +244,11 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail, repoRoot, tasksDir string, opts RunOptions) (envConfig, runContext) {
 	image := opts.DockerImage
 	if image == "" {
-		image = DefaultDockerImage
+		image = config.DefaultDockerImage
 	}
 	timeout := opts.AgentTimeout
 	if timeout <= 0 {
-		timeout = DefaultAgentTimeout
+		timeout = config.DefaultAgentTimeout
 	}
 	workdir := "/workspace"
 
