@@ -228,8 +228,11 @@ mato log --format json
 Phase 1 is intentionally a partial durable-outcomes view. It reads only
 host-written completion detail files from `.mato/messages/completions/` plus
 durable task markers for failures (`<!-- failure: ... -->`) and review
-rejections (`<!-- review-rejection: ... -->`). The output is newest first,
-`--limit` defaults to `20`, and `--limit 0` means unlimited.
+rejections (`<!-- review-rejection: ... -->`). If a task has no durable review
+rejection marker, `mato log` falls back to the preserved
+`.mato/messages/verdict-<task>.json` rejection so retryable review feedback
+still appears in history. The output is newest first, `--limit` defaults to
+`20`, and `--limit 0` means unlimited.
 
 ## Doctor Command
 
