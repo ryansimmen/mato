@@ -74,20 +74,26 @@ func failMergeTask(src, dst, reason string) error {
 		reason = "merge queue failure"
 	}
 
-	appendErr := appendTaskRecord(src, "<!-- failure: merge-queue at %s — %s -->", time.Now().UTC().Format(time.RFC3339), reason)
-	if appendErr != nil {
-		ui.Warnf("warning: could not append failure record to %s: %v\n", filepath.Base(src), appendErr)
-	}
 	if dst == "" {
-		return appendErr
+		return appendMergeFailureRecord(src, reason)
 	}
 	if err := queue.AtomicMove(src, dst); err != nil {
-		if appendErr != nil {
-			return fmt.Errorf("move task file after merge failure: %w (also failed to append failure record: %v)", err, appendErr)
+		if errors.Is(err, queue.ErrDestinationExists) {
+			if removeErr := removeTaskFileFn(src); removeErr != nil && !os.IsNotExist(removeErr) {
+				return fmt.Errorf("remove duplicate merge-failed task after destination collision: %w", removeErr)
+			}
+			return nil
 		}
 		return fmt.Errorf("move task file after merge failure: %w", err)
 	}
+	if appendErr := appendMergeFailureRecord(dst, reason); appendErr != nil {
+		ui.Warnf("warning: could not append failure record to %s: %v\n", filepath.Base(dst), appendErr)
+	}
 	return nil
+}
+
+func appendMergeFailureRecord(path, reason string) error {
+	return appendTaskRecord(path, "<!-- failure: merge-queue at %s — %s -->", time.Now().UTC().Format(time.RFC3339), reason)
 }
 
 func markTaskMerged(path string) error {

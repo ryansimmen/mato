@@ -1910,7 +1910,7 @@ func TestFailMergeTask_NoDst_ReturnsAppendError(t *testing.T) {
 	}
 }
 
-func TestFailMergeTask_BothAppendAndMoveFail(t *testing.T) {
+func TestFailMergeTask_MoveFailureDoesNotAppendRecord(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "tasks")
 	os.MkdirAll(subdir, 0o755)
@@ -1922,24 +1922,21 @@ func TestFailMergeTask_BothAppendAndMoveFail(t *testing.T) {
 	blocker := filepath.Join(dir, "blocked-dir")
 	os.WriteFile(blocker, []byte("not a directory"), 0o644)
 
-	// Make the task directory read-only so atomic write fails.
-	os.Chmod(subdir, 0o555)
-	t.Cleanup(func() {
-		os.Chmod(subdir, 0o755)
-	})
-
 	dstPath := filepath.Join(blocker, "sub", "task.md")
 
 	err := failMergeTask(taskFile, dstPath, "test failure")
 	if err == nil {
-		t.Fatal("failMergeTask should return error when both append and move fail")
+		t.Fatal("failMergeTask should return error when move fails")
 	}
-	// Error should mention both failures
 	if !strings.Contains(err.Error(), "move task file") {
 		t.Fatalf("error should mention move failure, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "append failure record") {
-		t.Fatalf("error should mention append failure, got: %v", err)
+	data, readErr := os.ReadFile(taskFile)
+	if readErr != nil {
+		t.Fatalf("task should remain at source when move fails: %v", readErr)
+	}
+	if strings.Contains(string(data), "<!-- failure:") {
+		t.Fatalf("move failure should not append failure metadata, got:\n%s", string(data))
 	}
 }
 
