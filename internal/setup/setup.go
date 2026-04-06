@@ -235,35 +235,37 @@ func pathHasLocalChanges(repoRoot, path string) (bool, error) {
 }
 
 func createEmptyBootstrapCommit(repoRoot, message string) error {
-	treeID, err := gitOutputWithStdin(repoRoot, nil, "hash-object", "-t", "tree", "-w", "--stdin")
+	indexFile, err := os.CreateTemp("", "mato-bootstrap-index-*")
 	if err != nil {
-		return fmt.Errorf("hash empty tree: %w", err)
+		return fmt.Errorf("create temporary git index: %w", err)
 	}
+	indexPath := indexFile.Name()
+	if err := indexFile.Close(); err != nil {
+		return fmt.Errorf("close temporary git index %s: %w", indexPath, err)
+	}
+	defer os.Remove(indexPath)
 
-	commitID, err := gitOutputWithStdin(repoRoot, []byte(message), "commit-tree", strings.TrimSpace(treeID), "-F", "-")
-	if err != nil {
+	env := []string{"GIT_INDEX_FILE=" + indexPath}
+	if _, err := gitOutputWithOptions(repoRoot, env, nil, "read-tree", "--empty"); err != nil {
+		return fmt.Errorf("prepare empty bootstrap index: %w", err)
+	}
+	if _, err := gitOutputWithOptions(repoRoot, env, nil, "commit", "--allow-empty", "-m", message); err != nil {
 		return fmt.Errorf("create empty bootstrap commit: %w", err)
-	}
-
-	headRef, err := git.Output(repoRoot, "symbolic-ref", "HEAD")
-	if err != nil {
-		return fmt.Errorf("resolve HEAD ref: %w", err)
-	}
-	refName := strings.TrimSpace(headRef)
-	if _, err := git.Output(repoRoot, "update-ref", refName, strings.TrimSpace(commitID)); err != nil {
-		return fmt.Errorf("update branch ref %s: %w", refName, err)
 	}
 
 	return nil
 }
 
-func gitOutputWithStdin(repoRoot string, stdin []byte, args ...string) (string, error) {
+func gitOutputWithOptions(repoRoot string, env []string, stdin []byte, args ...string) (string, error) {
 	cmdArgs := make([]string, 0, len(args)+2)
 	if repoRoot != "" {
 		cmdArgs = append(cmdArgs, "-C", repoRoot)
 	}
 	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.Command("git", cmdArgs...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	cmd.Stdin = bytes.NewReader(stdin)
 
 	var stdout bytes.Buffer
