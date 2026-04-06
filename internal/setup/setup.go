@@ -3,8 +3,10 @@
 package setup
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -110,11 +112,17 @@ func InitRepo(repoRoot, branch string) (*InitResult, error) {
 		return nil, err
 	}
 	if !born {
-		if _, err := git.Output(repoRoot, "add", "--", ".gitignore"); err != nil {
-			return nil, fmt.Errorf("git add .gitignore: %w", err)
-		}
-		if _, err := git.Output(repoRoot, "commit", "-m", "chore: initialize mato", "--", ".gitignore"); err != nil {
-			return nil, fmt.Errorf("git commit .gitignore: %w", err)
+		if changed {
+			if _, err := git.Output(repoRoot, "add", "--", ".gitignore"); err != nil {
+				return nil, fmt.Errorf("git add .gitignore: %w", err)
+			}
+			if _, err := git.Output(repoRoot, "commit", "-m", "chore: initialize mato", "--", ".gitignore"); err != nil {
+				return nil, fmt.Errorf("git commit .gitignore: %w", err)
+			}
+		} else {
+			if err := createEmptyBootstrapCommit(repoRoot, "chore: initialize mato"); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -224,4 +232,49 @@ func pathHasLocalChanges(repoRoot, path string) (bool, error) {
 		return false, fmt.Errorf("check %s status: %w", path, err)
 	}
 	return strings.TrimSpace(out) != "", nil
+}
+
+func createEmptyBootstrapCommit(repoRoot, message string) error {
+	indexFile, err := os.CreateTemp("", "mato-bootstrap-index-*")
+	if err != nil {
+		return fmt.Errorf("create temporary git index: %w", err)
+	}
+	indexPath := indexFile.Name()
+	if err := indexFile.Close(); err != nil {
+		return fmt.Errorf("close temporary git index %s: %w", indexPath, err)
+	}
+	defer os.Remove(indexPath)
+
+	env := []string{"GIT_INDEX_FILE=" + indexPath}
+	if _, err := gitOutputWithOptions(repoRoot, env, nil, "read-tree", "--empty"); err != nil {
+		return fmt.Errorf("prepare empty bootstrap index: %w", err)
+	}
+	if _, err := gitOutputWithOptions(repoRoot, env, nil, "commit", "--allow-empty", "-m", message); err != nil {
+		return fmt.Errorf("create empty bootstrap commit: %w", err)
+	}
+
+	return nil
+}
+
+func gitOutputWithOptions(repoRoot string, env []string, stdin []byte, args ...string) (string, error) {
+	cmdArgs := make([]string, 0, len(args)+2)
+	if repoRoot != "" {
+		cmdArgs = append(cmdArgs, "-C", repoRoot)
+	}
+	cmdArgs = append(cmdArgs, args...)
+	cmd := exec.Command("git", cmdArgs...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	cmd.Stdin = bytes.NewReader(stdin)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		combined := strings.TrimSpace(stdout.String() + "\n" + stderr.String())
+		return "", fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, combined)
+	}
+	return stdout.String(), nil
 }

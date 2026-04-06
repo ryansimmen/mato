@@ -144,7 +144,12 @@ func SweepTaskState(tasksDir string) error {
 		if taskFilename == "" {
 			continue
 		}
-		if dirs.IsActive(tasksDir, taskFilename) {
+		active, err := dirs.IsActive(tasksDir, taskFilename)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("check task activity for %s: %w", taskFilename, err))
+			continue
+		}
+		if active {
 			continue
 		}
 		if err := os.Remove(filepath.Join(runtimeDir, entry.Name())); err != nil && !os.IsNotExist(err) {

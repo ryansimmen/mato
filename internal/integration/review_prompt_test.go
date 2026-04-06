@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -170,6 +171,31 @@ func TestReviewVerifyReview(t *testing.T) {
 	}
 	if progressCount != 1 {
 		t.Fatalf("progress message count = %d, want 1", progressCount)
+	}
+
+	paths, err := filepath.Glob(filepath.Join(tasksDir, "messages", "events", "*.json"))
+	if err != nil {
+		t.Fatalf("filepath.Glob(events): %v", err)
+	}
+	sort.Strings(paths)
+	if len(paths) != 1 {
+		t.Fatalf("event file count = %d, want 1", len(paths))
+	}
+	raw, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatalf("os.ReadFile(%s): %v", paths[0], err)
+	}
+	content := string(raw)
+	for _, want := range []string{
+		`"from":"test-reviewer-1"`,
+		`"type":"progress"`,
+		`"task":"review-task.md"`,
+		`"branch":"task/review-task"`,
+		`"body":"Step: VERIFY_REVIEW"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("raw event file missing %q:\n%s", want, content)
+		}
 	}
 
 	// Task file must remain untouched in ready-for-review/.
