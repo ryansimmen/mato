@@ -84,6 +84,7 @@ func immediatelyClaimableTask(idx *PollIndex, snap *TaskSnapshot, cooldown time.
 // Tests can override these to inject failures without filesystem permission
 // tricks.
 var (
+	claimMoveFn            = AtomicMove
 	claimPrependFn         = prependClaimedBy
 	claimRollbackFn        = AtomicMove
 	retryExhaustedMoveFn   = AtomicMove
@@ -302,10 +303,13 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			continue
 		}
 
-		if err := AtomicMove(src, dst); err != nil {
-			// Another agent may have claimed it, or the destination
-			// already exists (EEXIST). Skip to the next candidate.
-			continue
+		if err := claimMoveFn(src, dst); err != nil {
+			if errors.Is(err, ErrDestinationExists) {
+				// Another agent won the claim race first.
+				continue
+			}
+			ui.Warnf("warning: could not move backlog task %s to in-progress/: %v\n", name, err)
+			return nil, fmt.Errorf("move backlog task %s to in-progress/: %w", name, err)
 		}
 
 		if retryExhausted {

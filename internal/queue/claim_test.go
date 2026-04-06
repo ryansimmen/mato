@@ -1429,6 +1429,67 @@ func TestSelectAndClaimTask_DestinationExistsInProgress(t *testing.T) {
 	}
 }
 
+func TestSelectAndClaimTask_NonRaceMoveFailureSurfaced(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "broken.md"), "# Broken\nDo broken.\n")
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "ok.md"), "# OK\nDo ok.\n")
+
+	origMove := claimMoveFn
+	t.Cleanup(func() { claimMoveFn = origMove })
+
+	moveErr := errors.New("simulated move failure")
+	claimMoveFn = func(src, dst string) error {
+		if filepath.Base(src) == "broken.md" {
+			return fmt.Errorf("move candidate: %w", moveErr)
+		}
+		return origMove(src, dst)
+	}
+
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
+
+	task, claimErr := SelectAndClaimTask(dir, "agent-broken", candidates("broken.md", "ok.md"), 0, nil)
+
+	ui.SetWarningWriter(prevWarn)
+	w.Close()
+	stderrOutput, readErr := io.ReadAll(r)
+	os.Stderr = origStderr
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+
+	if claimErr == nil {
+		t.Fatal("expected non-race claim move failure to be returned")
+	}
+	if !errors.Is(claimErr, moveErr) {
+		t.Fatalf("claim error = %v, want wrapped %v", claimErr, moveErr)
+	}
+	if !strings.Contains(claimErr.Error(), "move backlog task broken.md to in-progress/") {
+		t.Fatalf("claim error = %q, want backlog move context", claimErr)
+	}
+	if task != nil {
+		t.Fatalf("expected nil task on hard move failure, got %+v", task)
+	}
+
+	if !strings.Contains(string(stderrOutput), "warning: could not move backlog task broken.md to in-progress/") {
+		t.Fatalf("expected warning about surfaced move failure, got: %q", string(stderrOutput))
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "broken.md")); err != nil {
+		t.Fatalf("broken.md should remain in backlog after move failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "ok.md")); err != nil {
+		t.Fatalf("ok.md should remain in backlog after hard move failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.InProgress, "broken.md")); !os.IsNotExist(err) {
+		t.Fatalf("broken.md should not appear in in-progress after move failure: %v", err)
+	}
+}
+
 func TestSelectAndClaimTask_DestinationExistsInFailed(t *testing.T) {
 	dir := setupClaimTestDir(t)
 	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "old.md"), strings.Join([]string{
