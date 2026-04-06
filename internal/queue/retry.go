@@ -6,7 +6,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"mato/internal/dirs"
@@ -151,44 +150,17 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 }
 
 func resolveFailedTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
-	ref := strings.TrimSpace(taskRef)
-	filenameRef := ref
-	if !strings.HasSuffix(filenameRef, ".md") {
-		filenameRef += ".md"
-	}
-	stemRef := strings.TrimSuffix(filenameRef, ".md")
-
-	var matches []TaskMatch
-	for _, snap := range idx.TasksByState(dirs.Failed) {
-		match := TaskMatch{Filename: snap.Filename, State: snap.State, Path: snap.Path, Snapshot: snap}
-		if matchesTaskRef(match, ref, filenameRef, stemRef) {
-			matches = append(matches, match)
-		}
-	}
-	for _, pf := range idx.ParseFailures() {
-		if pf.State != dirs.Failed {
-			continue
-		}
-		pf := pf
-		match := TaskMatch{Filename: pf.Filename, State: pf.State, Path: pf.Path, ParseFailure: &pf}
-		if matchesParseFailureRef(match, ref, filenameRef, stemRef) {
-			matches = append(matches, match)
-		}
+	ref, matches, err := queueview.CollectTaskMatches(idx, taskRef, []string{dirs.Failed})
+	if err != nil {
+		return TaskMatch{}, err
 	}
 
 	if len(matches) == 0 {
 		return TaskMatch{}, fmt.Errorf("task %s not found in failed/", strings.TrimSuffix(ref, ".md"))
 	}
-	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].Filename < matches[j].Filename
-	})
+	queueview.SortTaskMatches(matches)
 	if len(matches) > 1 {
-		var b strings.Builder
-		fmt.Fprintf(&b, "task reference %q is ambiguous in failed/:", ref)
-		for _, m := range matches {
-			fmt.Fprintf(&b, "\n- %s/%s (id: %s)", m.State, m.Filename, taskMatchID(m))
-		}
-		return TaskMatch{}, fmt.Errorf("%s", b.String())
+		return TaskMatch{}, fmt.Errorf("%s", queueview.FormatAmbiguousTaskMatches(ref, matches, "task reference %q is ambiguous in failed/:"))
 	}
 	return matches[0], nil
 }
