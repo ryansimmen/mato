@@ -56,7 +56,21 @@ func allowRecordedBranchResume(source git.BranchSource) bool {
 	}
 }
 
+func recordWorkLaunchState(tasksDir, targetBranch string, claimed *queue.ClaimedTask, startingTip string) {
+	if claimed == nil {
+		return
+	}
+	recordTaskStateUpdate(tasksDir, claimed.Filename, "record work launch taskstate", func(state *runtimedata.TaskState) {
+		state.TaskBranch = claimed.Branch
+		state.TargetBranch = targetBranch
+		state.LastHeadSHA = strings.TrimSpace(startingTip)
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	})
+}
+
 func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.ClaimedTask) error {
+	recordWorkLaunchState(env.tasksDir, env.targetBranch, claimed, "")
+
 	cloneDir, err := createCloneFn(env.repoRoot)
 	if err != nil {
 		return fmt.Errorf("create clone: %w", err)
@@ -98,12 +112,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 			return fmt.Errorf("capture starting tip for %s: %w", claimed.Branch, err)
 		}
 		startingTip = strings.TrimSpace(startingTip)
-		recordTaskStateUpdate(env.tasksDir, claimed.Filename, "record work launch taskstate", func(state *runtimedata.TaskState) {
-			state.TaskBranch = claimed.Branch
-			state.TargetBranch = env.targetBranch
-			state.LastHeadSHA = startingTip
-			state.LastOutcome = runtimedata.OutcomeWorkLaunched
-		})
+		recordWorkLaunchState(env.tasksDir, env.targetBranch, claimed, startingTip)
 		session := loadOrCreateSession(env.tasksDir, runtimedata.KindWork, claimed.Filename, claimed.Branch)
 		if session != nil {
 			run.resumeSessionID = session.CopilotSessionID
