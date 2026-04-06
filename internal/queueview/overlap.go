@@ -1,9 +1,10 @@
-package queue
+package queueview
 
 import (
 	"sort"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -21,7 +22,7 @@ func isInvalidGlob(s string) bool {
 		return false
 	}
 	if strings.HasSuffix(s, "/") {
-		return true // glob + trailing slash is semantically broken
+		return true
 	}
 	_, err := doublestar.Match(s, "")
 	return err != nil
@@ -29,12 +30,6 @@ func isInvalidGlob(s string) bool {
 
 // staticPrefix returns the longest directory path before the first glob
 // metacharacter. Returns the full string if no metacharacters are present.
-//
-// Note: patterns like {a,b/c} where braces contain a "/" will return a
-// prefix that doesn't fully capture the matching scope. This is acceptable
-// because the result is used for conservative conflict detection — a shorter
-// prefix only produces false positives (unnecessary deferral), never false
-// negatives.
 func staticPrefix(pattern string) string {
 	for i, c := range pattern {
 		if c == '*' || c == '?' || c == '[' || c == '{' {
@@ -46,7 +41,7 @@ func staticPrefix(pattern string) string {
 
 type backlogTask struct {
 	name     string
-	dir      string // source directory (e.g., "backlog", "in-progress", "ready-to-merge")
+	dir      string
 	path     string
 	priority int
 	affects  []string
@@ -54,17 +49,14 @@ type backlogTask struct {
 
 // DeferralInfo describes why a task was excluded from the runnable queue.
 type DeferralInfo struct {
-	BlockedBy          string   // name of the conflicting task
-	BlockedByDir       string   // directory of the conflicting task (e.g., "in-progress", "backlog")
-	ConflictingAffects []string // affects entries from either task that overlap
+	BlockedBy          string
+	BlockedByDir       string
+	ConflictingAffects []string
 }
 
 // DeferredOverlappingTasks returns the set of backlog task filenames that should
 // be excluded from the queue because they conflict with higher-priority backlog
-// tasks or active tasks in in-progress/ready-for-review/ready-to-merge. Tasks remain in backlog/
-// (no file movement) to avoid churn between waiting/ and backlog/.
-//
-// When idx is nil, a temporary index is built internally.
+// tasks or active tasks in in-progress/ready-for-review/ready-to-merge.
 func DeferredOverlappingTasks(tasksDir string, idx *PollIndex) map[string]struct{} {
 	detailed := DeferredOverlappingTasksDetailed(tasksDir, idx)
 	simple := make(map[string]struct{}, len(detailed))
@@ -75,8 +67,6 @@ func DeferredOverlappingTasks(tasksDir string, idx *PollIndex) map[string]struct
 }
 
 // DeferredOverlappingTasksDetailed returns deferred tasks with the reason for deferral.
-//
-// When idx is nil, a temporary index is built internally.
 func DeferredOverlappingTasksDetailed(tasksDir string, idx *PollIndex) map[string]DeferralInfo {
 	idx = ensureIndex(tasksDir, idx)
 	view := ComputeRunnableBacklogView(tasksDir, idx)
@@ -119,7 +109,7 @@ func deferredOverlappingTasksDetailedForSnapshots(idx *PollIndex, backlogSnaps [
 			if len(overlap) > 0 {
 				blockedByDir := other.dir
 				if blockedByDir == "" {
-					blockedByDir = DirBacklog
+					blockedByDir = dirs.Backlog
 				}
 				deferred[task.name] = DeferralInfo{
 					BlockedBy:          other.name,
@@ -131,7 +121,7 @@ func deferredOverlappingTasksDetailedForSnapshots(idx *PollIndex, backlogSnaps [
 			}
 		}
 		if !isDef {
-			task.dir = DirBacklog
+			task.dir = dirs.Backlog
 			kept = append(kept, task)
 		}
 	}
@@ -139,24 +129,11 @@ func deferredOverlappingTasksDetailedForSnapshots(idx *PollIndex, backlogSnaps [
 	return deferred
 }
 
-// affectsMatch reports whether two affects entries conflict. An entry ending
-// with "/" is treated as a directory prefix that matches any path underneath
-// it. Two prefix entries conflict if one contains the other. Glob patterns
-// (entries containing *, ?, [, or {) are matched using doublestar; two glob
-// patterns are conservatively compared via their static prefixes. Invalid
-// glob entries (broken syntax or glob combined with trailing /) are treated
-// as directory-prefix conflicts using their static prefix — this ensures no
-// false negatives while limiting false positives to the prefix scope.
 func affectsMatch(a, b string) bool {
 	if a == b {
 		return true
 	}
 
-	// Invalid globs are conservatively matched via static prefix comparison.
-	// Both sides are reduced to their static prefix when glob-like, so a
-	// valid glob like "**/*.go" (empty prefix) correctly triggers the
-	// "could match anything" rule rather than being compared as a raw
-	// pattern string.
 	aInvalid, bInvalid := isInvalidGlob(a), isInvalidGlob(b)
 	if aInvalid || bInvalid {
 		pa, pb := a, b
@@ -167,10 +144,8 @@ func affectsMatch(a, b string) bool {
 			pb = staticPrefix(b)
 		}
 		if pa == "" || pb == "" {
-			return true // empty prefix — could match anything
+			return true
 		}
-		// Treat both as prefix-like entries: overlap if one is a prefix
-		// of the other or they share a common prefix hierarchy.
 		return strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa)
 	}
 
@@ -183,13 +158,10 @@ func affectsMatch(a, b string) bool {
 
 	aGlob, bGlob := isGlob(a), isGlob(b)
 
-	// Glob vs directory prefix: compare the glob's static prefix against the
-	// directory prefix. We cannot rely on doublestar.Match here because it
-	// expects concrete file paths, not directory markers with trailing "/".
 	if aGlob && isDirPrefix(b) {
 		pa := staticPrefix(a)
 		if pa == "" {
-			return true // empty prefix could match anywhere
+			return true
 		}
 		return strings.HasPrefix(pa, b) || strings.HasPrefix(b, pa)
 	}
@@ -204,21 +176,21 @@ func affectsMatch(a, b string) bool {
 	if aGlob && bGlob {
 		pa, pb := staticPrefix(a), staticPrefix(b)
 		if pa == "" || pb == "" {
-			return true // empty prefix could match anything
+			return true
 		}
 		return strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa)
 	}
 	if aGlob {
 		matched, err := doublestar.Match(a, b)
 		if err != nil {
-			return true // invalid pattern — assume conflict
+			return true
 		}
 		return matched
 	}
 	if bGlob {
 		matched, err := doublestar.Match(b, a)
 		if err != nil {
-			return true // invalid pattern — assume conflict
+			return true
 		}
 		return matched
 	}
@@ -226,7 +198,6 @@ func affectsMatch(a, b string) bool {
 	return false
 }
 
-// isDirPrefix reports whether s is a directory-prefix affects entry.
 func isDirPrefix(s string) bool {
 	return strings.HasSuffix(s, "/")
 }
@@ -236,7 +207,6 @@ func overlappingAffects(a, b []string) []string {
 		return nil
 	}
 
-	// Filter empty strings and detect whether either list has prefix or glob entries.
 	aClean := make([]string, 0, len(a))
 	hasPrefixA, hasGlobA := false, false
 	for _, item := range a {
@@ -270,7 +240,6 @@ func overlappingAffects(a, b []string) []string {
 		return nil
 	}
 
-	// Fast path: no prefix or glob entries, use exact-match map lookup.
 	if !hasPrefixA && !hasPrefixB && !hasGlobA && !hasGlobB {
 		seen := make(map[string]struct{}, len(aClean))
 		for _, item := range aClean {
@@ -292,7 +261,6 @@ func overlappingAffects(a, b []string) []string {
 		return overlap
 	}
 
-	// Slow path: at least one side has prefix entries, do pairwise comparison.
 	overlap := make([]string, 0)
 	added := make(map[string]struct{})
 	for _, ai := range aClean {

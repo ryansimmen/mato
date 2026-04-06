@@ -15,7 +15,6 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
-	"mato/internal/queue"
 	"mato/internal/taskfile"
 	"mato/internal/timeutil"
 	"mato/internal/ui"
@@ -174,9 +173,9 @@ func collectTaskEvents(tasksDir string) ([]Event, sourceStatus, error) {
 		failedErr error
 	)
 
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		dirPath := filepath.Join(tasksDir, dir)
-		names, err := queue.ListTaskFiles(dirPath)
+		names, err := taskfile.ListTaskFiles(dirPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue

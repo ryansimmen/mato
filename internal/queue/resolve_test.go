@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"mato/internal/dirs"
 	"strings"
 	"testing"
 )
@@ -15,14 +16,14 @@ func TestResolveTask(t *testing.T) {
 		{
 			name: "stem match",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, DirBacklog, "task-a.md", "---\nid: task-a\n---\n")
+				writeTask(t, tasksDir, dirs.Backlog, "task-a.md", "---\nid: task-a\n---\n")
 			},
 			taskRef: "task-a",
 			assert: func(t *testing.T, match TaskMatch, err error) {
 				if err != nil {
 					t.Fatalf("ResolveTask: %v", err)
 				}
-				if match.State != DirBacklog || match.Filename != "task-a.md" || match.Snapshot == nil {
+				if match.State != dirs.Backlog || match.Filename != "task-a.md" || match.Snapshot == nil {
 					t.Fatalf("unexpected match: %+v", match)
 				}
 			},
@@ -30,14 +31,14 @@ func TestResolveTask(t *testing.T) {
 		{
 			name: "md suffix match",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, DirWaiting, "task-b.md", "---\nid: task-b\n---\n")
+				writeTask(t, tasksDir, dirs.Waiting, "task-b.md", "---\nid: task-b\n---\n")
 			},
 			taskRef: "task-b.md",
 			assert: func(t *testing.T, match TaskMatch, err error) {
 				if err != nil {
 					t.Fatalf("ResolveTask: %v", err)
 				}
-				if match.State != DirWaiting || match.Filename != "task-b.md" {
+				if match.State != dirs.Waiting || match.Filename != "task-b.md" {
 					t.Fatalf("unexpected match: %+v", match)
 				}
 			},
@@ -45,7 +46,7 @@ func TestResolveTask(t *testing.T) {
 		{
 			name: "explicit id match",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, DirReadyReview, "different-name.md", "---\nid: explicit-id\n---\n")
+				writeTask(t, tasksDir, dirs.ReadyReview, "different-name.md", "---\nid: explicit-id\n---\n")
 			},
 			taskRef: "explicit-id",
 			assert: func(t *testing.T, match TaskMatch, err error) {
@@ -60,7 +61,7 @@ func TestResolveTask(t *testing.T) {
 		{
 			name: "explicit id with slash",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, DirReadyMerge, "task-c.md", "---\nid: group/task-c\n---\n")
+				writeTask(t, tasksDir, dirs.ReadyMerge, "task-c.md", "---\nid: group/task-c\n---\n")
 			},
 			taskRef: "group/task-c",
 			assert: func(t *testing.T, match TaskMatch, err error) {
@@ -75,7 +76,7 @@ func TestResolveTask(t *testing.T) {
 		{
 			name: "parse failure match",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, DirFailed, "broken.md", "---\npriority: nope\n---\n")
+				writeTask(t, tasksDir, dirs.Failed, "broken.md", "---\npriority: nope\n---\n")
 			},
 			taskRef: "broken",
 			assert: func(t *testing.T, match TaskMatch, err error) {
@@ -100,8 +101,8 @@ func TestResolveTask(t *testing.T) {
 		{
 			name: "ambiguous match",
 			setup: func(t *testing.T, tasksDir string) {
-				writeTask(t, tasksDir, DirBacklog, "dup.md", "---\nid: dup\n---\n")
-				writeTask(t, tasksDir, DirFailed, "dup.md", "---\nid: dup\n---\n")
+				writeTask(t, tasksDir, dirs.Backlog, "dup.md", "---\nid: dup\n---\n")
+				writeTask(t, tasksDir, dirs.Failed, "dup.md", "---\nid: dup\n---\n")
 			},
 			taskRef: "dup",
 			assert: func(t *testing.T, match TaskMatch, err error) {

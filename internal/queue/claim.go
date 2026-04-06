@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/config"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
-	"mato/internal/runtimecleanup"
+	"mato/internal/queueview"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
 )
@@ -66,20 +69,16 @@ func retryClaimability(failures, maxRetries int, lastFailureAt time.Time, cooldo
 	return false, true
 }
 
-func immediatelyClaimableTask(snap *TaskSnapshot, depLookup dependencyLookup, cooldown time.Duration) bool {
+func immediatelyClaimableTask(idx *PollIndex, snap *TaskSnapshot, cooldown time.Duration) bool {
 	if snap == nil {
 		return false
 	}
-	if blocks := depLookup.blockedDependencies(snap.Meta.DependsOn); len(blocks) > 0 {
+	if blocks := dependencyBlocksFor(idx, snap.Meta.DependsOn); len(blocks) > 0 {
 		return false
 	}
 	retryExhausted, cooledDown := retryClaimability(snap.FailureCount, snap.Meta.MaxRetries, snap.LastFailureAt, cooldown)
 	return retryExhausted || cooledDown
 }
-
-// DefaultRetryCooldown is the default time to wait after a task failure before
-// the task becomes eligible for claiming again.
-const DefaultRetryCooldown = 2 * time.Minute
 
 // Testing hooks for the claim path. Default to real implementations.
 // Tests can override these to inject failures without filesystem permission
@@ -116,12 +115,12 @@ func CollectActiveBranches(tasksDir string, idx *PollIndex) map[string]struct{} 
 	}
 	active := make(map[string]struct{})
 	dirs := []string{
-		filepath.Join(tasksDir, DirInProgress),
-		filepath.Join(tasksDir, DirReadyReview),
-		filepath.Join(tasksDir, DirReadyMerge),
+		filepath.Join(tasksDir, dirs.InProgress),
+		filepath.Join(tasksDir, dirs.ReadyReview),
+		filepath.Join(tasksDir, dirs.ReadyMerge),
 	}
 	for _, dir := range dirs {
-		names, err := ListTaskFiles(dir)
+		names, err := taskfile.ListTaskFiles(dir)
 		if err != nil {
 			continue
 		}
@@ -235,7 +234,7 @@ func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
 		// host does not immediately re-claim and livelock.
 		return &FailedDirUnavailableError{TaskFilename: name, MoveErr: err}
 	}
-	runtimecleanup.DeleteAllPreservingVerdict(filepath.Dir(failedDir), name)
+	runtimedata.DeleteRuntimeArtifactsPreservingVerdict(filepath.Dir(failedDir), name)
 	return nil
 }
 
@@ -261,13 +260,11 @@ func rollbackClaimToBacklog(name, dst, src string, claimErr error) error {
 func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown time.Duration, idx *PollIndex) (*ClaimedTask, error) {
 	idx = ensureIndex(tasksDir, idx)
 
-	inProgressDir := filepath.Join(tasksDir, DirInProgress)
-	failedDir := filepath.Join(tasksDir, DirFailed)
-	backlogDir := filepath.Join(tasksDir, DirBacklog)
+	inProgressDir := filepath.Join(tasksDir, dirs.InProgress)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
 
 	activeBranches := CollectActiveBranches(tasksDir, idx)
-	depLookup := newDependencyLookup(idx)
-
 	for _, name := range candidates {
 		name, ok := normalizeClaimCandidate(name)
 		if !ok {
@@ -278,7 +275,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 
 		// Always re-read the candidate file before claiming so manual edits made
 		// after index construction cannot bypass dependency enforcement.
-		snap, snapErr := loadTaskSnapshot(tasksDir, DirBacklog, name, src)
+		snap, snapErr := loadTaskSnapshot(tasksDir, dirs.Backlog, name, src)
 		if snapErr != nil {
 			ui.Warnf("warning: could not parse task metadata for %s, skipping until reconciled: %v\n", name, snapErr)
 			continue
@@ -287,13 +284,13 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		title := frontmatter.ExtractTitle(name, snap.Body)
 		retryExhausted, cooledDown := retryClaimability(snap.FailureCount, meta.MaxRetries, snap.LastFailureAt, cooldown)
 
-		if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
-			waitingPath := filepath.Join(tasksDir, DirWaiting, name)
+		if blocks := dependencyBlocksFor(idx, meta.DependsOn); len(blocks) > 0 {
+			waitingPath := filepath.Join(tasksDir, dirs.Waiting, name)
 			if err := AtomicMove(src, waitingPath); err != nil {
 				ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
 				continue
 			}
-			ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, FormatDependencyBlocks(blocks))
+			ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, queueview.FormatDependencyBlocks(blocks))
 			continue
 		}
 
@@ -428,12 +425,12 @@ func CountReviewFailureLines(taskPath string) (int, error) {
 }
 
 // retryCooldown resolves the effective retry cooldown duration, defaulting to
-// DefaultRetryCooldown when cooldown is zero or negative.
+// config.DefaultRetryCooldown when cooldown is zero or negative.
 func retryCooldown(cooldown time.Duration) time.Duration {
 	if cooldown > 0 {
 		return cooldown
 	}
-	return DefaultRetryCooldown
+	return config.DefaultRetryCooldown
 }
 
 // lastFailureTime extracts the timestamp from the most recent standalone

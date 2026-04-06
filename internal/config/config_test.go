@@ -5,7 +5,32 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestDefaultConstants(t *testing.T) {
+	if DefaultBranch != "mato" {
+		t.Fatalf("DefaultBranch = %q, want %q", DefaultBranch, "mato")
+	}
+	if DefaultDockerImage != "ubuntu:24.04" {
+		t.Fatalf("DefaultDockerImage = %q, want %q", DefaultDockerImage, "ubuntu:24.04")
+	}
+	if DefaultTaskModel != "claude-opus-4.6" {
+		t.Fatalf("DefaultTaskModel = %q, want %q", DefaultTaskModel, "claude-opus-4.6")
+	}
+	if DefaultReviewModel != "gpt-5.4" {
+		t.Fatalf("DefaultReviewModel = %q, want %q", DefaultReviewModel, "gpt-5.4")
+	}
+	if DefaultReasoningEffort != "high" {
+		t.Fatalf("DefaultReasoningEffort = %q, want %q", DefaultReasoningEffort, "high")
+	}
+	if DefaultAgentTimeout != 30*time.Minute {
+		t.Fatalf("DefaultAgentTimeout = %v, want %v", DefaultAgentTimeout, 30*time.Minute)
+	}
+	if DefaultRetryCooldown != 2*time.Minute {
+		t.Fatalf("DefaultRetryCooldown = %v, want %v", DefaultRetryCooldown, 2*time.Minute)
+	}
+}
 
 func TestLoad_AllFields(t *testing.T) {
 	dir := t.TempDir()

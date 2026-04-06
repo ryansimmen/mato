@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/dirs"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 )
 
@@ -17,7 +19,7 @@ import (
 // internally. When idx is non-nil, the caller-provided index is reused.
 func ComputeQueueManifest(tasksDir string, exclude map[string]struct{}, idx *PollIndex) (string, error) {
 	idx = ensureIndex(tasksDir, idx)
-	view := ComputeRunnableBacklogView(tasksDir, idx)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 	return ComputeQueueManifestFromView(tasksDir, exclude, idx, view)
 }
 
@@ -29,11 +31,11 @@ func ComputeQueueManifestFromView(tasksDir string, exclude map[string]struct{}, 
 
 	for _, warn := range idx.BuildWarnings() {
 		ui.Warnf("warning: could not build queue index cleanly: read %s: %v\n", warn.Path, warn.Err)
-		if warn.State == DirBacklog && warn.DirLevel {
+		if warn.State == dirs.Backlog && warn.DirLevel {
 			return "", fmt.Errorf("read backlog dir: %w", warn.Err)
 		}
 	}
-	lines := OrderedRunnableFilenames(view, exclude)
+	lines := queueview.OrderedRunnableFilenames(view, exclude)
 	for _, pf := range idx.BacklogParseFailures() {
 		if exclude != nil {
 			if _, excluded := exclude[pf.Filename]; excluded {

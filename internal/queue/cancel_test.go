@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/taskfile"
 )
 
@@ -16,11 +17,11 @@ func TestCancelTask_MovesTaskToFailed(t *testing.T) {
 		name  string
 		state string
 	}{
-		{name: "waiting", state: DirWaiting},
-		{name: "backlog", state: DirBacklog},
-		{name: "in progress", state: DirInProgress},
-		{name: "ready for review", state: DirReadyReview},
-		{name: "ready to merge", state: DirReadyMerge},
+		{name: "waiting", state: dirs.Waiting},
+		{name: "backlog", state: dirs.Backlog},
+		{name: "in progress", state: dirs.InProgress},
+		{name: "ready for review", state: dirs.ReadyReview},
+		{name: "ready to merge", state: dirs.ReadyMerge},
 	}
 
 	for _, tt := range tests {
@@ -38,7 +39,7 @@ func TestCancelTask_MovesTaskToFailed(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(tasksDir, tt.state, "task.md")); !os.IsNotExist(err) {
 				t.Fatalf("source file still present in %s/: %v", tt.state, err)
 			}
-			data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "task.md"))
+			data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "task.md"))
 			if err != nil {
 				t.Fatalf("read failed task: %v", err)
 			}
@@ -51,16 +52,16 @@ func TestCancelTask_MovesTaskToFailed(t *testing.T) {
 
 func TestCancelTask_AlreadyFailed(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirFailed, "task.md", "---\nid: task\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Failed, "task.md", "---\nid: task\n---\n# Task\n")
 
 	result, err := CancelTask(tasksDir, "task")
 	if err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
-	if result.PriorState != DirFailed {
-		t.Fatalf("PriorState = %q, want %q", result.PriorState, DirFailed)
+	if result.PriorState != dirs.Failed {
+		t.Fatalf("PriorState = %q, want %q", result.PriorState, dirs.Failed)
 	}
-	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "task.md"))
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "task.md"))
 	if err != nil {
 		t.Fatalf("read failed task: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestCancelTask_AlreadyFailed(t *testing.T) {
 
 func TestCancelTask_ReCancelFailedTask(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirFailed, "task.md", "---\nid: task\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Failed, "task.md", "---\nid: task\n---\n# Task\n")
 
 	if _, err := CancelTask(tasksDir, "task"); err != nil {
 		t.Fatalf("first CancelTask: %v", err)
@@ -79,7 +80,7 @@ func TestCancelTask_ReCancelFailedTask(t *testing.T) {
 	if _, err := CancelTask(tasksDir, "task"); err != nil {
 		t.Fatalf("second CancelTask: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "task.md"))
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "task.md"))
 	if err != nil {
 		t.Fatalf("read failed task: %v", err)
 	}
@@ -90,16 +91,16 @@ func TestCancelTask_ReCancelFailedTask(t *testing.T) {
 
 func TestCancelTask_ParseFailedTask(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirWaiting, "broken.md", "---\npriority: nope\n---\n")
+	writeTask(t, tasksDir, dirs.Waiting, "broken.md", "---\npriority: nope\n---\n")
 
 	result, err := CancelTask(tasksDir, "broken")
 	if err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
-	if result.PriorState != DirWaiting {
-		t.Fatalf("PriorState = %q, want %q", result.PriorState, DirWaiting)
+	if result.PriorState != dirs.Waiting {
+		t.Fatalf("PriorState = %q, want %q", result.PriorState, dirs.Waiting)
 	}
-	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "broken.md"))
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "broken.md"))
 	if err != nil {
 		t.Fatalf("read failed task: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestCancelTask_ParseFailedTask(t *testing.T) {
 
 func TestCancelTask_CompletedRefused(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirCompleted, "done.md", "---\nid: done\n---\n# Done\n")
+	writeTask(t, tasksDir, dirs.Completed, "done.md", "---\nid: done\n---\n# Done\n")
 
 	_, err := CancelTask(tasksDir, "done")
 	if err == nil || !strings.Contains(err.Error(), "cannot cancel done: task has already been merged") {
@@ -120,21 +121,21 @@ func TestCancelTask_CompletedRefused(t *testing.T) {
 
 func TestCancelTask_DestinationCollision(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "task.md", "---\nid: unique/source\n---\n# Source\n")
-	writeTask(t, tasksDir, DirFailed, "task.md", "---\nid: other\n---\n# Existing\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task.md", "---\nid: unique/source\n---\n# Source\n")
+	writeTask(t, tasksDir, dirs.Failed, "task.md", "---\nid: other\n---\n# Existing\n")
 
 	_, err := CancelTask(tasksDir, "unique/source")
 	if err == nil || !strings.Contains(err.Error(), "cannot cancel task: already exists in failed/") {
 		t.Fatalf("err = %v, want destination-collision error", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "task.md")); err != nil {
 		t.Fatalf("source task should remain in backlog: %v", err)
 	}
 }
 
 func TestCancelTask_AppendFailsAfterMove(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "task.md", "---\nid: task\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task.md", "---\nid: task\n---\n# Task\n")
 
 	origAppend := appendCancelledRecordFn
 	appendCancelledRecordFn = func(path string) error { return fmt.Errorf("append failed") }
@@ -144,17 +145,17 @@ func TestCancelTask_AppendFailsAfterMove(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "rolled back to backlog/") {
 		t.Fatalf("err = %v, want rollback error", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "task.md")); err != nil {
 		t.Fatalf("task should be rolled back to backlog: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, DirFailed, "task.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "task.md")); !os.IsNotExist(err) {
 		t.Fatalf("failed copy should be removed after rollback: %v", err)
 	}
 }
 
 func TestCancelTask_AppendFailsAfterMoveRollbackFails(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "task.md", "---\nid: task\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task.md", "---\nid: task\n---\n# Task\n")
 
 	origAppend := appendCancelledRecordFn
 	origLink := linkFn
@@ -181,7 +182,7 @@ func TestCancelTask_AppendFailsAfterMoveRollbackFails(t *testing.T) {
 	if !strings.Contains(stderr, "rollback to backlog/ also failed") {
 		t.Fatalf("stderr missing rollback warning: %q", stderr)
 	}
-	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "task.md"))
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "task.md"))
 	if err != nil {
 		t.Fatalf("task should remain in failed after rollback failure: %v", err)
 	}
@@ -192,7 +193,7 @@ func TestCancelTask_AppendFailsAfterMoveRollbackFails(t *testing.T) {
 
 func TestCancelTask_MoveLeavesDuplicateCopies(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "task.md", "---\nid: task\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task.md", "---\nid: task\n---\n# Task\n")
 
 	origRemove := removeFn
 	removeCalls := 0
@@ -209,17 +210,17 @@ func TestCancelTask_MoveLeavesDuplicateCopies(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "remove source after linking") {
 		t.Fatalf("err = %v, want source-removal error", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(tasksDir, DirBacklog, "task.md")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "task.md")); statErr != nil {
 		t.Fatalf("source task should remain after duplicate-copy detection: %v", statErr)
 	}
-	if _, statErr := os.Stat(filepath.Join(tasksDir, DirFailed, "task.md")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Failed, "task.md")); !os.IsNotExist(statErr) {
 		t.Fatalf("failed copy should be cleaned up after duplicate-copy detection: %v", statErr)
 	}
 }
 
 func TestCancelTask_SucceedsWithoutSourceCleanupPostCheck(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "task.md", "---\nid: task\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "task.md", "---\nid: task\n---\n# Task\n")
 
 	result, err := CancelTask(tasksDir, "task")
 	if err != nil {
@@ -228,10 +229,10 @@ func TestCancelTask_SucceedsWithoutSourceCleanupPostCheck(t *testing.T) {
 	if result.Filename != "task.md" {
 		t.Fatalf("Filename = %q, want %q", result.Filename, "task.md")
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, DirBacklog, "task.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "task.md")); !os.IsNotExist(err) {
 		t.Fatalf("backlog task should be removed after cancel, stat err = %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(tasksDir, DirFailed, "task.md"))
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "task.md"))
 	if err != nil {
 		t.Fatalf("failed task missing: %v", err)
 	}
@@ -242,9 +243,9 @@ func TestCancelTask_SucceedsWithoutSourceCleanupPostCheck(t *testing.T) {
 
 func TestCancelTask_DownstreamWarnings(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "dep.md", "---\nid: dep-id\n---\n# Dep\n")
-	writeTask(t, tasksDir, DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-id]\n---\n# Waiter\n")
-	writeTask(t, tasksDir, DirBacklog, "blocked.md", "---\nid: blocked\ndepends_on: [dep]\n---\n# Blocked\n")
+	writeTask(t, tasksDir, dirs.Backlog, "dep.md", "---\nid: dep-id\n---\n# Dep\n")
+	writeTask(t, tasksDir, dirs.Waiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-id]\n---\n# Waiter\n")
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md", "---\nid: blocked\ndepends_on: [dep]\n---\n# Blocked\n")
 
 	result, err := CancelTask(tasksDir, "dep")
 	if err != nil {
@@ -263,8 +264,8 @@ func TestCancelTask_DownstreamWarnings(t *testing.T) {
 
 func TestCancelTask_DownstreamDeduplication(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "dep.md", "---\nid: dep-id\n---\n# Dep\n")
-	writeTask(t, tasksDir, DirWaiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep, dep-id]\n---\n# Waiter\n")
+	writeTask(t, tasksDir, dirs.Backlog, "dep.md", "---\nid: dep-id\n---\n# Dep\n")
+	writeTask(t, tasksDir, dirs.Waiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep, dep-id]\n---\n# Waiter\n")
 
 	result, err := CancelTask(tasksDir, "dep")
 	if err != nil {
@@ -277,7 +278,7 @@ func TestCancelTask_DownstreamDeduplication(t *testing.T) {
 
 func TestCancelTask_NoDownstreamWarnings(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "dep.md", "---\nid: dep\n---\n# Dep\n")
+	writeTask(t, tasksDir, dirs.Backlog, "dep.md", "---\nid: dep\n---\n# Dep\n")
 
 	result, err := CancelTask(tasksDir, "dep")
 	if err != nil {
@@ -306,7 +307,7 @@ func TestCancelTask_EmptyName(t *testing.T) {
 
 func TestCancelTask_ExplicitIDResolution(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "filename.md", "---\nid: explicit-id\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "filename.md", "---\nid: explicit-id\n---\n# Task\n")
 
 	result, err := CancelTask(tasksDir, "explicit-id")
 	if err != nil {
@@ -319,7 +320,7 @@ func TestCancelTask_ExplicitIDResolution(t *testing.T) {
 
 func TestCancelTask_ExplicitIDWithSlash(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirBacklog, "filename.md", "---\nid: group/explicit-id\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Backlog, "filename.md", "---\nid: group/explicit-id\n---\n# Task\n")
 
 	result, err := CancelTask(tasksDir, "group/explicit-id")
 	if err != nil {
@@ -332,12 +333,12 @@ func TestCancelTask_ExplicitIDWithSlash(t *testing.T) {
 
 func TestRetryTask_StrippedCancelledMarker(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
-	writeTask(t, tasksDir, DirFailed, "task.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: task\n---\n# Task\n")
+	writeTask(t, tasksDir, dirs.Failed, "task.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: task\n---\n# Task\n")
 
 	if _, err := RetryTask(tasksDir, "task"); err != nil {
 		t.Fatalf("RetryTask: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(tasksDir, DirBacklog, "task.md"))
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Backlog, "task.md"))
 	if err != nil {
 		t.Fatalf("read retried task: %v", err)
 	}
@@ -350,7 +351,7 @@ func TestCancelTask_CleansVerdictAndIndexNoLongerSurfacesRejection(t *testing.T)
 	tasksDir := setupIndexDirs(t)
 	filename := "stale-verdict-cancel.md"
 
-	writeTask(t, tasksDir, DirBacklog, filename,
+	writeTask(t, tasksDir, dirs.Backlog, filename,
 		"---\nid: stale-verdict-cancel\npriority: 10\n---\n# Stale verdict cancel\n")
 
 	// Seed a stale verdict file with a reject reason.
@@ -367,7 +368,7 @@ func TestCancelTask_CleansVerdictAndIndexNoLongerSurfacesRejection(t *testing.T)
 
 	// Before cancel: BuildIndex should surface the verdict rejection reason.
 	idx := BuildIndex(tasksDir)
-	snap := idx.Snapshot(DirBacklog, filename)
+	snap := idx.Snapshot(dirs.Backlog, filename)
 	if snap == nil {
 		t.Fatal("expected snapshot in backlog/ before cancel")
 	}
@@ -388,7 +389,7 @@ func TestCancelTask_CleansVerdictAndIndexNoLongerSurfacesRejection(t *testing.T)
 
 	// After cancel: BuildIndex must not surface a stale rejection reason.
 	idx2 := BuildIndex(tasksDir)
-	snap2 := idx2.Snapshot(DirFailed, filename)
+	snap2 := idx2.Snapshot(dirs.Failed, filename)
 	if snap2 == nil {
 		t.Fatal("expected snapshot in failed/ after cancel")
 	}

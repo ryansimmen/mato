@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/queue"
-	"mato/internal/runtimecleanup"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/ui"
 )
 
@@ -26,18 +26,18 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 	if err := failMergeTask(task.path, dst, mergeErr.Error()); err != nil {
 		return err
 	}
-	if filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirFailed) {
-		runtimecleanup.DeleteAll(tasksDir, task.name)
+	if filepath.Dir(dst) == filepath.Join(tasksDir, dirs.Failed) {
+		runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
 		cleanupTaskBranchFn(repoRoot, taskBranchName(task))
 	}
-	if errors.Is(mergeErr, errSquashMergeConflict) && filepath.Dir(dst) == filepath.Join(tasksDir, queue.DirBacklog) {
+	if errors.Is(mergeErr, errSquashMergeConflict) && filepath.Dir(dst) == filepath.Join(tasksDir, dirs.Backlog) {
 		cleanupTaskBranchFn(repoRoot, taskBranchName(task))
 		if err := removeBranchMarkerFn(dst); err != nil {
 			ui.Warnf("warning: could not clear branch marker after merge-conflict cleanup for %s: %v\n", task.name, err)
 		}
-		if err := taskstate.Update(tasksDir, task.name, func(state *taskstate.TaskState) {
+		if err := runtimedata.UpdateTaskState(tasksDir, task.name, func(state *runtimedata.TaskState) {
 			state.TaskBranch = taskBranchName(task)
-			state.LastOutcome = taskstate.OutcomeMergeConflictCleanup
+			state.LastOutcome = runtimedata.OutcomeMergeConflictCleanup
 		}); err != nil {
 			ui.Warnf("warning: could not record merge-conflict cleanup taskstate for %s: %v\n", task.name, err)
 		}
@@ -45,9 +45,9 @@ func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr
 	return nil
 }
 func mergeFailureDestination(tasksDir, taskPath, taskName string) string {
-	dir := queue.DirBacklog
+	dir := dirs.Backlog
 	if shouldFailTaskAfterNextFailure(taskPath) {
-		dir = queue.DirFailed
+		dir = dirs.Failed
 	}
 	return filepath.Join(tasksDir, dir, taskName)
 }

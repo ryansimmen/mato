@@ -9,7 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/queue"
+	"mato/internal/dirs"
+	"mato/internal/queueview"
 	"mato/internal/testutil"
 )
 
@@ -30,7 +31,7 @@ func writeTask(t *testing.T, tasksDir, state, filename, content string) {
 func setupTasksDir(t *testing.T) string {
 	t.Helper()
 	tasksDir := filepath.Join(t.TempDir(), ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -40,7 +41,7 @@ func setupTasksDir(t *testing.T) string {
 
 func TestBuild_EmptyQueue(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	if len(data.Nodes) != 0 {
@@ -58,7 +59,7 @@ func TestBuild_SingleTask(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, "backlog", "my-task.md", "---\nid: my-task\npriority: 10\n---\n# My Task\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	if len(data.Nodes) != 1 {
@@ -90,7 +91,7 @@ func TestBuild_LinearChain(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "task-b.md", "---\nid: task-b\npriority: 20\ndepends_on:\n  - task-a\n---\n# Task B\n")
 	writeTask(t, tasksDir, "waiting", "task-c.md", "---\nid: task-c\npriority: 30\ndepends_on:\n  - task-b\n---\n# Task C\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	// showAll=false: completed not included
 	data := Build(tasksDir, idx, false)
@@ -136,7 +137,7 @@ func TestBuild_LinearChain_ShowAll(t *testing.T) {
 	writeTask(t, tasksDir, "completed", "task-a.md", "---\nid: task-a\npriority: 10\n---\n# Task A\n")
 	writeTask(t, tasksDir, "backlog", "task-b.md", "---\nid: task-b\npriority: 20\ndepends_on:\n  - task-a\n---\n# Task B\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, true)
 
 	nodeKeys := nodeKeySet(data)
@@ -174,7 +175,7 @@ func TestBuild_Diamond(t *testing.T) {
 	writeTask(t, tasksDir, "waiting", "c.md", "---\nid: c\npriority: 20\ndepends_on:\n  - a\n---\n# C\n")
 	writeTask(t, tasksDir, "waiting", "d.md", "---\nid: d\npriority: 30\ndepends_on:\n  - b\n  - c\n---\n# D\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	if len(data.Nodes) != 4 {
@@ -194,7 +195,7 @@ func TestBuild_CycleMutual(t *testing.T) {
 	writeTask(t, tasksDir, "waiting", "x.md", "---\nid: x\npriority: 10\ndepends_on:\n  - y\n---\n# X\n")
 	writeTask(t, tasksDir, "waiting", "y.md", "---\nid: y\npriority: 10\ndepends_on:\n  - x\n---\n# Y\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	if len(data.Cycles) != 1 {
@@ -223,7 +224,7 @@ func TestBuild_CycleSelf(t *testing.T) {
 
 	writeTask(t, tasksDir, "waiting", "self.md", "---\nid: self\npriority: 10\ndepends_on:\n  - self\n---\n# Self\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	if len(data.Cycles) != 1 {
@@ -249,7 +250,7 @@ func TestBuild_ShowAllFalse_HiddenCompleted(t *testing.T) {
 	writeTask(t, tasksDir, "completed", "done.md", "---\nid: done\npriority: 10\n---\n# Done\n")
 	writeTask(t, tasksDir, "backlog", "next.md", "---\nid: next\npriority: 20\ndepends_on:\n  - done\n---\n# Next\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	nodeKeys := nodeKeySet(data)
@@ -275,7 +276,7 @@ func TestBuild_ShowAllFalse_HiddenFailed(t *testing.T) {
 	writeTask(t, tasksDir, "failed", "broken.md", "---\nid: broken\npriority: 10\n---\n# Broken\n")
 	writeTask(t, tasksDir, "backlog", "depends.md", "---\nid: depends\npriority: 20\ndepends_on:\n  - broken\n---\n# Depends\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	nodeKeys := nodeKeySet(data)
@@ -302,7 +303,7 @@ func TestBuild_ShowAllTrue_IncludesCompletedFailed(t *testing.T) {
 	writeTask(t, tasksDir, "failed", "broken.md", "---\nid: broken\npriority: 10\n---\n# Broken\n")
 	writeTask(t, tasksDir, "backlog", "next.md", "---\nid: next\npriority: 20\ndepends_on:\n  - done\n  - broken\n---\n# Next\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, true)
 
 	nodeKeys := nodeKeySet(data)
@@ -338,7 +339,7 @@ func TestBuild_AliasResolution_StemVsMetaID(t *testing.T) {
 	// Depends on meta.ID reference.
 	writeTask(t, tasksDir, "backlog", "dep-id.md", "---\nid: dep-id\npriority: 20\ndepends_on:\n  - custom-id\n---\n# Dep ID\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	// Both should have edges to my-file.md
@@ -370,7 +371,7 @@ func TestBuild_WaitingAliasParityWithScheduler(t *testing.T) {
 	// dep-id depends on meta.ID "target-id" — the scheduler honors this.
 	writeTask(t, tasksDir, "waiting", "dep-id.md", "---\nid: dep-id\npriority: 20\ndepends_on:\n  - target-id\n---\n# Dep by ID\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	// Stem reference "target" should NOT produce an edge (matches scheduler).
@@ -426,7 +427,7 @@ func TestBuild_AmbiguousIDs(t *testing.T) {
 	writeTask(t, tasksDir, "failed", "ambig.md", "---\nid: ambig\npriority: 10\n---\n# Ambig\n")
 	writeTask(t, tasksDir, "backlog", "dep.md", "---\nid: dep\npriority: 20\ndepends_on:\n  - ambig\n---\n# Dep\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	// showAll=false: ambig nodes not in graph
 	data := Build(tasksDir, idx, false)
@@ -463,7 +464,7 @@ func TestBuild_DuplicateCompletedIDs_NotAmbiguous(t *testing.T) {
 	writeTask(t, tasksDir, "completed", "done-b.md", "---\nid: done\npriority: 10\n---\n# Done B\n")
 	writeTask(t, tasksDir, "backlog", "dep.md", "---\nid: dep\npriority: 20\ndepends_on:\n  - done\n---\n# Dep\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	dep := findNode(data, "backlog/dep.md")
@@ -487,7 +488,7 @@ func TestBuild_DuplicateNonCompletedStates(t *testing.T) {
 	writeTask(t, tasksDir, "in-progress", "dup.md", "---\nid: dup\npriority: 10\n---\n# Dup\n")
 	writeTask(t, tasksDir, "waiting", "dep.md", "---\nid: dep\npriority: 20\ndepends_on:\n  - dup\n---\n# Dep\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	// dup is known but not completed → "external"
@@ -509,7 +510,7 @@ func TestBuild_DuplicateWaitingIDs(t *testing.T) {
 	writeTask(t, tasksDir, "waiting", "alpha.md", "---\nid: shared\npriority: 10\n---\n# Alpha\n")
 	writeTask(t, tasksDir, "waiting", "beta.md", "---\nid: shared\npriority: 10\n---\n# Beta\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	// Both should exist as nodes.
@@ -541,7 +542,7 @@ func TestBuild_ParseFailures(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "bad.md", "---\n: invalid yaml [[\n---\n# Bad\n")
 	writeTask(t, tasksDir, "backlog", "good.md", "---\nid: good\npriority: 10\n---\n# Good\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	// bad.md should be in parse failures.
@@ -561,7 +562,7 @@ func TestBuild_ParseFailures(t *testing.T) {
 
 	// But its stem is still in allIDs and can satisfy/block deps.
 	writeTask(t, tasksDir, "waiting", "dep.md", "---\nid: dep\npriority: 20\ndepends_on:\n  - bad\n---\n# Dep\n")
-	idx = queue.BuildIndex(tasksDir)
+	idx = queueview.BuildIndex(tasksDir)
 	data = Build(tasksDir, idx, false)
 
 	dep := findNode(data, "waiting/dep.md")
@@ -580,7 +581,7 @@ func TestBuild_ShowTo_DirReadError(t *testing.T) {
 	tasksDir := filepath.Join(repoDir, ".mato")
 
 	// Create only some dirs — make one unreadable to simulate dir-level error.
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -606,7 +607,7 @@ func TestBuild_ShowTo_DirReadError(t *testing.T) {
 func TestBuild_ShowTo_GlobWarningNoError(t *testing.T) {
 	repoDir := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -626,7 +627,7 @@ func TestBuild_ShowTo_GlobWarningNoError(t *testing.T) {
 func TestShowTo_TextWriteErrorPropagates(t *testing.T) {
 	repoDir := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -654,7 +655,7 @@ func TestBuild_CycleMemberDuplicateID_ShowAll(t *testing.T) {
 	// Same ID "x" in failed state.
 	writeTask(t, tasksDir, "failed", "x.md", "---\nid: x\npriority: 10\n---\n# X Failed\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, true)
 
 	// Only waiting x should be cycle member, not failed x.
@@ -691,7 +692,7 @@ func TestBuild_DeterministicOrdering(t *testing.T) {
 	writeTask(t, tasksDir, "waiting", "m-task.md", "---\nid: m-task\npriority: 5\n---\n# M\n")
 	writeTask(t, tasksDir, "in-progress", "ip.md", "---\nid: ip\npriority: 1\n---\n# IP\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	// Order: waiting (m-task) < backlog (a-task, z-task) < in-progress (ip)
@@ -719,7 +720,7 @@ func TestBuild_NodeKeyUniqueness(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "task.md", "---\nid: task\npriority: 10\n---\n# Task\n")
 	writeTask(t, tasksDir, "in-progress", "task.md", "---\nid: task\npriority: 10\n---\n# Task\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	seen := make(map[string]bool)
@@ -736,7 +737,7 @@ func TestBuild_UnknownDependency(t *testing.T) {
 
 	writeTask(t, tasksDir, "waiting", "dep.md", "---\nid: dep\npriority: 10\ndepends_on:\n  - nonexistent\n---\n# Dep\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	dep := findNode(data, "waiting/dep.md")
@@ -803,7 +804,7 @@ func TestBuild_FailureCount(t *testing.T) {
 		"<!-- failure: def at 2025-01-02T00:00:00Z step=WORK error=test2 files_changed=none -->\n"
 	writeTask(t, tasksDir, "backlog", "retried.md", content)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	node := findNode(data, "backlog/retried.md")
@@ -822,7 +823,7 @@ func TestBuild_PriorityOrdering(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "high.md", "---\nid: high\npriority: 5\n---\n# High\n")
 	writeTask(t, tasksDir, "backlog", "mid.md", "---\nid: mid\npriority: 25\n---\n# Mid\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	if len(data.Nodes) != 3 {
@@ -845,7 +846,7 @@ func TestBuild_DuplicateDependsOn_EdgesDeduped(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "target.md", "---\nid: target\npriority: 10\n---\n# Target\n")
 	writeTask(t, tasksDir, "backlog", "consumer.md", "---\nid: consumer\npriority: 20\ndepends_on:\n  - target\n  - target\n---\n# Consumer\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	edges := edgesTo(data, "backlog/consumer.md")
@@ -863,7 +864,7 @@ func TestBuild_DuplicateDependsOn_HiddenDepsDeduped(t *testing.T) {
 	writeTask(t, tasksDir, "completed", "gone.md", "---\nid: gone\npriority: 10\n---\n# Gone\n")
 	writeTask(t, tasksDir, "backlog", "consumer.md", "---\nid: consumer\npriority: 20\ndepends_on:\n  - gone\n  - gone\n---\n# Consumer\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	data := Build(tasksDir, idx, false)
 
 	node := findNode(data, "backlog/consumer.md")

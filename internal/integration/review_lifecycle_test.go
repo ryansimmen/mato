@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runner"
 	"mato/internal/testutil"
 )
@@ -49,7 +51,7 @@ func TestReviewLifecycle_Approved(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "approve-task.md"
-	reviewPath := writeTask(t, tasksDir, queue.DirReadyReview, taskFile,
+	reviewPath := writeTask(t, tasksDir, dirs.ReadyReview, taskFile,
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Approve Task\nDo something.\n")
 
 	writeVerdict(t, tasksDir, taskFile, map[string]string{"verdict": "approve"})
@@ -64,11 +66,11 @@ func TestReviewLifecycle_Approved(t *testing.T) {
 	runner.PostReviewAction(tasksDir, "review-host", task)
 
 	// Task should be moved to ready-to-merge/.
-	mustExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
+	mustExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, taskFile))
 	mustNotExist(t, reviewPath)
 
 	// Task file should contain the approval marker.
-	data := readFile(t, filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
+	data := readFile(t, filepath.Join(tasksDir, dirs.ReadyMerge, taskFile))
 	if !strings.Contains(data, "<!-- reviewed:") {
 		t.Fatal("approval marker not written to task file")
 	}
@@ -96,7 +98,7 @@ func TestReviewLifecycle_Rejected(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "reject-task.md"
-	reviewPath := writeTask(t, tasksDir, queue.DirReadyReview, taskFile,
+	reviewPath := writeTask(t, tasksDir, dirs.ReadyReview, taskFile,
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Reject Task\nDo something.\n")
 
 	writeVerdict(t, tasksDir, taskFile, map[string]string{
@@ -114,11 +116,11 @@ func TestReviewLifecycle_Rejected(t *testing.T) {
 	runner.PostReviewAction(tasksDir, "review-host", task)
 
 	// Task should be moved to backlog/.
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, taskFile))
 	mustNotExist(t, reviewPath)
 
 	// Task file should contain the rejection marker with reason.
-	data := readFile(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	data := readFile(t, filepath.Join(tasksDir, dirs.Backlog, taskFile))
 	if !strings.Contains(data, "<!-- review-rejection:") {
 		t.Fatal("rejection marker not written to task file")
 	}
@@ -143,7 +145,7 @@ func TestReviewLifecycle_ErrorVerdict(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "error-task.md"
-	reviewPath := writeTask(t, tasksDir, queue.DirReadyReview, taskFile,
+	reviewPath := writeTask(t, tasksDir, dirs.ReadyReview, taskFile,
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Error Task\n")
 
 	writeVerdict(t, tasksDir, taskFile, map[string]string{
@@ -162,8 +164,8 @@ func TestReviewLifecycle_ErrorVerdict(t *testing.T) {
 
 	// Task should stay in ready-for-review/.
 	mustExist(t, reviewPath)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, taskFile))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, taskFile))
 
 	// Task file should contain a review-failure marker.
 	data := readFile(t, reviewPath)
@@ -182,7 +184,7 @@ func TestReviewLifecycle_MalformedJSON(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "malformed-task.md"
-	reviewPath := writeTask(t, tasksDir, queue.DirReadyReview, taskFile,
+	reviewPath := writeTask(t, tasksDir, dirs.ReadyReview, taskFile,
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Malformed Task\n")
 
 	// Write invalid JSON to the verdict file.
@@ -200,8 +202,8 @@ func TestReviewLifecycle_MalformedJSON(t *testing.T) {
 
 	// Task should stay in ready-for-review/.
 	mustExist(t, reviewPath)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, taskFile))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, taskFile))
 
 	// Task file should contain a review-failure marker mentioning the parse error.
 	data := readFile(t, reviewPath)
@@ -220,7 +222,7 @@ func TestReviewLifecycle_MissingVerdictFile(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "no-verdict-task.md"
-	reviewPath := writeTask(t, tasksDir, queue.DirReadyReview, taskFile,
+	reviewPath := writeTask(t, tasksDir, dirs.ReadyReview, taskFile,
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# No Verdict Task\n")
 
 	// No verdict file is written — simulates a review agent crash.
@@ -236,8 +238,8 @@ func TestReviewLifecycle_MissingVerdictFile(t *testing.T) {
 
 	// Task should stay in ready-for-review/.
 	mustExist(t, reviewPath)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, taskFile))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, taskFile))
 
 	// Task file should contain a review-failure marker.
 	data := readFile(t, reviewPath)
@@ -259,7 +261,7 @@ func TestReviewLifecycle_MissingTaskBranch(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "no-branch-task.md"
-	reviewPath := writeTask(t, tasksDir, queue.DirReadyReview, taskFile,
+	reviewPath := writeTask(t, tasksDir, dirs.ReadyReview, taskFile,
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 			"<!-- branch: task/nonexistent-branch -->\n"+
 			"# No Branch Task\n")
@@ -281,8 +283,8 @@ func TestReviewLifecycle_MissingTaskBranch(t *testing.T) {
 
 	// Task should stay in ready-for-review/ — no transition occurs.
 	mustExist(t, reviewPath)
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
-	mustNotExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, taskFile))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, taskFile))
 
 	// A review-failure record should be appended with the host-side reason.
 	data := readFile(t, reviewPath)
@@ -305,12 +307,12 @@ func TestReviewLifecycle_MalformedTaskQuarantined(t *testing.T) {
 
 	// Write a malformed task file with unterminated frontmatter.
 	malformedFile := "malformed-review.md"
-	malformedPath := writeTask(t, tasksDir, queue.DirReadyReview, malformedFile,
+	malformedPath := writeTask(t, tasksDir, dirs.ReadyReview, malformedFile,
 		"---\npriority: [oops\n# Malformed\n")
 
 	// Write a valid task file.
 	goodFile := "good-review.md"
-	goodPath := writeTask(t, tasksDir, queue.DirReadyReview, goodFile,
+	goodPath := writeTask(t, tasksDir, dirs.ReadyReview, goodFile,
 		"<!-- branch: task/good-review -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good Review Task\n")
 
 	// Use ReviewCandidates via SelectTaskForReview (exported).
@@ -325,14 +327,14 @@ func TestReviewLifecycle_MalformedTaskQuarantined(t *testing.T) {
 	}
 
 	// The malformed task should be quarantined to failed/.
-	mustExist(t, filepath.Join(tasksDir, queue.DirFailed, malformedFile))
+	mustExist(t, filepath.Join(tasksDir, dirs.Failed, malformedFile))
 	mustNotExist(t, malformedPath)
 
 	// The valid task should still be in ready-for-review/.
 	mustExist(t, goodPath)
 
 	// The failed task should have a terminal-failure marker.
-	data := readFile(t, filepath.Join(tasksDir, queue.DirFailed, malformedFile))
+	data := readFile(t, filepath.Join(tasksDir, dirs.Failed, malformedFile))
 	if !strings.Contains(data, "<!-- terminal-failure:") {
 		t.Fatal("terminal-failure marker not written to malformed task")
 	}
@@ -346,15 +348,15 @@ func TestReviewLifecycle_MalformedTaskQuarantined_Indexed(t *testing.T) {
 
 	// Write a malformed task file.
 	malformedFile := "malformed-indexed.md"
-	malformedPath := writeTask(t, tasksDir, queue.DirReadyReview, malformedFile,
+	malformedPath := writeTask(t, tasksDir, dirs.ReadyReview, malformedFile,
 		"---\npriority: [oops\n# Malformed\n")
 
 	// Write a valid task file.
 	goodFile := "good-indexed.md"
-	goodPath := writeTask(t, tasksDir, queue.DirReadyReview, goodFile,
+	goodPath := writeTask(t, tasksDir, dirs.ReadyReview, goodFile,
 		"<!-- branch: task/good-indexed -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good Indexed Task\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	task := runner.SelectTaskForReview(tasksDir, idx)
 
@@ -366,14 +368,14 @@ func TestReviewLifecycle_MalformedTaskQuarantined_Indexed(t *testing.T) {
 	}
 
 	// Malformed task should be in failed/.
-	mustExist(t, filepath.Join(tasksDir, queue.DirFailed, malformedFile))
+	mustExist(t, filepath.Join(tasksDir, dirs.Failed, malformedFile))
 	mustNotExist(t, malformedPath)
 
 	// Valid task should still be in ready-for-review/.
 	mustExist(t, goodPath)
 
 	// Terminal-failure marker should be present.
-	data := readFile(t, filepath.Join(tasksDir, queue.DirFailed, malformedFile))
+	data := readFile(t, filepath.Join(tasksDir, dirs.Failed, malformedFile))
 	if !strings.Contains(data, "<!-- terminal-failure:") {
 		t.Fatal("terminal-failure marker not written")
 	}

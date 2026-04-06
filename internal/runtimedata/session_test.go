@@ -1,4 +1,4 @@
-package sessionmeta
+package runtimedata
 
 import (
 	"os"
@@ -10,25 +10,25 @@ import (
 	"mato/internal/dirs"
 )
 
-func TestLoad_MissingReturnsNil(t *testing.T) {
-	session, err := Load(t.TempDir(), KindWork, "missing.md")
+func TestLoadSession_MissingReturnsNil(t *testing.T) {
+	session, err := LoadSession(t.TempDir(), KindWork, "missing.md")
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadSession: %v", err)
 	}
 	if session != nil {
-		t.Fatalf("Load = %+v, want nil", session)
+		t.Fatalf("LoadSession = %+v, want nil", session)
 	}
 }
 
-func TestLoadOrCreate_CreatesSeparateWorkAndReviewSessions(t *testing.T) {
+func TestLoadOrCreateSession_CreatesSeparateWorkAndReviewSessions(t *testing.T) {
 	tasksDir := t.TempDir()
-	work, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task")
+	work, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
 	if err != nil {
-		t.Fatalf("LoadOrCreate work: %v", err)
+		t.Fatalf("LoadOrCreateSession work: %v", err)
 	}
-	review, err := LoadOrCreate(tasksDir, KindReview, "task.md", "task/task")
+	review, err := LoadOrCreateSession(tasksDir, KindReview, "task.md", "task/task")
 	if err != nil {
-		t.Fatalf("LoadOrCreate review: %v", err)
+		t.Fatalf("LoadOrCreateSession review: %v", err)
 	}
 	if work == nil || review == nil {
 		t.Fatal("expected both session records to be created")
@@ -58,35 +58,35 @@ func TestLoadOrCreate_CreatesSeparateWorkAndReviewSessions(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreate_ReusesExistingSessionID(t *testing.T) {
+func TestLoadOrCreateSession_ReusesExistingSessionID(t *testing.T) {
 	tasksDir := t.TempDir()
-	first, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task")
+	first, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
 	if err != nil {
-		t.Fatalf("first LoadOrCreate: %v", err)
+		t.Fatalf("first LoadOrCreateSession: %v", err)
 	}
-	second, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task")
+	second, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
 	if err != nil {
-		t.Fatalf("second LoadOrCreate: %v", err)
+		t.Fatalf("second LoadOrCreateSession: %v", err)
 	}
 	if second.CopilotSessionID != first.CopilotSessionID {
 		t.Fatalf("session ID = %q, want %q", second.CopilotSessionID, first.CopilotSessionID)
 	}
 }
 
-func TestLoadOrCreate_RotatesSessionIDOnBranchChange(t *testing.T) {
+func TestLoadOrCreateSession_RotatesSessionIDOnBranchChange(t *testing.T) {
 	tasksDir := t.TempDir()
-	first, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task")
+	first, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
 	if err != nil {
-		t.Fatalf("first LoadOrCreate: %v", err)
+		t.Fatalf("first LoadOrCreateSession: %v", err)
 	}
-	if err := Update(tasksDir, KindWork, "task.md", func(session *Session) {
+	if err := UpdateSession(tasksDir, KindWork, "task.md", func(session *Session) {
 		session.LastHeadSHA = "abc123"
 	}); err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("UpdateSession: %v", err)
 	}
-	second, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task-v2")
+	second, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task-v2")
 	if err != nil {
-		t.Fatalf("second LoadOrCreate: %v", err)
+		t.Fatalf("second LoadOrCreateSession: %v", err)
 	}
 	if second.CopilotSessionID == first.CopilotSessionID {
 		t.Fatal("expected rotated session ID after branch change")
@@ -105,10 +105,10 @@ func TestLoadOrCreate_RotatesSessionIDOnBranchChange(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreate_DoesNotRewriteWhenUnchanged(t *testing.T) {
+func TestLoadOrCreateSession_DoesNotRewriteWhenUnchanged(t *testing.T) {
 	tasksDir := t.TempDir()
-	if _, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task"); err != nil {
-		t.Fatalf("first LoadOrCreate: %v", err)
+	if _, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task"); err != nil {
+		t.Fatalf("first LoadOrCreateSession: %v", err)
 	}
 	path := filepath.Join(tasksDir, "runtime", "sessionmeta", "work-task.md.json")
 	infoBefore, err := os.Stat(path)
@@ -116,8 +116,8 @@ func TestLoadOrCreate_DoesNotRewriteWhenUnchanged(t *testing.T) {
 		t.Fatalf("Stat before: %v", err)
 	}
 	time.Sleep(1100 * time.Millisecond)
-	if _, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task"); err != nil {
-		t.Fatalf("second LoadOrCreate: %v", err)
+	if _, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task"); err != nil {
+		t.Fatalf("second LoadOrCreateSession: %v", err)
 	}
 	infoAfter, err := os.Stat(path)
 	if err != nil {
@@ -130,14 +130,14 @@ func TestLoadOrCreate_DoesNotRewriteWhenUnchanged(t *testing.T) {
 
 func TestResetSessionID_RotatesSessionIDAndPreservesState(t *testing.T) {
 	tasksDir := t.TempDir()
-	created, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task")
+	created, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
 	if err != nil {
-		t.Fatalf("LoadOrCreate: %v", err)
+		t.Fatalf("LoadOrCreateSession: %v", err)
 	}
-	if err := Update(tasksDir, KindWork, "task.md", func(session *Session) {
+	if err := UpdateSession(tasksDir, KindWork, "task.md", func(session *Session) {
 		session.LastHeadSHA = "abc123"
 	}); err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("UpdateSession: %v", err)
 	}
 	reset, err := ResetSessionID(tasksDir, KindWork, "task.md", "task/task")
 	if err != nil {
@@ -154,7 +154,7 @@ func TestResetSessionID_RotatesSessionIDAndPreservesState(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreate_CorruptJSONFallsBackToFreshSession(t *testing.T) {
+func TestLoadOrCreateSession_CorruptJSONFallsBackToFreshSession(t *testing.T) {
 	tasksDir := t.TempDir()
 	path := filepath.Join(tasksDir, "runtime", "sessionmeta", "work-task.md.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -163,9 +163,9 @@ func TestLoadOrCreate_CorruptJSONFallsBackToFreshSession(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	session, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task")
+	session, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
 	if err != nil {
-		t.Fatalf("LoadOrCreate: %v", err)
+		t.Fatalf("LoadOrCreateSession: %v", err)
 	}
 	if session == nil {
 		t.Fatal("expected fresh session after corrupt JSON")
@@ -173,30 +173,30 @@ func TestLoadOrCreate_CorruptJSONFallsBackToFreshSession(t *testing.T) {
 	if session.CopilotSessionID == "" {
 		t.Fatal("fresh session should have an ID")
 	}
-	loaded, err := Load(tasksDir, KindWork, "task.md")
+	loaded, err := LoadSession(tasksDir, KindWork, "task.md")
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadSession: %v", err)
 	}
 	if loaded == nil || loaded.CopilotSessionID != session.CopilotSessionID {
 		t.Fatalf("loaded session = %+v, want persisted ID %q", loaded, session.CopilotSessionID)
 	}
 }
 
-func TestUpdate_PreservesExistingSessionID(t *testing.T) {
+func TestUpdateSession_PreservesExistingSessionID(t *testing.T) {
 	tasksDir := t.TempDir()
-	created, err := LoadOrCreate(tasksDir, KindWork, "task.md", "task/task")
+	created, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
 	if err != nil {
-		t.Fatalf("LoadOrCreate: %v", err)
+		t.Fatalf("LoadOrCreateSession: %v", err)
 	}
-	if err := Update(tasksDir, KindWork, "task.md", func(session *Session) {
+	if err := UpdateSession(tasksDir, KindWork, "task.md", func(session *Session) {
 		session.TaskBranch = "task/updated"
 		session.LastHeadSHA = "abc123"
 	}); err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("UpdateSession: %v", err)
 	}
-	loaded, err := Load(tasksDir, KindWork, "task.md")
+	loaded, err := LoadSession(tasksDir, KindWork, "task.md")
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadSession: %v", err)
 	}
 	if loaded.CopilotSessionID != created.CopilotSessionID {
 		t.Fatalf("session ID = %q, want %q", loaded.CopilotSessionID, created.CopilotSessionID)
@@ -215,28 +215,28 @@ func TestUpdate_PreservesExistingSessionID(t *testing.T) {
 	}
 }
 
-func TestDeleteAll_RemovesWorkAndReviewFiles(t *testing.T) {
+func TestDeleteAllSessions_RemovesWorkAndReviewFiles(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, kind := range []string{KindWork, KindReview} {
-		if _, err := LoadOrCreate(tasksDir, kind, "task.md", "task/task"); err != nil {
+		if _, err := LoadOrCreateSession(tasksDir, kind, "task.md", "task/task"); err != nil {
 			t.Fatalf("seed %s session: %v", kind, err)
 		}
 	}
-	if err := DeleteAll(tasksDir, "task.md"); err != nil {
-		t.Fatalf("DeleteAll: %v", err)
+	if err := DeleteAllSessions(tasksDir, "task.md"); err != nil {
+		t.Fatalf("DeleteAllSessions: %v", err)
 	}
 	for _, kind := range []string{KindWork, KindReview} {
-		loaded, err := Load(tasksDir, kind, "task.md")
+		loaded, err := LoadSession(tasksDir, kind, "task.md")
 		if err != nil {
-			t.Fatalf("Load %s: %v", kind, err)
+			t.Fatalf("LoadSession %s: %v", kind, err)
 		}
 		if loaded != nil {
-			t.Fatalf("Load(%s) = %+v, want nil", kind, loaded)
+			t.Fatalf("LoadSession(%s) = %+v, want nil", kind, loaded)
 		}
 	}
 }
 
-func TestSweep_RemovesTerminalStateAndKeepsActive(t *testing.T) {
+func TestSweepSessions_RemovesTerminalStateAndKeepsActive(t *testing.T) {
 	activeDirs := []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge}
 	for _, activeDir := range activeDirs {
 		t.Run(activeDir, func(t *testing.T) {
@@ -254,26 +254,26 @@ func TestSweep_RemovesTerminalStateAndKeepsActive(t *testing.T) {
 			}
 			for _, kind := range []string{KindWork, KindReview} {
 				for _, name := range []string{"active.md", "done.md", "gone.md"} {
-					if _, err := LoadOrCreate(tasksDir, kind, name, "task/"+name); err != nil {
-						t.Fatalf("LoadOrCreate %s %s: %v", kind, name, err)
+					if _, err := LoadOrCreateSession(tasksDir, kind, name, "task/"+name); err != nil {
+						t.Fatalf("LoadOrCreateSession %s %s: %v", kind, name, err)
 					}
 				}
 			}
-			if err := Sweep(tasksDir); err != nil {
-				t.Fatalf("Sweep: %v", err)
+			if err := SweepSessions(tasksDir); err != nil {
+				t.Fatalf("SweepSessions: %v", err)
 			}
 			for _, kind := range []string{KindWork, KindReview} {
-				active, err := Load(tasksDir, kind, "active.md")
+				active, err := LoadSession(tasksDir, kind, "active.md")
 				if err != nil {
-					t.Fatalf("Load active %s: %v", kind, err)
+					t.Fatalf("LoadSession active %s: %v", kind, err)
 				}
 				if active == nil {
 					t.Fatalf("active %s session should remain", kind)
 				}
 				for _, name := range []string{"done.md", "gone.md"} {
-					loaded, err := Load(tasksDir, kind, name)
+					loaded, err := LoadSession(tasksDir, kind, name)
 					if err != nil {
-						t.Fatalf("Load %s %s: %v", kind, name, err)
+						t.Fatalf("LoadSession %s %s: %v", kind, name, err)
 					}
 					if loaded != nil {
 						t.Fatalf("stale %s session for %s should be removed", kind, name)

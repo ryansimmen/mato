@@ -6,11 +6,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
-	"mato/internal/runtimecleanup"
+	"mato/internal/queueview"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 )
 
@@ -67,7 +68,7 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 		return RetryResult{}, err
 	}
 
-	idx := BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	match, err := resolveFailedTask(idx, ref)
 	if err != nil {
 		return RetryResult{}, err
@@ -84,7 +85,7 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 
 	cleaned := stripFailureMarkers(string(data))
 
-	backlogDir := filepath.Join(tasksDir, DirBacklog)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
 	backlogPath := filepath.Join(backlogDir, match.Filename)
 
 	// Write cleaned content to a temp file in backlog/, then atomically
@@ -130,63 +131,36 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 		removeWarning = fmt.Sprintf("could not remove %s after requeue: %v", failedPath, err)
 	}
 
-	// Clean up stale runtime state (taskstate, sessionmeta) from the
+	// Clean up stale runtime sidecar data from the
 	// previous failed attempt so a fresh agent run starts clean.
-	runtimecleanup.DeleteAllPreservingVerdict(tasksDir, match.Filename)
+	runtimedata.DeleteRuntimeArtifactsPreservingVerdict(tasksDir, match.Filename)
 
 	result := RetryResult{Filename: match.Filename}
 	if removeWarning != "" {
 		result.Warnings = append(result.Warnings, removeWarning)
 	}
 
-	idx = BuildIndex(tasksDir)
-	if blocks, ok := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[match.Filename]; ok {
+	idx = queueview.BuildIndex(tasksDir)
+	if blocks, ok := queueview.DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[match.Filename]; ok {
 		result.DependencyBlocked = true
-		result.Warnings = append(result.Warnings, fmt.Sprintf("retried task %s was placed in backlog/ but remains dependency-blocked; next reconcile will move it to waiting/ (blocked by %s)", match.Filename, FormatDependencyBlocks(blocks)))
+		result.Warnings = append(result.Warnings, fmt.Sprintf("retried task %s was placed in backlog/ but remains dependency-blocked; next reconcile will move it to waiting/ (blocked by %s)", match.Filename, queueview.FormatDependencyBlocks(blocks)))
 	}
 
 	return result, nil
 }
 
 func resolveFailedTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
-	ref := strings.TrimSpace(taskRef)
-	filenameRef := ref
-	if !strings.HasSuffix(filenameRef, ".md") {
-		filenameRef += ".md"
-	}
-	stemRef := strings.TrimSuffix(filenameRef, ".md")
-
-	var matches []TaskMatch
-	for _, snap := range idx.TasksByState(DirFailed) {
-		match := TaskMatch{Filename: snap.Filename, State: snap.State, Path: snap.Path, Snapshot: snap}
-		if matchesTaskRef(match, ref, filenameRef, stemRef) {
-			matches = append(matches, match)
-		}
-	}
-	for _, pf := range idx.ParseFailures() {
-		if pf.State != DirFailed {
-			continue
-		}
-		pf := pf
-		match := TaskMatch{Filename: pf.Filename, State: pf.State, Path: pf.Path, ParseFailure: &pf}
-		if matchesParseFailureRef(match, ref, filenameRef, stemRef) {
-			matches = append(matches, match)
-		}
+	ref, matches, err := queueview.CollectTaskMatches(idx, taskRef, []string{dirs.Failed})
+	if err != nil {
+		return TaskMatch{}, err
 	}
 
 	if len(matches) == 0 {
 		return TaskMatch{}, fmt.Errorf("task %s not found in failed/", strings.TrimSuffix(ref, ".md"))
 	}
-	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].Filename < matches[j].Filename
-	})
+	queueview.SortTaskMatches(matches)
 	if len(matches) > 1 {
-		var b strings.Builder
-		fmt.Fprintf(&b, "task reference %q is ambiguous in failed/:", ref)
-		for _, m := range matches {
-			fmt.Fprintf(&b, "\n- %s/%s (id: %s)", m.State, m.Filename, taskMatchID(m))
-		}
-		return TaskMatch{}, fmt.Errorf("%s", b.String())
+		return TaskMatch{}, fmt.Errorf("%s", queueview.FormatAmbiguousTaskMatches(ref, matches, "task reference %q is ambiguous in failed/:"))
 	}
 	return matches[0], nil
 }

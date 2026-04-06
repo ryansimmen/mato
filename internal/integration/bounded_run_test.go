@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/pause"
-	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
@@ -183,18 +183,18 @@ func TestBoundedRun_OnceExitsOnEmptyQueue(t *testing.T) {
 
 func TestBoundedRun_OnceClaimsAndLeavesTaskReadyForReview(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, queue.DirBacklog, "once.md", "# Once\nCreate once.txt\n")
+	writeTask(t, tasksDir, dirs.Backlog, "once.md", "# Once\nCreate once.txt\n")
 
 	out, err := runMatoCommandWithEnv(t, boundedRunWorkEnv(t), "run", "--repo", repoRoot, "--once")
 	if err != nil {
 		t.Fatalf("mato run --once: %v\n%s", err, out)
 	}
 
-	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, "once.md")
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, "once.md")
 	if _, err := os.Stat(readyPath); err != nil {
 		t.Fatalf("ready-for-review task missing: %v\n%s", err, out)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "once.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "once.md")); !os.IsNotExist(err) {
 		t.Fatalf("backlog task should be gone, stat err = %v\n%s", err, out)
 	}
 	taskData := readFile(t, readyPath)
@@ -231,7 +231,7 @@ func TestBoundedRun_UntilIdleExitsWhenPausedAndQueueIsEmpty(t *testing.T) {
 func TestBoundedRun_UntilIdleDrainsReadyToMergeAndExits(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	createTaskBranch(t, repoRoot, "task/add-bounded", map[string]string{"bounded.txt": "bounded\n"}, "add bounded")
-	writeTask(t, tasksDir, queue.DirReadyMerge, "add-bounded.md", strings.Join([]string{
+	writeTask(t, tasksDir, dirs.ReadyMerge, "add-bounded.md", strings.Join([]string{
 		"<!-- branch: task/add-bounded -->",
 		"# Add bounded",
 		"",
@@ -244,7 +244,7 @@ func TestBoundedRun_UntilIdleDrainsReadyToMergeAndExits(t *testing.T) {
 	if !strings.Contains(out, "Merged 1 task(s) into mato") {
 		t.Fatalf("output = %q, want merge confirmation", out)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "add-bounded.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "add-bounded.md")); err != nil {
 		t.Fatalf("completed task missing: %v", err)
 	}
 	contents, err := git.Output(repoRoot, "show", "mato:bounded.txt")

@@ -1,4 +1,4 @@
-package queue
+package queueview
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/taskfile"
 )
@@ -85,7 +86,7 @@ type BuildWarning struct {
 //
 // PollIndex is a plain struct with no concurrency protection. Each agent
 // process runs in a separate terminal; cross-process safety is handled by
-// existing atomic filesystem operations (AtomicMove via os.Link + os.Remove).
+// existing atomic filesystem operations in queue mutation paths.
 type PollIndex struct {
 	// tasks maps "state/filename" to the parsed snapshot.
 	tasks map[string]*TaskSnapshot
@@ -132,10 +133,10 @@ type PollIndex struct {
 }
 
 // activeDirs are the directories representing tasks actively being worked on.
-var activeDirs = []string{DirInProgress, DirReadyReview, DirReadyMerge}
+var activeDirs = []string{dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge}
 
 // nonCompletedDirs are all directories except completed/.
-var nonCompletedDirs = []string{DirWaiting, DirBacklog, DirInProgress, DirReadyReview, DirReadyMerge, DirFailed}
+var nonCompletedDirs = []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Failed}
 
 type taskFileMetadata struct {
 	branch                    string
@@ -208,7 +209,8 @@ func snapshotFromData(state, filename, path string, data []byte, info taskFileMe
 	return snap, nil
 }
 
-func loadTaskSnapshot(tasksDir, state, filename, path string) (*TaskSnapshot, error) {
+// LoadTaskSnapshot reads and parses one task file into a snapshot.
+func LoadTaskSnapshot(tasksDir, state, filename, path string) (*TaskSnapshot, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -217,13 +219,27 @@ func loadTaskSnapshot(tasksDir, state, filename, path string) (*TaskSnapshot, er
 	return snapshotFromData(state, filename, path, data, info)
 }
 
+func lastFailureTime(data []byte) (time.Time, bool) {
+	records := taskfile.ParseFailureMarkers(data)
+	if len(records) == 0 {
+		return time.Time{}, false
+	}
+	last := records[0].Timestamp
+	for _, r := range records[1:] {
+		if r.Timestamp.After(last) {
+			last = r.Timestamp
+		}
+	}
+	return last, true
+}
+
 // BuildIndex scans all queue directories under tasksDir and reads each task
 // file exactly once, building an in-memory index. Returns a fully populated
 // PollIndex.
 func BuildIndex(tasksDir string) *PollIndex {
 	idx := &PollIndex{
 		tasks:           make(map[string]*TaskSnapshot),
-		byState:         make(map[string][]*TaskSnapshot, len(AllDirs)),
+		byState:         make(map[string][]*TaskSnapshot, len(dirs.All)),
 		completedIDs:    make(map[string]struct{}),
 		nonCompletedIDs: make(map[string]struct{}),
 		allIDs:          make(map[string]struct{}),
@@ -242,12 +258,11 @@ func BuildIndex(tasksDir string) *PollIndex {
 		isNonCompleted[d] = true
 	}
 
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		dirPath := filepath.Join(tasksDir, dir)
-		names, err := ListTaskFiles(dirPath)
+		names, err := taskfile.ListTaskFiles(dirPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				// Directory may not exist yet (e.g. first run). Skip.
 				continue
 			}
 			idx.buildWarnings = append(idx.buildWarnings, BuildWarning{State: dir, Path: dirPath, Err: err, DirLevel: true})
@@ -258,13 +273,9 @@ func BuildIndex(tasksDir string) *PollIndex {
 		for _, name := range names {
 			path := filepath.Join(dirPath, name)
 
-			// Always register the filename stem so ID-based
-			// dependency lookups work even when frontmatter is
-			// malformed.  meta.ID is added only on successful
-			// parse below.
 			stem := frontmatter.TaskFileStem(name)
 			idx.allIDs[stem] = struct{}{}
-			if dir == DirCompleted {
+			if dir == dirs.Completed {
 				idx.completedIDs[stem] = struct{}{}
 			}
 			if isNonCompleted[dir] {
@@ -304,18 +315,12 @@ func BuildIndex(tasksDir string) *PollIndex {
 			}
 			meta := snap.Meta
 
-			// Validate glob syntax in affects once and cache the result.
-			// Invalid globs are logged as build warnings but the task
-			// is still fully indexed so its affects remain visible to
-			// overlap detection.
 			if snap.GlobError != nil {
 				idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
 					State: dir, Path: path, Err: snap.GlobError,
 				})
 			}
 
-			// Report unsafe affects entries (absolute paths, path
-			// traversal) that were stripped during parsing.
 			for _, sa := range meta.StrippedAffects {
 				idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
 					State: dir, Path: path,
@@ -327,16 +332,14 @@ func BuildIndex(tasksDir string) *PollIndex {
 			idx.tasks[key] = snap
 			snapshots = append(snapshots, snap)
 
-			// Register frontmatter meta.ID (may differ from stem).
 			idx.allIDs[meta.ID] = struct{}{}
-			if dir == DirCompleted {
+			if dir == dirs.Completed {
 				idx.completedIDs[meta.ID] = struct{}{}
 			}
 			if isNonCompleted[dir] {
 				idx.nonCompletedIDs[meta.ID] = struct{}{}
 			}
 
-			// Populate active-only indexes.
 			if isActive[dir] {
 				if info.branch != "" {
 					idx.activeBranches[info.branch] = struct{}{}
@@ -436,12 +439,9 @@ func (idx *PollIndex) HasActiveOverlap(affects []string) bool {
 		return false
 	}
 	for _, af := range affects {
-		// Exact match (fast path).
 		if len(idx.activeAffects[af]) > 0 {
 			return true
 		}
-		// If af is a prefix, check if any active key or active prefix
-		// falls under it.
 		if isDirPrefix(af) {
 			for key := range idx.activeAffects {
 				if strings.HasPrefix(key, af) {
@@ -454,12 +454,8 @@ func (idx *PollIndex) HasActiveOverlap(affects []string) bool {
 				}
 			}
 		}
-		// Check if af falls under any active prefix entry.
 		for _, prefix := range idx.activeAffectsPrefixes {
 			if isInvalidGlob(prefix) {
-				// Invalid-glob prefixes (e.g. "internal/*/") cannot
-				// match via string comparison; delegate to affectsMatch
-				// which uses conservative static-prefix comparison.
 				if affectsMatch(prefix, af) {
 					return true
 				}
@@ -469,16 +465,11 @@ func (idx *PollIndex) HasActiveOverlap(affects []string) bool {
 				return true
 			}
 		}
-		// Check if af matches any active glob pattern.
 		for _, g := range idx.activeAffectsGlobs {
 			if affectsMatch(g, af) {
 				return true
 			}
 		}
-		// If af is a glob, the exact-match lookup above only catches the
-		// literal string; we must also test it against every active key.
-		// No separate activeAffectsPrefixes loop is needed here because
-		// prefix entries are already stored in activeAffects.
 		if isGlob(af) {
 			for key := range idx.activeAffects {
 				if affectsMatch(af, key) {
@@ -491,12 +482,10 @@ func (idx *PollIndex) HasActiveOverlap(affects []string) bool {
 }
 
 // ActiveAffects returns the list of ActiveTask entries derived from the index.
-// This replaces taskfile.CollectActiveAffects for callers that have an index.
 func (idx *PollIndex) ActiveAffects() []taskfile.ActiveTask {
 	if idx == nil {
 		return nil
 	}
-	// Collect unique tasks from active dirs that have affects.
 	type taskKey struct {
 		name string
 		dir  string
@@ -545,7 +534,7 @@ func (idx *PollIndex) BacklogByPriority(exclude map[string]struct{}) []*TaskSnap
 	if idx == nil {
 		return nil
 	}
-	backlog := idx.byState[DirBacklog]
+	backlog := idx.byState[dirs.Backlog]
 	result := make([]*TaskSnapshot, 0, len(backlog))
 	for _, snap := range backlog {
 		if exclude != nil {
@@ -580,7 +569,7 @@ func (idx *PollIndex) WaitingParseFailures() []ParseFailure {
 	}
 	var result []ParseFailure
 	for _, pf := range idx.parseFailures {
-		if pf.State == DirWaiting {
+		if pf.State == dirs.Waiting {
 			result = append(result, pf)
 		}
 	}
@@ -594,7 +583,7 @@ func (idx *PollIndex) BacklogParseFailures() []ParseFailure {
 	}
 	var result []ParseFailure
 	for _, pf := range idx.parseFailures {
-		if pf.State == DirBacklog {
+		if pf.State == dirs.Backlog {
 			result = append(result, pf)
 		}
 	}
@@ -608,7 +597,7 @@ func (idx *PollIndex) ReviewParseFailures() []ParseFailure {
 	}
 	var result []ParseFailure
 	for _, pf := range idx.parseFailures {
-		if pf.State == DirReadyReview {
+		if pf.State == dirs.ReadyReview {
 			result = append(result, pf)
 		}
 	}
@@ -624,14 +613,10 @@ func (idx *PollIndex) Snapshot(state, filename string) *TaskSnapshot {
 	return idx.tasks[state+"/"+filename]
 }
 
-// buildTemporaryIndex creates a PollIndex for callers that pass nil. This
-// preserves backward compatibility for code paths outside the poll loop
-// (DryRun, status command, integration tests).
 func buildTemporaryIndex(tasksDir string) *PollIndex {
 	return BuildIndex(tasksDir)
 }
 
-// ensureIndex returns idx if non-nil, otherwise builds a temporary index.
 func ensureIndex(tasksDir string, idx *PollIndex) *PollIndex {
 	if idx != nil {
 		return idx

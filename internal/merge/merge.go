@@ -13,12 +13,12 @@ import (
 	"slices"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
-	"mato/internal/queue"
-	"mato/internal/runtimecleanup"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
 )
@@ -64,7 +64,7 @@ func ProcessQueueContext(ctx context.Context, repoRoot, tasksDir, branch string)
 		return 0
 	}
 
-	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
+	readyDir := filepath.Join(tasksDir, dirs.ReadyMerge)
 	candidates, err := loadMergeCandidates(readyDir, tasksDir)
 	if err != nil {
 		return 0
@@ -78,7 +78,7 @@ func ProcessQueueContext(ctx context.Context, repoRoot, tasksDir, branch string)
 // priority-sorted slice of candidates. Unparseable or marker-less files are
 // routed through the normal failure/requeue path with a stderr warning.
 func loadMergeCandidates(dir, tasksDir string) ([]mergeQueueTask, error) {
-	names, err := queue.ListTaskFiles(dir)
+	names, err := taskfile.ListTaskFiles(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func loadMergeCandidates(dir, tasksDir string) ([]mergeQueueTask, error) {
 		meta, body, err := frontmatter.ParseTaskFile(path)
 		if err != nil {
 			ui.Warnf("warning: could not parse ready-to-merge task %s: %v\n", name, err)
-			if failureErr := failMergeTask(path, filepath.Join(tasksDir, queue.DirBacklog, name), fmt.Sprintf("parse task file: %v", err)); failureErr != nil {
+			if failureErr := failMergeTask(path, filepath.Join(tasksDir, dirs.Backlog, name), fmt.Sprintf("parse task file: %v", err)); failureErr != nil {
 				ui.Warnf("warning: could not requeue task %s: %v\n", name, failureErr)
 			}
 			continue
@@ -135,7 +135,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 			return merged
 		}
 
-		completedPath := filepath.Join(tasksDir, queue.DirCompleted, task.name)
+		completedPath := filepath.Join(tasksDir, dirs.Completed, task.name)
 		if taskHasMergeSuccessRecord(task.path) {
 			recoverCompletionDetailForMergedTask(repoRoot, tasksDir, branch, task)
 			if err := moveTaskWithRetry(ctx, task.path, completedPath); err != nil {
@@ -146,7 +146,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 					if removeErr := os.Remove(task.path); removeErr != nil {
 						ui.Warnf("warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
 					} else {
-						runtimecleanup.DeleteAll(tasksDir, task.name)
+						runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
 						cleanupTaskBranch(repoRoot, taskBranchName(task))
 						merged++
 					}
@@ -155,7 +155,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 				}
 				continue
 			}
-			runtimecleanup.DeleteAll(tasksDir, task.name)
+			runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
 			cleanupTaskBranch(repoRoot, taskBranchName(task))
 			merged++
 			continue
@@ -205,7 +205,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 			bookkeepingComplete = true
 		}
 		if bookkeepingComplete {
-			runtimecleanup.DeleteAll(tasksDir, task.name)
+			runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
 			cleanupTaskBranch(repoRoot, taskBranchName(task))
 		}
 		merged++
@@ -216,7 +216,7 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 
 // HasReadyTasks reports whether any tasks are waiting in ready-to-merge/.
 func HasReadyTasks(tasksDir string) bool {
-	names, err := queue.ListTaskFiles(filepath.Join(tasksDir, queue.DirReadyMerge))
+	names, err := taskfile.ListTaskFiles(filepath.Join(tasksDir, dirs.ReadyMerge))
 	if err != nil {
 		return false
 	}

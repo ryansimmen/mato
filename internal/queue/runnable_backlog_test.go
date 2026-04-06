@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"mato/internal/dirs"
 	"strings"
 	"testing"
 )
@@ -59,7 +60,7 @@ func TestFormatDependencyBlocks(t *testing.T) {
 func TestDependencyBlockedBacklogTasksDetailed_NoBlockedTasks(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	// A backlog task with no dependencies should not be blocked.
-	writeTask(t, tasksDir, DirBacklog, "simple-task.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "simple-task.md", `---
 priority: 10
 ---
 # Simple Task
@@ -74,7 +75,7 @@ priority: 10
 func TestDependencyBlockedBacklogTasksDetailed_MissingDependency(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	// A backlog task depending on a task that doesn't exist anywhere.
-	writeTask(t, tasksDir, DirBacklog, "needs-missing.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "needs-missing.md", `---
 priority: 10
 depends_on:
   - nonexistent-task
@@ -101,13 +102,13 @@ depends_on:
 func TestDependencyBlockedBacklogTasksDetailed_FailedDependency(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	// The dependency task is in the failed directory.
-	writeTask(t, tasksDir, DirFailed, "setup-db.md", `---
+	writeTask(t, tasksDir, dirs.Failed, "setup-db.md", `---
 id: setup-db
 priority: 5
 ---
 # Setup DB
 `)
-	writeTask(t, tasksDir, DirBacklog, "migrate-data.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "migrate-data.md", `---
 priority: 10
 depends_on:
   - setup-db
@@ -126,8 +127,8 @@ depends_on:
 	if blocks[0].DependencyID != "setup-db" {
 		t.Errorf("DependencyID = %q, want %q", blocks[0].DependencyID, "setup-db")
 	}
-	if !strings.Contains(blocks[0].State, DirFailed) {
-		t.Errorf("State = %q, want it to contain %q", blocks[0].State, DirFailed)
+	if !strings.Contains(blocks[0].State, dirs.Failed) {
+		t.Errorf("State = %q, want it to contain %q", blocks[0].State, dirs.Failed)
 	}
 }
 
@@ -135,19 +136,19 @@ func TestDependencyBlockedBacklogTasksDetailed_AmbiguousDependency(t *testing.T)
 	tasksDir := setupIndexDirs(t)
 	// The dependency exists in both completed and another active directory,
 	// making the ID ambiguous.
-	writeTask(t, tasksDir, DirCompleted, "shared-id.md", `---
+	writeTask(t, tasksDir, dirs.Completed, "shared-id.md", `---
 id: shared-id
 priority: 5
 ---
 # Shared ID (completed)
 `)
-	writeTask(t, tasksDir, DirBacklog, "shared-id-v2.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "shared-id-v2.md", `---
 id: shared-id
 priority: 5
 ---
 # Shared ID (backlog duplicate)
 `)
-	writeTask(t, tasksDir, DirBacklog, "consumer.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "consumer.md", `---
 priority: 20
 depends_on:
   - shared-id
@@ -174,13 +175,13 @@ depends_on:
 func TestDependencyBlockedBacklogTasksDetailed_CompletedDependency(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	// A completed dependency should NOT block the dependent task.
-	writeTask(t, tasksDir, DirCompleted, "prerequisite.md", `---
+	writeTask(t, tasksDir, dirs.Completed, "prerequisite.md", `---
 id: prerequisite
 priority: 5
 ---
 # Prerequisite
 `)
-	writeTask(t, tasksDir, DirBacklog, "depends-on-completed.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "depends-on-completed.md", `---
 priority: 10
 depends_on:
   - prerequisite
@@ -197,13 +198,13 @@ depends_on:
 func TestDependencyBlockedBacklogTasksDetailed_InProgressDependency(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	// A dependency that is in-progress should block the dependent task.
-	writeTask(t, tasksDir, DirInProgress, "running-task.md", `---
+	writeTask(t, tasksDir, dirs.InProgress, "running-task.md", `---
 id: running-task
 priority: 5
 ---
 # Running Task
 `)
-	writeTask(t, tasksDir, DirBacklog, "waits-for-running.md", `---
+	writeTask(t, tasksDir, dirs.Backlog, "waits-for-running.md", `---
 priority: 10
 depends_on:
   - running-task
@@ -222,7 +223,7 @@ depends_on:
 	if blocks[0].DependencyID != "running-task" {
 		t.Errorf("DependencyID = %q, want %q", blocks[0].DependencyID, "running-task")
 	}
-	if !strings.Contains(blocks[0].State, DirInProgress) {
-		t.Errorf("State = %q, want it to contain %q", blocks[0].State, DirInProgress)
+	if !strings.Contains(blocks[0].State, dirs.InProgress) {
+		t.Errorf("State = %q, want it to contain %q", blocks[0].State, dirs.InProgress)
 	}
 }

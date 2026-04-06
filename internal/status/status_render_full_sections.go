@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/queue"
+	"mato/internal/dirs"
 	"mato/internal/ui"
 )
 
@@ -55,7 +55,7 @@ func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) error {
 		}
 		state := task.State
 		if state == "" {
-			state = queue.DirWaiting
+			state = dirs.Waiting
 		}
 		suffix := "(" + state + "/)"
 		if termWidth > 0 {
@@ -73,7 +73,7 @@ func renderDependencyBlocked(w io.Writer, c colorSet, data statusData) error {
 		depStrs := make([]string, 0, len(task.Dependencies))
 		for _, dep := range task.Dependencies {
 			symbol := c.Red("✗")
-			if dep.Status == queue.DirCompleted {
+			if dep.Status == dirs.Completed {
 				symbol = c.Green("✓")
 			}
 			depStrs = append(depStrs, fmt.Sprintf("%s (%s %s)", dep.ID, symbol, dep.Status))

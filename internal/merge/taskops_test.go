@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/queue"
-	"mato/internal/taskstate"
+	"mato/internal/runtimedata"
 )
 
 func TestTaskHasMergeSuccessRecord(t *testing.T) {
@@ -237,13 +238,13 @@ func TestRemoveBranchMarker(t *testing.T) {
 func TestHandleMergeFailure_ConflictInFailedKeepsBranchMarker(t *testing.T) {
 	repoRoot := t.TempDir()
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyMerge, queue.DirFailed} {
+	for _, sub := range []string{dirs.ReadyMerge, dirs.Failed} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 	}
 
-	taskPath := filepath.Join(tasksDir, queue.DirReadyMerge, "conflict.md")
+	taskPath := filepath.Join(tasksDir, dirs.ReadyMerge, "conflict.md")
 	content := strings.Join([]string{
 		"<!-- branch: task/conflict -->",
 		"---",
@@ -261,7 +262,7 @@ func TestHandleMergeFailure_ConflictInFailedKeepsBranchMarker(t *testing.T) {
 	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
 		t.Fatalf("handleMergeFailure: %v", err)
 	}
-	failedPath := filepath.Join(tasksDir, queue.DirFailed, "conflict.md")
+	failedPath := filepath.Join(tasksDir, dirs.Failed, "conflict.md")
 	data, err := os.ReadFile(failedPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -274,14 +275,14 @@ func TestHandleMergeFailure_ConflictInFailedKeepsBranchMarker(t *testing.T) {
 func TestHandleMergeFailure_FailedTaskCleansBranch(t *testing.T) {
 	repoRoot := t.TempDir()
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyMerge, queue.DirFailed} {
+	for _, sub := range []string{dirs.ReadyMerge, dirs.Failed} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 	}
 
 	// Task with max_retries=1 and one prior failure → next failure routes to failed/
-	taskPath := filepath.Join(tasksDir, queue.DirReadyMerge, "exhaust.md")
+	taskPath := filepath.Join(tasksDir, dirs.ReadyMerge, "exhaust.md")
 	content := strings.Join([]string{
 		"<!-- branch: task/exhaust -->",
 		"---",
@@ -312,7 +313,7 @@ func TestHandleMergeFailure_FailedTaskCleansBranch(t *testing.T) {
 	}
 
 	// Verify task moved to failed/
-	failedPath := filepath.Join(tasksDir, queue.DirFailed, "exhaust.md")
+	failedPath := filepath.Join(tasksDir, dirs.Failed, "exhaust.md")
 	if _, err := os.Stat(failedPath); err != nil {
 		t.Fatalf("task should be in failed/: %v", err)
 	}
@@ -321,13 +322,13 @@ func TestHandleMergeFailure_FailedTaskCleansBranch(t *testing.T) {
 func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 	repoRoot := t.TempDir()
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyMerge, queue.DirBacklog} {
+	for _, sub := range []string{dirs.ReadyMerge, dirs.Backlog} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 	}
 
-	taskPath := filepath.Join(tasksDir, queue.DirReadyMerge, "cleanup.md")
+	taskPath := filepath.Join(tasksDir, dirs.ReadyMerge, "cleanup.md")
 	content := strings.Join([]string{
 		"<!-- branch: task/cleanup -->",
 		"---",
@@ -339,8 +340,8 @@ func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 	if err := os.WriteFile(taskPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, "cleanup.md", func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewApproved
+	if err := runtimedata.UpdateTaskState(tasksDir, "cleanup.md", func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewApproved
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -349,12 +350,12 @@ func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
 		t.Fatalf("handleMergeFailure: %v", err)
 	}
-	state, err := taskstate.Load(tasksDir, task.name)
+	state, err := runtimedata.LoadTaskState(tasksDir, task.name)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeMergeConflictCleanup {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeMergeConflictCleanup)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeMergeConflictCleanup {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeMergeConflictCleanup)
 	}
 }
 

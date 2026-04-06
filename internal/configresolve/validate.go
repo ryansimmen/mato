@@ -8,8 +8,6 @@ import (
 
 	"mato/internal/config"
 	"mato/internal/git"
-	"mato/internal/queue"
-	"mato/internal/runner"
 )
 
 // ValidationIssue describes an invalid effective repository-default setting.
@@ -42,13 +40,13 @@ func ValidateRepoDefaults(repoRoot string) (*RepoValidationResult, error) {
 			RepoRoot:              repoRoot,
 			ConfigPath:            load.Path,
 			ConfigExists:          load.Exists,
-			DockerImage:           resolveStringValue("", envDockerImage, load.Config.DockerImage, runner.DefaultDockerImage),
-			TaskModel:             resolveStringValue("", envTaskModel, load.Config.TaskModel, runner.DefaultTaskModel),
-			ReviewModel:           resolveStringValue("", envReviewModel, load.Config.ReviewModel, runner.DefaultReviewModel),
-			TaskReasoningEffort:   resolveStringValue("", envTaskReasoningEffort, load.Config.TaskReasoningEffort, runner.DefaultReasoningEffort),
-			ReviewReasoningEffort: resolveStringValue("", envReviewReasoningEffort, load.Config.ReviewReasoningEffort, runner.DefaultReasoningEffort),
-			AgentTimeout:          resolveDurationValueForValidation(envAgentTimeout, load.Config.AgentTimeout, runner.DefaultAgentTimeout),
-			RetryCooldown:         resolveDurationValueForValidation(envRetryCooldown, load.Config.RetryCooldown, queue.DefaultRetryCooldown),
+			DockerImage:           resolveStringValue("", envDockerImage, load.Config.DockerImage, config.DefaultDockerImage),
+			TaskModel:             resolveStringValue("", envTaskModel, load.Config.TaskModel, config.DefaultTaskModel),
+			ReviewModel:           resolveStringValue("", envReviewModel, load.Config.ReviewModel, config.DefaultReviewModel),
+			TaskReasoningEffort:   resolveStringValue("", envTaskReasoningEffort, load.Config.TaskReasoningEffort, config.DefaultReasoningEffort),
+			ReviewReasoningEffort: resolveStringValue("", envReviewReasoningEffort, load.Config.ReviewReasoningEffort, config.DefaultReasoningEffort),
+			AgentTimeout:          resolveDurationValueForValidation(envAgentTimeout, load.Config.AgentTimeout, config.DefaultAgentTimeout),
+			RetryCooldown:         resolveDurationValueForValidation(envRetryCooldown, load.Config.RetryCooldown, config.DefaultRetryCooldown),
 		},
 	}
 
@@ -122,7 +120,7 @@ func resolveBranchForValidation(load config.LoadResult) (Resolved[string], *Vali
 		return resolved, nil
 	}
 
-	resolved := Resolved[string]{Value: "mato", Source: SourceDefault}
+	resolved := Resolved[string]{Value: config.DefaultBranch, Source: SourceDefault}
 	if err := git.ValidateBranch(resolved.Value); err != nil {
 		return resolved, &ValidationIssue{
 			Code:    "config.invalid_branch",

@@ -1,11 +1,11 @@
-package queue
+package queueview
 
 import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 )
 
@@ -29,6 +29,15 @@ type dependencyLookup struct {
 	statesByID    map[string][]string
 }
 
+// DependencyBlocksFor reports why the provided dependency refs are not
+// currently satisfied in the indexed queue state.
+func DependencyBlocksFor(idx *PollIndex, dependsOn []string) []DependencyBlock {
+	if idx == nil {
+		return nil
+	}
+	return newDependencyLookup(idx).blockedDependencies(dependsOn)
+}
+
 // FormatDependencyBlocks formats dependency blockers for user-facing warnings.
 func FormatDependencyBlocks(blocks []DependencyBlock) string {
 	if len(blocks) == 0 {
@@ -47,7 +56,7 @@ func DependencyBlockedBacklogTasksDetailed(tasksDir string, idx *PollIndex) map[
 	idx = ensureIndex(tasksDir, idx)
 	lookup := newDependencyLookup(idx)
 	blocked := make(map[string][]DependencyBlock)
-	for _, snap := range idx.TasksByState(DirBacklog) {
+	for _, snap := range idx.TasksByState(dirs.Backlog) {
 		blocks := lookup.blockedDependencies(snap.Meta.DependsOn)
 		if len(blocks) == 0 {
 			continue
@@ -64,8 +73,8 @@ func ComputeRunnableBacklogView(tasksDir string, idx *PollIndex) RunnableBacklog
 	idx = ensureIndex(tasksDir, idx)
 
 	dependencyBlocked := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
-	candidates := make([]*TaskSnapshot, 0, len(idx.TasksByState(DirBacklog)))
-	for _, snap := range idx.TasksByState(DirBacklog) {
+	candidates := make([]*TaskSnapshot, 0, len(idx.TasksByState(dirs.Backlog)))
+	for _, snap := range idx.TasksByState(dirs.Backlog) {
 		if _, blocked := dependencyBlocked[snap.Filename]; blocked {
 			continue
 		}
@@ -97,21 +106,6 @@ func OrderedRunnableFilenames(view RunnableBacklogView, exclude map[string]struc
 	return names
 }
 
-// HasClaimableBacklogTask reports whether backlog currently contains at least
-// one immediately claimable task after dependency and affects filtering,
-// caller-provided exclusions, retry exhaustion, and retry cooldown.
-func HasClaimableBacklogTask(tasksDir string, exclude map[string]struct{}, cooldown time.Duration, idx *PollIndex) bool {
-	idx = ensureIndex(tasksDir, idx)
-	view := ComputeRunnableBacklogView(tasksDir, idx)
-	depLookup := newDependencyLookup(idx)
-	for _, snap := range sortSnapshotsByPriority(view.Runnable, exclude) {
-		if immediatelyClaimableTask(snap, depLookup, cooldown) {
-			return true
-		}
-	}
-	return false
-}
-
 func newDependencyLookup(idx *PollIndex) dependencyLookup {
 	completedIDs := idx.CompletedIDs()
 	nonCompletedIDs := idx.NonCompletedIDs()
@@ -129,7 +123,7 @@ func newDependencyLookup(idx *PollIndex) dependencyLookup {
 	}
 
 	statesByID := make(map[string]map[string]struct{})
-	for _, dir := range AllDirs {
+	for _, dir := range dirs.All {
 		for _, snap := range idx.TasksByState(dir) {
 			registerState(statesByID, frontmatter.TaskFileStem(snap.Filename), dir)
 			if snap.Meta.ID != "" {

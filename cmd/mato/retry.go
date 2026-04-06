@@ -100,7 +100,7 @@ func newRetryCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
-	cmd.ValidArgsFunction = completeTaskNames(repoFlag, []string{queue.DirFailed})
+	cmd.ValidArgsFunction = completeTaskNames(repoFlag, []string{dirs.Failed})
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd
