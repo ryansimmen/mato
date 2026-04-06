@@ -7,6 +7,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
@@ -163,7 +164,7 @@ func failInvalidGlobBacklog(tasksDir string, idx *PollIndex) bool {
 // to waiting/. It returns the number of demoted tasks and whether any task was
 // moved.
 func demoteBlockedBacklog(tasksDir string, idx *PollIndex) (int, bool) {
-	blockedBacklog := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
+	blockedBacklog := queueview.DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
 	if len(blockedBacklog) == 0 {
 		return 0, false
 	}
@@ -179,7 +180,7 @@ func demoteBlockedBacklog(tasksDir string, idx *PollIndex) (int, bool) {
 			ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", snap.Filename, err)
 			continue
 		}
-		ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", snap.Filename, FormatDependencyBlocks(blocks))
+		ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", snap.Filename, queueview.FormatDependencyBlocks(blocks))
 		moved = true
 		demoted++
 	}

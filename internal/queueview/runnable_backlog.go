@@ -29,6 +29,15 @@ type dependencyLookup struct {
 	statesByID    map[string][]string
 }
 
+// DependencyBlocksFor reports why the provided dependency refs are not
+// currently satisfied in the indexed queue state.
+func DependencyBlocksFor(idx *PollIndex, dependsOn []string) []DependencyBlock {
+	if idx == nil {
+		return nil
+	}
+	return newDependencyLookup(idx).blockedDependencies(dependsOn)
+}
+
 // FormatDependencyBlocks formats dependency blockers for user-facing warnings.
 func FormatDependencyBlocks(blocks []DependencyBlock) string {
 	if len(blocks) == 0 {

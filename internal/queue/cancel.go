@@ -10,6 +10,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 )
@@ -83,7 +84,7 @@ func downstreamWarnings(tasksDir string, idx *PollIndex, match TaskMatch) []stri
 		taskID = match.Snapshot.Meta.ID
 	}
 
-	blockedBacklog := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
+	blockedBacklog := queueview.DependencyBlockedBacklogTasksDetailed(tasksDir, idx)
 	warnings := make(map[string]struct{})
 
 	for _, snap := range idx.TasksByState(dirs.Waiting) {

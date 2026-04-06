@@ -127,7 +127,7 @@ func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, i
 // FailedDirUnavailableError is encountered. It returns whether a task was
 // claimed and whether any non-fatal error occurred.
 func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queueview.PollIndex, view queueview.RunnableBacklogView) (claimed bool, hadError bool) {
-	candidates := queue.OrderedRunnableFilenames(view, failedDirExcluded)
+	candidates := queueview.OrderedRunnableFilenames(view, failedDirExcluded)
 	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, candidates, cooldown, idx)
 	var fdErr *queue.FailedDirUnavailableError
 	if errors.As(claimErr, &fdErr) {

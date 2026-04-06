@@ -11,6 +11,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 )
@@ -141,9 +142,9 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 	}
 
 	idx = BuildIndex(tasksDir)
-	if blocks, ok := DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[match.Filename]; ok {
+	if blocks, ok := queueview.DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[match.Filename]; ok {
 		result.DependencyBlocked = true
-		result.Warnings = append(result.Warnings, fmt.Sprintf("retried task %s was placed in backlog/ but remains dependency-blocked; next reconcile will move it to waiting/ (blocked by %s)", match.Filename, FormatDependencyBlocks(blocks)))
+		result.Warnings = append(result.Warnings, fmt.Sprintf("retried task %s was placed in backlog/ but remains dependency-blocked; next reconcile will move it to waiting/ (blocked by %s)", match.Filename, queueview.FormatDependencyBlocks(blocks)))
 	}
 
 	return result, nil
