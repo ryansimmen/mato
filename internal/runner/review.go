@@ -17,6 +17,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
@@ -37,7 +38,7 @@ type reviewCandidate struct {
 	priority int
 }
 
-func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queue.ParseFailure) {
+func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queueview.ParseFailure) {
 	ui.Warnf("warning: quarantining unparseable review candidate %s: %v\n", pf.Filename, pf.Err)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		ui.Warnf("warning: could not create failed dir for %s: %v\n", pf.Filename, err)
@@ -54,11 +55,11 @@ func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queue.ParseFai
 	fmt.Printf("quarantined malformed review candidate %s to failed/\n", pf.Filename)
 }
 
-func reviewTaskReady(snap *queue.TaskSnapshot) bool {
+func reviewTaskReady(snap *queueview.TaskSnapshot) bool {
 	return snap != nil && snap.ReviewFailureCount < snap.Meta.MaxRetries
 }
 
-func buildReviewCandidate(tasksDir, failedDir string, snap *queue.TaskSnapshot) (*reviewCandidate, bool) {
+func buildReviewCandidate(tasksDir, failedDir string, snap *queueview.TaskSnapshot) (*reviewCandidate, bool) {
 	if snap == nil {
 		return nil, false
 	}
@@ -108,9 +109,9 @@ func buildReviewCandidate(tasksDir, failedDir string, snap *queue.TaskSnapshot) 
 //
 // When idx is non-nil, pre-parsed metadata from the index is used instead of
 // re-parsing each file from disk.
-func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTask {
+func reviewCandidates(tasksDir string, idx *queueview.PollIndex) []*queue.ClaimedTask {
 	if idx == nil {
-		idx = queue.BuildIndex(tasksDir)
+		idx = queueview.BuildIndex(tasksDir)
 	}
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
 
@@ -160,7 +161,7 @@ func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
 // tasks. A task missing the branch marker will never be selected by
 // reviewCandidates, so counting it here would prevent idle detection.
 func hasReviewCandidates(tasksDir string) bool {
-	for _, snap := range queue.BuildIndex(tasksDir).TasksByState(dirs.ReadyReview) {
+	for _, snap := range queueview.BuildIndex(tasksDir).TasksByState(dirs.ReadyReview) {
 		if reviewTaskReady(snap) && strings.TrimSpace(snap.Branch) != "" {
 			return true
 		}
@@ -174,7 +175,7 @@ func hasReviewCandidates(tasksDir string) bool {
 // This does not acquire a lock; use selectAndLockReview for mutual exclusion.
 //
 // When idx is nil, the filesystem is scanned directly.
-func selectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTask {
+func selectTaskForReview(tasksDir string, idx *queueview.PollIndex) *queue.ClaimedTask {
 	candidates := reviewCandidates(tasksDir, idx)
 	if len(candidates) == 0 {
 		return nil
@@ -184,7 +185,7 @@ func selectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTa
 
 // SelectTaskForReview is the exported entry point for selecting the
 // highest-priority review candidate. It delegates to selectTaskForReview.
-func SelectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTask {
+func SelectTaskForReview(tasksDir string, idx *queueview.PollIndex) *queue.ClaimedTask {
 	return selectTaskForReview(tasksDir, idx)
 }
 
@@ -193,7 +194,7 @@ func SelectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTa
 // lock. Returns (nil, nil) when no unlocked review task is available.
 //
 // When idx is nil, the filesystem is scanned directly.
-func selectAndLockReview(tasksDir string, idx *queue.PollIndex) (*queue.ClaimedTask, func()) {
+func selectAndLockReview(tasksDir string, idx *queueview.PollIndex) (*queue.ClaimedTask, func()) {
 	for _, task := range reviewCandidates(tasksDir, idx) {
 		cleanup, ok := queue.AcquireReviewLock(tasksDir, task.Filename)
 		if ok {

@@ -7,7 +7,7 @@ import (
 
 	"mato/internal/configresolve"
 	"mato/internal/git"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 )
 
 // checkContext carries shared state across checks within a single doctor run.
@@ -18,7 +18,7 @@ type checkContext struct {
 	repoErr                error  // populated by resolveRepo on failure
 	tasksDir               string // derived from repoRoot
 	opts                   Options
-	idx                    *queue.PollIndex // lazily built, shared across checks
+	idx                    *queueview.PollIndex // lazily built, shared across checks
 	selectedChecks         map[string]bool
 	resolvedDockerImage    string
 	dockerImageResolved    bool
@@ -91,9 +91,9 @@ func (c *checkContext) repoErrDetail() string {
 }
 
 // ensureIndex lazily builds the PollIndex from tasksDir.
-func (c *checkContext) ensureIndex() *queue.PollIndex {
+func (c *checkContext) ensureIndex() *queueview.PollIndex {
 	if c.idx == nil {
-		c.idx = queue.BuildIndex(c.tasksDir)
+		c.idx = queueview.BuildIndex(c.tasksDir)
 	}
 	return c.idx
 }

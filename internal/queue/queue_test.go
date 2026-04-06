@@ -123,6 +123,39 @@ func TestAtomicMove_SuccessRemovesSource(t *testing.T) {
 	}
 }
 
+func TestAtomicMove_MissingSourceAfterLinkTreatsMoveAsSuccess(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+
+	if err := os.WriteFile(src, []byte("content\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	var removeCalls int
+	withRemoveFn(t, func(path string) error {
+		removeCalls++
+		if path == src {
+			return os.ErrNotExist
+		}
+		return os.Remove(path)
+	})
+
+	if err := AtomicMove(src, dst); err != nil {
+		t.Fatalf("AtomicMove should treat missing source after link as success: %v", err)
+	}
+	if removeCalls != 1 {
+		t.Fatalf("removeFn call count = %d, want 1", removeCalls)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	if string(data) != "content\n" {
+		t.Fatalf("destination contents = %q, want %q", string(data), "content\n")
+	}
+}
+
 func TestAtomicMove_ConcurrentRace(t *testing.T) {
 	dir := t.TempDir()
 	const goroutines = 10
@@ -1799,7 +1832,7 @@ func TestWriteQueueManifest_WithIndexSkipsMalformedBacklogFiles(t *testing.T) {
 
 func TestWriteQueueManifest_WithIndexFailsWhenBacklogUnreadable(t *testing.T) {
 	tasksDir := t.TempDir()
-	idx := &PollIndex{buildWarnings: []BuildWarning{{State: dirs.Backlog, Path: filepath.Join(tasksDir, dirs.Backlog), Err: os.ErrPermission, DirLevel: true}}}
+	idx := newPollIndexWithWarnings([]BuildWarning{{State: dirs.Backlog, Path: filepath.Join(tasksDir, dirs.Backlog), Err: os.ErrPermission, DirLevel: true}})
 
 	stderr := captureStderr(t, func() {
 		err := WriteQueueManifest(tasksDir, nil, idx)

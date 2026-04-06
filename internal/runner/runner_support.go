@@ -12,7 +12,7 @@ import (
 
 	"mato/internal/atomicwrite"
 	"mato/internal/git"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/ui"
 )
@@ -234,7 +234,7 @@ func cleanStaleClones(tmpDir string, now time.Time, maxAge time.Duration) {
 // stderr. It returns true when any warning indicates a directory-level read
 // failure (incomplete index), which callers should treat as a poll-cycle error
 // to trigger backoff signaling.
-func surfaceBuildWarnings(idx *queue.PollIndex) bool {
+func surfaceBuildWarnings(idx *queueview.PollIndex) bool {
 	warnings := idx.BuildWarnings()
 	if len(warnings) == 0 {
 		return false

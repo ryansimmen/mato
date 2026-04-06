@@ -10,7 +10,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 
 	"github.com/spf13/cobra"
 )
@@ -35,7 +35,7 @@ func completeTaskNames(repoFlag *string, queueDirs []string) func(*cobra.Command
 		if _, err := os.Stat(tasksDir); err != nil {
 			return nil, cobra.ShellCompDirectiveError
 		}
-		idx := queue.BuildIndex(tasksDir)
+		idx := queueview.BuildIndex(tasksDir)
 
 		dirSet := make(map[string]struct{}, len(queueDirs))
 		for _, d := range queueDirs {

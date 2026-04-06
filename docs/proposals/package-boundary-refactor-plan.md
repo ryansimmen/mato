@@ -19,8 +19,11 @@ the broadest packages before they become harder to change.
   `internal/queue/taskfiles.go` and `internal/queue/dirs.go` have been
   removed, and fence detection intentionally remains duplicated in
   `internal/frontmatter/` and `internal/taskfile/`.
-- The remaining active work in this proposal is Phase 4 `queueview`
-  extraction and Phase 5 `runner` reassessment.
+- Phase 4 is complete: the queue read model now lives in `internal/queueview/`,
+  read-only consumers use it directly where appropriate, and `internal/queue/`
+  retains mutation/orchestration behavior with a smaller compatibility layer.
+- The remaining active work in this proposal is Phase 5 `runner`
+  reassessment.
 
 ## 1. Goals
 
@@ -352,7 +355,7 @@ Use this sequence to minimize churn and keep behavior changes low-risk.
 17. Decide whether fence-line detection should remain duplicated or be moved to
     a shared existing package after checking for dependency-cycle risk.
 
-### Phase 4: Extract the `queue` read model
+### Phase 4: Extract the `queue` read model (completed)
 
 18. Create `internal/queueview/` for read-only queue index and diagnostic APIs.
 19. Move explicitly named read-model types and functions into `queueview`:
@@ -575,11 +578,11 @@ Acceptable options:
 
 Option 1 is preferable if the only motivation is deduping ten lines of code.
 
-### 6.4 Phase 4: extract the `queue` read model
+### 6.4 Phase 4: extracted the `queue` read model
 
 #### `queue`
 
-Create a read-only sibling package for the queue read model.
+A read-only sibling package now owns the queue read model.
 
 Suggested package:
 
@@ -587,7 +590,7 @@ Suggested package:
 internal/queueview/
 ```
 
-Move read/query responsibilities there:
+Read/query responsibilities now live there:
 
 - query files
   - `index.go`
@@ -602,14 +605,14 @@ Move read/query responsibilities there:
   - `retry.go`
   - `queue.go`
 
-Likely end state:
+Landed end state:
 
 ```text
 internal/queue/       // mutations and transitions
 internal/queueview/   // read-only index, diagnostics, runnable views
 ```
 
-Why this split is worth taking:
+Why this split was worth taking:
 
 - `TaskSnapshot` and `PollIndex` are primarily read-model types
 - many consumers across the codebase read queue state without mutating it
@@ -619,15 +622,15 @@ Why this split is worth taking:
 
 Migration note:
 
-The current read-model seam is real but not perfectly clean. Several helper
-types and functions are interleaved across current queue files:
+The read-model seam was real but not perfectly clean. Several helper
+types and functions were interleaved across queue files during the extraction:
 
 - `ensureIndex` lives in `index.go`
 - `dependencyLookup` lives in `runnable_backlog.go`
 - `DeferralInfo` lives in `overlap.go`
 - `immediatelyClaimableTask` lives in `claim.go`
 
-Current read-model consumers already include:
+Read-model consumers include:
 
 - `runner`
 - `status`
@@ -639,20 +642,20 @@ Current read-model consumers already include:
 - command-layer callers
 - tests
 
-Phase 4 should therefore start by moving or duplicating these small supporting
-helpers so `queueview` can become a true read-only package without depending
-back on queue mutation code. Do not assume the extraction is purely a file move.
+Phase 4 therefore required moving or duplicating these small supporting
+helpers so `queueview` could become a true read-only package without depending
+back on queue mutation code. The extraction was not purely a file move.
 
-Readiness note:
+Outcome note:
 
 - Phase 1 is ready immediately.
 - Phase 2 is ready once the runtime-session API surface above is preserved.
 - Phase 3 is ready once `AllDirs` ownership is migrated alongside `Dir*`
   constants.
-- Phase 4 should not start until the explicit move/stay surface is agreed and
+- Phase 4 landed after the explicit move/stay surface was agreed and
   documented.
 
-After Phase 3, `queueview` should import `taskfile` for `ListTaskFiles` rather
+After Phase 3, `queueview` imports `taskfile` for `ListTaskFiles` rather
 than reintroducing a queue-specific directory-scanning helper.
 
 #### `runner`
@@ -767,6 +770,8 @@ internal/queue/dirs.go
 
 ### Phase 4
 
+Status: completed.
+
 Create:
 
 ```text
@@ -845,13 +850,12 @@ show that the package boundary is genuinely blocking maintainability.
 
 ## 10. Recommended PR Breakdown
 
-The remaining refactor work should fit in at most two PRs, with the second
-only if later evidence justifies revisiting `runner`.
+The only remaining work in this proposal is optional later reassessment of
+`runner` if future growth justifies it.
 
-1. `queueview` extraction for the queue read model
-2. optional later reassessment of `runner`, with no package split by default
+1. optional later reassessment of `runner`, with no package split by default
 
-Phases 1, 2, and 3 already landed separately.
+Phases 1, 2, 3, and 4 already landed separately.
 
 ## 11. Acceptance Criteria
 

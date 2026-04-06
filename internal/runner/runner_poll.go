@@ -10,6 +10,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/ui"
 )
@@ -96,12 +97,12 @@ func pollCleanup(tasksDir string) {
 // are satisfied and quarantining exhausted ones). If reconciliation moved
 // tasks the index is rebuilt. It returns the (possibly refreshed) index and
 // whether any directory-level read failure occurred.
-func pollReconcile(tasksDir string) (*queue.PollIndex, bool) {
-	idx := queue.BuildIndex(tasksDir)
+func pollReconcile(tasksDir string) (*queueview.PollIndex, bool) {
+	idx := queueview.BuildIndex(tasksDir)
 	hadError := surfaceBuildWarnings(idx)
 
 	if queue.ReconcileReadyQueue(tasksDir, idx) {
-		idx = queue.BuildIndex(tasksDir)
+		idx = queueview.BuildIndex(tasksDir)
 		if surfaceBuildWarnings(idx) {
 			hadError = true
 		}
@@ -110,8 +111,8 @@ func pollReconcile(tasksDir string) (*queue.PollIndex, bool) {
 	return idx, hadError
 }
 
-func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 	if err := queue.WriteQueueManifestFromView(tasksDir, failedDirExcluded, idx, view); err != nil {
 		ui.Warnf("warning: could not write queue manifest: %v\n", err)
 		return view, true
@@ -125,7 +126,7 @@ func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, i
 // it stuck in in-progress/. The failedDirExcluded map may be mutated when a
 // FailedDirUnavailableError is encountered. It returns whether a task was
 // claimed and whether any non-fatal error occurred.
-func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex, view queue.RunnableBacklogView) (claimed bool, hadError bool) {
+func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queueview.PollIndex, view queueview.RunnableBacklogView) (claimed bool, hadError bool) {
 	candidates := queue.OrderedRunnableFilenames(view, failedDirExcluded)
 	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, candidates, cooldown, idx)
 	var fdErr *queue.FailedDirUnavailableError
@@ -169,7 +170,7 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 // review lock, verifies the task branch exists, runs the review agent, and
 // performs post-review actions (approve or reject). It returns whether a
 // review was processed.
-func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, branch, agentID string, idx *queue.PollIndex) bool {
+func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, branch, agentID string, idx *queueview.PollIndex) bool {
 	if ctx.Err() != nil {
 		return false
 	}

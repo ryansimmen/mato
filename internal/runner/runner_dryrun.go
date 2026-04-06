@@ -8,7 +8,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 )
 
@@ -46,7 +46,7 @@ func (r *DryRunRenderer) valueWidth(indent, labelCol int) int {
 }
 
 // RenderValidation writes the === Task File Validation === section.
-func (r *DryRunRenderer) RenderValidation(parseFailures []queue.ParseFailure, totalTasks int) {
+func (r *DryRunRenderer) RenderValidation(parseFailures []queueview.ParseFailure, totalTasks int) {
 	fmt.Fprintln(r.W, r.Color.Bold("=== Task File Validation ==="))
 	if len(parseFailures) > 0 {
 		for _, pf := range parseFailures {
@@ -70,13 +70,13 @@ func (r *DryRunRenderer) RenderDependencyResolution(promotable int) {
 
 // RenderDependencySummary writes the === Dependency Summary === section for
 // waiting/ tasks, showing each dependency and its resolved queue state.
-func (r *DryRunRenderer) RenderDependencySummary(tasksDir string, idx *queue.PollIndex) {
+func (r *DryRunRenderer) RenderDependencySummary(tasksDir string, idx *queueview.PollIndex) {
 	waitingTasks := idx.TasksByState(dirs.Waiting)
 	if len(waitingTasks) == 0 {
 		return
 	}
 
-	diag := queue.DiagnoseDependencies(tasksDir, idx)
+	diag := queueview.DiagnoseDependencies(tasksDir, idx)
 
 	r.header("Dependency Summary")
 	for _, snap := range waitingTasks {
@@ -95,17 +95,17 @@ func (r *DryRunRenderer) RenderDependencySummary(tasksDir string, idx *queue.Pol
 		fmt.Fprintln(r.W, "  diagnostics:")
 		for _, issue := range diag.Issues {
 			switch issue.Kind {
-			case queue.DependencyDuplicateID:
+			case queueview.DependencyDuplicateID:
 				fmt.Fprintf(r.W, "    %s duplicate waiting id %q (files: %s, %s)\n",
 					r.Color.Yellow("WARNING"), issue.TaskID, issue.DependsOn, issue.Filename)
-			case queue.DependencySelfCycle:
+			case queueview.DependencySelfCycle:
 				fmt.Fprintf(r.W, "    %s %s depends on itself\n", r.Color.Yellow("WARNING"), issue.TaskID)
-			case queue.DependencyCycle:
+			case queueview.DependencyCycle:
 				fmt.Fprintf(r.W, "    %s %s is part of a dependency cycle\n", r.Color.Yellow("WARNING"), issue.TaskID)
-			case queue.DependencyAmbiguousID:
+			case queueview.DependencyAmbiguousID:
 				fmt.Fprintf(r.W, "    %s id %q is ambiguous (exists in both completed and non-completed directories)\n",
 					r.Color.Yellow("WARNING"), issue.TaskID)
-			case queue.DependencyUnknownID:
+			case queueview.DependencyUnknownID:
 				fmt.Fprintf(r.W, "    %s %s depends on unknown id %q\n",
 					r.Color.Yellow("WARNING"), issue.TaskID, issue.DependsOn)
 			}
@@ -115,7 +115,7 @@ func (r *DryRunRenderer) RenderDependencySummary(tasksDir string, idx *queue.Pol
 
 // RenderAffectsConflicts writes the === Affects Conflict Detection ===
 // section and any dependency-blocked backlog tasks.
-func (r *DryRunRenderer) RenderAffectsConflicts(view queue.RunnableBacklogView) {
+func (r *DryRunRenderer) RenderAffectsConflicts(view queueview.RunnableBacklogView) {
 	r.header("Affects Conflict Detection")
 	blockedBacklog := view.DependencyBlocked
 	if len(blockedBacklog) > 0 {
@@ -127,7 +127,7 @@ func (r *DryRunRenderer) RenderAffectsConflicts(view queue.RunnableBacklogView) 
 		sort.Strings(names)
 		for _, name := range names {
 			fmt.Fprintf(r.W, "  %s %s (depends on %s)\n",
-				r.Color.Red("BLOCKED"), name, queue.FormatDependencyBlocks(blockedBacklog[name]))
+				r.Color.Red("BLOCKED"), name, queueview.FormatDependencyBlocks(blockedBacklog[name]))
 		}
 	}
 	detailed := view.Deferred
@@ -149,7 +149,7 @@ func (r *DryRunRenderer) RenderAffectsConflicts(view queue.RunnableBacklogView) 
 
 // RenderExecutionOrder writes the === Execution Order === section showing
 // runnable backlog tasks in priority order with their priority values.
-func (r *DryRunRenderer) RenderExecutionOrder(runnable []*queue.TaskSnapshot) {
+func (r *DryRunRenderer) RenderExecutionOrder(runnable []*queueview.TaskSnapshot) {
 	r.header("Execution Order")
 	if len(runnable) == 0 {
 		fmt.Fprintln(r.W, r.Color.Dim("  (no runnable tasks)"))
@@ -167,7 +167,7 @@ func (r *DryRunRenderer) RenderExecutionOrder(runnable []*queue.TaskSnapshot) {
 
 // RenderBacklogSummary writes the === Backlog Task Summary === section with
 // compact frontmatter for every parsed backlog task.
-func (r *DryRunRenderer) RenderBacklogSummary(idx *queue.PollIndex, deferred map[string]struct{}, blocked map[string][]queue.DependencyBlock) {
+func (r *DryRunRenderer) RenderBacklogSummary(idx *queueview.PollIndex, deferred map[string]struct{}, blocked map[string][]queueview.DependencyBlock) {
 	backlog := idx.TasksByState(dirs.Backlog)
 	if len(backlog) == 0 {
 		return
@@ -211,7 +211,7 @@ func (r *DryRunRenderer) RenderBacklogSummary(idx *queue.PollIndex, deferred map
 		fmt.Fprintf(r.W, "    affects: %s\n", affects)
 		fmt.Fprintf(r.W, "    depends_on: %s\n", dependsOn)
 		if blocks, ok := blocked[snap.Filename]; ok {
-			fmt.Fprintf(r.W, "    blocked by: %s\n", queue.FormatDependencyBlocks(blocks))
+			fmt.Fprintf(r.W, "    blocked by: %s\n", queueview.FormatDependencyBlocks(blocks))
 		}
 	}
 }
@@ -233,7 +233,7 @@ func (r *DryRunRenderer) RenderResolvedSettings(opts RunOptions) {
 }
 
 // RenderQueueSummary writes the === Queue Summary === section.
-func (r *DryRunRenderer) RenderQueueSummary(idx *queue.PollIndex, subdirs []string, parseFailuresByDir map[string]int, deferredCount int) {
+func (r *DryRunRenderer) RenderQueueSummary(idx *queueview.PollIndex, subdirs []string, parseFailuresByDir map[string]int, deferredCount int) {
 	r.header("Queue Summary")
 	for _, sub := range subdirs {
 		fmt.Fprintf(r.W, "  %-20s %d\n", sub, len(idx.TasksByState(sub))+parseFailuresByDir[sub])
@@ -248,7 +248,7 @@ func (r *DryRunRenderer) RenderQueueSummary(idx *queue.PollIndex, subdirs []stri
 // ID or filename stem), including parse-failed files that still have a known
 // filename stem. Returns "unknown" if not found, or "ambiguous" if multiple
 // task files match and the dependency cannot be resolved safely.
-func resolveDepState(depID string, idx *queue.PollIndex) string {
+func resolveDepState(depID string, idx *queueview.PollIndex) string {
 	seen := make(map[string]struct{})
 	matchedState := ""
 

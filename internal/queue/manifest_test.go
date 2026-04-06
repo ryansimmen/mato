@@ -1,7 +1,6 @@
 package queue
 
 import (
-	"fmt"
 	"mato/internal/dirs"
 	"os"
 	"path/filepath"
@@ -277,16 +276,21 @@ func TestComputeQueueManifest_BacklogTaskWarningDoesNotAbort(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
 	writeTask(t, tasksDir, dirs.Backlog, "good.md",
-		"---\nid: good\npriority: 50\n---\n# Good\n")
+		"---\nid: good\npriority: 50\naffects:\n  - main.go\n  - ../escape\n---\n# Good\n")
 
-	// Simulate per-task backlog warnings (invalid glob, unsafe affects)
-	// that should NOT cause manifest generation to fail.
+	// A runnable task can still carry a per-task warning (for example an unsafe
+	// affects entry that gets stripped) without aborting manifest generation.
 	idx := BuildIndex(tasksDir)
-	idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
-		State: dirs.Backlog,
-		Path:  filepath.Join(tasksDir, dirs.Backlog, "good.md"),
-		Err:   fmt.Errorf("invalid glob syntax in affects: [unclosed"),
-	})
+	foundWarning := false
+	for _, warn := range idx.BuildWarnings() {
+		if strings.Contains(warn.Err.Error(), "unsafe affects entry") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("expected unsafe affects warning, got %v", idx.BuildWarnings())
+	}
 
 	view := ComputeRunnableBacklogView(tasksDir, idx)
 	manifest, err := ComputeQueueManifestFromView(tasksDir, nil, idx, view)
@@ -302,14 +306,12 @@ func TestComputeQueueManifest_BacklogDirUnreadableAborts(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
 	// Simulate a directory-level read failure for the backlog directory.
-	idx := &PollIndex{
-		buildWarnings: []BuildWarning{{
-			State:    dirs.Backlog,
-			Path:     filepath.Join(tasksDir, dirs.Backlog),
-			Err:      os.ErrPermission,
-			DirLevel: true,
-		}},
-	}
+	idx := newPollIndexWithWarnings([]BuildWarning{{
+		State:    dirs.Backlog,
+		Path:     filepath.Join(tasksDir, dirs.Backlog),
+		Err:      os.ErrPermission,
+		DirLevel: true,
+	}})
 
 	view := ComputeRunnableBacklogView(tasksDir, idx)
 	_, err := ComputeQueueManifestFromView(tasksDir, nil, idx, view)
