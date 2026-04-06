@@ -20,9 +20,26 @@ type TaskMatch struct {
 
 // ResolveTask finds a single task across all queue directories.
 func ResolveTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
+	ref, matches, err := CollectTaskMatches(idx, taskRef, dirs.All)
+	if err != nil {
+		return TaskMatch{}, err
+	}
+	if len(matches) == 0 {
+		return TaskMatch{}, fmt.Errorf("task not found: %s", ref)
+	}
+	SortTaskMatches(matches)
+	if len(matches) > 1 {
+		return TaskMatch{}, fmt.Errorf("%s", FormatAmbiguousTaskMatches(ref, matches, "task reference %q is ambiguous:"))
+	}
+	return matches[0], nil
+}
+
+// CollectTaskMatches finds all tasks matching the given ref in the provided
+// queue states. It returns the normalized ref used for matching.
+func CollectTaskMatches(idx *PollIndex, taskRef string, states []string) (string, []TaskMatch, error) {
 	ref := strings.TrimSpace(taskRef)
 	if ref == "" {
-		return TaskMatch{}, fmt.Errorf("task reference must not be empty")
+		return "", nil, fmt.Errorf("task reference must not be empty")
 	}
 	filenameRef := ref
 	if !strings.HasSuffix(filenameRef, ".md") {
@@ -30,8 +47,13 @@ func ResolveTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
 	}
 	stemRef := strings.TrimSuffix(filenameRef, ".md")
 
+	allowed := make(map[string]struct{}, len(states))
+	for _, state := range states {
+		allowed[state] = struct{}{}
+	}
+
 	var matches []TaskMatch
-	for _, dir := range dirs.All {
+	for _, dir := range states {
 		for _, snap := range idx.TasksByState(dir) {
 			match := TaskMatch{
 				Filename: snap.Filename,
@@ -45,6 +67,9 @@ func ResolveTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
 		}
 	}
 	for _, pf := range idx.ParseFailures() {
+		if _, ok := allowed[pf.State]; !ok {
+			continue
+		}
 		pf := pf
 		match := TaskMatch{
 			Filename:     pf.Filename,
@@ -57,24 +82,28 @@ func ResolveTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
 		}
 	}
 
-	if len(matches) == 0 {
-		return TaskMatch{}, fmt.Errorf("task not found: %s", ref)
-	}
+	return ref, matches, nil
+}
+
+// SortTaskMatches applies the canonical deterministic ordering for task-match
+// lists.
+func SortTaskMatches(matches []TaskMatch) {
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].State != matches[j].State {
 			return resolveStateOrder(matches[i].State) < resolveStateOrder(matches[j].State)
 		}
 		return matches[i].Filename < matches[j].Filename
 	})
-	if len(matches) > 1 {
-		var b strings.Builder
-		fmt.Fprintf(&b, "task reference %q is ambiguous:", ref)
-		for _, m := range matches {
-			fmt.Fprintf(&b, "\n- %s/%s (id: %s)", m.State, m.Filename, taskMatchID(m))
-		}
-		return TaskMatch{}, fmt.Errorf("%s", b.String())
+}
+
+// FormatAmbiguousTaskMatches renders a canonical ambiguity message body.
+func FormatAmbiguousTaskMatches(ref string, matches []TaskMatch, headerFmt string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, headerFmt, ref)
+	for _, m := range matches {
+		fmt.Fprintf(&b, "\n- %s/%s (id: %s)", m.State, m.Filename, taskMatchID(m))
 	}
-	return matches[0], nil
+	return b.String()
 }
 
 func matchesTaskRef(match TaskMatch, rawRef, filenameRef, stemRef string) bool {
