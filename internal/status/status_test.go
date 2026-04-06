@@ -19,6 +19,7 @@ import (
 	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/taskfile"
 	"mato/internal/testutil"
 )
@@ -551,7 +552,7 @@ func TestReverseDependenciesHelper(t *testing.T) {
 	// Task B also depends on X.
 	os.WriteFile(filepath.Join(waitingDir, "task-b.md"), []byte("---\nid: task-b\ndepends_on: [dep-x]\n---\n# B\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	result := reverseDepsFromIndex(idx)
 
 	if len(result["dep-x"]) != 2 {

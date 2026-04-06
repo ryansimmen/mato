@@ -16,6 +16,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/testutil"
 )
 
@@ -76,7 +77,7 @@ func TestListTasksFromIndex_CountsViaIndex(t *testing.T) {
 			for _, f := range tt.files {
 				os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, f), []byte("# Task\n"), 0o644)
 			}
-			idx := queue.BuildIndex(tasksDir)
+			idx := queueview.BuildIndex(tasksDir)
 			got := len(idx.TasksByState(dirs.Backlog))
 			if got != tt.want {
 				t.Errorf("len(idx.TasksByState) = %d, want %d", got, tt.want)
@@ -87,7 +88,7 @@ func TestListTasksFromIndex_CountsViaIndex(t *testing.T) {
 
 func TestListTasksFromIndex_MissingDir(t *testing.T) {
 	// With PollIndex, missing directories result in zero-length slices.
-	idx := queue.BuildIndex(filepath.Join(t.TempDir(), "nonexistent"))
+	idx := queueview.BuildIndex(filepath.Join(t.TempDir(), "nonexistent"))
 	got := len(idx.TasksByState(dirs.Backlog))
 	if got != 0 {
 		t.Errorf("len(idx.TasksByState(missing dir)) = %d, want 0", got)
@@ -96,7 +97,7 @@ func TestListTasksFromIndex_MissingDir(t *testing.T) {
 
 func TestListTasksFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := listTasksFromIndex(idx, dirs.Backlog)
 	if len(tasks) != 0 {
 		t.Errorf("listTasksFromIndex(empty) returned %d tasks, want 0", len(tasks))
@@ -109,7 +110,7 @@ func TestListTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "a-task.md", "---\nid: a-task\npriority: 10\n---\n# A task\n")
 	writeTask(t, tasksDir, dirs.Backlog, "b-task.md", "---\nid: b-task\npriority: 10\n---\n# B task\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := listTasksFromIndex(idx, dirs.Backlog)
 	if len(tasks) != 3 {
 		t.Fatalf("listTasksFromIndex returned %d tasks, want 3", len(tasks))
@@ -130,7 +131,7 @@ func TestListTasksFromIndex_ExtractsTitleAndMeta(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, dirs.Backlog, "my-task.md", "---\nid: my-task\npriority: 15\nmax_retries: 5\n---\n# My fancy title\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := listTasksFromIndex(idx, dirs.Backlog)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
@@ -153,7 +154,7 @@ func TestListTasksFromIndex_MalformedFrontmatter(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, dirs.Backlog, "bad.md", "---\n: invalid yaml [\n---\n# Title\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	// Parse failures are included with default metadata so they remain visible.
 	tasks := listTasksFromIndex(idx, dirs.Backlog)
 	if len(tasks) != 1 {
@@ -179,7 +180,7 @@ func TestListTasksFromIndex_SnapshotMetadata(t *testing.T) {
 		"---\nid: my-task\npriority: 10\nmax_retries: 5\n---\n# My task\n"
 	writeTask(t, tasksDir, dirs.InProgress, "my-task.md", content)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := listTasksFromIndex(idx, dirs.InProgress)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
@@ -214,7 +215,7 @@ func TestListTasksFromIndex_ParseFailureBranch(t *testing.T) {
 	content := "<!-- branch: task/bad-task -->\n---\n: invalid yaml [\n---\n"
 	writeTask(t, tasksDir, dirs.ReadyReview, "bad.md", content)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := listTasksFromIndex(idx, dirs.ReadyReview)
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
@@ -229,7 +230,7 @@ func TestListTasksFromIndex_CancelledPropagation(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Failed, "cancelled.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\nid: cancelled\n---\n# Cancelled\n")
 	writeTask(t, tasksDir, dirs.Failed, "broken.md", "<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n---\npriority: nope\n---\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := listTasksFromIndex(idx, dirs.Failed)
 	if len(tasks) != 2 {
 		t.Fatalf("got %d tasks, want 2", len(tasks))
@@ -558,7 +559,7 @@ func TestReverseDepsFromIndex_MultipleDeps(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Waiting, "a.md", "---\nid: a\ndepends_on: [x, y]\n---\n# A\n")
 	writeTask(t, tasksDir, dirs.Waiting, "b.md", "---\nid: b\ndepends_on: [x]\n---\n# B\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	result := reverseDepsFromIndex(idx)
 	if len(result["x"]) != 2 {
 		t.Errorf("x has %d dependents, want 2", len(result["x"]))
@@ -570,7 +571,7 @@ func TestReverseDepsFromIndex_MultipleDeps(t *testing.T) {
 
 func TestReverseDepsFromIndex_EmptyWaiting(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	result := reverseDepsFromIndex(idx)
 	if len(result) != 0 {
 		t.Errorf("expected empty map, got %d entries", len(result))
@@ -581,7 +582,7 @@ func TestReverseDepsFromIndex_NoDependencies(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, dirs.Waiting, "standalone.md", "---\nid: standalone\n---\n# Standalone\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	result := reverseDepsFromIndex(idx)
 	if len(result) != 0 {
 		t.Errorf("expected empty map for task with no deps, got %d entries", len(result))
@@ -595,7 +596,7 @@ func TestTaskStatesByIDFromIndex(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Completed, "task-c.md", "---\nid: task-c\n---\n# C\n")
 	writeTask(t, tasksDir, dirs.Failed, "task-d.md", "---\nid: task-d\n---\n# D\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	states := taskStatesByIDFromIndex(idx)
 
 	// Both the ID and the filename stem should be mapped.
@@ -614,7 +615,7 @@ func TestTaskStatesByIDFromIndex(t *testing.T) {
 
 func TestTaskStatesByIDFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	states := taskStatesByIDFromIndex(idx)
 	if len(states) != 0 {
 		t.Errorf("expected empty states, got %d", len(states))
@@ -626,7 +627,7 @@ func TestTaskStatesByIDFromIndex_FileStemKey(t *testing.T) {
 	// Task with no explicit id — should be keyed by filename stem.
 	writeTask(t, tasksDir, dirs.Backlog, "no-id-task.md", "---\npriority: 10\n---\n# No ID\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	states := taskStatesByIDFromIndex(idx)
 	stem := frontmatter.TaskFileStem("no-id-task.md")
 	if got := states[stem]; got != dirs.Backlog {
@@ -638,7 +639,7 @@ func TestTaskStatesByIDFromIndex_ParseFailureStemKey(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, dirs.Failed, "broken.md", "---\npriority: nope\n---\n# Broken\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	states := taskStatesByIDFromIndex(idx)
 	if got := states["broken"]; got != dirs.Failed {
 		t.Errorf("states[%q] = %q, want %q", "broken", got, dirs.Failed)
@@ -817,7 +818,7 @@ func TestIsMergeLockActive_DeadProcess(t *testing.T) {
 
 func TestWaitingTasksFromIndex_Empty(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 waiting tasks, got %d", len(tasks))
@@ -830,7 +831,7 @@ func TestWaitingTasksFromIndex_SortsByPriorityThenName(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Waiting, "a-wait.md", "---\nid: a-wait\npriority: 10\ndepends_on: [dep-y]\n---\n# A waiting\n")
 	writeTask(t, tasksDir, dirs.Waiting, "b-wait.md", "---\nid: b-wait\npriority: 10\ndepends_on: [dep-z]\n---\n# B waiting\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 3 {
 		t.Fatalf("expected 3 waiting tasks, got %d", len(tasks))
@@ -851,7 +852,7 @@ func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Completed, "dep-done.md", "---\nid: dep-done\n---\n# Done\n")
 	writeTask(t, tasksDir, dirs.Waiting, "waiter.md", "---\nid: waiter\ndepends_on: [dep-done]\n---\n# Waiter\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
@@ -869,7 +870,7 @@ func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, dirs.Waiting, "waiter.md", "---\nid: waiter\ndepends_on: [nonexistent]\n---\n# Waiter\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	tasks := waitingTasksFromIndex(idx, nil)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
@@ -887,8 +888,8 @@ func TestWaitingTasksFromIndex_IncludesBlockedBacklogFromSharedMap(t *testing.T)
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, dirs.Backlog, "blocked.md", "---\nid: blocked\ndepends_on: [missing]\npriority: 10\n---\n# Blocked\n")
 
-	idx := queue.BuildIndex(tasksDir)
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 	tasks := waitingTasksFromIndex(idx, view.DependencyBlocked)
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 dependency-blocked task, got %d", len(tasks))

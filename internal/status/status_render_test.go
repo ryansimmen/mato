@@ -10,7 +10,7 @@ import (
 	"mato/internal/dirs"
 	"mato/internal/messaging"
 	"mato/internal/pause"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 )
 
@@ -76,7 +76,7 @@ func TestRenderQueueOverview_ZeroCounts(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{
 		queueCounts:    map[string]int{},
-		deferredDetail: map[string]queue.DeferralInfo{},
+		deferredDetail: map[string]queueview.DeferralInfo{},
 	}
 
 	renderQueueOverview(&buf, c, data)
@@ -97,7 +97,7 @@ func TestRenderQueueOverview_MergeLockActive(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{
 		queueCounts:     map[string]int{dirs.Backlog: 3, dirs.InProgress: 2},
-		deferredDetail:  map[string]queue.DeferralInfo{},
+		deferredDetail:  map[string]queueview.DeferralInfo{},
 		runnable:        3,
 		mergeLockActive: true,
 	}
@@ -124,7 +124,7 @@ func TestRenderQueueOverview_PauseState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			renderQueueOverview(&buf, plainColorSet(), statusData{queueCounts: map[string]int{}, deferredDetail: map[string]queue.DeferralInfo{}, pauseState: tt.state})
+			renderQueueOverview(&buf, plainColorSet(), statusData{queueCounts: map[string]int{}, deferredDetail: map[string]queueview.DeferralInfo{}, pauseState: tt.state})
 			if !strings.Contains(buf.String(), tt.want) {
 				t.Fatalf("output missing %q, got:\n%s", tt.want, buf.String())
 			}
@@ -367,7 +367,7 @@ func TestRenderConflictDeferred_None(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		deferredDetail: map[string]queue.DeferralInfo{},
+		deferredDetail: map[string]queueview.DeferralInfo{},
 	}
 
 	renderConflictDeferred(&buf, c, data)
@@ -385,7 +385,7 @@ func TestRenderConflictDeferred_WithEntries(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		deferredDetail: map[string]queue.DeferralInfo{
+		deferredDetail: map[string]queueview.DeferralInfo{
 			"deferred-task.md": {
 				BlockedBy:          "active-task.md",
 				BlockedByDir:       "in-progress",
@@ -415,7 +415,7 @@ func TestRenderConflictDeferred_SortedByName(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		deferredDetail: map[string]queue.DeferralInfo{
+		deferredDetail: map[string]queueview.DeferralInfo{
 			"z-task.md": {BlockedBy: "x.md", BlockedByDir: "in-progress", ConflictingAffects: []string{"a.go"}},
 			"a-task.md": {BlockedBy: "x.md", BlockedByDir: "in-progress", ConflictingAffects: []string{"b.go"}},
 		},
@@ -1693,7 +1693,7 @@ func TestRenderConflictDeferred_NarrowTerminalTruncates(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		deferredDetail: map[string]queue.DeferralInfo{
+		deferredDetail: map[string]queueview.DeferralInfo{
 			"my-deferred-task.md": {
 				BlockedBy:          "some-very-long-blocking-task-name-that-exceeds-terminal-width.md",
 				BlockedByDir:       "in-progress",

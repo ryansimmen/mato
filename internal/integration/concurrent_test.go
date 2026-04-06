@@ -17,6 +17,7 @@ import (
 	"mato/internal/merge"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/testutil"
 )
 
@@ -798,8 +799,8 @@ func TestConcurrentSelectAndClaimTask(t *testing.T) {
 	results := make([]*queue.ClaimedTask, numGoroutines)
 	errs := make([]error, numGoroutines)
 	var panics atomic.Int32
-	view := queue.ComputeRunnableBacklogView(tasksDir, nil)
-	candidates := queue.OrderedRunnableFilenames(view, nil)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, nil)
+	candidates := queueview.OrderedRunnableFilenames(view, nil)
 
 	for g := 0; g < numGoroutines; g++ {
 		wg.Add(1)

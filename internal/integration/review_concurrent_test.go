@@ -10,6 +10,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runner"
 	"mato/internal/testutil"
 )
@@ -333,7 +334,7 @@ func TestConcurrentReviewSelection_RequiresBranchMarkers(t *testing.T) {
 	writeTask(t, tasksDir, dirs.ReadyReview, "add-feature.md",
 		"<!-- branch: task/add-feature -->\n---\npriority: 20\nmax_retries: 3\n---\n# Add Feature Dash\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	first := runner.SelectTaskForReview(tasksDir, idx)
 	if first == nil {
 		t.Fatal("expected a review candidate, got nil")
@@ -349,7 +350,7 @@ func TestConcurrentReviewSelection_RequiresBranchMarkers(t *testing.T) {
 		t.Fatalf("move first task: %v", err)
 	}
 
-	idx2 := queue.BuildIndex(tasksDir)
+	idx2 := queueview.BuildIndex(tasksDir)
 	second := runner.SelectTaskForReview(tasksDir, idx2)
 	if second != nil {
 		t.Fatalf("expected nil candidate for marker-less handoff, got %+v", second)
