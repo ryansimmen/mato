@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -332,7 +333,9 @@ func TestRenderText_RecursiveDepTree(t *testing.T) {
 
 func TestRenderDOT_EmptyGraph(t *testing.T) {
 	var buf bytes.Buffer
-	RenderDOT(&buf, emptyGraph())
+	if err := RenderDOT(&buf, emptyGraph()); err != nil {
+		t.Fatalf("RenderDOT: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, "digraph mato {") {
@@ -352,7 +355,9 @@ func TestRenderDOT_EmptyGraph(t *testing.T) {
 
 func TestRenderDOT_CycleEdges_SameSCC(t *testing.T) {
 	var buf bytes.Buffer
-	RenderDOT(&buf, cycleGraph())
+	if err := RenderDOT(&buf, cycleGraph()); err != nil {
+		t.Fatalf("RenderDOT: %v", err)
+	}
 	got := buf.String()
 
 	// Both edges should be bold red (same SCC).
@@ -386,7 +391,9 @@ func TestRenderDOT_CycleEdges_DifferentSCC(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderDOT(&buf, data)
+	if err := RenderDOT(&buf, data); err != nil {
+		t.Fatalf("RenderDOT: %v", err)
+	}
 	got := buf.String()
 
 	// The a→b edge should be dashed red (blocked), NOT bold red.
@@ -400,7 +407,9 @@ func TestRenderDOT_CycleEdges_DifferentSCC(t *testing.T) {
 
 func TestRenderDOT_BlockedEdges(t *testing.T) {
 	var buf bytes.Buffer
-	RenderDOT(&buf, blockedGraph())
+	if err := RenderDOT(&buf, blockedGraph()); err != nil {
+		t.Fatalf("RenderDOT: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, "style=dashed, color=red") {
@@ -420,7 +429,9 @@ func TestRenderDOT_SatisfiedEdges(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderDOT(&buf, data)
+	if err := RenderDOT(&buf, data); err != nil {
+		t.Fatalf("RenderDOT: %v", err)
+	}
 	got := buf.String()
 
 	// Satisfied edges have no style attributes (default solid black).
@@ -436,7 +447,9 @@ func TestRenderDOT_SatisfiedEdges(t *testing.T) {
 
 func TestRenderDOT_SpecialCharacters(t *testing.T) {
 	var buf bytes.Buffer
-	RenderDOT(&buf, specialCharsGraph())
+	if err := RenderDOT(&buf, specialCharsGraph()); err != nil {
+		t.Fatalf("RenderDOT: %v", err)
+	}
 	got := buf.String()
 
 	// Quotes should be escaped in node IDs and labels.
@@ -457,7 +470,9 @@ func TestRenderDOT_LabelNewlines(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderDOT(&buf, data)
+	if err := RenderDOT(&buf, data); err != nil {
+		t.Fatalf("RenderDOT: %v", err)
+	}
 	got := buf.String()
 
 	if !strings.Contains(got, `label="task\npriority: 7\n(waiting)"`) {
@@ -490,12 +505,27 @@ func TestRenderDOT_NodeColors(t *testing.T) {
 				},
 			}
 			var buf bytes.Buffer
-			RenderDOT(&buf, data)
+			if err := RenderDOT(&buf, data); err != nil {
+				t.Fatalf("RenderDOT: %v", err)
+			}
 			got := buf.String()
 			if !strings.Contains(got, tt.color) {
 				t.Errorf("state %s: missing color %s:\n%s", tt.state, tt.color, got)
 			}
 		})
+	}
+}
+
+func TestRenderDOT_WriteError(t *testing.T) {
+	writeErr := errors.New("broken pipe")
+	fw := &failAfterNWriter{n: 1, err: writeErr}
+
+	err := RenderDOT(fw, simpleGraph())
+	if err == nil {
+		t.Fatal("expected writer error, got nil")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, writeErr)
 	}
 }
 
@@ -627,8 +657,12 @@ func TestRenderText_Deterministic(t *testing.T) {
 func TestRenderDOT_Deterministic(t *testing.T) {
 	data := simpleGraph()
 	var buf1, buf2 bytes.Buffer
-	RenderDOT(&buf1, data)
-	RenderDOT(&buf2, data)
+	if err := RenderDOT(&buf1, data); err != nil {
+		t.Fatalf("first RenderDOT: %v", err)
+	}
+	if err := RenderDOT(&buf2, data); err != nil {
+		t.Fatalf("second RenderDOT: %v", err)
+	}
 	if buf1.String() != buf2.String() {
 		t.Errorf("DOT output is not deterministic:\nfirst:  %q\nsecond: %q", buf1.String(), buf2.String())
 	}

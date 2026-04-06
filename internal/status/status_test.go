@@ -1649,6 +1649,73 @@ func TestShowJSON_BacklogDependencyBlockedAppearsInWaiting(t *testing.T) {
 	}
 }
 
+func TestShow_WaitingAmbiguousDependency(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Completed, dirs.Failed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "shared-completed.md"), []byte("---\nid: shared\n---\n# Shared completed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(shared-completed): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "shared-active.md"), []byte("<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: shared\n---\n# Shared active\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(shared-active): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "blocked.md"), []byte("---\nid: blocked\ndepends_on: [shared]\n---\n# Blocked\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(blocked): %v", err)
+	}
+
+	output := captureShowVerbose(t, repoRoot)
+	if !strings.Contains(output, "shared (✗ ambiguous)") {
+		t.Fatalf("Show output = %q, want ambiguous dependency label", output)
+	}
+}
+
+func TestShowJSON_WaitingAmbiguousDependency(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Completed, dirs.Failed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "shared-completed.md"), []byte("---\nid: shared\n---\n# Shared completed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(shared-completed): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "shared-failed.md"), []byte("---\nid: shared\n---\n# Shared failed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(shared-failed): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "blocked.md"), []byte("---\nid: blocked\ndepends_on: [shared]\npriority: 10\n---\n# Blocked\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(blocked): %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v", err)
+	}
+	if len(result.Waiting) != 1 {
+		t.Fatalf("Waiting = %#v, want 1 task", result.Waiting)
+	}
+	if len(result.Waiting[0].Dependencies) != 1 || result.Waiting[0].Dependencies[0].Status != "ambiguous" {
+		t.Fatalf("Dependencies = %#v, want ambiguous", result.Waiting[0].Dependencies)
+	}
+}
+
 func TestShowJSON_EmptyTasksDir(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")

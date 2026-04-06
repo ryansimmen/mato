@@ -14,6 +14,7 @@ import (
 	"mato/internal/config"
 	"mato/internal/process"
 	"mato/internal/runner"
+	"mato/internal/runtimedata"
 	"mato/internal/testutil"
 )
 
@@ -764,6 +765,12 @@ func TestDoctor_UnclaimedInProgress_Fix(t *testing.T) {
 	inProgressFile := filepath.Join(tasksDir, "in-progress", "unclaimed.md")
 	testutil.WriteFile(t, inProgressFile,
 		"---\nid: unclaimed\n---\nUnclaimed task\n")
+	if err := runtimedata.UpdateTaskState(tasksDir, "unclaimed.md", func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/unclaimed"
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
+	}
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
@@ -798,6 +805,12 @@ func TestDoctor_OrphanedInProgress_Fix(t *testing.T) {
 	inProgressFile := filepath.Join(tasksDir, "in-progress", "orphan.md")
 	testutil.WriteFile(t, inProgressFile,
 		"<!-- claimed-by: deadbeef -->\n---\nid: orphan\n---\nOrphan task\n")
+	if err := runtimedata.UpdateTaskState(tasksDir, "orphan.md", func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/orphan"
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
+	}
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
@@ -1250,7 +1263,9 @@ func TestRenderText(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, report)
+	if err := RenderText(&buf, report); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "[OK] git") {

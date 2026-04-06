@@ -8,6 +8,7 @@ import (
 
 	"mato/internal/doctor"
 	"mato/internal/runner"
+	"mato/internal/runtimedata"
 	"mato/internal/testutil"
 )
 
@@ -39,6 +40,12 @@ func TestDoctor_Integration_FixCycle(t *testing.T) {
 	// Create an orphaned in-progress task (no live agent).
 	testutil.WriteFile(t, filepath.Join(tasksDir, "in-progress", "orphan.md"),
 		"<!-- claimed-by: deadbeef -->\n---\nid: orphan\n---\nOrphan task\n")
+	if err := runtimedata.UpdateTaskState(tasksDir, "orphan.md", func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/orphan"
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
+	}
 
 	// Step 1: Run without --fix. Expect warnings (exit code 1).
 	report1, err := doctor.Run(context.Background(), repoRoot, doctor.Options{Format: "text"})

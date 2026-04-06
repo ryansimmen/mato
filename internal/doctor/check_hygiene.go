@@ -159,8 +159,16 @@ func scanStaleMergeLock(tasksDir string, fix bool) []Finding {
 	mergeLockPath := filepath.Join(tasksDir, ".locks", "merge.lock")
 	data, err := os.ReadFile(mergeLockPath)
 	if err != nil {
-		// No merge.lock is the normal case.
-		return findings
+		if os.IsNotExist(err) {
+			// No merge.lock is the normal case.
+			return findings
+		}
+		return []Finding{{
+			Code:     "hygiene.merge_lock_unreadable",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("cannot read merge.lock: %v", err),
+			Path:     mergeLockPath,
+		}}
 	}
 
 	content := strings.TrimSpace(string(data))

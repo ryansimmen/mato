@@ -646,6 +646,28 @@ func TestShowTo_TextWriteErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestShowTo_DOTWriteErrorPropagates(t *testing.T) {
+	repoDir := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoDir, ".mato")
+	for _, dir := range dirs.All {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	writeTask(t, tasksDir, "backlog", "sample.md", "---\nid: sample\npriority: 10\n---\n# Sample task\n")
+
+	writeErr := errors.New("broken pipe")
+	fw := &failAfterNWriter{n: 1, err: writeErr}
+
+	err := ShowTo(fw, repoDir, "dot", false)
+	if err == nil {
+		t.Fatal("expected writer error, got nil")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, writeErr)
+	}
+}
+
 func TestBuild_CycleMemberDuplicateID_ShowAll(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 

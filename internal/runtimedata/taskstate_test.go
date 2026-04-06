@@ -310,6 +310,7 @@ func TestOutcomeConstants_CoverFullLifecycle(t *testing.T) {
 		constant string
 		wire     string
 	}{
+		{"work-launched", OutcomeWorkLaunched, "work-launched"},
 		{"work-branch-pushed", OutcomeWorkBranchPushed, "work-branch-pushed"},
 		{"work-pushed", OutcomeWorkPushed, "work-pushed"},
 		{"review-launched", OutcomeReviewLaunched, "review-launched"},
@@ -334,6 +335,7 @@ func TestOutcomeConstants_CoverFullLifecycle(t *testing.T) {
 func TestOutcomeConstants_RoundTripThroughJSON(t *testing.T) {
 	tasksDir := t.TempDir()
 	outcomes := []string{
+		OutcomeWorkLaunched,
 		OutcomeWorkBranchPushed,
 		OutcomeWorkPushed,
 		OutcomeReviewLaunched,
