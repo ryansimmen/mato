@@ -970,6 +970,12 @@ func TestRecoverStuckTask_AppendsFailureWithTimestamp(t *testing.T) {
 		Title:    "Timestamp Task",
 		TaskPath: inProgressPath,
 	}
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TaskBranch = claimed.Branch
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
+	}
 
 	captureStdoutStderr(t, func() {
 		recoverStuckTask(tasksDir, "agent-x", claimed)

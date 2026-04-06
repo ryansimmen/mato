@@ -20,6 +20,7 @@ const taskStateVersion = 1
 // lifecycle so callers never need raw strings.
 const (
 	// Work phase
+	OutcomeWorkLaunched     = "work-launched"      // work agent launched; safe to requeue if it exits before push
 	OutcomeWorkBranchPushed = "work-branch-pushed" // branch push succeeded; queue transition pending
 	OutcomeWorkPushed       = "work-pushed"        // branch pushed and task moved to ready-for-review
 
