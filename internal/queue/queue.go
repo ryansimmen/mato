@@ -18,6 +18,7 @@ import (
 	"mato/internal/frontmatter"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
@@ -49,8 +50,8 @@ func ParseClaimedBy(path string) string {
 // queue index and computes the runnable backlog view so dependency-blocked and
 // affects-deferred tasks are excluded consistently with claim selection.
 func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
-	idx := BuildIndex(tasksDir)
-	view := ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 	for _, snap := range view.Runnable {
 		if deferred != nil {
 			if _, excluded := deferred[snap.Filename]; excluded {

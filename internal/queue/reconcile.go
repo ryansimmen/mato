@@ -29,7 +29,7 @@ type promotableTask struct {
 func resolvePromotableTasks(tasksDir string, idx *PollIndex) []promotableTask {
 	idx = ensureIndex(tasksDir, idx)
 
-	diag := DiagnoseDependencies(tasksDir, idx)
+	diag := queueview.DiagnoseDependencies(tasksDir, idx)
 	satisfiedSet := make(map[string]struct{}, len(diag.Analysis.DepsSatisfied))
 	for _, id := range diag.Analysis.DepsSatisfied {
 		satisfiedSet[id] = struct{}{}
@@ -81,7 +81,7 @@ func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 		idx = ensureIndex(tasksDir, nil)
 	}
 
-	diag := DiagnoseDependencies(tasksDir, idx)
+	diag := queueview.DiagnoseDependencies(tasksDir, idx)
 
 	emitDependencyWarnings(diag)
 

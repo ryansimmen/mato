@@ -9,8 +9,8 @@ import (
 
 func HasClaimableBacklogTask(tasksDir string, exclude map[string]struct{}, cooldown time.Duration, idx *PollIndex) bool {
 	idx = ensureIndex(tasksDir, idx)
-	view := ComputeRunnableBacklogView(tasksDir, idx)
-	for _, name := range OrderedRunnableFilenames(view, exclude) {
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
+	for _, name := range queueview.OrderedRunnableFilenames(view, exclude) {
 		if immediatelyClaimableTask(idx, idx.Snapshot(dirs.Backlog, name), cooldown) {
 			return true
 		}

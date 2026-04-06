@@ -1,5 +1,5 @@
 # Mato Architecture
-This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `history/`, `inspect/`, `doctor/`, `graph/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, `taskfile/`, `config/`, `configresolve/`, `dirs/`, `pause/`, `sessionmeta/`, `taskstate/`, and `runtimecleanup/`.
+This document describes the architecture implemented by `cmd/mato/main.go` and the packages in `internal/`: `runner/`, `setup/`, `queue/`, `queueview/`, `dag/`, `git/`, `merge/`, `frontmatter/`, `messaging/`, `status/`, `history/`, `inspect/`, `doctor/`, `graph/`, `identity/`, `lockfile/`, `process/`, `atomicwrite/`, `taskfile/`, `config/`, `configresolve/`, `dirs/`, `pause/`, `runtimedata/`, `timeutil/`, `testutil/`, and `ui/`.
 ## 1. System Overview
 `mato` is a filesystem-backed task orchestrator for Copilot agents. The host process watches `.mato/`, promotes tasks whose dependencies are satisfied, defers overlapping tasks, selects and claims a task, launches one agent run at a time in an ephemeral Docker container, runs an AI review pass for completed work, and squash-merges approved task branches back into a target branch. An optional `.mato/.paused` sentinel can temporarily stop new claims and review launches without stopping the host process. The agent container handles exactly one pre-claimed task lifecycle: verify the claim, work in an isolated clone on the host-selected task branch, commit its changes, and exit. The host then pushes the task branch, moves the task to `ready-for-review/`, processes the review verdict, and later merges approved work.
 ```text
@@ -71,8 +71,8 @@ queue.CleanStaleLocks(tasksDir)
 queue.CleanStaleReviewLocks(tasksDir)
 messaging.CleanStalePresence(tasksDir)
 messaging.CleanOldMessages(tasksDir, 24*time.Hour)
-taskstate.Sweep(tasksDir)
-sessionmeta.Sweep(tasksDir)
+runtimedata.SweepTaskState(tasksDir)
+runtimedata.SweepSessions(tasksDir)
 
 idx := queueview.BuildIndex(tasksDir)      // build poll index once
 queue.ReconcileReadyQueue(tasksDir, idx)
@@ -106,8 +106,8 @@ Important details from the implementation:
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
-- Lightweight runtime metadata lives under `.mato/runtime/taskstate/<task-filename>.json`. Work pushes and review launches/completions update this file best-effort so follow-up reviews can carry explicit host-curated context even before durable Copilot session resume exists.
-- Durable Copilot resume metadata lives under `.mato/runtime/sessionmeta/work-<task-filename>.json` and `.mato/runtime/sessionmeta/review-<task-filename>.json`. Work and review sessions are intentionally separate. Terminal task transitions delete both taskstate and sessionmeta; `pollCleanup()` also sweeps stale runtime files whose task is no longer active.
+- Runtime sidecar data lives under `.mato/runtime/`. Work pushes and review launches/completions update `.mato/runtime/taskstate/<task-filename>.json` best-effort so follow-up reviews can carry explicit host-curated context even before durable Copilot session resume exists.
+- Durable Copilot resume metadata lives under `.mato/runtime/sessionmeta/work-<task-filename>.json` and `.mato/runtime/sessionmeta/review-<task-filename>.json`. Work and review sessions are intentionally separate. Terminal task transitions delete both task-state and session records; the host also sweeps stale runtime sidecar files whose task is no longer active.
 - Pause mode is controlled by `.mato/.paused`, which stores the UTC RFC3339 time
   when the repo was paused. While present, the host skips new claims and review
   launches but continues merge processing.
@@ -502,6 +502,12 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `internal/testutil/`
 - Shared test helpers — `SetupRepo`, `SetupRepoWithTasks` (`testutil.go`).
 - Used by integration tests and package-level tests to create temporary git repos with pre-populated task queues.
+
+### `internal/timeutil/`
+- Shared time-formatting helpers used by status/history style rendering and human-readable CLI output.
+
+### `internal/ui/`
+- Shared CLI output helpers — warnings, colors, and common terminal formatting used across commands.
 
 ### Test files
 Most packages have tests alongside their source. `internal/git/` has `git_test.go` (covering helpers like `EnsureGitignoreContains` and `CommitGitignore`) and its helpers are also exercised through the integration tests. Integration tests live in `internal/integration/` using `package integration_test`. Repository tests run with `go test ./...`.
