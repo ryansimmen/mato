@@ -99,6 +99,16 @@ func testRunOptions() RunOptions {
 	}
 }
 
+func seedWorkLaunchedTaskState(t *testing.T, tasksDir, taskFile, branch string) {
+	t.Helper()
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TaskBranch = branch
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
+	}
+}
+
 func writeExecutable(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -127,6 +137,7 @@ func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 		Title:    "Example Task",
 		TaskPath: inProgressPath,
 	}
+	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
 	recoverStuckTask(tasksDir, "agent1", claimed)
 
@@ -203,6 +214,7 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 		Title:    "Example Task",
 		TaskPath: inProgressPath,
 	}
+	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
 	// Recovery should refuse to overwrite the existing backlog file
 	recoverStuckTask(tasksDir, "agent1", claimed)
@@ -305,6 +317,101 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 		if (msg.Type == "conflict-warning" || msg.Type == "completion") && len(msg.Files) != 0 {
 			t.Fatalf("recovered pushed task without affects should emit empty file list, got %v for %s", msg.Files, msg.Type)
 		}
+	}
+}
+
+func TestRecoverStuckTask_MissingTaskStateFailsClosed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "missing-taskstate.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/missing-taskstate -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/missing-taskstate", Title: "Example Task", TaskPath: inProgressPath}
+	_, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+	if !strings.Contains(stderr, "pushed-task recovery metadata for "+taskFile+" is missing") {
+		t.Fatalf("expected missing metadata warning, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("task should remain in in-progress/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to ready-for-review, stat err = %v", err)
+	}
+}
+
+func TestRecoverStuckTask_CorruptTaskStateFailsClosed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, "runtime", "runtime/taskstate"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "corrupt-taskstate.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/corrupt-taskstate -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "runtime", "taskstate", taskFile+".json"), []byte("{not json\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/corrupt-taskstate", Title: "Example Task", TaskPath: inProgressPath}
+	_, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+	if !strings.Contains(stderr, "pushed-task recovery metadata for "+taskFile+" is unavailable") {
+		t.Fatalf("expected unavailable metadata warning, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("task should remain in in-progress/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
+	}
+}
+
+func TestRecoverStuckTask_UnreadableTaskStateFailsClosed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "unreadable-taskstate.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/unreadable-taskstate -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	seedWorkLaunchedTaskState(t, tasksDir, taskFile, "task/unreadable-taskstate")
+	testutil.MakeUnreadablePath(t, filepath.Join(tasksDir, "runtime", "taskstate", taskFile+".json"))
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/unreadable-taskstate", Title: "Example Task", TaskPath: inProgressPath}
+	_, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+	if !strings.Contains(stderr, "pushed-task recovery metadata for "+taskFile+" is unavailable") {
+		t.Fatalf("expected unavailable metadata warning, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("task should remain in in-progress/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
 	}
 }
 
@@ -906,6 +1013,7 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 		Title:    "Read-only task",
 		TaskPath: inProgressPath,
 	}
+	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
 	recoverStuckTask(tasksDir, "agent1", claimed)
 
@@ -1641,6 +1749,7 @@ func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 		Title:    "My Task",
 		TaskPath: inProgressPath,
 	}
+	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
 	recoverStuckTask(tasksDir, "agent-x", claimed)
 
@@ -3506,6 +3615,7 @@ func TestGracefulShutdown_RecoversDuringSignal(t *testing.T) {
 		Title:    "Signal Test",
 		TaskPath: inProgressPath,
 	}
+	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
 	// Simulate runOnce with context cancellation (SIGTERM).
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3702,6 +3812,7 @@ func TestPollCleanup_RecoverOrphanedTask(t *testing.T) {
 	taskContent := "<!-- claimed-by: deadagent1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: orphan-task\npriority: 10\n---\n# Orphan\n"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, "orphan-task.md")
 	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+	seedWorkLaunchedTaskState(t, tasksDir, "orphan-task.md", "task/orphan-task")
 
 	// No lock file for deadagent1, so the task should be recovered.
 	captureStdoutStderr(t, func() {

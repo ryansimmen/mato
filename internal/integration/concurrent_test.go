@@ -18,6 +18,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/queueview"
+	"mato/internal/runtimedata"
 	"mato/internal/testutil"
 )
 
@@ -590,6 +591,18 @@ func TestOrphanRecoveryDuringConcurrentWork(t *testing.T) {
 	aliveTask := writeTask(t, tasksDir, dirs.InProgress, "alive-task.md", "<!-- claimed-by: alive-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Alive\nStill running.\n")
 	deadTask := writeTask(t, tasksDir, dirs.InProgress, "dead-task.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Dead\nNeeds recovery.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
+	if err := runtimedata.UpdateTaskState(tasksDir, "alive-task.md", func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/alive-task"
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed active work-launched taskstate: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, "dead-task.md", func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/dead-task"
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed dead work-launched taskstate: %v", err)
+	}
 
 	_ = queue.RecoverOrphanedTasks(tasksDir)
 
