@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1303,6 +1305,83 @@ func TestSelectAndClaimTask_NoBranchCollision_NormalBranch(t *testing.T) {
 	}
 }
 
+func TestSelectAndClaimTask_ConcurrentCollidingBranchAssignmentsStayUnique(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "fix-bug.md"), "# Fix bug\n")
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "fix_bug.md"), "# Fix bug underscore\n")
+
+	origHook := claimBranchAssignHook
+	t.Cleanup(func() { claimBranchAssignHook = origHook })
+
+	var held atomic.Bool
+	lockHeld := make(chan struct{})
+	release := make(chan struct{})
+	claimBranchAssignHook = func() {
+		if held.CompareAndSwap(false, true) {
+			close(lockHeld)
+			<-release
+		}
+	}
+
+	start := make(chan struct{})
+	taskNames := []string{"fix-bug.md", "fix_bug.md"}
+	results := make([]*ClaimedTask, 2)
+	errs := make([]error, 2)
+
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = SelectAndClaimTask(dir, fmt.Sprintf("agent-%d", i), candidates(taskNames[i]), 0, nil)
+		}(i)
+	}
+
+	close(start)
+	<-lockHeld
+	close(release)
+	wg.Wait()
+
+	seenBranches := make(map[string]string, len(results))
+	baseBranches := 0
+	disambiguatedBranches := 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("claim %d: %v", i, err)
+		}
+		task := results[i]
+		if task == nil {
+			t.Fatalf("claim %d returned nil task", i)
+		}
+		if other, ok := seenBranches[task.Branch]; ok {
+			t.Fatalf("duplicate branch %q assigned to %s and %s", task.Branch, other, task.Filename)
+		}
+		seenBranches[task.Branch] = task.Filename
+		switch {
+		case task.Branch == "task/fix-bug":
+			baseBranches++
+		case strings.HasPrefix(task.Branch, "task/fix-bug-"):
+			disambiguatedBranches++
+		default:
+			t.Fatalf("unexpected branch %q", task.Branch)
+		}
+		data, err := os.ReadFile(task.TaskPath)
+		if err != nil {
+			t.Fatalf("read claimed task %s: %v", task.Filename, err)
+		}
+		if !strings.Contains(string(data), "<!-- branch: "+task.Branch+" -->") {
+			t.Fatalf("claimed task %s missing branch marker %q", task.Filename, task.Branch)
+		}
+	}
+	if len(seenBranches) != 2 {
+		t.Fatalf("expected 2 unique branches, got %d (%v)", len(seenBranches), seenBranches)
+	}
+	if baseBranches != 1 || disambiguatedBranches != 1 {
+		t.Fatalf("base/disambiguated branch counts = %d/%d, want 1/1", baseBranches, disambiguatedBranches)
+	}
+}
+
 func TestCollectActiveBranches(t *testing.T) {
 	dir := setupClaimTestDir(t)
 
@@ -1487,6 +1566,35 @@ func TestSelectAndClaimTask_NonRaceMoveFailureSurfaced(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, dirs.InProgress, "broken.md")); !os.IsNotExist(err) {
 		t.Fatalf("broken.md should not appear in in-progress after move failure: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_MissingSourceMoveRaceSkipsToNextCandidate(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "gone.md"), "# Gone\n")
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "ok.md"), "# OK\n")
+
+	origMove := claimMoveFn
+	t.Cleanup(func() { claimMoveFn = origMove })
+	claimMoveFn = func(src, dst string) error {
+		if filepath.Base(src) == "gone.md" {
+			return fmt.Errorf("move candidate: %w", os.ErrNotExist)
+		}
+		return origMove(src, dst)
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-race", candidates("gone.md", "ok.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected ok.md to be claimed after missing-source race")
+	}
+	if task.Filename != "ok.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "ok.md")
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "gone.md")); err != nil {
+		t.Fatalf("gone.md should remain in backlog after skipped race: %v", err)
 	}
 }
 
