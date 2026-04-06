@@ -15,6 +15,7 @@ import (
 	"mato/internal/merge"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/status"
 	"mato/internal/testutil"
 )
@@ -205,7 +206,7 @@ func TestOverlapPrevention(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Low\n")
 	writeTask(t, tasksDir, dirs.Backlog, "other.md", "---\npriority: 10\naffects: [README.md]\n---\n# Other\n")
 
-	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred := queueview.DeferredOverlappingTasks(tasksDir, nil)
 
 	if len(deferred) != 1 {
 		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
@@ -227,7 +228,7 @@ func TestOverlapPrevention(t *testing.T) {
 		t.Fatalf("queue.ReconcileReadyQueue() after completion = %v, want false", got)
 	}
 
-	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred = queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if len(deferred) != 0 {
 		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
 	}
@@ -395,7 +396,7 @@ func TestGlobDeferral(t *testing.T) {
 	// Non-overlapping task.
 	writeTask(t, tasksDir, dirs.Backlog, "other.md", "---\npriority: 10\naffects:\n  - pkg/client/*.go\n---\n# Other\n")
 
-	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred := queueview.DeferredOverlappingTasks(tasksDir, nil)
 
 	if len(deferred) != 1 {
 		t.Fatalf("len(deferred) = %d, want 1; deferred = %v", len(deferred), deferred)
@@ -420,7 +421,7 @@ func TestMixedGlobExactOverlap(t *testing.T) {
 	// Backlog task with non-overlapping glob.
 	writeTask(t, tasksDir, dirs.Backlog, "safe-task.md", "---\npriority: 10\naffects:\n  - pkg/**/*.go\n---\n# Safe\n")
 
-	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred := queueview.DeferredOverlappingTasks(tasksDir, nil)
 
 	if _, ok := deferred["glob-task.md"]; !ok {
 		t.Fatalf("expected glob-task.md to be deferred (overlaps with active exact path), got deferred = %v", deferred)

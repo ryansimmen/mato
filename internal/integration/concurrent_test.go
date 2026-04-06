@@ -696,7 +696,7 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 	highPath := writeTask(t, tasksDir, dirs.Backlog, "task-high.md", "---\npriority: 5\naffects: [main.go]\n---\n# Task High\n")
 	writeTask(t, tasksDir, dirs.Backlog, "task-low.md", "---\npriority: 20\naffects: [main.go]\n---\n# Task Low\n")
 
-	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred := queueview.DeferredOverlappingTasks(tasksDir, nil)
 
 	if len(deferred) != 1 {
 		t.Fatalf("len(deferred) = %d, want 1", len(deferred))
@@ -721,7 +721,7 @@ func TestOverlapPreventionWithConcurrentCompletion(t *testing.T) {
 		t.Fatalf("queue.ReconcileReadyQueue() = %v, want false", got)
 	}
 
-	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred = queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if len(deferred) != 0 {
 		t.Fatalf("len(deferred) = %d, want 0", len(deferred))
 	}
@@ -754,7 +754,7 @@ func TestDeferredOnlyBacklogDoesNotTriggerAgent(t *testing.T) {
 		"---\nid: blocked\npriority: 10\naffects: [main.go]\n---\n# Blocked task\n")
 
 	// Compute deferred set
-	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred := queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if _, ok := deferred["blocked.md"]; !ok {
 		t.Fatal("blocked.md should be in deferred set")
 	}
@@ -891,7 +891,7 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "task-b.md",
 		"---\npriority: 20\naffects: [src/api.go]\n---\n# Task B\n")
 
-	deferred := queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred := queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if _, ok := deferred["task-b.md"]; !ok {
 		t.Fatalf("task-b.md should be deferred (overlap on src/api.go): deferred=%v", deferred)
 	}
@@ -922,7 +922,7 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	}
 
 	// task-B should still be deferred (task-A active in in-progress).
-	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred = queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if _, ok := deferred["task-b.md"]; !ok {
 		t.Fatalf("task-b.md should be deferred while task-a is in-progress: deferred=%v", deferred)
 	}
@@ -933,7 +933,7 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 		filepath.Join(tasksDir, dirs.Completed, "task-a.md"))
 
 	// Rebuild deferred set and file claims.
-	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred = queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if _, ok := deferred["task-b.md"]; ok {
 		t.Fatalf("task-b.md should no longer be deferred after task-a completed: deferred=%v", deferred)
 	}
@@ -956,7 +956,7 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "task-d.md",
 		"---\npriority: 20\naffects: [internal/runner/review.go]\n---\n# Task D\n")
 
-	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred = queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if _, ok := deferred["task-d.md"]; !ok {
 		t.Fatalf("task-d.md should be deferred (glob overlap with task-c): deferred=%v", deferred)
 	}
@@ -975,7 +975,7 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "task-f.md",
 		"---\npriority: 20\naffects: [pkg/client/http.go]\n---\n# Task F\n")
 
-	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred = queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if _, ok := deferred["task-f.md"]; !ok {
 		t.Fatalf("task-f.md should be deferred (directory prefix overlap with task-e): deferred=%v", deferred)
 	}
@@ -1012,7 +1012,7 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "task-h.md",
 		"---\npriority: 20\naffects: [src/db.go]\n---\n# Task H\n")
 
-	deferred = queue.DeferredOverlappingTasks(tasksDir, nil)
+	deferred = queueview.DeferredOverlappingTasks(tasksDir, nil)
 	if _, ok := deferred["task-g.md"]; ok {
 		t.Fatalf("task-g.md should NOT be deferred: deferred=%v", deferred)
 	}
