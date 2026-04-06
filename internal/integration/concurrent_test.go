@@ -498,6 +498,86 @@ func TestBranchNameCollisionTwoTasks(t *testing.T) {
 	mustGitOutput(t, clone2, "push", "origin", claimed.Branch)
 }
 
+func TestConcurrentClaimersKeepBranchNamesUnique(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
+	inProgressDir := filepath.Join(tasksDir, dirs.InProgress)
+
+	writeTask(t, tasksDir, dirs.Backlog, "fix-bug.md", "# Fix bug\n")
+	writeTask(t, tasksDir, dirs.Backlog, "fix_bug.md", "# Fix bug underscore\n")
+
+	taskNames := []string{"fix-bug.md", "fix_bug.md"}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	results := make([]*queue.ClaimedTask, 2)
+	errs := make([]error, 2)
+	var panics atomic.Int32
+
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() {
+				if recover() != nil {
+					panics.Add(1)
+				}
+			}()
+
+			<-start
+			results[i], errs[i] = queue.SelectAndClaimTask(tasksDir, fmt.Sprintf("agent-%d", i), []string{taskNames[i]}, 0, nil)
+		}(i)
+	}
+
+	close(start)
+	wg.Wait()
+
+	if panics.Load() != 0 {
+		t.Fatalf("expected no goroutine panics, got %d", panics.Load())
+	}
+
+	seenNames := make(map[string]struct{}, len(results))
+	seenBranches := make(map[string]struct{}, len(results))
+	baseBranches := 0
+	disambiguatedBranches := 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d returned error: %v", i, err)
+		}
+		task := results[i]
+		if task == nil {
+			t.Fatalf("goroutine %d returned nil ClaimedTask", i)
+		}
+		seenNames[task.Filename] = struct{}{}
+		seenBranches[task.Branch] = struct{}{}
+		switch {
+		case task.Branch == "task/fix-bug":
+			baseBranches++
+		case strings.HasPrefix(task.Branch, "task/fix-bug-"):
+			disambiguatedBranches++
+		default:
+			t.Fatalf("unexpected branch %q", task.Branch)
+		}
+
+		path := filepath.Join(inProgressDir, task.Filename)
+		mustExist(t, path)
+		if contents := readFile(t, path); !strings.Contains(contents, "<!-- branch: "+task.Branch+" -->") {
+			t.Fatalf("task %s missing branch marker %q:\n%s", task.Filename, task.Branch, contents)
+		}
+		mustNotExist(t, filepath.Join(backlogDir, task.Filename))
+	}
+
+	if len(seenNames) != 2 {
+		t.Fatalf("expected 2 uniquely claimed tasks, got %d (%v)", len(seenNames), seenNames)
+	}
+	if len(seenBranches) != 2 {
+		t.Fatalf("expected 2 unique branch names, got %d (%v)", len(seenBranches), seenBranches)
+	}
+	if baseBranches != 1 || disambiguatedBranches != 1 {
+		t.Fatalf("base/disambiguated branch counts = %d/%d, want 1/1", baseBranches, disambiguatedBranches)
+	}
+}
+
 func TestOrphanRecoveryDuringConcurrentWork(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
