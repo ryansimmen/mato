@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,16 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/testutil"
 )
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", path, err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatalf("chmod executable %s: %v", path, err)
+	}
+}
 
 func TestInitDirs_CreatesAll(t *testing.T) {
 	tasksDir := t.TempDir()
@@ -262,7 +273,7 @@ func TestInitRepo_EmptyRepoStagedFilesPreserved(t *testing.T) {
 	}
 }
 
-func TestInitRepo_EmptyRepoExistingGitignoreUsesEmptyBootstrapCommit(t *testing.T) {
+func TestInitRepo_EmptyRepoExistingGitignoreUsesPorcelainEmptyCommit(t *testing.T) {
 	repoRoot := t.TempDir()
 	if _, err := git.Output(repoRoot, "init"); err != nil {
 		t.Fatalf("git init: %v", err)
@@ -325,6 +336,38 @@ func TestInitRepo_EmptyRepoExistingGitignoreUsesEmptyBootstrapCommit(t *testing.
 	}
 	if !strings.Contains(status, "?? .gitignore") {
 		t.Fatalf("expected unchanged .gitignore to remain untracked, got %q", status)
+	}
+}
+
+func TestInitRepo_EmptyRepoExistingGitignoreRunsCommitHook(t *testing.T) {
+	repoRoot := t.TempDir()
+	if _, err := git.Output(repoRoot, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".gitignore"), []byte("/.mato/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+
+	hooksDir := filepath.Join(repoRoot, ".githooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatalf("mkdir hooks dir: %v", err)
+	}
+	markerPath := filepath.Join(repoRoot, "hook-ran.txt")
+	writeExecutable(t, filepath.Join(hooksDir, "commit-msg"), fmt.Sprintf("#!/bin/sh\nprintf 'hook-ran\\n' >> %q\n", markerPath))
+	if _, err := git.Output(repoRoot, "config", "core.hooksPath", hooksDir); err != nil {
+		t.Fatalf("git config core.hooksPath: %v", err)
+	}
+
+	if _, err := InitRepo(repoRoot, "mato"); err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("read hook marker: %v", err)
+	}
+	if !strings.Contains(string(data), "hook-ran") {
+		t.Fatalf("expected commit hook marker, got %q", string(data))
 	}
 }
 

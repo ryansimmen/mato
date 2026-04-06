@@ -181,7 +181,7 @@ When the target branch does not already exist locally, `mato init` checks the li
 | `--repo <path>` | current directory | Path to the git repository. The command resolves it to the repository top level. |
 | `--branch <name>` | `mato` | Target branch to create or check out. |
 
-`mato init` always creates the queue at `<repo>/.mato` and ensures `/.mato/` is present in `.gitignore`.
+`mato init` always creates the queue at `<repo>/.mato` and ensures `/.mato/` is present in `.gitignore`. When the repository has no commits and `/.mato/` is already ignored, mato still creates the bootstrap commit through normal `git commit` semantics so commit hooks, signing, and other commit-time policy checks still run without staging unrelated files.
 
 ### `mato log`
 `mato log` shows recent durable task outcomes so operators can answer "what happened recently?" without manually checking multiple queue directories. It reads host-written completion details from `.mato/messages/completions/` plus durable task markers for failures and review rejections. When a task has no durable `<!-- review-rejection: ... -->` marker, the command falls back to the preserved `.mato/messages/verdict-<task>.json` rejection so retryable review feedback still appears in history.
