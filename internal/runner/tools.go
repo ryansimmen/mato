@@ -36,6 +36,7 @@ type hostTools struct {
 	gitUploadPackPath  string
 	gitReceivePackPath string
 	ghPath             string
+	goplsPath          string
 	goRoot             string
 	gitTemplatesDir    string
 	hasGitTemplates    bool
@@ -73,6 +74,7 @@ func discoverHostTools() (hostTools, error) {
 			return hostTools{}, fmt.Errorf("find gh CLI: %w\n  Install: see https://cli.github.com/", err)
 		}
 	}
+	goplsPath, _ := lookPathFn("gopls")
 
 	gitTemplatesDir := "/usr/share/git-core/templates"
 	hasGitTemplates := false
@@ -119,6 +121,7 @@ func discoverHostTools() (hostTools, error) {
 		gitUploadPackPath:  gitUploadPackPath,
 		gitReceivePackPath: gitReceivePackPath,
 		ghPath:             ghPath,
+		goplsPath:          goplsPath,
 		goRoot:             runtime.GOROOT(),
 		gitTemplatesDir:    gitTemplatesDir,
 		hasGitTemplates:    hasGitTemplates,
@@ -183,6 +186,31 @@ func InspectHostTools() ToolReport {
 				Name:     tool.name,
 				Path:     path,
 				Required: tool.required,
+				Found:    true,
+				Message:  fmt.Sprintf("%s: %s", tool.name, path),
+			})
+		}
+	}
+
+	for _, tool := range []struct {
+		name   string
+		lookup func() (string, error)
+	}{
+		{"gopls", func() (string, error) { return lookPathFn("gopls") }},
+	} {
+		path, err := tool.lookup()
+		if err != nil {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:     tool.name,
+				Required: false,
+				Found:    false,
+				Message:  "gopls not found; Go LSP features will be unavailable in Docker agent containers",
+			})
+		} else {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:     tool.name,
+				Path:     path,
+				Required: false,
 				Found:    true,
 				Message:  fmt.Sprintf("%s: %s", tool.name, path),
 			})

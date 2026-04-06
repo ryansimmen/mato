@@ -47,7 +47,7 @@ High-level flow:
 6. Generate an agent ID with `identity.GenerateAgentID()`.
 7. Register the process as active by writing `.mato/.locks/<agentID>.pid` via `queue.RegisterAgent(...)`.
 8. Ensure `/.mato/` is in `.gitignore` via `git.EnsureGitignoreContains(...)`, then commit with `git.CommitGitignore(...)` only if the file was modified.
-9. Resolve host tools and runtime dependencies: `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity. Docker image, task model, review model, task reasoning effort, review reasoning effort, agent timeout, and retry cooldown are already resolved in `cmd/mato/main.go`.
+9. Resolve host tools and runtime dependencies: `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, `gh`, optional `gopls`, `GOROOT`, optional `~/.config/gh`, optional `/etc/ssl/certs`, and Git author/committer identity. Docker image, task model, review model, task reasoning effort, review reasoning effort, agent timeout, and retry cooldown are already resolved in `cmd/mato/main.go`.
 10. Build the embedded prompts by replacing placeholders in `task-instructions.md` and `review-instructions.md` with `/workspace/.mato`, the configured target branch, and `/workspace/.mato/messages`. Review launches also interpolate a host-written review-context block describing the task branch, current branch tip, prior reviewed tip (if known), and prior rejection reason (if known).
 11. Prepare durable Copilot session metadata under `.mato/runtime/sessionmeta/`. Work runs always load or create a `work-<task>.json` record and pass `copilot --resume=<session-id>`. Review runs do the same for `review-<task>.json` when `review_session_resume_enabled` is true (default true, configurable via `.mato.yaml` or `MATO_REVIEW_SESSION_RESUME_ENABLED=false`). If Copilot rejects a stored resume ID, `mato` resets that phase's session record and retries once with a fresh generated session ID.
 12. Install `SIGINT`/`SIGTERM` handlers.
@@ -144,6 +144,7 @@ Primary mounts:
 | `git-upload-pack` | `/usr/local/bin/git-upload-pack` (ro) | local-path fetch support |
 | `git-receive-pack` | `/usr/local/bin/git-receive-pack` (ro) | local-path push support |
 | `gh` | `/usr/local/bin/gh` (ro) | GitHub CLI |
+| `gopls` | `/usr/local/bin/gopls` (ro, optional) | Go LSP inside the container when available on the host |
 | host `GOROOT` | `/usr/local/go` (ro) | Go toolchain |
 | host `~/.copilot` | `$HOME/.copilot` | Copilot auth/package state |
 | host `~/.cache/copilot` | `$HOME/.cache/copilot` | Copilot cache data |
@@ -164,6 +165,7 @@ Environment variables injected by the host:
 - `HOME=<host home path>`
 - `GOPATH=<home>/go`, `GOMODCACHE=<home>/go/pkg/mod`, `GOCACHE=<home>/.cache/go-build`
 - `MATO_DEPENDENCY_CONTEXT=<file path>` (conditionally, only when the task has `depends_on` entries with available completion data; points to `/workspace/.mato/messages/dependency-context-<filename>.json`)
+If `gopls` is absent on the host `PATH`, the host still launches the container but emits a warning that Go LSP features will be unavailable for that agent run.
 The final command is:
 ```text
 copilot [--resume=<session-id>] -p <embedded task prompt> --autopilot --allow-all --model <run.model> --reasoning-effort <run.reasoningEffort>
