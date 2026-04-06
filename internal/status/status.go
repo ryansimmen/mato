@@ -160,7 +160,7 @@ func (a statusAgent) displayName() string {
 // waitingDep describes a single dependency and its resolution state.
 type waitingDep struct {
 	ID     string
-	Status string // queue directory name (e.g. "completed") or "missing"
+	Status string // queue state (e.g. "completed", "ambiguous", "missing", "unknown")
 }
 
 type waitingTaskSummary struct {
@@ -212,17 +212,31 @@ func activeAgents(tasksDir string) ([]statusAgent, []string, error) {
 func waitingTasksFromIndex(idx *queueview.PollIndex, blockedBacklog map[string][]queueview.DependencyBlock) []waitingTaskSummary {
 	snaps := idx.TasksByState(dirs.Waiting)
 
-	// Build ID→state map from the index.
+	// Build ID→state map from the index for satisfied or genuinely missing
+	// dependencies. Ambiguity and unsatisfied-state classification come from the
+	// shared queueview dependency blocker logic so status matches scheduling.
 	stateByID := taskStatesByIDFromIndex(idx)
 
 	waiting := make([]waitingTaskSummary, 0, len(snaps))
 	for _, snap := range snaps {
 		title := frontmatter.ExtractTitle(snap.Filename, snap.Body)
+		blockedByID := make(map[string]string)
+		for _, block := range queueview.DependencyBlocksFor(idx, snap.Meta.DependsOn) {
+			blockedByID[block.DependencyID] = block.State
+		}
 		deps := make([]waitingDep, 0, len(snap.Meta.DependsOn))
 		for _, dep := range snap.Meta.DependsOn {
-			status := stateByID[dep]
-			if status == "" {
-				status = "missing"
+			status, blocked := blockedByID[dep]
+			fallbackStatus := stateByID[dep]
+			if blocked {
+				if status == "unknown" && fallbackStatus == "" {
+					status = "missing"
+				}
+			} else {
+				status = fallbackStatus
+				if status == "" {
+					status = "missing"
+				}
 			}
 			deps = append(deps, waitingDep{ID: dep, Status: status})
 		}
