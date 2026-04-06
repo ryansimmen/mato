@@ -3,9 +3,24 @@ package doctor
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
+
+type failAfterNWriter struct {
+	n      int
+	err    error
+	writes int
+}
+
+func (w *failAfterNWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.n {
+		return 0, w.err
+	}
+	return len(p), nil
+}
 
 func TestSeveritySuffix(t *testing.T) {
 	tests := []struct {
@@ -303,7 +318,9 @@ func TestRenderText_FixedFindings(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, report)
+	if err := RenderText(&buf, report); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	output := buf.String()
 
 	// Fixed finding should show "(fixed)"
@@ -335,7 +352,9 @@ func TestRenderText_SkippedCheck(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, report)
+	if err := RenderText(&buf, report); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "[SKIP] docker") {
@@ -362,7 +381,9 @@ func TestRenderText_ErrorOnlyCheck(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, report)
+	if err := RenderText(&buf, report); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "[ERROR] git") {
@@ -389,7 +410,9 @@ func TestRenderText_WarningOnlyCheck(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, report)
+	if err := RenderText(&buf, report); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "[WARN] locks") {
@@ -415,7 +438,9 @@ func TestRenderText_FindingWithPath(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, report)
+	if err := RenderText(&buf, report); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	output := buf.String()
 
 	// Finding with path uses "path: message" format
@@ -425,6 +450,24 @@ func TestRenderText_FindingWithPath(t *testing.T) {
 	// Finding without path uses "message" format only
 	if !strings.Contains(output, "  - gh not found") {
 		t.Errorf("expected pathless finding, got:\n%s", output)
+	}
+}
+
+func TestRenderText_WriteError(t *testing.T) {
+	report := Report{
+		Checks: []CheckReport{
+			{Name: "git", Status: CheckRan, Findings: []Finding{
+				{Code: "git.repo_root", Severity: SeverityInfo, Message: "repo root: /repo"},
+			}},
+		},
+	}
+
+	writeErr := errors.New("broken pipe")
+	fw := &failAfterNWriter{n: 2, err: writeErr}
+
+	err := RenderText(fw, report)
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("RenderText error = %v, want wrapped %v", err, writeErr)
 	}
 }
 

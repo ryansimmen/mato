@@ -1250,7 +1250,9 @@ func TestRenderText(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	RenderText(&buf, report)
+	if err := RenderText(&buf, report); err != nil {
+		t.Fatalf("RenderText: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "[OK] git") {

@@ -1051,6 +1051,44 @@ func TestDoctorCmd_HardFailurePropagated(t *testing.T) {
 	}
 }
 
+func TestDoctorCmd_TextWriterErrorPropagates(t *testing.T) {
+	orig := doctorRunFn
+	defer func() { doctorRunFn = orig }()
+
+	writeErr := errors.New("broken pipe")
+	doctorRunFn = func(_ context.Context, _ string, _ doctor.Options) (doctor.Report, error) {
+		return doctor.Report{
+			Checks: []doctor.CheckReport{
+				{Name: "git", Status: doctor.CheckRan, Findings: []doctor.Finding{
+					{Code: "git.repo_root", Severity: doctor.SeverityInfo, Message: "repo root: /repo"},
+				}},
+			},
+			Summary:  doctor.Summary{Warnings: 1},
+			ExitCode: 1,
+		}, nil
+	}
+
+	fw := &failAfterNWriter{n: 2, err: writeErr}
+
+	cmd := newRootCmd()
+	cmd.SetOut(fw)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"doctor"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected writer error, got nil")
+	}
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, writeErr)
+	}
+
+	var exitErr ExitError
+	if errors.As(err, &exitErr) {
+		t.Fatalf("expected hard writer error, got ExitError %d", exitErr.Code)
+	}
+}
+
 func TestDoctorCmd_FlagParsing(t *testing.T) {
 	orig := doctorRunFn
 	defer func() { doctorRunFn = orig }()

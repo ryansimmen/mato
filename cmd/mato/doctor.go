@@ -86,7 +86,9 @@ func newDoctorCmd(repoFlag *string) *cobra.Command {
 					return renderErr
 				}
 			} else {
-				doctor.RenderText(cmd.OutOrStdout(), report)
+				if renderErr := doctor.RenderText(cmd.OutOrStdout(), report); renderErr != nil {
+					return renderErr
+				}
 			}
 
 			if report.ExitCode != 0 {
