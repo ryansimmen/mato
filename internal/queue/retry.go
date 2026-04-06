@@ -68,7 +68,7 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 		return RetryResult{}, err
 	}
 
-	idx := BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	match, err := resolveFailedTask(idx, ref)
 	if err != nil {
 		return RetryResult{}, err
@@ -140,7 +140,7 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 		result.Warnings = append(result.Warnings, removeWarning)
 	}
 
-	idx = BuildIndex(tasksDir)
+	idx = queueview.BuildIndex(tasksDir)
 	if blocks, ok := queueview.DependencyBlockedBacklogTasksDetailed(tasksDir, idx)[match.Filename]; ok {
 		result.DependencyBlocked = true
 		result.Warnings = append(result.Warnings, fmt.Sprintf("retried task %s was placed in backlog/ but remains dependency-blocked; next reconcile will move it to waiting/ (blocked by %s)", match.Filename, queueview.FormatDependencyBlocks(blocks)))

@@ -12,6 +12,7 @@ import (
 	"mato/internal/config"
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
@@ -289,7 +290,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 				ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
 				continue
 			}
-			ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, FormatDependencyBlocks(blocks))
+			ui.Warnf("warning: moved dependency-blocked backlog task %s back to waiting/ (blocked by %s)\n", name, queueview.FormatDependencyBlocks(blocks))
 			continue
 		}
 

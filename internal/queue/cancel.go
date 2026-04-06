@@ -33,8 +33,8 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		return CancelResult{}, fmt.Errorf("task name must not be empty")
 	}
 
-	idx := BuildIndex(tasksDir)
-	match, err := ResolveTask(idx, ref)
+	idx := queueview.BuildIndex(tasksDir)
+	match, err := queueview.ResolveTask(idx, ref)
 	if err != nil {
 		return CancelResult{}, err
 	}
