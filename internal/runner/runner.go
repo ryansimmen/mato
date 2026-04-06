@@ -210,14 +210,8 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 
 	gitName, gitEmail := resolveGitIdentity(repoRoot)
 
-	changed, err := git.EnsureGitignoreContains(repoRoot, "/"+dirs.Root+"/")
-	if err != nil {
-		return fmt.Errorf("update .gitignore: %w", err)
-	}
-	if changed {
-		if err := git.CommitGitignore(repoRoot, "chore: add /"+dirs.Root+"/ to .gitignore"); err != nil {
-			return fmt.Errorf("commit .gitignore: %w", err)
-		}
+	if err := ensureTasksDirGitignore(repoRoot); err != nil {
+		return fmt.Errorf("ensure %s/ is gitignored: %w", dirs.Root, err)
 	}
 
 	tools, err := discoverHostTools()
@@ -238,6 +232,62 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 	cleanStaleClones(os.TempDir(), time.Now(), staleCloneMaxAge)
 
 	return pollLoop(ctx, cfg, run, repoRoot, tasksDir, branch, agentID, opts.RetryCooldown, opts.Mode)
+}
+
+func ensureTasksDirGitignore(repoRoot string) error {
+	ignorePattern := "/" + dirs.Root + "/"
+
+	contains, err := gitignoreContains(repoRoot, ignorePattern)
+	if err != nil {
+		return err
+	}
+	if contains {
+		return nil
+	}
+
+	dirty, err := pathHasLocalChanges(repoRoot, ".gitignore")
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("cannot update .gitignore: file has local changes; commit, stash, or discard them first")
+	}
+
+	changed, err := git.EnsureGitignoreContains(repoRoot, ignorePattern)
+	if err != nil {
+		return fmt.Errorf("update .gitignore: %w", err)
+	}
+	if !changed {
+		return nil
+	}
+	if err := git.CommitGitignore(repoRoot, "chore: add "+ignorePattern+" to .gitignore"); err != nil {
+		return fmt.Errorf("commit .gitignore: %w", err)
+	}
+	return nil
+}
+
+func gitignoreContains(repoRoot, pattern string) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read .gitignore: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == pattern {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func pathHasLocalChanges(repoRoot, path string) (bool, error) {
+	out, err := git.Output(repoRoot, "status", "--porcelain", "--", path)
+	if err != nil {
+		return false, fmt.Errorf("check %s status: %w", path, err)
+	}
+	return strings.TrimSpace(out) != "", nil
 }
 
 // buildEnvAndRunContext assembles the envConfig and runContext from resolved
