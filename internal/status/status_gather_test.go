@@ -975,6 +975,26 @@ func TestWaitingTasksFromIndex_CompletedDepShowsCheck(t *testing.T) {
 	}
 }
 
+func TestWaitingTasksFromIndex_AmbiguousDepShowsAmbiguous(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, dirs.Completed, "shared-completed.md", "---\nid: shared\n---\n# Shared completed\n")
+	writeTask(t, tasksDir, dirs.InProgress, "shared-active.md", "<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: shared\n---\n# Shared active\n")
+	writeTask(t, tasksDir, dirs.Waiting, "waiter.md", "---\nid: waiter\ndepends_on: [shared]\n---\n# Waiter\n")
+
+	idx := queueview.BuildIndex(tasksDir)
+	tasks := waitingTasksFromIndex(idx, nil)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 waiting task, got %d", len(tasks))
+	}
+	dep := tasks[0].Dependencies[0]
+	if dep.ID != "shared" {
+		t.Errorf("dep ID = %q, want %q", dep.ID, "shared")
+	}
+	if dep.Status != "ambiguous" {
+		t.Errorf("dep Status = %q, want %q", dep.Status, "ambiguous")
+	}
+}
+
 func TestWaitingTasksFromIndex_MissingDepShowsCross(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	writeTask(t, tasksDir, dirs.Waiting, "waiter.md", "---\nid: waiter\ndepends_on: [nonexistent]\n---\n# Waiter\n")
@@ -1011,6 +1031,23 @@ func TestWaitingTasksFromIndex_IncludesBlockedBacklogFromSharedMap(t *testing.T)
 	}
 	if len(tasks[0].Dependencies) != 1 || tasks[0].Dependencies[0].Status != "unknown" {
 		t.Fatalf("Dependencies = %#v, want unknown blocked dependency", tasks[0].Dependencies)
+	}
+}
+
+func TestWaitingTasksFromIndex_IncludesAmbiguousBlockedBacklogFromSharedMap(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	writeTask(t, tasksDir, dirs.Completed, "shared-completed.md", "---\nid: shared\n---\n# Shared completed\n")
+	writeTask(t, tasksDir, dirs.Failed, "shared-failed.md", "---\nid: shared\n---\n# Shared failed\n")
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md", "---\nid: blocked\ndepends_on: [shared]\npriority: 10\n---\n# Blocked\n")
+
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
+	tasks := waitingTasksFromIndex(idx, view.DependencyBlocked)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 dependency-blocked task, got %d", len(tasks))
+	}
+	if len(tasks[0].Dependencies) != 1 || tasks[0].Dependencies[0].Status != "ambiguous" {
+		t.Fatalf("Dependencies = %#v, want ambiguous blocked dependency", tasks[0].Dependencies)
 	}
 }
 
