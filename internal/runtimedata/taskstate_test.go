@@ -191,6 +191,81 @@ func TestSweepTaskState_RemovesTerminalStateAndKeepsActive(t *testing.T) {
 	}
 }
 
+func TestSweepTaskState_PreservesStateWhenActiveStateUnknown(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, dir := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Completed, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+	}
+	activeDir := filepath.Join(tasksDir, dirs.InProgress)
+	if err := os.WriteFile(filepath.Join(activeDir, "active.md"), []byte("# Active\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile active: %v", err)
+	}
+	if err := UpdateTaskState(tasksDir, "active.md", func(state *TaskState) {
+		state.LastOutcome = OutcomeReviewLaunched
+	}); err != nil {
+		t.Fatalf("UpdateTaskState active: %v", err)
+	}
+	if err := os.Chmod(activeDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(activeDir, 0o755)
+	})
+
+	err := SweepTaskState(tasksDir)
+	if err == nil {
+		t.Fatal("SweepTaskState error = nil, want activity check failure")
+	}
+	if !strings.Contains(err.Error(), "check task activity for active.md") {
+		t.Fatalf("SweepTaskState error = %v, want activity warning", err)
+	}
+	state, loadErr := LoadTaskState(tasksDir, "active.md")
+	if loadErr != nil {
+		t.Fatalf("LoadTaskState active: %v", loadErr)
+	}
+	if state == nil {
+		t.Fatal("active taskstate should remain when liveness is unknown")
+	}
+}
+
+func TestSweepTaskState_PreservesStateWhenActiveDirectoryMissing(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, dir := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Completed, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+	}
+	activeDir := filepath.Join(tasksDir, dirs.InProgress)
+	if err := os.WriteFile(filepath.Join(activeDir, "active.md"), []byte("# Active\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile active: %v", err)
+	}
+	if err := UpdateTaskState(tasksDir, "active.md", func(state *TaskState) {
+		state.LastOutcome = OutcomeReviewLaunched
+	}); err != nil {
+		t.Fatalf("UpdateTaskState active: %v", err)
+	}
+	if err := os.RemoveAll(activeDir); err != nil {
+		t.Fatalf("RemoveAll active dir: %v", err)
+	}
+
+	err := SweepTaskState(tasksDir)
+	if err == nil {
+		t.Fatal("SweepTaskState error = nil, want missing directory failure")
+	}
+	if !strings.Contains(err.Error(), "check task activity for active.md") {
+		t.Fatalf("SweepTaskState error = %v, want activity warning", err)
+	}
+	state, loadErr := LoadTaskState(tasksDir, "active.md")
+	if loadErr != nil {
+		t.Fatalf("LoadTaskState active: %v", loadErr)
+	}
+	if state == nil {
+		t.Fatal("active taskstate should remain when active directory is missing")
+	}
+}
+
 func TestUpdateTaskState_EmptyTasksDirFails(t *testing.T) {
 	err := UpdateTaskState("", "task.md", func(state *TaskState) {
 		state.LastOutcome = OutcomeReviewLaunched

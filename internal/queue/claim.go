@@ -84,12 +84,14 @@ func immediatelyClaimableTask(idx *PollIndex, snap *TaskSnapshot, cooldown time.
 // Tests can override these to inject failures without filesystem permission
 // tricks.
 var (
+	claimMoveFn            = AtomicMove
 	claimPrependFn         = prependClaimedBy
 	claimRollbackFn        = AtomicMove
 	retryExhaustedMoveFn   = AtomicMove
 	retryExhaustedRollback = AtomicMove
 	claimReadFileFn        = os.ReadFile
 	claimWriteFileFn       = atomicwrite.WriteFile
+	claimBranchAssignHook  = func() {}
 	timeNowFn              = time.Now
 )
 
@@ -110,6 +112,10 @@ type ClaimedTask struct {
 //
 // When idx is non-nil, the index is used instead of scanning the filesystem.
 func CollectActiveBranches(tasksDir string, idx *PollIndex) map[string]struct{} {
+	return collectActiveBranches(tasksDir, idx, "")
+}
+
+func collectActiveBranches(tasksDir string, idx *PollIndex, skipPath string) map[string]struct{} {
 	if idx != nil {
 		return idx.ActiveBranches()
 	}
@@ -125,7 +131,11 @@ func CollectActiveBranches(tasksDir string, idx *PollIndex) map[string]struct{} 
 			continue
 		}
 		for _, name := range names {
-			if b := readBranchFromFile(filepath.Join(dir, name)); b != "" {
+			path := filepath.Join(dir, name)
+			if path == skipPath {
+				continue
+			}
+			if b := readBranchFromFile(path); b != "" {
 				active[b] = struct{}{}
 			}
 		}
@@ -204,6 +214,36 @@ func restoreClaimedTaskContents(path string, content []byte) error {
 	return nil
 }
 
+func assignClaimBranch(tasksDir, taskPath, name, existingBranchBeforeClaim string, hadRecordedBranchMark bool) (string, error) {
+	release, err := acquireClaimBranchAssignmentLock(tasksDir)
+	if err != nil {
+		return "", fmt.Errorf("acquire claim branch assignment lock: %w", err)
+	}
+	defer release()
+
+	claimBranchAssignHook()
+
+	claimedData, err := claimReadFileFn(taskPath)
+	if err != nil {
+		return "", fmt.Errorf("read claimed task for branch marker: %w", err)
+	}
+
+	existingBranch, _ := taskfile.ParseBranchMarkerLine(claimedData)
+	if existingBranch == "" && hadRecordedBranchMark {
+		existingBranch = existingBranchBeforeClaim
+	}
+
+	activeBranches := collectActiveBranches(tasksDir, nil, taskPath)
+	branch := chooseClaimBranch(name, activeBranches, existingBranch)
+	if existingBranch != branch {
+		if err := WriteBranchMarker(taskPath, branch); err != nil {
+			return "", fmt.Errorf("write branch marker for %s: %w", name, err)
+		}
+	}
+
+	return branch, nil
+}
+
 func chooseClaimBranch(name string, activeBranches map[string]struct{}, existing string) string {
 	if existing != "" {
 		if _, taken := activeBranches[existing]; !taken {
@@ -215,6 +255,22 @@ func chooseClaimBranch(name string, activeBranches map[string]struct{}, existing
 		branch = branch + "-" + frontmatter.BranchDisambiguator(name)
 	}
 	return branch
+}
+
+func isBenignClaimMoveRace(src, dst string, err error) bool {
+	if errors.Is(err, ErrDestinationExists) {
+		return true
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if _, statErr := os.Stat(src); !os.IsNotExist(statErr) {
+		return false
+	}
+	if _, statErr := os.Stat(filepath.Dir(dst)); statErr != nil {
+		return false
+	}
+	return true
 }
 
 // handleRetryExhaustedTask moves a retry-exhausted task from in-progress/ to
@@ -264,7 +320,6 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
 
-	activeBranches := CollectActiveBranches(tasksDir, idx)
 	for _, name := range candidates {
 		name, ok := normalizeClaimCandidate(name)
 		if !ok {
@@ -302,10 +357,14 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			continue
 		}
 
-		if err := AtomicMove(src, dst); err != nil {
-			// Another agent may have claimed it, or the destination
-			// already exists (EEXIST). Skip to the next candidate.
-			continue
+		if err := claimMoveFn(src, dst); err != nil {
+			if isBenignClaimMoveRace(src, dst, err) {
+				// Another agent won the claim race first, either by creating the
+				// destination before we linked or by moving the source away first.
+				continue
+			}
+			ui.Warnf("warning: could not move backlog task %s to in-progress/: %v\n", name, err)
+			return nil, fmt.Errorf("move backlog task %s to in-progress/: %w", name, err)
 		}
 
 		if retryExhausted {
@@ -336,37 +395,17 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 			continue
 		}
 
-		claimedData, err := claimReadFileFn(dst)
+		branch, err := assignClaimBranch(tasksDir, dst, name, existingBranchBeforeClaim, hadRecordedBranchMark)
 		if err != nil {
-			ui.Warnf("warning: could not read claimed task %s for branch marker: %v\n", name, err)
+			ui.Warnf("warning: could not assign branch for %s: %v\n", name, err)
 			if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
-				return nil, fmt.Errorf("read claimed task for branch marker: %w (also failed to restore task contents: %v)", err, restoreErr)
+				return nil, fmt.Errorf("assign branch for %s: %w (also failed to restore task contents: %v)", name, err, restoreErr)
 			}
 			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
 				return nil, rbErr
 			}
 			continue
 		}
-
-		existingBranch, _ := taskfile.ParseBranchMarkerLine(claimedData)
-		if existingBranch == "" && hadRecordedBranchMark {
-			existingBranch = existingBranchBeforeClaim
-		}
-		branch := chooseClaimBranch(name, activeBranches, existingBranch)
-
-		if existingBranch != branch {
-			if err := WriteBranchMarker(dst, branch); err != nil {
-				ui.Warnf("warning: could not write branch marker for %s: %v\n", name, err)
-				if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
-					return nil, fmt.Errorf("write branch marker for %s: %w (also failed to restore task contents: %v)", name, err, restoreErr)
-				}
-				if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
-					return nil, rbErr
-				}
-				continue
-			}
-		}
-		activeBranches[branch] = struct{}{}
 
 		return &ClaimedTask{
 			Filename:              name,

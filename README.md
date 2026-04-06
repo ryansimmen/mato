@@ -8,6 +8,7 @@ Runs autonomous Copilot agents against a filesystem-backed task queue in Docker.
 - Docker
 - GitHub CLI
 - Copilot CLI
+- `gopls` on the host `PATH` if you want Go LSP features inside Docker agent containers
 
 ## Quick Start
 
@@ -228,8 +229,11 @@ mato log --format json
 Phase 1 is intentionally a partial durable-outcomes view. It reads only
 host-written completion detail files from `.mato/messages/completions/` plus
 durable task markers for failures (`<!-- failure: ... -->`) and review
-rejections (`<!-- review-rejection: ... -->`). The output is newest first,
-`--limit` defaults to `20`, and `--limit 0` means unlimited.
+rejections (`<!-- review-rejection: ... -->`). If a task has no durable review
+rejection marker, `mato log` falls back to the preserved
+`.mato/messages/verdict-<task>.json` rejection so retryable review feedback
+still appears in history. The output is newest first, `--limit` defaults to
+`20`, and `--limit 0` means unlimited.
 
 ## Doctor Command
 
@@ -339,11 +343,13 @@ mato --version
 
 ## Docker
 
-`mato` launches an `ubuntu:24.04` container by default. Override it with `MATO_DOCKER_IMAGE` or set `docker_image` in `.mato.yaml`. The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, and credentials/config, runs as your UID/GID, and passes explicit model settings such as:
+`mato` launches an `ubuntu:24.04` container by default. Override it with `MATO_DOCKER_IMAGE` or set `docker_image` in `.mato.yaml`. The container mounts a temporary clone at `/workspace` plus the original repo path for local `git fetch`/`git push`, mounts host `copilot`, `git`, `gh`, optional `gopls`, and credentials/config, runs as your UID/GID, and passes explicit model settings such as:
 
 ```bash
 mato run --task-model claude-opus-4.6 --review-model gpt-5.4
 ```
+
+If `gopls` is not available on the host `PATH`, `mato` still launches Docker agents but warns that Go LSP features will be unavailable inside the container.
 
 ## Shell Completion
 

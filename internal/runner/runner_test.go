@@ -28,6 +28,7 @@ import (
 	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
+	"mato/internal/testutil"
 	"mato/internal/ui"
 )
 
@@ -96,6 +97,18 @@ func testRunOptions() RunOptions {
 		TaskReasoningEffort:        config.DefaultReasoningEffort,
 		ReviewReasoningEffort:      config.DefaultReasoningEffort,
 	}
+}
+
+func writeExecutable(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", name, err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatalf("chmod executable %s: %v", name, err)
+	}
+	return path
 }
 
 func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
@@ -4642,6 +4655,122 @@ func TestRun_InvalidRepoPath(t *testing.T) {
 	}
 }
 
+func TestRun_RefusesDirtyGitignore(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+
+	gitignorePath := filepath.Join(repoRoot, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("*.tmp\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "--", ".gitignore"); err != nil {
+		t.Fatalf("git add .gitignore: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "add gitignore"); err != nil {
+		t.Fatalf("git commit .gitignore: %v", err)
+	}
+	if err := os.WriteFile(gitignorePath, []byte("*.tmp\n*.log\n"), 0o644); err != nil {
+		t.Fatalf("dirty .gitignore: %v", err)
+	}
+
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "docker", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	err := Run(repoRoot, "mato", testRunOptions())
+	if err == nil {
+		t.Fatal("expected Run to fail for dirty .gitignore")
+	}
+	if !strings.Contains(err.Error(), "cannot update .gitignore: file has local changes") {
+		t.Fatalf("expected dirty .gitignore error, got: %v", err)
+	}
+
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if strings.Contains(string(data), "/.mato/") {
+		t.Fatalf(".gitignore should not be updated when dirty, got:\n%s", string(data))
+	}
+
+	status, err := git.Output(repoRoot, "status", "--porcelain", "--", ".gitignore")
+	if err != nil {
+		t.Fatalf("git status .gitignore: %v", err)
+	}
+	if strings.TrimSpace(status) == "" {
+		t.Fatal("expected .gitignore to remain dirty")
+	}
+
+	log, err := git.Output(repoRoot, "log", "-1", "--pretty=%s")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if strings.Contains(log, "chore: add /.mato/ to .gitignore") {
+		t.Fatalf("Run should not auto-commit dirty .gitignore, got %q", strings.TrimSpace(log))
+	}
+}
+
+func TestRun_CleanGitignoreAddsTasksDirEntry(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+
+	gitignorePath := filepath.Join(repoRoot, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("*.tmp\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "--", ".gitignore"); err != nil {
+		t.Fatalf("git add .gitignore: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "add gitignore"); err != nil {
+		t.Fatalf("git commit .gitignore: %v", err)
+	}
+
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "docker", "#!/bin/sh\nexit 0\n")
+	writeExecutable(t, binDir, "copilot", "#!/bin/sh\nexit 0\n")
+	writeExecutable(t, binDir, "gh", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	err := Run(repoRoot, "mato", testRunOptions())
+	if err == nil {
+		t.Fatal("expected Run to stop after gitignore commit when ~/.copilot is missing")
+	}
+	if !strings.Contains(err.Error(), ".copilot directory not found") {
+		t.Fatalf("expected discoverHostTools ~/.copilot error, got: %v", err)
+	}
+
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), "/.mato/\n") {
+		t.Fatalf(".gitignore should contain /.mato/, got:\n%s", string(data))
+	}
+
+	subject, err := git.Output(repoRoot, "log", "-1", "--pretty=%s")
+	if err != nil {
+		t.Fatalf("git log subject: %v", err)
+	}
+	if strings.TrimSpace(subject) != "chore: add /.mato/ to .gitignore" {
+		t.Fatalf("unexpected gitignore commit subject %q", strings.TrimSpace(subject))
+	}
+
+	files, err := git.Output(repoRoot, "show", "--pretty=", "--name-only", "HEAD")
+	if err != nil {
+		t.Fatalf("git show HEAD: %v", err)
+	}
+	if strings.TrimSpace(files) != ".gitignore" {
+		t.Fatalf("expected gitignore commit to contain only .gitignore, got %q", strings.TrimSpace(files))
+	}
+}
+
 func TestNormalizeAndValidateRunOptions(t *testing.T) {
 	t.Run("trims valid values", func(t *testing.T) {
 		opts, err := normalizeAndValidateRunOptions(RunOptions{
@@ -4741,6 +4870,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 		gitUploadPackPath:  "/usr/bin/git-upload-pack",
 		gitReceivePackPath: "/usr/bin/git-receive-pack",
 		ghPath:             "/usr/bin/gh",
+		goplsPath:          "/home/testuser/go/bin/gopls",
 		goRoot:             "/usr/local/go",
 		homeDir:            "/home/testuser",
 		copilotConfigDir:   "/home/testuser/.copilot",
@@ -4763,6 +4893,12 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	}
 	if env.targetBranch != "main" {
 		t.Errorf("expected targetBranch %q, got %q", "main", env.targetBranch)
+	}
+	if env.goplsPath != "/home/testuser/go/bin/gopls" {
+		t.Errorf("expected goplsPath %q, got %q", "/home/testuser/go/bin/gopls", env.goplsPath)
+	}
+	if env.warnMissingGopls {
+		t.Fatal("expected warnMissingGopls to be false when gopls is available")
 	}
 	if run.agentID != "agent-123" {
 		t.Errorf("expected agentID %q, got %q", "agent-123", run.agentID)
@@ -4817,6 +4953,25 @@ func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	}
 	if env.reviewSessionResumeEnabled {
 		t.Fatal("expected review session resume to reflect RunOptions")
+	}
+}
+
+func TestBuildEnvAndRunContext_MissingGoplsEnablesWarning(t *testing.T) {
+	tools := hostTools{homeDir: "/home/test"}
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{
+		TaskModel:                  config.DefaultTaskModel,
+		ReviewModel:                config.DefaultReviewModel,
+		ReviewSessionResumeEnabled: true,
+		TaskReasoningEffort:        config.DefaultReasoningEffort,
+		ReviewReasoningEffort:      config.DefaultReasoningEffort,
+		AgentTimeout:               time.Hour,
+	})
+
+	if !env.warnMissingGopls {
+		t.Fatal("expected warnMissingGopls to be true when gopls is unavailable on the host")
+	}
+	if env.goplsPath != "" {
+		t.Fatalf("expected empty goplsPath when gopls is unavailable, got %q", env.goplsPath)
 	}
 }
 

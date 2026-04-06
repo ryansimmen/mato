@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mato/internal/dirs"
 	"mato/internal/process"
@@ -220,6 +221,49 @@ func TestAcquireReviewLock_CleanupRemovesLock(t *testing.T) {
 		t.Fatal("AcquireReviewLock should succeed after cleanup")
 	}
 	cleanup2()
+}
+
+func TestAcquireClaimBranchAssignmentLock_WaitsForRelease(t *testing.T) {
+	tasksDir := setupTasksDirs(t)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("mkdir .locks: %v", err)
+	}
+
+	cleanup, err := acquireClaimBranchAssignmentLock(tasksDir)
+	if err != nil {
+		t.Fatalf("acquireClaimBranchAssignmentLock: %v", err)
+	}
+
+	acquired := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		release, err := acquireClaimBranchAssignmentLock(tasksDir)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		release()
+		close(acquired)
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatal("second claim branch lock acquisition should wait for release")
+	case err := <-errCh:
+		t.Fatalf("second acquireClaimBranchAssignmentLock: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	cleanup()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("second acquireClaimBranchAssignmentLock: %v", err)
+	case <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("second claim branch lock acquisition did not complete after release")
+	}
 }
 
 func TestCleanStaleReviewLocks_RemovesDeadProcess(t *testing.T) {

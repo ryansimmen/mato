@@ -359,6 +359,150 @@ func TestHandleMergeFailure_MergeConflictCleanupRecordsTaskState(t *testing.T) {
 	}
 }
 
+func TestHandleMergeFailure_BacklogDestinationCollisionConverges(t *testing.T) {
+	repoRoot := t.TempDir()
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.ReadyMerge, dirs.Backlog} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	taskPath := filepath.Join(tasksDir, dirs.ReadyMerge, "collision.md")
+	content := strings.Join([]string{
+		"<!-- branch: task/collision -->",
+		"---",
+		"max_retries: 3",
+		"---",
+		"# Collision",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile taskPath: %v", err)
+	}
+
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, "collision.md")
+	backlogContent := strings.Join([]string{
+		"# Collision",
+		"",
+		"<!-- failure: merge-queue at 2026-01-01T00:00:00Z — squash merge conflict -->",
+	}, "\n")
+	if err := os.WriteFile(backlogPath, []byte(backlogContent), 0o644); err != nil {
+		t.Fatalf("WriteFile backlogPath: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, "collision.md", func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewApproved
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	var cleanedBranch string
+	orig := cleanupTaskBranchFn
+	cleanupTaskBranchFn = func(root, branch string) {
+		cleanedBranch = branch
+	}
+	t.Cleanup(func() { cleanupTaskBranchFn = orig })
+
+	task := mergeQueueTask{name: "collision.md", path: taskPath, branch: "task/collision"}
+	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
+		t.Fatalf("handleMergeFailure: %v", err)
+	}
+
+	if _, err := os.Stat(taskPath); !os.IsNotExist(err) {
+		t.Fatalf("ready-to-merge copy should be removed after destination collision, got err=%v", err)
+	}
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("ReadFile backlogPath: %v", err)
+	}
+	if got := strings.Count(string(data), "<!-- failure:"); got != 1 {
+		t.Fatalf("backlog task should keep existing failure markers without duplicates, got %d", got)
+	}
+	if cleanedBranch != "task/collision" {
+		t.Fatalf("expected branch cleanup for %q, got %q", "task/collision", cleanedBranch)
+	}
+	state, err := runtimedata.LoadTaskState(tasksDir, task.name)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil || state.LastOutcome != runtimedata.OutcomeMergeConflictCleanup {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeMergeConflictCleanup)
+	}
+}
+
+func TestHandleMergeFailure_FailedDestinationCollisionConverges(t *testing.T) {
+	repoRoot := t.TempDir()
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.ReadyMerge, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	taskPath := filepath.Join(tasksDir, dirs.ReadyMerge, "collision.md")
+	content := strings.Join([]string{
+		"<!-- branch: task/collision -->",
+		"---",
+		"max_retries: 1",
+		"---",
+		"<!-- failure: prior-agent at 2026-01-01T00:00:00Z step=WORK error=prior -->",
+		"# Collision",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile taskPath: %v", err)
+	}
+
+	failedPath := filepath.Join(tasksDir, dirs.Failed, "collision.md")
+	failedContent := strings.Join([]string{
+		"<!-- branch: task/collision -->",
+		"# Collision",
+		"",
+		"<!-- failure: merge-queue at 2026-01-02T00:00:00Z — squash merge conflict -->",
+	}, "\n")
+	if err := os.WriteFile(failedPath, []byte(failedContent), 0o644); err != nil {
+		t.Fatalf("WriteFile failedPath: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, "collision.md", func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewApproved
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	var cleanedBranch string
+	orig := cleanupTaskBranchFn
+	cleanupTaskBranchFn = func(root, branch string) {
+		cleanedBranch = branch
+	}
+	t.Cleanup(func() { cleanupTaskBranchFn = orig })
+
+	task := mergeQueueTask{name: "collision.md", path: taskPath, branch: "task/collision"}
+	if err := handleMergeFailure(repoRoot, tasksDir, task, errSquashMergeConflict); err != nil {
+		t.Fatalf("handleMergeFailure: %v", err)
+	}
+
+	if _, err := os.Stat(taskPath); !os.IsNotExist(err) {
+		t.Fatalf("ready-to-merge copy should be removed after failed collision, got err=%v", err)
+	}
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("ReadFile failedPath: %v", err)
+	}
+	if got := strings.Count(string(data), "<!-- failure:"); got != 1 {
+		t.Fatalf("failed task should keep existing failure markers without duplicates, got %d", got)
+	}
+	if cleanedBranch != "task/collision" {
+		t.Fatalf("expected branch cleanup for %q, got %q", "task/collision", cleanedBranch)
+	}
+	state, err := runtimedata.LoadTaskState(tasksDir, task.name)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should be removed after failed collision cleanup, got %+v", state)
+	}
+}
+
 func TestMergeFailureDestination(t *testing.T) {
 	tests := []struct {
 		name     string

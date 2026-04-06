@@ -10,8 +10,13 @@ Install these tools on the host that runs `mato`:
 - [Git](https://git-scm.com/downloads)
 - [GitHub CLI (`gh`)](https://cli.github.com/)
 - [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot)
-`mato` locates `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, and `gh` on
-the host and bind-mounts those executables into agent containers.
+- [`gopls`](https://pkg.go.dev/golang.org/x/tools/gopls) on the host `PATH` if you
+  want Go LSP features inside Docker agent containers
+`mato` locates `copilot`, `git`, `git-upload-pack`, `git-receive-pack`, and `gh`
+on the host and bind-mounts those executables into agent containers. When
+`gopls` is available, `mato` bind-mounts that binary too; when it is missing,
+task and review containers still launch but Go LSP features are unavailable and
+`mato` prints a warning up front.
 
 ## CLI Usage
 ```text
@@ -176,10 +181,10 @@ When the target branch does not already exist locally, `mato init` checks the li
 | `--repo <path>` | current directory | Path to the git repository. The command resolves it to the repository top level. |
 | `--branch <name>` | `mato` | Target branch to create or check out. |
 
-`mato init` always creates the queue at `<repo>/.mato` and ensures `/.mato/` is present in `.gitignore`.
+`mato init` always creates the queue at `<repo>/.mato` and ensures `/.mato/` is present in `.gitignore`. When the repository has no commits and `/.mato/` is already ignored, mato still creates the bootstrap commit through normal `git commit` semantics so commit hooks, signing, and other commit-time policy checks still run without staging unrelated files.
 
 ### `mato log`
-`mato log` shows recent durable task outcomes so operators can answer "what happened recently?" without manually checking multiple queue directories. It reads host-written completion details from `.mato/messages/completions/` plus durable task markers for failures and review rejections.
+`mato log` shows recent durable task outcomes so operators can answer "what happened recently?" without manually checking multiple queue directories. It reads host-written completion details from `.mato/messages/completions/` plus durable task markers for failures and review rejections. When a task has no durable `<!-- review-rejection: ... -->` marker, the command falls back to the preserved `.mato/messages/verdict-<task>.json` rejection so retryable review feedback still appears in history.
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -422,6 +427,7 @@ ownership.
 | host `git-upload-pack` | `/usr/local/bin/git-upload-pack` (ro) | Needed when Git fetches from the local-path remote. |
 | host `git-receive-pack` | `/usr/local/bin/git-receive-pack` (ro) | Needed when Git pushes to the local-path remote. |
 | host `gh` binary | `/usr/local/bin/gh` (ro) | Makes GitHub CLI available in the container. |
+| host `gopls` binary | `/usr/local/bin/gopls` (ro, optional) | Enables Go LSP requests inside the container when `gopls` exists on the host `PATH`. |
 | host `GOROOT` | `/usr/local/go` (ro) | Provides the Go toolchain in the container. |
 | host `~/.copilot` | `$HOME/.copilot` | For Copilot authentication and package data. |
 | host `~/.cache/copilot` | `$HOME/.cache/copilot` | Copilot cache data. |
@@ -438,6 +444,7 @@ ownership.
 - `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=*` allow Git to trust mounted worktrees even if ownership looks unusual.
 - If Git user name/email are configured on the host repository or globally, `mato` forwards them as `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL`.
 - The container command is `copilot [--resume=<session-id>] -p <embedded prompt> --autopilot --allow-all --model <resolved-model> --reasoning-effort <resolved-effort>`. `mato` only appends `--resume=<session-id>` when durable session metadata exists for the current task or review phase.
+- If `gopls` is not found on the host `PATH`, `mato` warns before launching the container so missing Go LSP support is explicit instead of surfacing later as a generic Copilot LSP failure.
 When choosing a custom Docker image via `MATO_DOCKER_IMAGE` or `.mato.yaml`, use an image compatible with the mounted
 host binaries and standard Linux filesystem layout expected above.
 

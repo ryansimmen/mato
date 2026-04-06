@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1303,6 +1305,83 @@ func TestSelectAndClaimTask_NoBranchCollision_NormalBranch(t *testing.T) {
 	}
 }
 
+func TestSelectAndClaimTask_ConcurrentCollidingBranchAssignmentsStayUnique(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "fix-bug.md"), "# Fix bug\n")
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "fix_bug.md"), "# Fix bug underscore\n")
+
+	origHook := claimBranchAssignHook
+	t.Cleanup(func() { claimBranchAssignHook = origHook })
+
+	var held atomic.Bool
+	lockHeld := make(chan struct{})
+	release := make(chan struct{})
+	claimBranchAssignHook = func() {
+		if held.CompareAndSwap(false, true) {
+			close(lockHeld)
+			<-release
+		}
+	}
+
+	start := make(chan struct{})
+	taskNames := []string{"fix-bug.md", "fix_bug.md"}
+	results := make([]*ClaimedTask, 2)
+	errs := make([]error, 2)
+
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = SelectAndClaimTask(dir, fmt.Sprintf("agent-%d", i), candidates(taskNames[i]), 0, nil)
+		}(i)
+	}
+
+	close(start)
+	<-lockHeld
+	close(release)
+	wg.Wait()
+
+	seenBranches := make(map[string]string, len(results))
+	baseBranches := 0
+	disambiguatedBranches := 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("claim %d: %v", i, err)
+		}
+		task := results[i]
+		if task == nil {
+			t.Fatalf("claim %d returned nil task", i)
+		}
+		if other, ok := seenBranches[task.Branch]; ok {
+			t.Fatalf("duplicate branch %q assigned to %s and %s", task.Branch, other, task.Filename)
+		}
+		seenBranches[task.Branch] = task.Filename
+		switch {
+		case task.Branch == "task/fix-bug":
+			baseBranches++
+		case strings.HasPrefix(task.Branch, "task/fix-bug-"):
+			disambiguatedBranches++
+		default:
+			t.Fatalf("unexpected branch %q", task.Branch)
+		}
+		data, err := os.ReadFile(task.TaskPath)
+		if err != nil {
+			t.Fatalf("read claimed task %s: %v", task.Filename, err)
+		}
+		if !strings.Contains(string(data), "<!-- branch: "+task.Branch+" -->") {
+			t.Fatalf("claimed task %s missing branch marker %q", task.Filename, task.Branch)
+		}
+	}
+	if len(seenBranches) != 2 {
+		t.Fatalf("expected 2 unique branches, got %d (%v)", len(seenBranches), seenBranches)
+	}
+	if baseBranches != 1 || disambiguatedBranches != 1 {
+		t.Fatalf("base/disambiguated branch counts = %d/%d, want 1/1", baseBranches, disambiguatedBranches)
+	}
+}
+
 func TestCollectActiveBranches(t *testing.T) {
 	dir := setupClaimTestDir(t)
 
@@ -1426,6 +1505,129 @@ func TestSelectAndClaimTask_DestinationExistsInProgress(t *testing.T) {
 	// The backlog copy of dup.md must still exist (source not removed).
 	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "dup.md")); err != nil {
 		t.Fatalf("backlog/dup.md should still exist after destination collision: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_NonRaceMoveFailureSurfaced(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "broken.md"), "# Broken\nDo broken.\n")
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "ok.md"), "# OK\nDo ok.\n")
+
+	origMove := claimMoveFn
+	t.Cleanup(func() { claimMoveFn = origMove })
+
+	moveErr := errors.New("simulated move failure")
+	claimMoveFn = func(src, dst string) error {
+		if filepath.Base(src) == "broken.md" {
+			return fmt.Errorf("move candidate: %w", moveErr)
+		}
+		return origMove(src, dst)
+	}
+
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	prevWarn := ui.SetWarningWriter(w)
+
+	task, claimErr := SelectAndClaimTask(dir, "agent-broken", candidates("broken.md", "ok.md"), 0, nil)
+
+	ui.SetWarningWriter(prevWarn)
+	w.Close()
+	stderrOutput, readErr := io.ReadAll(r)
+	os.Stderr = origStderr
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+
+	if claimErr == nil {
+		t.Fatal("expected non-race claim move failure to be returned")
+	}
+	if !errors.Is(claimErr, moveErr) {
+		t.Fatalf("claim error = %v, want wrapped %v", claimErr, moveErr)
+	}
+	if !strings.Contains(claimErr.Error(), "move backlog task broken.md to in-progress/") {
+		t.Fatalf("claim error = %q, want backlog move context", claimErr)
+	}
+	if task != nil {
+		t.Fatalf("expected nil task on hard move failure, got %+v", task)
+	}
+
+	if !strings.Contains(string(stderrOutput), "warning: could not move backlog task broken.md to in-progress/") {
+		t.Fatalf("expected warning about surfaced move failure, got: %q", string(stderrOutput))
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "broken.md")); err != nil {
+		t.Fatalf("broken.md should remain in backlog after move failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "ok.md")); err != nil {
+		t.Fatalf("ok.md should remain in backlog after hard move failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.InProgress, "broken.md")); !os.IsNotExist(err) {
+		t.Fatalf("broken.md should not appear in in-progress after move failure: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_MissingSourceMoveRaceSkipsToNextCandidate(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "gone.md"), "# Gone\n")
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "ok.md"), "# OK\n")
+
+	origMove := claimMoveFn
+	t.Cleanup(func() { claimMoveFn = origMove })
+	claimMoveFn = func(src, dst string) error {
+		if filepath.Base(src) == "gone.md" {
+			if err := os.Remove(src); err != nil {
+				t.Fatalf("remove gone.md: %v", err)
+			}
+			return fmt.Errorf("move candidate: %w", os.ErrNotExist)
+		}
+		return origMove(src, dst)
+	}
+
+	task, err := SelectAndClaimTask(dir, "agent-race", candidates("gone.md", "ok.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected ok.md to be claimed after missing-source race")
+	}
+	if task.Filename != "ok.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "ok.md")
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "gone.md")); !os.IsNotExist(err) {
+		t.Fatalf("gone.md should be gone after skipped source-missing race: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_MissingInProgressDirMoveFailureSurfaced(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "broken.md"), "# Broken\n")
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "ok.md"), "# OK\n")
+
+	if err := os.Remove(filepath.Join(dir, dirs.InProgress)); err != nil {
+		t.Fatalf("remove in-progress/: %v", err)
+	}
+
+	task, claimErr := SelectAndClaimTask(dir, "agent-race", candidates("broken.md", "ok.md"), 0, nil)
+	if claimErr == nil {
+		t.Fatal("expected missing in-progress/ move failure to be returned")
+	}
+	if !errors.Is(claimErr, os.ErrNotExist) {
+		t.Fatalf("claim error = %v, want wrapped os.ErrNotExist", claimErr)
+	}
+	if !strings.Contains(claimErr.Error(), "move backlog task broken.md to in-progress/") {
+		t.Fatalf("claim error = %q, want backlog move context", claimErr)
+	}
+	if task != nil {
+		t.Fatalf("expected nil task on missing in-progress/ failure, got %+v", task)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "broken.md")); err != nil {
+		t.Fatalf("broken.md should remain in backlog after move failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "ok.md")); err != nil {
+		t.Fatalf("ok.md should remain in backlog after hard move failure: %v", err)
 	}
 }
 

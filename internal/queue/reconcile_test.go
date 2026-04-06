@@ -22,6 +22,22 @@ func setupTasksDirs(t *testing.T) string {
 	return tasksDir
 }
 
+func readTaskAndAssertSingleTerminalFailure(t *testing.T, path string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatalf("%s should contain a terminal-failure marker", path)
+	}
+	if got := taskfile.CountTerminalFailureMarkers(data); got != 1 {
+		t.Fatalf("%s has %d terminal-failure markers, want 1", path, got)
+	}
+	return data
+}
+
 func TestReconcileReadyQueue_PromotesSatisfiedDeps(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
@@ -664,6 +680,83 @@ func TestReconcileReadyQueue_DuplicateIDIdempotency(t *testing.T) {
 	dataAfter, _ := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "bbb.md"))
 	if string(dataBefore) != string(dataAfter) {
 		t.Error("bbb.md content changed after second reconcile pass")
+	}
+}
+
+func TestReconcileReadyQueue_TerminalFailureCollisionIdempotency(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, tasksDir string) string
+	}{
+		{
+			name: "unparseable waiting",
+			setup: func(t *testing.T, tasksDir string) string {
+				filename := "bad-yaml-waiting.md"
+				writeTask(t, tasksDir, dirs.Waiting, filename,
+					"---\nbad: [unclosed\n---\n# Bad waiting YAML\n")
+				writeTask(t, tasksDir, dirs.Failed, filename, "# Existing failed copy\n")
+				return filepath.Join(tasksDir, dirs.Waiting, filename)
+			},
+		},
+		{
+			name: "unparseable backlog",
+			setup: func(t *testing.T, tasksDir string) string {
+				filename := "bad-yaml-backlog.md"
+				writeTask(t, tasksDir, dirs.Backlog, filename,
+					"---\nbad: [unclosed\n---\n# Bad backlog YAML\n")
+				writeTask(t, tasksDir, dirs.Failed, filename, "# Existing failed copy\n")
+				return filepath.Join(tasksDir, dirs.Backlog, filename)
+			},
+		},
+		{
+			name: "invalid glob backlog",
+			setup: func(t *testing.T, tasksDir string) string {
+				filename := "bad-glob-backlog.md"
+				writeTask(t, tasksDir, dirs.Backlog, filename,
+					"---\nid: bad-glob-backlog\naffects:\n  - \"[invalid\"\n---\n# Bad glob backlog\n")
+				writeTask(t, tasksDir, dirs.Failed, filename, "# Existing failed copy\n")
+				return filepath.Join(tasksDir, dirs.Backlog, filename)
+			},
+		},
+		{
+			name: "invalid glob waiting",
+			setup: func(t *testing.T, tasksDir string) string {
+				filename := "bad-glob-waiting.md"
+				writeTask(t, tasksDir, dirs.Waiting, filename,
+					"---\nid: bad-glob-waiting\naffects:\n  - \"[invalid\"\n---\n# Bad glob waiting\n")
+				writeTask(t, tasksDir, dirs.Failed, filename, "# Existing failed copy\n")
+				return filepath.Join(tasksDir, dirs.Waiting, filename)
+			},
+		},
+		{
+			name: "duplicate waiting",
+			setup: func(t *testing.T, tasksDir string) string {
+				writeTask(t, tasksDir, dirs.Waiting, "aaa.md",
+					"---\nid: dup\ndepends_on: [missing]\n---\n# A\n")
+				writeTask(t, tasksDir, dirs.Waiting, "bbb.md",
+					"---\nid: dup\ndepends_on: [missing]\n---\n# B\n")
+				writeTask(t, tasksDir, dirs.Failed, "bbb.md", "# Existing failed copy\n")
+				return filepath.Join(tasksDir, dirs.Waiting, "bbb.md")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasksDir := setupTasksDirs(t)
+			stuckPath := tt.setup(t, tasksDir)
+
+			ReconcileReadyQueue(tasksDir, nil)
+
+			dataBefore := readTaskAndAssertSingleTerminalFailure(t, stuckPath)
+
+			ReconcileReadyQueue(tasksDir, nil)
+
+			dataAfter := readTaskAndAssertSingleTerminalFailure(t, stuckPath)
+			if string(dataBefore) != string(dataAfter) {
+				t.Fatalf("%s content changed after second reconcile pass", filepath.Base(stuckPath))
+			}
+		})
 	}
 }
 

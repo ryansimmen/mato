@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,5 +282,84 @@ func TestSweepSessions_RemovesTerminalStateAndKeepsActive(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSweepSessions_PreservesMetadataWhenActiveStateUnknown(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, dir := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Completed, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+	}
+	activeDir := filepath.Join(tasksDir, dirs.InProgress)
+	if err := os.WriteFile(filepath.Join(activeDir, "active.md"), []byte("# Active\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile active: %v", err)
+	}
+	for _, kind := range []string{KindWork, KindReview} {
+		if _, err := LoadOrCreateSession(tasksDir, kind, "active.md", "task/active"); err != nil {
+			t.Fatalf("LoadOrCreateSession %s active: %v", kind, err)
+		}
+	}
+	if err := os.Chmod(activeDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(activeDir, 0o755)
+	})
+
+	err := SweepSessions(tasksDir)
+	if err == nil {
+		t.Fatal("SweepSessions error = nil, want activity check failure")
+	}
+	if !strings.Contains(err.Error(), "check task activity for active.md") {
+		t.Fatalf("SweepSessions error = %v, want activity warning", err)
+	}
+	for _, kind := range []string{KindWork, KindReview} {
+		session, loadErr := LoadSession(tasksDir, kind, "active.md")
+		if loadErr != nil {
+			t.Fatalf("LoadSession %s active: %v", kind, loadErr)
+		}
+		if session == nil {
+			t.Fatalf("active %s session should remain when liveness is unknown", kind)
+		}
+	}
+}
+
+func TestSweepSessions_PreservesMetadataWhenActiveDirectoryMissing(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, dir := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Completed, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", dir, err)
+		}
+	}
+	activeDir := filepath.Join(tasksDir, dirs.InProgress)
+	if err := os.WriteFile(filepath.Join(activeDir, "active.md"), []byte("# Active\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile active: %v", err)
+	}
+	for _, kind := range []string{KindWork, KindReview} {
+		if _, err := LoadOrCreateSession(tasksDir, kind, "active.md", "task/active"); err != nil {
+			t.Fatalf("LoadOrCreateSession %s active: %v", kind, err)
+		}
+	}
+	if err := os.RemoveAll(activeDir); err != nil {
+		t.Fatalf("RemoveAll active dir: %v", err)
+	}
+
+	err := SweepSessions(tasksDir)
+	if err == nil {
+		t.Fatal("SweepSessions error = nil, want missing directory failure")
+	}
+	if !strings.Contains(err.Error(), "check task activity for active.md") {
+		t.Fatalf("SweepSessions error = %v, want activity warning", err)
+	}
+	for _, kind := range []string{KindWork, KindReview} {
+		session, loadErr := LoadSession(tasksDir, kind, "active.md")
+		if loadErr != nil {
+			t.Fatalf("LoadSession %s active: %v", kind, loadErr)
+		}
+		if session == nil {
+			t.Fatalf("active %s session should remain when active directory is missing", kind)
+		}
 	}
 }

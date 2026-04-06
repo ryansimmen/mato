@@ -303,6 +303,50 @@ func TestDiscoverHostTools_OptionalDirsPresent(t *testing.T) {
 	}
 }
 
+func TestDiscoverHostTools_GoplsOptionalWhenPresent(t *testing.T) {
+	home := "/fake/home"
+	tools := allRequiredTools()
+	tools["gopls"] = "/home/test/go/bin/gopls"
+	setTestSeams(t,
+		makeLookPathFn(tools),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+
+	found, err := discoverHostTools()
+	if err != nil {
+		t.Fatalf("discoverHostTools() error: %v", err)
+	}
+	if found.goplsPath != "/home/test/go/bin/gopls" {
+		t.Fatalf("goplsPath = %q, want %q", found.goplsPath, "/home/test/go/bin/gopls")
+	}
+}
+
+func TestDiscoverHostTools_GoplsOptionalWhenMissing(t *testing.T) {
+	home := "/fake/home"
+	setTestSeams(t,
+		makeLookPathFn(allRequiredTools()),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+
+	found, err := discoverHostTools()
+	if err != nil {
+		t.Fatalf("discoverHostTools() error: %v", err)
+	}
+	if found.goplsPath != "" {
+		t.Fatalf("goplsPath = %q, want empty when gopls is missing", found.goplsPath)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // discoverHostTools — .copilot validation via seams
 // ---------------------------------------------------------------------------
@@ -426,8 +470,10 @@ func TestDiscoverHostTools_GhNotFoundIncludesHint(t *testing.T) {
 
 func TestInspectHostTools_RequiredVsOptionalClassification(t *testing.T) {
 	home := "/fake/home"
+	tools := allRequiredTools()
+	tools["gopls"] = "/home/test/go/bin/gopls"
 	setTestSeams(t,
-		makeLookPathFn(allRequiredTools()),
+		makeLookPathFn(tools),
 		makeStatFn(map[string]fakeFileInfo{
 			"/usr/bin/gh":                            {name: "gh", isDir: false},
 			filepath.Join(home, ".copilot"):          {name: ".copilot", isDir: true},
@@ -447,7 +493,7 @@ func TestInspectHostTools_RequiredVsOptionalClassification(t *testing.T) {
 		"git-receive-pack": true, "gh": true, ".copilot": true,
 	}
 	optionalNames := map[string]bool{
-		"copilot cache dir": true, "git templates dir": true, "system certs dir": true, "gh config dir": true,
+		"gopls": true, "copilot cache dir": true, "git templates dir": true, "system certs dir": true, "gh config dir": true,
 	}
 
 	for _, f := range report.Findings {
@@ -538,7 +584,7 @@ func TestInspectHostTools_OptionalDirsMissing(t *testing.T) {
 
 	report := InspectHostTools()
 	optionalNames := map[string]bool{
-		"copilot cache dir": true, "git templates dir": true, "system certs dir": true, "gh config dir": true,
+		"gopls": true, "copilot cache dir": true, "git templates dir": true, "system certs dir": true, "gh config dir": true,
 	}
 	for _, f := range report.Findings {
 		if optionalNames[f.Name] {

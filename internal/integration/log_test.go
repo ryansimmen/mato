@@ -59,6 +59,23 @@ func TestLogCommand_RejectedTaskAppears(t *testing.T) {
 	}
 }
 
+func TestLogCommand_RejectedTaskAppearsFromVerdictFallback(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "recover-review-feedback.md"), "# Recover review feedback\n")
+	writeVerdict(t, tasksDir, "recover-review-feedback.md", map[string]string{
+		"verdict": "reject",
+		"reason":  "fallback-only review feedback",
+	})
+
+	out, err := runMatoCommand(t, "log", "--repo", repoRoot)
+	if err != nil {
+		t.Fatalf("mato log failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "REJECTED") || !strings.Contains(out, "recover-review-feedback.md") || !strings.Contains(out, "fallback-only review feedback") {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+}
+
 func TestLogCommand_EmptyHistory(t *testing.T) {
 	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 
