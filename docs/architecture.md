@@ -488,22 +488,16 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - `Pause` writes the current UTC RFC3339 timestamp; repairs malformed sentinels.
 - `Resume` removes the sentinel file.
 
-### `internal/runtimecleanup/`
-- Best-effort cleanup of both `taskstate` and `sessionmeta` for terminal task transitions — `DeleteAll` (`runtimecleanup.go`).
-
-### `internal/sessionmeta/`
-- Durable Copilot session metadata under `.mato/runtime/sessionmeta/` — `LoadOrCreate`, `Save`, `DeleteAll`, `Sweep` (`sessionmeta.go`).
-- Separate records for work and review phases (`work-<task>.json`, `review-<task>.json`).
-- `Sweep` removes stale records whose task is no longer active in any non-terminal queue directory.
+### `internal/runtimedata/`
+- Host-managed runtime sidecar data under `.mato/runtime/` — task state, session metadata, and cleanup helpers.
+- Task state helpers — `LoadTaskState`, `UpdateTaskState`, `DeleteTaskState`, `SweepTaskState`.
+- Session helpers — `LoadSession`, `LoadOrCreateSession`, `ResetSessionID`, `UpdateSession`, `DeleteSession`, `DeleteAllSessions`, `SweepSessions`.
+- Terminal cleanup helpers — `DeleteRuntimeArtifacts`, `DeleteRuntimeArtifactsPreservingVerdict`.
+- Preserves the existing on-disk runtime layout while consolidating the former `taskstate`, `sessionmeta`, and `runtimecleanup` packages.
 
 ### `internal/setup/`
 - `mato init` bootstrap flow — `InitRepo` (`setup.go`).
 - Composes `git.EnsureBranch`, `git.EnsureIdentity`, `git.EnsureGitignoreContains`, and `messaging.Init` to create the queue layout, target branch, and git identity without requiring Docker.
-
-### `internal/taskstate/`
-- Lightweight per-task runtime state tracking under `.mato/runtime/taskstate/` — `Update`, `Load`, `Delete`, `Sweep` (`taskstate.go`).
-- Records pushed branch tips, review outcomes, and agent progress for follow-up review continuity.
-- `Sweep` removes stale records whose task is no longer active.
 
 ### `internal/testutil/`
 - Shared test helpers — `SetupRepo`, `SetupRepoWithTasks` (`testutil.go`).

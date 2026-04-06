@@ -495,7 +495,7 @@ func TestRetryTask_CleansRuntimeState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create taskstate and sessionmeta entries to simulate stale runtime state.
+	// Create runtime sidecar files to simulate stale runtime state.
 	taskstateDir := filepath.Join(tmp, "runtime", "taskstate")
 	sessionmetaDir := filepath.Join(tmp, "runtime", "sessionmeta")
 	if err := os.MkdirAll(taskstateDir, 0o755); err != nil {
@@ -523,12 +523,12 @@ func TestRetryTask_CleansRuntimeState(t *testing.T) {
 		t.Fatalf("task not found in backlog: %v", err)
 	}
 
-	// Verify taskstate was cleaned up.
+	// Verify task state was cleaned up.
 	if _, err := os.Stat(filepath.Join(taskstateDir, "cleanup-task.md.json")); !os.IsNotExist(err) {
 		t.Errorf("taskstate file should be removed after retry, stat err = %v", err)
 	}
 
-	// Verify sessionmeta (work and review) was cleaned up.
+	// Verify session metadata (work and review) was cleaned up.
 	if _, err := os.Stat(filepath.Join(sessionmetaDir, "work-cleanup-task.md.json")); !os.IsNotExist(err) {
 		t.Errorf("work sessionmeta file should be removed after retry, stat err = %v", err)
 	}

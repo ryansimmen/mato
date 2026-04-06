@@ -1832,7 +1832,11 @@ func TestWriteQueueManifest_WithIndexSkipsMalformedBacklogFiles(t *testing.T) {
 
 func TestWriteQueueManifest_WithIndexFailsWhenBacklogUnreadable(t *testing.T) {
 	tasksDir := t.TempDir()
-	idx := newPollIndexWithWarnings([]BuildWarning{{State: dirs.Backlog, Path: filepath.Join(tasksDir, dirs.Backlog), Err: os.ErrPermission, DirLevel: true}})
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog)
+	if err := os.WriteFile(backlogPath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("create backlog file: %v", err)
+	}
+	idx := BuildIndex(tasksDir)
 
 	stderr := captureStderr(t, func() {
 		err := WriteQueueManifest(tasksDir, nil, idx)

@@ -7,8 +7,6 @@ type ParseFailure = queueview.ParseFailure
 type BuildWarning = queueview.BuildWarning
 type PollIndex = queueview.PollIndex
 
-type DependencyIssueKind = queueview.DependencyIssueKind
-
 const (
 	DependencyAmbiguousID = queueview.DependencyAmbiguousID
 	DependencyDuplicateID = queueview.DependencyDuplicateID
@@ -22,7 +20,6 @@ type DependencyDiagnostics = queueview.DependencyDiagnostics
 type TaskMatch = queueview.TaskMatch
 type DependencyBlock = queueview.DependencyBlock
 type RunnableBacklogView = queueview.RunnableBacklogView
-type DeferralInfo = queueview.DeferralInfo
 
 func BuildIndex(tasksDir string) *PollIndex {
 	return queueview.BuildIndex(tasksDir)
@@ -34,10 +31,6 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 
 func DeferredOverlappingTasks(tasksDir string, idx *PollIndex) map[string]struct{} {
 	return queueview.DeferredOverlappingTasks(tasksDir, idx)
-}
-
-func DeferredOverlappingTasksDetailed(tasksDir string, idx *PollIndex) map[string]DeferralInfo {
-	return queueview.DeferredOverlappingTasksDetailed(tasksDir, idx)
 }
 
 func DependencyBlockedBacklogTasksDetailed(tasksDir string, idx *PollIndex) map[string][]DependencyBlock {
