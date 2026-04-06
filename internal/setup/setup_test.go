@@ -262,6 +262,72 @@ func TestInitRepo_EmptyRepoStagedFilesPreserved(t *testing.T) {
 	}
 }
 
+func TestInitRepo_EmptyRepoExistingGitignoreUsesEmptyBootstrapCommit(t *testing.T) {
+	repoRoot := t.TempDir()
+	if _, err := git.Output(repoRoot, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	gitignorePath := filepath.Join(repoRoot, ".gitignore")
+	gitignoreContent := "/.mato/\n*.tmp\n"
+	if err := os.WriteFile(gitignorePath, []byte(gitignoreContent), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "notes.txt"), []byte("staged\n"), 0o644); err != nil {
+		t.Fatalf("write notes.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "--", "notes.txt"); err != nil {
+		t.Fatalf("git add notes.txt: %v", err)
+	}
+
+	result, err := InitRepo(repoRoot, "mato")
+	if err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	if result.GitignoreUpdated {
+		t.Fatal("expected GitignoreUpdated=false for unchanged .gitignore")
+	}
+	head, err := git.Output(repoRoot, "rev-parse", "--verify", "refs/heads/mato")
+	if err != nil {
+		t.Fatalf("verify refs/heads/mato: %v", err)
+	}
+	if strings.TrimSpace(head) == "" {
+		t.Fatal("expected born branch after init")
+	}
+
+	show, err := git.Output(repoRoot, "show", "--format=fuller", "--stat", "--name-only", "-1")
+	if err != nil {
+		t.Fatalf("git show: %v", err)
+	}
+	if !strings.Contains(show, "chore: initialize mato") {
+		t.Fatalf("expected bootstrap commit, got %q", show)
+	}
+	if strings.Contains(show, ".gitignore") {
+		t.Fatalf("bootstrap commit should not include unchanged .gitignore, got %q", show)
+	}
+	if strings.Contains(show, "notes.txt") {
+		t.Fatalf("bootstrap commit should not include staged notes.txt, got %q", show)
+	}
+
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if string(data) != gitignoreContent {
+		t.Fatalf(".gitignore content changed: got %q want %q", string(data), gitignoreContent)
+	}
+
+	status, err := git.Output(repoRoot, "status", "--porcelain")
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if !strings.Contains(status, "A  notes.txt") {
+		t.Fatalf("expected notes.txt to remain staged, got %q", status)
+	}
+	if !strings.Contains(status, "?? .gitignore") {
+		t.Fatalf("expected unchanged .gitignore to remain untracked, got %q", status)
+	}
+}
+
 func TestInitRepo_DirtyGitignoreRejected(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	gitignorePath := filepath.Join(repoRoot, ".gitignore")
