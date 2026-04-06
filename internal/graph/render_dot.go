@@ -18,10 +18,12 @@ var stateColor = map[NodeState]string{
 }
 
 // RenderDOT writes a Graphviz DOT representation of the graph.
-func RenderDOT(w io.Writer, data GraphData) {
-	fmt.Fprintln(w, "digraph mato {")
-	fmt.Fprintln(w, "  rankdir=LR;")
-	fmt.Fprintln(w, "  node [shape=box, style=filled];")
+func RenderDOT(w io.Writer, data GraphData) error {
+	dw := dotRenderWriter{w: w}
+
+	dw.println("digraph mato {")
+	dw.println("  rankdir=LR;")
+	dw.println("  node [shape=box, style=filled];")
 
 	// Build same-SCC lookup for cycle edge detection.
 	// sccIndex maps node key → list of SCC indices it belongs to.
@@ -37,8 +39,8 @@ func RenderDOT(w io.Writer, data GraphData) {
 
 	// Nodes.
 	if len(data.Nodes) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "  // Nodes")
+		dw.println()
+		dw.println("  // Nodes")
 		for _, node := range data.Nodes {
 			label := node.ID + "\npriority: " + fmt.Sprintf("%d", node.Priority) + "\n(" + string(node.State)
 			if len(node.BlockDetails) > 0 {
@@ -50,28 +52,48 @@ func RenderDOT(w io.Writer, data GraphData) {
 			if color == "" {
 				color = "#FFFFFF"
 			}
-			fmt.Fprintf(w, "  %s [label=%s, fillcolor=%q];\n",
+			dw.printf("  %s [label=%s, fillcolor=%q];\n",
 				dotQuote(node.Key), dotQuoteLabel(label), color)
 		}
 	}
 
 	// Edges.
 	if len(data.Edges) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "  // Edges")
+		dw.println()
+		dw.println("  // Edges")
 		for _, edge := range data.Edges {
 			attrs := dotEdgeAttrs(edge, sccByKey)
 			if attrs != "" {
-				fmt.Fprintf(w, "  %s -> %s [%s];\n",
+				dw.printf("  %s -> %s [%s];\n",
 					dotQuote(edge.From), dotQuote(edge.To), attrs)
 			} else {
-				fmt.Fprintf(w, "  %s -> %s;\n",
+				dw.printf("  %s -> %s;\n",
 					dotQuote(edge.From), dotQuote(edge.To))
 			}
 		}
 	}
 
-	fmt.Fprintln(w, "}")
+	dw.println("}")
+	return dw.err
+}
+
+type dotRenderWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (dw *dotRenderWriter) printf(format string, args ...any) {
+	if dw.err != nil {
+		return
+	}
+	_, dw.err = fmt.Fprintf(dw.w, format, args...)
+}
+
+func (dw *dotRenderWriter) println(args ...any) {
+	if dw.err != nil {
+		return
+	}
+	_, dw.err = fmt.Fprintln(dw.w, args...)
 }
 
 // dotEdgeAttrs returns DOT edge attributes based on edge type.
