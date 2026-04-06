@@ -1,5 +1,9 @@
 # Package Boundary Refactor Plan
 
+> **Status: Implemented** — This proposal has been fully implemented.
+> The text below describes the original design; see the source code for
+> the current implementation.
+
 This proposal describes a focused architectural cleanup of mato's internal
 package boundaries. The goal is not to reduce package count for its own sake.
 The goal is to make dependencies flow downward more consistently, remove thin
