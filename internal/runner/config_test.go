@@ -144,6 +144,43 @@ func TestBuildDockerArgs_CopilotCacheMount(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_GoplsMount(t *testing.T) {
+	env := envConfig{
+		homeDir:   "/home/test",
+		image:     "ubuntu:24.04",
+		workdir:   "/workspace",
+		goplsPath: "/home/test/go/bin/gopls",
+	}
+	run := runContext{prompt: "test"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "/home/test/go/bin/gopls:/usr/local/bin/gopls:ro") {
+		t.Fatal("gopls should be bind-mounted to /usr/local/bin/gopls when present on the host")
+	}
+}
+
+func TestBuildDockerArgs_MissingGoplsWarns(t *testing.T) {
+	env := envConfig{
+		homeDir:          "/home/test",
+		image:            "ubuntu:24.04",
+		workdir:          "/workspace",
+		warnMissingGopls: true,
+	}
+	run := runContext{prompt: "test"}
+
+	_, stderr := captureStdoutStderr(t, func() {
+		args := buildDockerArgs(env, run, nil, nil)
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "/usr/local/bin/gopls") {
+			t.Fatal("gopls mount should be omitted when the host gopls binary is missing")
+		}
+	})
+	if !strings.Contains(stderr, "Go LSP features will be unavailable in Docker agent containers") {
+		t.Fatalf("expected missing gopls warning, got %q", stderr)
+	}
+}
+
 func TestBuildDockerArgs_SkipsMissingGoCacheMounts(t *testing.T) {
 	withStatPathFn(t, func(path string) (os.FileInfo, error) {
 		return nil, os.ErrNotExist

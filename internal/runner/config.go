@@ -98,7 +98,8 @@ func ensureDockerImage(ctx context.Context, image string) error {
 type envConfig struct {
 	image, workdir                          string
 	copilotPath, gitPath, gitUploadPackPath string
-	gitReceivePackPath, ghPath, goRoot      string
+	gitReceivePackPath, ghPath, goplsPath   string
+	goRoot                                  string
 	copilotConfigDir, copilotCacheDir       string
 	gitName, gitEmail, homeDir, ghConfigDir string
 	hasGhConfig                             bool
@@ -106,6 +107,7 @@ type envConfig struct {
 	hasGitTemplates                         bool
 	systemCertsDir                          string
 	hasSystemCerts                          bool
+	warnMissingGopls                        bool
 	repoRoot, tasksDir                      string
 	targetBranch, reviewModel               string
 	reviewReasoningEffort                   string
@@ -156,6 +158,11 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"-v", fmt.Sprintf("%s:/usr/local/go:ro", env.goRoot),
 		"-e", "GOROOT=/usr/local/go",
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	if goplsPath := strings.TrimSpace(env.goplsPath); goplsPath != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:/usr/local/bin/gopls:ro", goplsPath))
+	} else if env.warnMissingGopls {
+		ui.Warnf("warning: gopls not found on the host PATH; Go LSP features will be unavailable in Docker agent containers\n")
 	}
 	args = append(args,
 		"-e", "MATO_AGENT_ID="+run.agentID,

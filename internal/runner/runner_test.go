@@ -4870,6 +4870,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 		gitUploadPackPath:  "/usr/bin/git-upload-pack",
 		gitReceivePackPath: "/usr/bin/git-receive-pack",
 		ghPath:             "/usr/bin/gh",
+		goplsPath:          "/home/testuser/go/bin/gopls",
 		goRoot:             "/usr/local/go",
 		homeDir:            "/home/testuser",
 		copilotConfigDir:   "/home/testuser/.copilot",
@@ -4892,6 +4893,12 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	}
 	if env.targetBranch != "main" {
 		t.Errorf("expected targetBranch %q, got %q", "main", env.targetBranch)
+	}
+	if env.goplsPath != "/home/testuser/go/bin/gopls" {
+		t.Errorf("expected goplsPath %q, got %q", "/home/testuser/go/bin/gopls", env.goplsPath)
+	}
+	if env.warnMissingGopls {
+		t.Fatal("expected warnMissingGopls to be false when gopls is available")
 	}
 	if run.agentID != "agent-123" {
 		t.Errorf("expected agentID %q, got %q", "agent-123", run.agentID)
@@ -4946,6 +4953,25 @@ func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	}
 	if env.reviewSessionResumeEnabled {
 		t.Fatal("expected review session resume to reflect RunOptions")
+	}
+}
+
+func TestBuildEnvAndRunContext_MissingGoplsEnablesWarning(t *testing.T) {
+	tools := hostTools{homeDir: "/home/test"}
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{
+		TaskModel:                  config.DefaultTaskModel,
+		ReviewModel:                config.DefaultReviewModel,
+		ReviewSessionResumeEnabled: true,
+		TaskReasoningEffort:        config.DefaultReasoningEffort,
+		ReviewReasoningEffort:      config.DefaultReasoningEffort,
+		AgentTimeout:               time.Hour,
+	})
+
+	if !env.warnMissingGopls {
+		t.Fatal("expected warnMissingGopls to be true when gopls is unavailable on the host")
+	}
+	if env.goplsPath != "" {
+		t.Fatalf("expected empty goplsPath when gopls is unavailable, got %q", env.goplsPath)
 	}
 }
 
