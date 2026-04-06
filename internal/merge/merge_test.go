@@ -11,12 +11,12 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
-	"mato/internal/sessionmeta"
-	"mato/internal/taskstate"
+	"mato/internal/runtimedata"
 	"mato/internal/testutil"
 )
 
@@ -24,7 +24,7 @@ func setupTasksDir(t *testing.T) string {
 	t.Helper()
 
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirReadyMerge, queue.DirCompleted, queue.DirFailed, ".locks"} {
+	for _, sub := range []string{dirs.Backlog, dirs.ReadyMerge, dirs.Completed, dirs.Failed, ".locks"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
 		}
@@ -129,8 +129,8 @@ func TestAcquireLockCleanupRemovesLockFile(t *testing.T) {
 
 func TestAtomicMove_DestinationExists(t *testing.T) {
 	dir := t.TempDir()
-	src := filepath.Join(dir, queue.DirReadyMerge, "task.md")
-	dst := filepath.Join(dir, queue.DirBacklog, "task.md")
+	src := filepath.Join(dir, dirs.ReadyMerge, "task.md")
+	dst := filepath.Join(dir, dirs.Backlog, "task.md")
 	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
 		t.Fatalf("os.MkdirAll src dir: %v", err)
 	}
@@ -190,8 +190,8 @@ func TestProcessQueue_AlreadyMergedDuplicateDestinationCleansRuntimeState(t *tes
 
 	taskName := "already-merged-runtime-cleanup.md"
 	taskBranch := "task/already-merged-runtime-cleanup"
-	readyPath := filepath.Join(tasksDir, queue.DirReadyMerge, taskName)
-	completedPath := filepath.Join(tasksDir, queue.DirCompleted, taskName)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyMerge, taskName)
+	completedPath := filepath.Join(tasksDir, dirs.Completed, taskName)
 	readyContent := "---\nid: already-merged-runtime-cleanup\npriority: 5\n---\n<!-- branch: " + taskBranch + " -->\n# Already Merged Runtime Cleanup\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"
 	if err := os.WriteFile(readyPath, []byte(readyContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile ready task: %v", err)
@@ -199,13 +199,13 @@ func TestProcessQueue_AlreadyMergedDuplicateDestinationCleansRuntimeState(t *tes
 	if err := os.WriteFile(completedPath, []byte("already moved\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile completed task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, taskName, func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewApproved
+	if err := runtimedata.UpdateTaskState(tasksDir, taskName, func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewApproved
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, taskName, taskBranch); err != nil {
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		if _, err := runtimedata.LoadOrCreateSession(tasksDir, kind, taskName, taskBranch); err != nil {
 			t.Fatalf("seed %s session: %v", kind, err)
 		}
 	}
@@ -213,15 +213,15 @@ func TestProcessQueue_AlreadyMergedDuplicateDestinationCleansRuntimeState(t *tes
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("ProcessQueue() = %d, want 1", got)
 	}
-	state, err := taskstate.Load(tasksDir, taskName)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskName)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
 	if state != nil {
 		t.Fatalf("taskstate should be deleted, got %+v", state)
 	}
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		session, err := sessionmeta.Load(tasksDir, kind, taskName)
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		session, err := runtimedata.LoadSession(tasksDir, kind, taskName)
 		if err != nil {
 			t.Fatalf("Load %s session: %v", kind, err)
 		}
@@ -256,7 +256,7 @@ func TestProcessQueueMergesReadyTaskBranch(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add feature!!.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "add feature!!.md")
 	taskContent := "---\npriority: 5\n---\n<!-- claimed-by: agent123  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/add-feature -->\n# Add feature\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -265,7 +265,7 @@ func TestProcessQueueMergesReadyTaskBranch(t *testing.T) {
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("ProcessQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "add feature!!.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "add feature!!.md")); err != nil {
 		t.Fatalf("completed task file missing: %v", err)
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
@@ -331,7 +331,7 @@ func TestProcessQueue_CleansTaskBranchAfterSuccessfulMerge(t *testing.T) {
 		t.Fatalf("expected task branch %s to exist on origin before ProcessQueue", taskBranch)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "cleanup-test.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "cleanup-test.md")
 	taskContent := "---\npriority: 5\n---\n<!-- branch: " + taskBranch + " -->\n# Cleanup test\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -340,7 +340,7 @@ func TestProcessQueue_CleansTaskBranchAfterSuccessfulMerge(t *testing.T) {
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("ProcessQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "cleanup-test.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "cleanup-test.md")); err != nil {
 		t.Fatalf("completed task file missing: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, "feature.txt")); err != nil {
@@ -408,7 +408,7 @@ func TestProcessQueue_UsesBranchFromTaskFile(t *testing.T) {
 		t.Fatalf("git checkout mato after actual branch: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, taskName)
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, taskName)
 	taskContent := "---\npriority: 5\n---\n<!-- branch: " + actualBranch + " -->\n# Use actual branch\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -453,7 +453,7 @@ func TestProcessQueue_MissingBranchMarkerRequeuesTask(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, taskName)
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, taskName)
 	taskContent := "---\npriority: 5\n---\n# Fallback branch\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -462,7 +462,7 @@ func TestProcessQueue_MissingBranchMarkerRequeuesTask(t *testing.T) {
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
 		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
-	backlogFile := filepath.Join(tasksDir, queue.DirBacklog, taskName)
+	backlogFile := filepath.Join(tasksDir, dirs.Backlog, taskName)
 	data, err := os.ReadFile(backlogFile)
 	if err != nil {
 		t.Fatalf("backlog task file missing: %v", err)
@@ -516,7 +516,7 @@ func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
 		t.Fatalf("git commit target branch change: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "conflict task.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "conflict task.md")
 	taskContent := "---\npriority: 1\n---\n<!-- branch: task/conflict-task -->\n# Conflict task\nThis should conflict.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -525,7 +525,7 @@ func TestProcessQueueMovesConflictedTaskBackToBacklog(t *testing.T) {
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
 		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
-	backlogFile := filepath.Join(tasksDir, queue.DirBacklog, "conflict task.md")
+	backlogFile := filepath.Join(tasksDir, dirs.Backlog, "conflict task.md")
 	data, err := os.ReadFile(backlogFile)
 	if err != nil {
 		t.Fatalf("backlog task file missing: %v", err)
@@ -617,12 +617,12 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 		t.Fatalf("expected conflicted task branch %s to exist on origin before ProcessQueue", conflictBranch)
 	}
 
-	firstTaskFile := filepath.Join(tasksDir, queue.DirReadyMerge, firstTaskName)
+	firstTaskFile := filepath.Join(tasksDir, dirs.ReadyMerge, firstTaskName)
 	firstTaskContent := "---\npriority: 1\n---\n<!-- branch: " + firstBranch + " -->\n# First task\nThis should merge first.\n"
 	if err := os.WriteFile(firstTaskFile, []byte(firstTaskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile first task file: %v", err)
 	}
-	conflictTaskFile := filepath.Join(tasksDir, queue.DirReadyMerge, conflictTaskName)
+	conflictTaskFile := filepath.Join(tasksDir, dirs.ReadyMerge, conflictTaskName)
 	conflictTaskContent := "---\npriority: 2\n---\n<!-- branch: " + conflictBranch + " -->\n# Conflict task\nThis should conflict after the first merge.\n"
 	if err := os.WriteFile(conflictTaskFile, []byte(conflictTaskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile conflict task file: %v", err)
@@ -631,11 +631,11 @@ func TestProcessQueue_CleansRemoteBranchOnConflictRequeue(t *testing.T) {
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("ProcessQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, firstTaskName)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, firstTaskName)); err != nil {
 		t.Fatalf("completed first task missing: %v", err)
 	}
 
-	backlogFile := filepath.Join(tasksDir, queue.DirBacklog, conflictTaskName)
+	backlogFile := filepath.Join(tasksDir, dirs.Backlog, conflictTaskName)
 	data, err := os.ReadFile(backlogFile)
 	if err != nil {
 		t.Fatalf("backlog conflicted task file missing: %v", err)
@@ -663,7 +663,7 @@ func TestProcessQueue_RespectsMaxRetries(t *testing.T) {
 		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "missing branch.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "missing branch.md")
 	taskContent := strings.Join([]string{
 		"<!-- branch: task/missing-branch -->",
 		"---",
@@ -681,7 +681,7 @@ func TestProcessQueue_RespectsMaxRetries(t *testing.T) {
 		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
 
-	failedFile := filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")
+	failedFile := filepath.Join(tasksDir, dirs.Failed, "missing branch.md")
 	data, err := os.ReadFile(failedFile)
 	if err != nil {
 		t.Fatalf("failed task file missing: %v", err)
@@ -692,7 +692,7 @@ func TestProcessQueue_RespectsMaxRetries(t *testing.T) {
 	if got := strings.Count(string(data), "<!-- failure:"); got != 2 {
 		t.Fatalf("failed task failure count = %d, want 2\ncontents:\n%s", got, string(data))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "missing branch.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "missing branch.md")); !os.IsNotExist(err) {
 		t.Fatalf("missing-branch task should not be moved to backlog, stat err = %v", err)
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
@@ -710,7 +710,7 @@ func TestProcessQueue_ZeroMaxRetries(t *testing.T) {
 		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "zero-retry.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "zero-retry.md")
 	taskContent := strings.Join([]string{
 		"<!-- branch: task/zero-retry -->",
 		"---",
@@ -729,7 +729,7 @@ func TestProcessQueue_ZeroMaxRetries(t *testing.T) {
 
 	// With max_retries: 0 and 0 prior failures, the task should go to failed/
 	// because 0 >= 0 (no retries allowed).
-	failedFile := filepath.Join(tasksDir, queue.DirFailed, "zero-retry.md")
+	failedFile := filepath.Join(tasksDir, dirs.Failed, "zero-retry.md")
 	data, err := os.ReadFile(failedFile)
 	if err != nil {
 		t.Fatalf("failed task file missing: %v", err)
@@ -737,7 +737,7 @@ func TestProcessQueue_ZeroMaxRetries(t *testing.T) {
 	if !strings.Contains(string(data), "<!-- failure:") {
 		t.Fatalf("failed task should contain failure record, got %q", string(data))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "zero-retry.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "zero-retry.md")); !os.IsNotExist(err) {
 		t.Fatalf("zero-retry task should not be in backlog, stat err = %v", err)
 	}
 }
@@ -752,7 +752,7 @@ func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "missing branch.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "missing branch.md")
 	taskContent := strings.Join([]string{
 		"<!-- branch: task/missing-branch -->",
 		"<!-- failure: one -->",
@@ -768,7 +768,7 @@ func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 		t.Fatalf("ProcessQueue() = %d, want 0", got)
 	}
 
-	failedFile := filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")
+	failedFile := filepath.Join(tasksDir, dirs.Failed, "missing branch.md")
 	data, err := os.ReadFile(failedFile)
 	if err != nil {
 		t.Fatalf("failed task file missing: %v", err)
@@ -779,10 +779,10 @@ func TestProcessQueue_DefaultMaxRetries(t *testing.T) {
 	if got := strings.Count(string(data), "<!-- failure:"); got != 3 {
 		t.Fatalf("failed task failure count = %d, want 3\ncontents:\n%s", got, string(data))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "missing branch.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "missing branch.md")); err != nil {
 		t.Fatalf("missing-branch task should be moved to failed once the new failure exhausts retries, stat err = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "missing branch.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "missing branch.md")); !os.IsNotExist(err) {
 		t.Fatalf("missing-branch task should not remain in backlog once retries are exhausted, stat err = %v", err)
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
@@ -815,7 +815,7 @@ func TestProcessQueueMovesTaskToBacklogWhenPushFails(t *testing.T) {
 		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add feature!!.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "add feature!!.md")
 	taskContent := "---\npriority: 5\n---\n<!-- branch: task/add-feature -->\n# Add feature\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -826,7 +826,7 @@ func TestProcessQueueMovesTaskToBacklogWhenPushFails(t *testing.T) {
 	}
 
 	// Task should be moved to backlog (not stuck in ready-to-merge)
-	backlogFile := filepath.Join(tasksDir, queue.DirBacklog, "add feature!!.md")
+	backlogFile := filepath.Join(tasksDir, dirs.Backlog, "add feature!!.md")
 	data, err := os.ReadFile(backlogFile)
 	if err != nil {
 		t.Fatalf("task should be moved to backlog after push failure: %v", err)
@@ -837,7 +837,7 @@ func TestProcessQueueMovesTaskToBacklogWhenPushFails(t *testing.T) {
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
 		t.Fatalf("task should not remain in ready-to-merge after push failure, stat err = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "add feature!!.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "add feature!!.md")); !os.IsNotExist(err) {
 		t.Fatalf("push failure should not move task to completed, stat err = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, "feature.txt")); !os.IsNotExist(err) {
@@ -873,7 +873,7 @@ func TestProcessQueue_PushFailureRespectsMaxRetries(t *testing.T) {
 
 	// Task already has one prior failure and max_retries: 1, so the next
 	// failure should route it to failed/ instead of backlog/.
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "push-retry.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "push-retry.md")
 	taskContent := strings.Join([]string{
 		"<!-- branch: task/push-retry -->",
 		"---",
@@ -893,7 +893,7 @@ func TestProcessQueue_PushFailureRespectsMaxRetries(t *testing.T) {
 	}
 
 	// With one prior failure and max_retries:1, the task should go to failed/
-	failedFile := filepath.Join(tasksDir, queue.DirFailed, "push-retry.md")
+	failedFile := filepath.Join(tasksDir, dirs.Failed, "push-retry.md")
 	data, err := os.ReadFile(failedFile)
 	if err != nil {
 		t.Fatalf("failed task file missing after push failure with exhausted retries: %v", err)
@@ -907,7 +907,7 @@ func TestProcessQueue_PushFailureRespectsMaxRetries(t *testing.T) {
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
 		t.Fatalf("task should not remain in ready-to-merge, stat err = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "push-retry.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "push-retry.md")); !os.IsNotExist(err) {
 		t.Fatalf("exhausted-retry task should not be in backlog, stat err = %v", err)
 	}
 }
@@ -937,7 +937,7 @@ func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	completedDir := filepath.Join(tasksDir, queue.DirCompleted)
+	completedDir := filepath.Join(tasksDir, dirs.Completed)
 	if err := os.RemoveAll(completedDir); err != nil {
 		t.Fatalf("os.RemoveAll completed: %v", err)
 	}
@@ -945,7 +945,7 @@ func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
 		t.Fatalf("os.WriteFile completed placeholder: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add feature!!.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "add feature!!.md")
 	taskContent := "---\npriority: 5\n---\n<!-- branch: task/add-feature -->\n# Add feature\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -972,7 +972,7 @@ func TestProcessQueueRetriesCompletedMoveWithoutRemerging(t *testing.T) {
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("ProcessQueue() second run = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "add feature!!.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "add feature!!.md")); err != nil {
 		t.Fatalf("completed task file missing after retry: %v", err)
 	}
 	log, err := git.Output(repoRoot, "log", "--format=%s", "mato")
@@ -989,13 +989,13 @@ func TestProcessQueue_DuplicateInCompletedIsRemoved(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 
 	// Place a task in ready-to-merge with a merged record.
-	rtmFile := filepath.Join(tasksDir, queue.DirReadyMerge, "dup-task.md")
+	rtmFile := filepath.Join(tasksDir, dirs.ReadyMerge, "dup-task.md")
 	if err := os.WriteFile(rtmFile, []byte("<!-- branch: task/dup-task -->\n---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile rtm: %v", err)
 	}
 
 	// Place a copy in completed (simulating a prior successful move).
-	completedFile := filepath.Join(tasksDir, queue.DirCompleted, "dup-task.md")
+	completedFile := filepath.Join(tasksDir, dirs.Completed, "dup-task.md")
 	if err := os.WriteFile(completedFile, []byte("<!-- branch: task/dup-task -->\n---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile completed: %v", err)
 	}
@@ -1052,7 +1052,7 @@ func TestProcessQueue_RecoveryPathWritesCompletionDetail(t *testing.T) {
 	}
 
 	// Place a task in ready-to-merge with a merged marker but no completion detail.
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "recover-detail.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "recover-detail.md")
 	taskContent := "<!-- branch: task/recover-detail -->\n---\nid: recover-detail\npriority: 5\n---\n# Recover detail\nMerge this.\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task: %v", err)
@@ -1068,7 +1068,7 @@ func TestProcessQueue_RecoveryPathWritesCompletionDetail(t *testing.T) {
 	}
 
 	// Verify the task was moved to completed.
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "recover-detail.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "recover-detail.md")); err != nil {
 		t.Fatalf("completed task missing: %v", err)
 	}
 
@@ -1135,7 +1135,7 @@ func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
 		}
 
 		taskContent := "<!-- branch: " + taskBranch + " -->\n---\npriority: 10\n---\n# " + title + "\n"
-		if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskName), []byte(taskContent), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, taskName), []byte(taskContent), 0o644); err != nil {
 			t.Fatalf("os.WriteFile %s: %v", taskName, err)
 		}
 	}
@@ -1154,7 +1154,7 @@ func TestProcessQueue_SamePriorityDeterministicOrder(t *testing.T) {
 	}
 
 	for _, name := range []string{"a-task.md", "b-task.md", "c-task.md"} {
-		if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, name)); err != nil {
+		if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, name)); err != nil {
 			t.Fatalf("completed task %s missing: %v", name, err)
 		}
 	}
@@ -1207,11 +1207,11 @@ func TestProcessQueue_MalformedTaskInReadyToMerge(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	malformedTask := filepath.Join(tasksDir, queue.DirReadyMerge, "bad-task.md")
+	malformedTask := filepath.Join(tasksDir, dirs.ReadyMerge, "bad-task.md")
 	if err := os.WriteFile(malformedTask, []byte("---\npriority: not-a-number\n---\n# Bad\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile bad-task.md: %v", err)
 	}
-	validTask := filepath.Join(tasksDir, queue.DirReadyMerge, "good-task.md")
+	validTask := filepath.Join(tasksDir, dirs.ReadyMerge, "good-task.md")
 	if err := os.WriteFile(validTask, []byte("<!-- branch: task/good-task -->\n---\npriority: 1\n---\n# Good task\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile good-task.md: %v", err)
 	}
@@ -1219,14 +1219,14 @@ func TestProcessQueue_MalformedTaskInReadyToMerge(t *testing.T) {
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("ProcessQueue() = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "good-task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "good-task.md")); err != nil {
 		t.Fatalf("completed good-task.md missing: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, "good.txt")); err != nil {
 		t.Fatalf("merged good.txt missing from target branch: %v", err)
 	}
 
-	backlogTask := filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md")
+	backlogTask := filepath.Join(tasksDir, dirs.Backlog, "bad-task.md")
 	data, err := os.ReadFile(backlogTask)
 	if err != nil {
 		t.Fatalf("backlog bad-task.md missing: %v", err)
@@ -1245,7 +1245,7 @@ func TestProcessQueue_NonSentinelErrorMovesTaskToBacklog(t *testing.T) {
 	repoRoot := t.TempDir()
 	tasksDir := setupTasksDir(t)
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "clone-fail.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "clone-fail.md")
 	taskContent := strings.Join([]string{
 		"---",
 		"priority: 1",
@@ -1262,7 +1262,7 @@ func TestProcessQueue_NonSentinelErrorMovesTaskToBacklog(t *testing.T) {
 	}
 
 	// Task should be moved to backlog/ (not left in ready-to-merge/).
-	backlogFile := filepath.Join(tasksDir, queue.DirBacklog, "clone-fail.md")
+	backlogFile := filepath.Join(tasksDir, dirs.Backlog, "clone-fail.md")
 	data, err := os.ReadFile(backlogFile)
 	if err != nil {
 		t.Fatalf("backlog task file missing: %v", err)
@@ -1280,7 +1280,7 @@ func TestProcessQueue_NonSentinelErrorRespectsMaxRetries(t *testing.T) {
 	repoRoot := t.TempDir()
 	tasksDir := setupTasksDir(t)
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "clone-fail-retry.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "clone-fail-retry.md")
 	taskContent := strings.Join([]string{
 		"---",
 		"max_retries: 1",
@@ -1299,7 +1299,7 @@ func TestProcessQueue_NonSentinelErrorRespectsMaxRetries(t *testing.T) {
 
 	// With max_retries: 1 and 1 prior failure, the new failure makes 2 >= 1,
 	// so the task should go to failed/.
-	failedFile := filepath.Join(tasksDir, queue.DirFailed, "clone-fail-retry.md")
+	failedFile := filepath.Join(tasksDir, dirs.Failed, "clone-fail-retry.md")
 	data, err := os.ReadFile(failedFile)
 	if err != nil {
 		t.Fatalf("failed task file missing: %v", err)
@@ -1310,7 +1310,7 @@ func TestProcessQueue_NonSentinelErrorRespectsMaxRetries(t *testing.T) {
 	if got := strings.Count(string(data), "<!-- failure:"); got != 2 {
 		t.Fatalf("failed task failure count = %d, want 2\ncontents:\n%s", got, string(data))
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "clone-fail-retry.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "clone-fail-retry.md")); !os.IsNotExist(err) {
 		t.Fatalf("task should not be in backlog, stat err = %v", err)
 	}
 	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
@@ -1351,7 +1351,7 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 
 	// Sabotage: make the completed directory a file so moveTaskWithRetry fails
 	// after the merge commit lands, leaving recovery to the next poll.
-	completedDir := filepath.Join(tasksDir, queue.DirCompleted)
+	completedDir := filepath.Join(tasksDir, dirs.Completed)
 	if err := os.RemoveAll(completedDir); err != nil {
 		t.Fatalf("os.RemoveAll completed: %v", err)
 	}
@@ -1359,7 +1359,7 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 		t.Fatalf("os.WriteFile completed placeholder: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "durable-merge.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "durable-merge.md")
 	taskContent := "<!-- branch: task/durable-merge -->\n---\nid: durable-merge\npriority: 5\n---\n# Durable merge\nMerge this.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task: %v", err)
@@ -1396,7 +1396,7 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("ProcessQueue() second run = %d, want 1", got)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "durable-merge.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "durable-merge.md")); err != nil {
 		t.Fatalf("completed task missing after retry: %v", err)
 	}
 
@@ -1471,7 +1471,7 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "readonly-task.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "readonly-task.md")
 	taskContent := "---\npriority: 5\n---\n<!-- branch: task/readonly-task -->\n# Readonly task\nMerge this.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task: %v", err)
@@ -1485,7 +1485,7 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 	t.Cleanup(func() {
 		// Ensure cleanup can remove the file.
 		os.Chmod(taskFile, 0o644)
-		completedFile := filepath.Join(tasksDir, queue.DirCompleted, "readonly-task.md")
+		completedFile := filepath.Join(tasksDir, dirs.Completed, "readonly-task.md")
 		os.Chmod(completedFile, 0o644)
 	})
 
@@ -1494,7 +1494,7 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 	}
 
 	// Task should be in completed/ despite markTaskMerged failure.
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirCompleted, "readonly-task.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "readonly-task.md")); err != nil {
 		t.Fatalf("completed task missing: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, "readonly.txt")); err != nil {
@@ -1530,8 +1530,8 @@ func TestProcessQueue_DuplicateCompletedPathCleanupFailureSkipsBranchCleanup(t *
 	}
 
 	taskName := "duplicate-cleanup-fail.md"
-	readyPath := filepath.Join(tasksDir, queue.DirReadyMerge, taskName)
-	completedPath := filepath.Join(tasksDir, queue.DirCompleted, taskName)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyMerge, taskName)
+	completedPath := filepath.Join(tasksDir, dirs.Completed, taskName)
 	taskContent := "---\nid: duplicate-cleanup-fail\npriority: 5\n---\n<!-- branch: " + taskBranch + " -->\n# Duplicate cleanup fail\n"
 	if err := os.WriteFile(readyPath, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile ready task: %v", err)
@@ -1638,7 +1638,7 @@ func TestProcessQueue_CommitIncludesTrailers(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add-trailers-feature.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "add-trailers-feature.md")
 	taskContent := "<!-- branch: task/add-trailers-feature -->\n---\nid: add-trailers-feature\npriority: 5\naffects:\n  - internal/merge/merge.go\n  - internal/merge/merge_test.go\n---\n# Add trailers feature\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -1694,7 +1694,7 @@ func TestProcessQueue_CommitOmitsTrailersWhenEmpty(t *testing.T) {
 	// No explicit id or affects in frontmatter. The frontmatter parser
 	// defaults id to the filename stem, so Task-ID will still appear.
 	// Only Affects should be absent.
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "no-metadata.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "no-metadata.md")
 	taskContent := "<!-- branch: task/no-metadata -->\n---\npriority: 5\n---\n# No metadata task\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -1743,7 +1743,7 @@ func TestProcessQueue_WritesCompletionDetail(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "add-completion.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "add-completion.md")
 	taskContent := "<!-- branch: task/add-completion -->\n---\nid: add-completion\npriority: 5\naffects:\n  - completion.txt\n---\n# Add completion\nMerge this task.\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -1828,7 +1828,7 @@ func TestProcessQueue_CompletionDetailFilesChanged(t *testing.T) {
 		t.Fatalf("git checkout mato: %v", err)
 	}
 
-	taskFile := filepath.Join(tasksDir, queue.DirReadyMerge, "multi-file.md")
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "multi-file.md")
 	taskContent := "<!-- branch: task/multi-file -->\n---\nid: multi-file\npriority: 5\n---\n# Multi file task\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task file: %v", err)
@@ -1855,8 +1855,8 @@ func TestProcessQueue_CompletionDetailFilesChanged(t *testing.T) {
 
 func TestFailMergeTask_MovesTaskEvenWhenAppendFails(t *testing.T) {
 	dir := t.TempDir()
-	src := filepath.Join(dir, queue.DirReadyMerge)
-	dst := filepath.Join(dir, queue.DirBacklog)
+	src := filepath.Join(dir, dirs.ReadyMerge)
+	dst := filepath.Join(dir, dirs.Backlog)
 	os.MkdirAll(src, 0o755)
 	os.MkdirAll(dst, 0o755)
 
@@ -2147,8 +2147,8 @@ func TestAppendTaskRecord_ReadOnlyDir(t *testing.T) {
 
 func TestLoadMergeCandidates(t *testing.T) {
 	tasksDir := t.TempDir()
-	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
-	backlogDir := filepath.Join(tasksDir, queue.DirBacklog)
+	readyDir := filepath.Join(tasksDir, dirs.ReadyMerge)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
 	for _, sub := range []string{readyDir, backlogDir} {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
@@ -2239,7 +2239,7 @@ func TestLoadMergeCandidates_NonexistentDir(t *testing.T) {
 
 func TestLoadMergeCandidates_SamePrioritySortsByName(t *testing.T) {
 	tasksDir := t.TempDir()
-	readyDir := filepath.Join(tasksDir, queue.DirReadyMerge)
+	readyDir := filepath.Join(tasksDir, dirs.ReadyMerge)
 	if err := os.MkdirAll(readyDir, 0o755); err != nil {
 		t.Fatalf("os.MkdirAll: %v", err)
 	}

@@ -1,5 +1,4 @@
-// Package sessionmeta stores durable Copilot session metadata for tasks.
-package sessionmeta
+package runtimedata
 
 import (
 	"crypto/rand"
@@ -15,7 +14,7 @@ import (
 	"mato/internal/dirs"
 )
 
-const version = 1
+const sessionVersion = 1
 
 const (
 	KindWork   = "work"
@@ -33,10 +32,10 @@ type Session struct {
 	LastHeadSHA      string `json:"last_head_sha"`
 }
 
-// Load returns the stored session metadata for a task phase. Missing files
-// return (nil, nil).
-func Load(tasksDir, kind, taskFilename string) (*Session, error) {
-	statePath, err := pathFor(tasksDir, kind, taskFilename)
+// LoadSession returns the stored session metadata for a task phase. Missing
+// files return (nil, nil).
+func LoadSession(tasksDir, kind, taskFilename string) (*Session, error) {
+	statePath, err := sessionPathFor(tasksDir, kind, taskFilename)
 	if err != nil {
 		return nil, err
 	}
@@ -51,14 +50,14 @@ func Load(tasksDir, kind, taskFilename string) (*Session, error) {
 	if err := json.Unmarshal(data, &session); err != nil {
 		return nil, fmt.Errorf("parse sessionmeta %s: %w", statePath, err)
 	}
-	normalize(&session, kind, taskFilename)
+	normalizeSession(&session, kind, taskFilename)
 	return &session, nil
 }
 
-// LoadOrCreate returns existing session metadata or creates a fresh session when
-// metadata is missing or corrupt.
-func LoadOrCreate(tasksDir, kind, taskFilename, taskBranch string) (*Session, error) {
-	statePath, err := pathFor(tasksDir, kind, taskFilename)
+// LoadOrCreateSession returns existing session metadata or creates a fresh
+// session when metadata is missing or corrupt.
+func LoadOrCreateSession(tasksDir, kind, taskFilename, taskBranch string) (*Session, error) {
+	statePath, err := sessionPathFor(tasksDir, kind, taskFilename)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +76,7 @@ func LoadOrCreate(tasksDir, kind, taskFilename, taskBranch string) (*Session, er
 		return nil, fmt.Errorf("read sessionmeta %s: %w", statePath, err)
 	}
 
-	normalize(&session, kind, taskFilename)
+	normalizeSession(&session, kind, taskFilename)
 	if trimmedTaskBranch := strings.TrimSpace(taskBranch); trimmedTaskBranch != "" {
 		branchChanged = session.TaskBranch != trimmedTaskBranch
 		session.TaskBranch = trimmedTaskBranch
@@ -93,7 +92,7 @@ func LoadOrCreate(tasksDir, kind, taskFilename, taskBranch string) (*Session, er
 		}
 	}
 	if createdFresh || branchChanged {
-		if err := write(statePath, &session); err != nil {
+		if err := writeSession(statePath, &session); err != nil {
 			return nil, err
 		}
 	}
@@ -103,7 +102,7 @@ func LoadOrCreate(tasksDir, kind, taskFilename, taskBranch string) (*Session, er
 // ResetSessionID rotates the stored Copilot session ID while preserving the
 // rest of the session record and returns the updated session.
 func ResetSessionID(tasksDir, kind, taskFilename, taskBranch string) (*Session, error) {
-	statePath, err := pathFor(tasksDir, kind, taskFilename)
+	statePath, err := sessionPathFor(tasksDir, kind, taskFilename)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +115,7 @@ func ResetSessionID(tasksDir, kind, taskFilename, taskBranch string) (*Session, 
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read sessionmeta %s: %w", statePath, err)
 	}
-	normalize(&session, kind, taskFilename)
+	normalizeSession(&session, kind, taskFilename)
 	if trimmedTaskBranch := strings.TrimSpace(taskBranch); trimmedTaskBranch != "" {
 		session.TaskBranch = trimmedTaskBranch
 	}
@@ -125,16 +124,16 @@ func ResetSessionID(tasksDir, kind, taskFilename, taskBranch string) (*Session, 
 		return nil, err
 	}
 	session.CopilotSessionID = sessionID
-	if err := write(statePath, &session); err != nil {
+	if err := writeSession(statePath, &session); err != nil {
 		return nil, err
 	}
 	return &session, nil
 }
 
-// Update applies a load-modify-save update to a task phase's session metadata.
-// Corrupt files are replaced with a fresh record.
-func Update(tasksDir, kind, taskFilename string, fn func(*Session)) error {
-	statePath, err := pathFor(tasksDir, kind, taskFilename)
+// UpdateSession applies a load-modify-save update to a task phase's session
+// metadata. Corrupt files are replaced with a fresh record.
+func UpdateSession(tasksDir, kind, taskFilename string, fn func(*Session)) error {
+	statePath, err := sessionPathFor(tasksDir, kind, taskFilename)
 	if err != nil {
 		return fmt.Errorf("resolve session path: %w", err)
 	}
@@ -147,7 +146,7 @@ func Update(tasksDir, kind, taskFilename string, fn func(*Session)) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read sessionmeta %s: %w", statePath, err)
 	}
-	normalize(&session, kind, taskFilename)
+	normalizeSession(&session, kind, taskFilename)
 	if fn != nil {
 		fn(&session)
 	}
@@ -158,13 +157,13 @@ func Update(tasksDir, kind, taskFilename string, fn func(*Session)) error {
 		}
 		session.CopilotSessionID = sessionID
 	}
-	return write(statePath, &session)
+	return writeSession(statePath, &session)
 }
 
-// Delete removes a task phase's session metadata file. Missing files are
+// DeleteSession removes a task phase's session metadata file. Missing files are
 // ignored.
-func Delete(tasksDir, kind, taskFilename string) error {
-	statePath, err := pathFor(tasksDir, kind, taskFilename)
+func DeleteSession(tasksDir, kind, taskFilename string) error {
+	statePath, err := sessionPathFor(tasksDir, kind, taskFilename)
 	if err != nil {
 		return fmt.Errorf("resolve session path: %w", err)
 	}
@@ -174,11 +173,12 @@ func Delete(tasksDir, kind, taskFilename string) error {
 	return nil
 }
 
-// DeleteAll removes both work and review session metadata files for a task.
-func DeleteAll(tasksDir, taskFilename string) error {
+// DeleteAllSessions removes both work and review session metadata files for a
+// task.
+func DeleteAllSessions(tasksDir, taskFilename string) error {
 	var errs []error
 	for _, kind := range []string{KindWork, KindReview} {
-		if err := Delete(tasksDir, kind, taskFilename); err != nil {
+		if err := DeleteSession(tasksDir, kind, taskFilename); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -188,10 +188,10 @@ func DeleteAll(tasksDir, taskFilename string) error {
 	return nil
 }
 
-// Sweep removes session metadata for tasks that are no longer in non-terminal
-// queue directories.
-func Sweep(tasksDir string) error {
-	runtimeDir := runtimeDir(tasksDir)
+// SweepSessions removes session metadata for tasks that are no longer in
+// non-terminal queue directories.
+func SweepSessions(tasksDir string) error {
+	runtimeDir := sessionRuntimeDir(tasksDir)
 	entries, err := os.ReadDir(runtimeDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -204,7 +204,7 @@ func Sweep(tasksDir string) error {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		kind, taskFilename, ok := parseEntryName(entry.Name())
+		kind, taskFilename, ok := parseSessionEntryName(entry.Name())
 		if !ok || kind == "" || taskFilename == "" {
 			continue
 		}
@@ -221,13 +221,13 @@ func Sweep(tasksDir string) error {
 	return nil
 }
 
-func pathFor(tasksDir, kind, taskFilename string) (string, error) {
+func sessionPathFor(tasksDir, kind, taskFilename string) (string, error) {
 	tasksDir = strings.TrimSpace(tasksDir)
 	if tasksDir == "" {
 		return "", fmt.Errorf("tasks directory must not be empty")
 	}
 	kind = strings.TrimSpace(kind)
-	if !validKind(kind) {
+	if !validSessionKind(kind) {
 		return "", fmt.Errorf("invalid session kind %q", kind)
 	}
 	taskFilename = strings.TrimSpace(taskFilename)
@@ -237,19 +237,19 @@ func pathFor(tasksDir, kind, taskFilename string) (string, error) {
 	if filepath.Base(taskFilename) != taskFilename {
 		return "", fmt.Errorf("task filename %q must be a base name", taskFilename)
 	}
-	return filepath.Join(runtimeDir(tasksDir), kind+"-"+taskFilename+".json"), nil
+	return filepath.Join(sessionRuntimeDir(tasksDir), kind+"-"+taskFilename+".json"), nil
 }
 
-func runtimeDir(tasksDir string) string {
+func sessionRuntimeDir(tasksDir string) string {
 	return filepath.Join(tasksDir, "runtime", "sessionmeta")
 }
 
-func validKind(kind string) bool {
+func validSessionKind(kind string) bool {
 	return kind == KindWork || kind == KindReview
 }
 
-func normalize(session *Session, kind, taskFilename string) {
-	session.Version = version
+func normalizeSession(session *Session, kind, taskFilename string) {
+	session.Version = sessionVersion
 	session.Kind = kind
 	session.TaskFile = taskFilename
 	session.TaskBranch = strings.TrimSpace(session.TaskBranch)
@@ -260,7 +260,7 @@ func normalize(session *Session, kind, taskFilename string) {
 	}
 }
 
-func write(statePath string, session *Session) error {
+func writeSession(statePath string, session *Session) error {
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		return fmt.Errorf("create sessionmeta dir for %s: %w", session.TaskFile, err)
@@ -275,7 +275,7 @@ func write(statePath string, session *Session) error {
 	return nil
 }
 
-func parseEntryName(name string) (kind, taskFilename string, ok bool) {
+func parseSessionEntryName(name string) (kind, taskFilename string, ok bool) {
 	for _, candidate := range []string{KindWork, KindReview} {
 		prefix := candidate + "-"
 		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".json") {

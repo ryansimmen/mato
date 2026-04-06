@@ -14,11 +14,13 @@ import (
 	"time"
 
 	"mato/internal/atomicwrite"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/identity"
 	"mato/internal/lockfile"
+	"mato/internal/queueview"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/ui"
 )
 
@@ -48,8 +50,8 @@ func ParseClaimedBy(path string) string {
 // queue index and computes the runnable backlog view so dependency-blocked and
 // affects-deferred tasks are excluded consistently with claim selection.
 func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
-	idx := BuildIndex(tasksDir)
-	view := ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 	for _, snap := range view.Runnable {
 		if deferred != nil {
 			if _, excluded := deferred[snap.Filename]; excluded {
@@ -65,7 +67,7 @@ func HasAvailableTasks(tasksDir string, deferred map[string]struct{}) bool {
 // mato instances can detect PID reuse. Falls back to PID-only when start time
 // is unavailable (non-Linux). Returns a cleanup function.
 func RegisterAgent(tasksDir, agentID string) (func(), error) {
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	return lockfile.Register(locksDir, agentID)
 }
 
@@ -78,8 +80,8 @@ func RegisterAgent(tasksDir, agentID string) (func(), error) {
 // in-progress copy is treated as stale and removed instead of recovered.
 func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 	var pushedRecoveries []PushedTaskRecovery
-	inProgress := filepath.Join(tasksDir, DirInProgress)
-	names, err := ListTaskFiles(inProgress)
+	inProgress := filepath.Join(tasksDir, dirs.InProgress)
+	names, err := taskfile.ListTaskFiles(inProgress)
 	if err != nil {
 		return nil
 	}
@@ -122,7 +124,7 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 			continue
 		}
 
-		dst := filepath.Join(tasksDir, DirBacklog, name)
+		dst := filepath.Join(tasksDir, dirs.Backlog, name)
 		if err := AtomicMove(src, dst); err != nil {
 			if !errors.Is(err, ErrDestinationExists) {
 				ui.Warnf("warning: could not recover orphaned task %s: %v\n", name, err)
@@ -153,11 +155,11 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 }
 
 func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskRecovery, bool, error) {
-	state, err := taskstate.Load(tasksDir, name)
+	state, err := runtimedata.LoadTaskState(tasksDir, name)
 	if err != nil {
 		return nil, false, fmt.Errorf("load taskstate: %w", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeWorkBranchPushed {
+	if state == nil || state.LastOutcome != runtimedata.OutcomeWorkBranchPushed {
 		return nil, false, nil
 	}
 
@@ -166,7 +168,7 @@ func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskReco
 		return nil, true, fmt.Errorf("taskstate for %s is missing task branch", name)
 	}
 
-	dst := filepath.Join(tasksDir, DirReadyReview, name)
+	dst := filepath.Join(tasksDir, dirs.ReadyReview, name)
 	if err := AtomicMove(src, dst); err != nil {
 		return nil, true, fmt.Errorf("move task to ready-for-review: %w", err)
 	}
@@ -178,11 +180,11 @@ func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskReco
 	}
 	targetBranch := strings.TrimSpace(state.TargetBranch)
 	lastHeadSHA := strings.TrimSpace(state.LastHeadSHA)
-	if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
 		state.TaskBranch = branch
 		state.TargetBranch = targetBranch
 		state.LastHeadSHA = lastHeadSHA
-		state.LastOutcome = taskstate.OutcomeWorkPushed
+		state.LastOutcome = runtimedata.OutcomeWorkPushed
 	}); err != nil {
 		ui.Warnf("warning: could not record recovered pushed taskstate for %s: %v\n", name, err)
 	}
@@ -293,10 +295,10 @@ func LaterStateDuplicateDir(filename string, dirs ...string) (string, []error) {
 // tasksDir. Used by callers that need the standard set of directories.
 func laterStateDirs(tasksDir string) []string {
 	return []string{
-		filepath.Join(tasksDir, DirReadyReview),
-		filepath.Join(tasksDir, DirReadyMerge),
-		filepath.Join(tasksDir, DirCompleted),
-		filepath.Join(tasksDir, DirFailed),
+		filepath.Join(tasksDir, dirs.ReadyReview),
+		filepath.Join(tasksDir, dirs.ReadyMerge),
+		filepath.Join(tasksDir, dirs.Completed),
+		filepath.Join(tasksDir, dirs.Failed),
 	}
 }
 
@@ -371,6 +373,9 @@ func crossDeviceMove(src, dst string) error {
 
 func finalizeAtomicMove(src, dst, mode string) error {
 	if err := removeFn(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		cleanupErr := removeFn(dst)
 		if cleanupErr != nil && !os.IsNotExist(cleanupErr) {
 			return fmt.Errorf("atomic move %s → %s: remove source after %s: %w (also failed to remove destination during rollback: %v)", src, dst, mode, err, cleanupErr)

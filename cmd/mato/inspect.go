@@ -1,8 +1,8 @@
 package main
 
 import (
+	"mato/internal/dirs"
 	"mato/internal/inspect"
-	"mato/internal/queue"
 	"mato/internal/ui"
 
 	"github.com/spf13/cobra"
@@ -35,7 +35,7 @@ func newInspectCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
-	cmd.ValidArgsFunction = completeTaskNames(repoFlag, queue.AllDirs)
+	cmd.ValidArgsFunction = completeTaskNames(repoFlag, dirs.All)
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd

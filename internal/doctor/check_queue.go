@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mato/internal/dirs"
 	"mato/internal/messaging"
-	"mato/internal/queue"
 )
 
 // ---------- D. Queue Layout ----------
@@ -56,7 +56,7 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 
 	// Check for expected directories.
 	var expectedDirs []string
-	for _, d := range queue.AllDirs {
+	for _, d := range dirs.All {
 		expectedDirs = append(expectedDirs, d)
 	}
 	expectedDirs = append(expectedDirs, ".locks")
@@ -122,7 +122,7 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 	}
 
 	// Per-directory task counts.
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		tasks := idx.TasksByState(dir)
 		if len(tasks) > 0 {
 			cr.Findings = append(cr.Findings, Finding{

@@ -8,11 +8,25 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 var configFileNames = []string{".mato.yaml", ".mato.yml"}
+
+const (
+	DefaultBranch          = "mato"
+	DefaultDockerImage     = "ubuntu:24.04"
+	DefaultTaskModel       = "claude-opus-4.6"
+	DefaultReviewModel     = "gpt-5.4"
+	DefaultReasoningEffort = "high"
+)
+
+const (
+	DefaultAgentTimeout  = 30 * time.Minute
+	DefaultRetryCooldown = 2 * time.Minute
+)
 
 // Config represents the settings from a .mato.yaml file.
 // All fields are pointers to distinguish "not set" from "zero value".

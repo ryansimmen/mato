@@ -66,7 +66,7 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 	}
 	configureCommand(cmd)
 
-	cmd.Flags().StringVar(&initBranch, "branch", "", "Target branch name (default: mato)")
+	cmd.Flags().StringVar(&initBranch, "branch", "", "Target branch name (default: "+config.DefaultBranch+")")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 
 	return cmd

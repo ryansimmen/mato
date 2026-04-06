@@ -1,4 +1,4 @@
-package runtimecleanup
+package runtimedata
 
 import (
 	"bytes"
@@ -9,14 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/sessionmeta"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 )
 
-// captureStderr redirects os.Stderr to a pipe, runs fn, and returns whatever
-// was written. Tests that use this must not call t.Parallel because os.Stderr
-// is process-global.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stderr
@@ -38,8 +33,6 @@ func captureStderr(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// replaceWithFile removes path (dir or file) and creates a regular file in
-// its place so that child path lookups fail with ENOTDIR.
 func replaceWithFile(t *testing.T, path string) {
 	t.Helper()
 	if err := os.RemoveAll(path); err != nil {
@@ -53,7 +46,6 @@ func replaceWithFile(t *testing.T, path string) {
 	}
 }
 
-// seedVerdict creates a preserved verdict JSON file for the given task.
 func seedVerdict(t *testing.T, tasksDir, filename string) {
 	t.Helper()
 	verdictDir := filepath.Join(tasksDir, "messages")
@@ -70,83 +62,68 @@ func seedVerdict(t *testing.T, tasksDir, filename string) {
 	}
 }
 
-func TestDeleteAll_Success(t *testing.T) {
+func TestDeleteRuntimeArtifacts_Success(t *testing.T) {
 	tasksDir := t.TempDir()
 	filename := "task.md"
 
-	// Seed taskstate.
-	if err := taskstate.Update(tasksDir, filename, func(s *taskstate.TaskState) {
+	if err := UpdateTaskState(tasksDir, filename, func(s *TaskState) {
 		s.LastOutcome = "test"
 	}); err != nil {
 		t.Fatalf("setup taskstate: %v", err)
 	}
 
-	// Seed sessionmeta (both work and review).
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, filename, "task/task"); err != nil {
+	for _, kind := range []string{KindWork, KindReview} {
+		if _, err := LoadOrCreateSession(tasksDir, kind, filename, "task/task"); err != nil {
 			t.Fatalf("setup %s session: %v", kind, err)
 		}
 	}
 
-	// Seed preserved verdict file.
 	seedVerdict(t, tasksDir, filename)
 
 	output := captureStderr(t, func() {
-		DeleteAll(tasksDir, filename)
+		DeleteRuntimeArtifacts(tasksDir, filename)
 	})
 
 	if output != "" {
 		t.Fatalf("expected no stderr output, got: %q", output)
 	}
 
-	// Verify taskstate is gone.
-	state, err := taskstate.Load(tasksDir, filename)
+	state, err := LoadTaskState(tasksDir, filename)
 	if err != nil {
-		t.Fatalf("Load taskstate: %v", err)
+		t.Fatalf("LoadTaskState: %v", err)
 	}
 	if state != nil {
 		t.Fatal("taskstate should have been deleted")
 	}
 
-	// Verify both session files are gone.
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		session, err := sessionmeta.Load(tasksDir, kind, filename)
+	for _, kind := range []string{KindWork, KindReview} {
+		session, err := LoadSession(tasksDir, kind, filename)
 		if err != nil {
-			t.Fatalf("Load %s session: %v", kind, err)
+			t.Fatalf("LoadSession %s: %v", kind, err)
 		}
 		if session != nil {
 			t.Fatalf("%s session should have been deleted", kind)
 		}
 	}
 
-	// Verify verdict file is gone.
 	if _, err := os.Stat(taskfile.VerdictPath(tasksDir, filename)); !os.IsNotExist(err) {
 		t.Fatal("verdict file should have been deleted")
 	}
 }
 
-func TestDeleteAll_TaskStateError(t *testing.T) {
+func TestDeleteRuntimeArtifacts_TaskStateError(t *testing.T) {
 	tasksDir := t.TempDir()
 	filename := "task.md"
 
-	// Replace the taskstate runtime directory with a regular file so that
-	// os.Remove on child paths fails with ENOTDIR (not swallowed by
-	// os.IsNotExist).
 	replaceWithFile(t, filepath.Join(tasksDir, "runtime", "taskstate"))
 
-	// sessionmeta runtime dir does not exist → deletes return os.ErrNotExist
-	// which is silently ignored, so no sessionmeta warning.
-
 	output := captureStderr(t, func() {
-		DeleteAll(tasksDir, filename)
+		DeleteRuntimeArtifacts(tasksDir, filename)
 	})
 
 	if !strings.Contains(output, "warning: could not delete taskstate for "+filename) {
 		t.Fatalf("expected taskstate warning, got: %q", output)
 	}
-	// The warning must also surface the underlying OS error so operators can
-	// diagnose the root cause (task requirement: "containing the filename
-	// and error").
 	if !strings.Contains(output, "not a directory") {
 		t.Fatalf("expected underlying error in taskstate warning, got: %q", output)
 	}
@@ -155,24 +132,19 @@ func TestDeleteAll_TaskStateError(t *testing.T) {
 	}
 }
 
-func TestDeleteAll_SessionMetaError(t *testing.T) {
+func TestDeleteRuntimeArtifacts_SessionMetaError(t *testing.T) {
 	tasksDir := t.TempDir()
 	filename := "task.md"
 
-	// Replace the sessionmeta runtime directory with a regular file.
 	replaceWithFile(t, filepath.Join(tasksDir, "runtime", "sessionmeta"))
 
-	// taskstate runtime dir does not exist → delete returns os.ErrNotExist
-	// which is silently ignored.
-
 	output := captureStderr(t, func() {
-		DeleteAll(tasksDir, filename)
+		DeleteRuntimeArtifacts(tasksDir, filename)
 	})
 
 	if !strings.Contains(output, "warning: could not delete sessionmeta for "+filename) {
 		t.Fatalf("expected sessionmeta warning, got: %q", output)
 	}
-	// Verify the underlying error is included in the warning output.
 	if !strings.Contains(output, "not a directory") {
 		t.Fatalf("expected underlying error in sessionmeta warning, got: %q", output)
 	}
@@ -181,16 +153,15 @@ func TestDeleteAll_SessionMetaError(t *testing.T) {
 	}
 }
 
-func TestDeleteAll_BothFail(t *testing.T) {
+func TestDeleteRuntimeArtifacts_BothFail(t *testing.T) {
 	tasksDir := t.TempDir()
 	filename := "task.md"
 
-	// Replace both runtime directories with regular files.
 	replaceWithFile(t, filepath.Join(tasksDir, "runtime", "taskstate"))
 	replaceWithFile(t, filepath.Join(tasksDir, "runtime", "sessionmeta"))
 
 	output := captureStderr(t, func() {
-		DeleteAll(tasksDir, filename)
+		DeleteRuntimeArtifacts(tasksDir, filename)
 	})
 
 	if !strings.Contains(output, "warning: could not delete taskstate for "+filename) {
@@ -201,16 +172,14 @@ func TestDeleteAll_BothFail(t *testing.T) {
 	}
 }
 
-func TestDeleteAll_VerdictError(t *testing.T) {
+func TestDeleteRuntimeArtifacts_VerdictError(t *testing.T) {
 	tasksDir := t.TempDir()
 	filename := "task.md"
 
-	// Replace the messages directory with a regular file so that
-	// os.Remove on child paths fails with ENOTDIR.
 	replaceWithFile(t, filepath.Join(tasksDir, "messages"))
 
 	output := captureStderr(t, func() {
-		DeleteAll(tasksDir, filename)
+		DeleteRuntimeArtifacts(tasksDir, filename)
 	})
 
 	if !strings.Contains(output, "warning: could not delete verdict for "+filename) {
@@ -227,13 +196,12 @@ func TestDeleteAll_VerdictError(t *testing.T) {
 	}
 }
 
-func TestDeleteAll_VerdictMissing_NoWarning(t *testing.T) {
+func TestDeleteRuntimeArtifacts_VerdictMissing_NoWarning(t *testing.T) {
 	tasksDir := t.TempDir()
 	filename := "task.md"
 
-	// No verdict file exists — DeleteAll should not warn.
 	output := captureStderr(t, func() {
-		DeleteAll(tasksDir, filename)
+		DeleteRuntimeArtifacts(tasksDir, filename)
 	})
 
 	if output != "" {
@@ -241,86 +209,74 @@ func TestDeleteAll_VerdictMissing_NoWarning(t *testing.T) {
 	}
 }
 
-func TestDeleteAll_StaleVerdictCleanedOnReset(t *testing.T) {
+func TestDeleteRuntimeArtifacts_StaleVerdictCleanedOnReset(t *testing.T) {
 	tasksDir := t.TempDir()
 	filename := "task.md"
 
-	// Seed a stale verdict file (simulates a preserved reject verdict
-	// surviving a rejection-recovery state).
 	seedVerdict(t, tasksDir, filename)
 
-	// Verify verdict is readable before cleanup.
 	if _, ok := taskfile.ReadVerdictRejection(tasksDir, filename); !ok {
 		t.Fatal("expected verdict to be readable before cleanup")
 	}
 
-	// DeleteAll simulates the cleanup that happens on retry, merge,
-	// cancel, and other terminal transitions.
 	output := captureStderr(t, func() {
-		DeleteAll(tasksDir, filename)
+		DeleteRuntimeArtifacts(tasksDir, filename)
 	})
 
 	if output != "" {
 		t.Fatalf("expected no stderr output, got: %q", output)
 	}
 
-	// After cleanup the stale verdict must no longer surface a rejection.
 	if _, ok := taskfile.ReadVerdictRejection(tasksDir, filename); ok {
 		t.Fatal("stale verdict should not be readable after cleanup")
 	}
 }
 
-func TestDeleteAllPreservingVerdict_KeepsVerdictFile(t *testing.T) {
+func TestDeleteRuntimeArtifactsPreservingVerdict_KeepsVerdictFile(t *testing.T) {
 	tasksDir := t.TempDir()
 	filename := "task.md"
 
-	// Seed taskstate.
-	if err := taskstate.Update(tasksDir, filename, func(s *taskstate.TaskState) {
+	if err := UpdateTaskState(tasksDir, filename, func(s *TaskState) {
 		s.LastOutcome = "test"
 	}); err != nil {
 		t.Fatalf("setup taskstate: %v", err)
 	}
 
-	// Seed sessionmeta (both work and review).
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, filename, "task/task"); err != nil {
+	for _, kind := range []string{KindWork, KindReview} {
+		if _, err := LoadOrCreateSession(tasksDir, kind, filename, "task/task"); err != nil {
 			t.Fatalf("setup %s session: %v", kind, err)
 		}
 	}
 
-	// Seed preserved verdict file.
 	seedVerdict(t, tasksDir, filename)
 
 	output := captureStderr(t, func() {
-		DeleteAllPreservingVerdict(tasksDir, filename)
+		DeleteRuntimeArtifactsPreservingVerdict(tasksDir, filename)
 	})
 
 	if output != "" {
 		t.Fatalf("expected no stderr output, got: %q", output)
 	}
 
-	// Verify taskstate is gone.
-	state, err := taskstate.Load(tasksDir, filename)
+	state, err := LoadTaskState(tasksDir, filename)
 	if err != nil {
-		t.Fatalf("Load taskstate: %v", err)
+		t.Fatalf("LoadTaskState: %v", err)
 	}
 	if state != nil {
 		t.Fatal("taskstate should have been deleted")
 	}
 
-	// Verify both session files are gone.
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		session, err := sessionmeta.Load(tasksDir, kind, filename)
+	for _, kind := range []string{KindWork, KindReview} {
+		session, err := LoadSession(tasksDir, kind, filename)
 		if err != nil {
-			t.Fatalf("Load %s session: %v", kind, err)
+			t.Fatalf("LoadSession %s: %v", kind, err)
 		}
 		if session != nil {
 			t.Fatalf("%s session should have been deleted", kind)
 		}
 	}
 
-	// Verdict file must still exist.
 	if _, ok := taskfile.ReadVerdictRejection(tasksDir, filename); !ok {
-		t.Fatal("verdict file should be preserved by DeleteAllPreservingVerdict")
+		t.Fatal("verdict file should be preserved by DeleteRuntimeArtifactsPreservingVerdict")
 	}
 }

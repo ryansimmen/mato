@@ -1,4 +1,4 @@
-package taskstate
+package runtimedata
 
 import (
 	"os"
@@ -9,34 +9,34 @@ import (
 	"mato/internal/dirs"
 )
 
-func TestLoad_MissingReturnsNil(t *testing.T) {
-	state, err := Load(t.TempDir(), "missing.md")
+func TestLoadTaskState_MissingReturnsNil(t *testing.T) {
+	state, err := LoadTaskState(t.TempDir(), "missing.md")
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadTaskState: %v", err)
 	}
 	if state != nil {
-		t.Fatalf("Load = %+v, want nil", state)
+		t.Fatalf("LoadTaskState = %+v, want nil", state)
 	}
 }
 
-func TestUpdate_CreatesAndPreservesFields(t *testing.T) {
+func TestUpdateTaskState_CreatesAndPreservesFields(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := Update(tasksDir, "task.md", func(state *TaskState) {
+	if err := UpdateTaskState(tasksDir, "task.md", func(state *TaskState) {
 		state.TaskBranch = "task/task"
 		state.LastHeadSHA = "abc123"
 		state.LastOutcome = OutcomeWorkPushed
 	}); err != nil {
-		t.Fatalf("first Update: %v", err)
+		t.Fatalf("first UpdateTaskState: %v", err)
 	}
-	first, err := Load(tasksDir, "task.md")
+	first, err := LoadTaskState(tasksDir, "task.md")
 	if err != nil {
-		t.Fatalf("Load after first update: %v", err)
+		t.Fatalf("LoadTaskState after first update: %v", err)
 	}
 	if first == nil {
-		t.Fatal("Load returned nil state")
+		t.Fatal("LoadTaskState returned nil state")
 	}
-	if first.Version != version {
-		t.Fatalf("Version = %d, want %d", first.Version, version)
+	if first.Version != taskStateVersion {
+		t.Fatalf("Version = %d, want %d", first.Version, taskStateVersion)
 	}
 	if first.TaskFile != "task.md" {
 		t.Fatalf("TaskFile = %q, want %q", first.TaskFile, "task.md")
@@ -54,15 +54,15 @@ func TestUpdate_CreatesAndPreservesFields(t *testing.T) {
 		t.Fatal("UpdatedAt should be set")
 	}
 
-	if err := Update(tasksDir, "task.md", func(state *TaskState) {
+	if err := UpdateTaskState(tasksDir, "task.md", func(state *TaskState) {
 		state.LastReviewedSHA = "def456"
 		state.LastOutcome = OutcomeReviewApproved
 	}); err != nil {
-		t.Fatalf("second Update: %v", err)
+		t.Fatalf("second UpdateTaskState: %v", err)
 	}
-	second, err := Load(tasksDir, "task.md")
+	second, err := LoadTaskState(tasksDir, "task.md")
 	if err != nil {
-		t.Fatalf("Load after second update: %v", err)
+		t.Fatalf("LoadTaskState after second update: %v", err)
 	}
 	if second.TaskBranch != "task/task" {
 		t.Fatalf("TaskBranch = %q, want preserved value", second.TaskBranch)
@@ -78,7 +78,7 @@ func TestUpdate_CreatesAndPreservesFields(t *testing.T) {
 	}
 }
 
-func TestLoad_CorruptJSONReturnsError(t *testing.T) {
+func TestLoadTaskState_CorruptJSONReturnsError(t *testing.T) {
 	tasksDir := t.TempDir()
 	path := filepath.Join(tasksDir, "runtime", "taskstate", "task.md.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -87,16 +87,16 @@ func TestLoad_CorruptJSONReturnsError(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	state, err := Load(tasksDir, "task.md")
+	state, err := LoadTaskState(tasksDir, "task.md")
 	if err == nil {
-		t.Fatal("Load should fail for corrupt JSON")
+		t.Fatal("LoadTaskState should fail for corrupt JSON")
 	}
 	if state != nil {
-		t.Fatalf("Load returned %+v, want nil on error", state)
+		t.Fatalf("LoadTaskState returned %+v, want nil on error", state)
 	}
 }
 
-func TestUpdate_CorruptJSONRecreatesFreshState(t *testing.T) {
+func TestUpdateTaskState_CorruptJSONRecreatesFreshState(t *testing.T) {
 	tasksDir := t.TempDir()
 	path := filepath.Join(tasksDir, "runtime", "taskstate", "task.md.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -105,14 +105,14 @@ func TestUpdate_CorruptJSONRecreatesFreshState(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := Update(tasksDir, "task.md", func(state *TaskState) {
+	if err := UpdateTaskState(tasksDir, "task.md", func(state *TaskState) {
 		state.LastOutcome = OutcomeReviewRejected
 	}); err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("UpdateTaskState: %v", err)
 	}
-	state, err := Load(tasksDir, "task.md")
+	state, err := LoadTaskState(tasksDir, "task.md")
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadTaskState: %v", err)
 	}
 	if state.LastOutcome != OutcomeReviewRejected {
 		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, OutcomeReviewRejected)
@@ -122,26 +122,26 @@ func TestUpdate_CorruptJSONRecreatesFreshState(t *testing.T) {
 	}
 }
 
-func TestDelete_RemovesFile(t *testing.T) {
+func TestDeleteTaskState_RemovesFile(t *testing.T) {
 	tasksDir := t.TempDir()
-	if err := Update(tasksDir, "task.md", func(state *TaskState) {
+	if err := UpdateTaskState(tasksDir, "task.md", func(state *TaskState) {
 		state.LastOutcome = "done"
 	}); err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("UpdateTaskState: %v", err)
 	}
-	if err := Delete(tasksDir, "task.md"); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if err := DeleteTaskState(tasksDir, "task.md"); err != nil {
+		t.Fatalf("DeleteTaskState: %v", err)
 	}
-	state, err := Load(tasksDir, "task.md")
+	state, err := LoadTaskState(tasksDir, "task.md")
 	if err != nil {
-		t.Fatalf("Load after Delete: %v", err)
+		t.Fatalf("LoadTaskState after DeleteTaskState: %v", err)
 	}
 	if state != nil {
-		t.Fatalf("Load after Delete = %+v, want nil", state)
+		t.Fatalf("LoadTaskState after DeleteTaskState = %+v, want nil", state)
 	}
 }
 
-func TestSweep_RemovesTerminalStateAndKeepsActive(t *testing.T) {
+func TestSweepTaskState_RemovesTerminalStateAndKeepsActive(t *testing.T) {
 	activeDirs := []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge}
 	for _, activeDir := range activeDirs {
 		t.Run(activeDir, func(t *testing.T) {
@@ -161,28 +161,28 @@ func TestSweep_RemovesTerminalStateAndKeepsActive(t *testing.T) {
 				t.Fatalf("WriteFile failed: %v", err)
 			}
 			for _, name := range []string{"active.md", "done.md", "failed.md", "gone.md"} {
-				if err := Update(tasksDir, name, func(state *TaskState) {
+				if err := UpdateTaskState(tasksDir, name, func(state *TaskState) {
 					state.LastOutcome = name
 				}); err != nil {
-					t.Fatalf("Update %s: %v", name, err)
+					t.Fatalf("UpdateTaskState %s: %v", name, err)
 				}
 			}
 
-			if err := Sweep(tasksDir); err != nil {
-				t.Fatalf("Sweep: %v", err)
+			if err := SweepTaskState(tasksDir); err != nil {
+				t.Fatalf("SweepTaskState: %v", err)
 			}
 			for _, name := range []string{"done.md", "failed.md", "gone.md"} {
-				state, err := Load(tasksDir, name)
+				state, err := LoadTaskState(tasksDir, name)
 				if err != nil {
-					t.Fatalf("Load %s: %v", name, err)
+					t.Fatalf("LoadTaskState %s: %v", name, err)
 				}
 				if state != nil {
-					t.Fatalf("Load(%s) = %+v, want nil after sweep", name, state)
+					t.Fatalf("LoadTaskState(%s) = %+v, want nil after sweep", name, state)
 				}
 			}
-			active, err := Load(tasksDir, "active.md")
+			active, err := LoadTaskState(tasksDir, "active.md")
 			if err != nil {
-				t.Fatalf("Load active: %v", err)
+				t.Fatalf("LoadTaskState active: %v", err)
 			}
 			if active == nil {
 				t.Fatalf("active taskstate should be preserved for %s", activeDir)
@@ -191,47 +191,45 @@ func TestSweep_RemovesTerminalStateAndKeepsActive(t *testing.T) {
 	}
 }
 
-func TestUpdate_EmptyTasksDirFails(t *testing.T) {
-	err := Update("", "task.md", func(state *TaskState) {
+func TestUpdateTaskState_EmptyTasksDirFails(t *testing.T) {
+	err := UpdateTaskState("", "task.md", func(state *TaskState) {
 		state.LastOutcome = OutcomeReviewLaunched
 	})
 	if err == nil {
-		t.Fatal("Update should fail for empty tasksDir")
+		t.Fatal("UpdateTaskState should fail for empty tasksDir")
 	}
 	if !strings.Contains(err.Error(), "tasks directory must not be empty") {
-		t.Fatalf("Update error = %v, want empty tasksDir error", err)
+		t.Fatalf("UpdateTaskState error = %v, want empty tasksDir error", err)
 	}
 }
 
-func TestLoad_InvalidTaskFilenameFails(t *testing.T) {
-	state, err := Load(t.TempDir(), "../escape.md")
+func TestLoadTaskState_InvalidTaskFilenameFails(t *testing.T) {
+	state, err := LoadTaskState(t.TempDir(), "../escape.md")
 	if err == nil {
-		t.Fatal("Load should fail for invalid task filename")
+		t.Fatal("LoadTaskState should fail for invalid task filename")
 	}
 	if state != nil {
-		t.Fatalf("Load returned %+v, want nil on error", state)
+		t.Fatalf("LoadTaskState returned %+v, want nil on error", state)
 	}
 }
 
-func TestLoad_EmptyTaskFilenameFails(t *testing.T) {
-	state, err := Load(t.TempDir(), "")
+func TestLoadTaskState_EmptyTaskFilenameFails(t *testing.T) {
+	state, err := LoadTaskState(t.TempDir(), "")
 	if err == nil {
-		t.Fatal("Load should fail for empty task filename")
+		t.Fatal("LoadTaskState should fail for empty task filename")
 	}
 	if state != nil {
-		t.Fatalf("Load returned %+v, want nil on error", state)
+		t.Fatalf("LoadTaskState returned %+v, want nil on error", state)
 	}
 }
 
-func TestDelete_MissingFileReturnsNil(t *testing.T) {
-	if err := Delete(t.TempDir(), "missing.md"); err != nil {
-		t.Fatalf("Delete missing file: %v", err)
+func TestDeleteTaskState_MissingFileReturnsNil(t *testing.T) {
+	if err := DeleteTaskState(t.TempDir(), "missing.md"); err != nil {
+		t.Fatalf("DeleteTaskState missing file: %v", err)
 	}
 }
 
 func TestOutcomeConstants_CoverFullLifecycle(t *testing.T) {
-	// Verify each constant has the expected wire-format string so that
-	// existing JSON state files remain backward-compatible.
 	tests := []struct {
 		name     string
 		constant string
@@ -276,14 +274,14 @@ func TestOutcomeConstants_RoundTripThroughJSON(t *testing.T) {
 	for _, outcome := range outcomes {
 		t.Run(outcome, func(t *testing.T) {
 			filename := strings.ReplaceAll(outcome, "-", "") + ".md"
-			if err := Update(tasksDir, filename, func(state *TaskState) {
+			if err := UpdateTaskState(tasksDir, filename, func(state *TaskState) {
 				state.LastOutcome = outcome
 			}); err != nil {
-				t.Fatalf("Update: %v", err)
+				t.Fatalf("UpdateTaskState: %v", err)
 			}
-			loaded, err := Load(tasksDir, filename)
+			loaded, err := LoadTaskState(tasksDir, filename)
 			if err != nil {
-				t.Fatalf("Load: %v", err)
+				t.Fatalf("LoadTaskState: %v", err)
 			}
 			if loaded.LastOutcome != outcome {
 				t.Fatalf("LastOutcome = %q, want %q", loaded.LastOutcome, outcome)

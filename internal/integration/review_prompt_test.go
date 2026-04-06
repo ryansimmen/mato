@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"mato/internal/dirs"
-	"mato/internal/queue"
 	"mato/internal/testutil"
 )
 
@@ -109,7 +108,7 @@ type reviewVerdict struct {
 func TestReviewVerifyReview(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirReadyReview, "review-task.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "review-task.md",
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 			"<!-- branch: task/review-task -->\n"+
 			"# Review Task\nDo the review.\n")
@@ -134,7 +133,7 @@ func TestReviewVerifyReview(t *testing.T) {
 		"MATO_TASK_FILE=review-task.md",
 		"MATO_TASK_BRANCH=task/review-task",
 		"MATO_TASK_TITLE=Review Task",
-		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirReadyReview, "review-task.md"),
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, dirs.ReadyReview, "review-task.md"),
 		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
 	}
 	out, err := runBash(t, cloneDir, env, script)
@@ -174,7 +173,7 @@ func TestReviewVerifyReview(t *testing.T) {
 	}
 
 	// Task file must remain untouched in ready-for-review/.
-	mustExist(t, filepath.Join(tasksDir, queue.DirReadyReview, "review-task.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.ReadyReview, "review-task.md"))
 }
 
 // TestReviewEmptyDiffRejects runs the real VERIFY_REVIEW, DIFF, and VERDICT
@@ -186,7 +185,7 @@ func TestReviewEmptyDiffRejects(t *testing.T) {
 	// Create a task branch that is identical to mato (no diff).
 	mustGitOutput(t, repoRoot, "branch", "task/empty-diff", "mato")
 
-	writeTask(t, tasksDir, queue.DirReadyReview, "empty-diff.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "empty-diff.md",
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 			"<!-- branch: task/empty-diff -->\n"+
 			"# Empty Diff Task\nShould be rejected.\n")
@@ -221,7 +220,7 @@ func TestReviewEmptyDiffRejects(t *testing.T) {
 		"MATO_TASK_FILE=empty-diff.md",
 		"MATO_TASK_BRANCH=task/empty-diff",
 		"MATO_TASK_TITLE=Empty Diff Task",
-		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirReadyReview, "empty-diff.md"),
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, dirs.ReadyReview, "empty-diff.md"),
 		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
 	}
 	out, err := runBash(t, cloneDir, env, script)
@@ -244,7 +243,7 @@ func TestReviewEmptyDiffRejects(t *testing.T) {
 	}
 
 	// Task file must remain in ready-for-review/ — agent never moves files.
-	mustExist(t, filepath.Join(tasksDir, queue.DirReadyReview, "empty-diff.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.ReadyReview, "empty-diff.md"))
 }
 
 // TestReviewFetchFailureWritesErrorVerdict verifies that when git fetch fails
@@ -253,7 +252,7 @@ func TestReviewEmptyDiffRejects(t *testing.T) {
 func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirReadyReview, "fetch-fail.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "fetch-fail.md",
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 			"<!-- branch: task/nonexistent-branch -->\n"+
 			"# Fetch Fail Task\nBranch does not exist.\n")
@@ -284,7 +283,7 @@ func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
 		"MATO_TASK_FILE=fetch-fail.md",
 		"MATO_TASK_BRANCH=task/nonexistent-branch",
 		"MATO_TASK_TITLE=Fetch Fail Task",
-		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirReadyReview, "fetch-fail.md"),
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, dirs.ReadyReview, "fetch-fail.md"),
 		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
 	}
 	out, err := runBash(t, cloneDir, env, script)
@@ -310,7 +309,7 @@ func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
 	}
 
 	// Task file must remain in ready-for-review/.
-	mustExist(t, filepath.Join(tasksDir, queue.DirReadyReview, "fetch-fail.md"))
+	mustExist(t, filepath.Join(tasksDir, dirs.ReadyReview, "fetch-fail.md"))
 }
 
 // TestReviewRejectReasonWithSpecialChars verifies that rejection reasons
@@ -340,7 +339,7 @@ func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-			writeTask(t, tasksDir, queue.DirReadyReview, "special-chars.md",
+			writeTask(t, tasksDir, dirs.ReadyReview, "special-chars.md",
 				"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 					"<!-- branch: task/special-chars -->\n"+
 					"# Special Chars Task\nTest special characters.\n")
@@ -521,7 +520,7 @@ func TestReviewVerifyReviewMissingTask(t *testing.T) {
 	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-missing.md.json")
-	missingPath := filepath.Join(cloneTasksDir, queue.DirReadyReview, "missing-task.md")
+	missingPath := filepath.Join(cloneTasksDir, dirs.ReadyReview, "missing-task.md")
 
 	script := strings.Join([]string{
 		reviewPreamble(t),
@@ -556,7 +555,7 @@ func TestReviewVerifyReviewMissingTask(t *testing.T) {
 func TestReviewProgressMessageFilenameIsDistinct(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirReadyReview, "review-progress.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "review-progress.md",
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 			"<!-- branch: task/review-progress -->\n"+
 			"# Review Progress Test\nTest review progress message.\n")
@@ -577,7 +576,7 @@ func TestReviewProgressMessageFilenameIsDistinct(t *testing.T) {
 		"MATO_TASK_FILE=review-progress.md",
 		"MATO_TASK_BRANCH=task/review-progress",
 		"MATO_TASK_TITLE=Review Progress Test",
-		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, queue.DirReadyReview, "review-progress.md"),
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, dirs.ReadyReview, "review-progress.md"),
 		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
 	}
 	out, err := runBash(t, cloneDir, env, script)
@@ -705,7 +704,7 @@ func extractReviewBashBlocks(t *testing.T, text string) []string {
 func TestReviewProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirReadyReview, "review-accum.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "review-accum.md",
 		"<!-- claimed-by: task-agent  claimed-at: 2026-01-01T00:00:00Z -->\n"+
 			"<!-- branch: task/review-accum -->\n"+
 			"# Review Accumulate Test\nTest that review progress messages accumulate.\n")
@@ -714,7 +713,7 @@ func TestReviewProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
 
 	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-review-accum.md.json")
-	taskPath := filepath.Join(cloneTasksDir, queue.DirReadyReview, "review-accum.md")
+	taskPath := filepath.Join(cloneTasksDir, dirs.ReadyReview, "review-accum.md")
 
 	script := strings.Join([]string{
 		reviewPreamble(t),

@@ -16,10 +16,6 @@ import (
 	"golang.org/x/term"
 )
 
-// DefaultDockerImage is the fallback Docker image used when no override is
-// provided via MATO_DOCKER_IMAGE or .mato.yaml configuration.
-const DefaultDockerImage = "ubuntu:24.04"
-
 // statPathFn wraps os.Stat for test injection.
 //
 // NOTE: Package-level test seam — prevents t.Parallel(). Struct-based

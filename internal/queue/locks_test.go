@@ -7,13 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/process"
 	"mato/internal/testutil"
 )
 
 func TestCleanStaleLocks_RemovesDeadProcessLock(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -33,7 +34,7 @@ func TestCleanStaleLocks_RemovesDeadProcessLock(t *testing.T) {
 
 func TestCleanStaleLocks_PreservesLiveProcessLock(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -54,7 +55,7 @@ func TestCleanStaleLocks_PreservesLiveProcessLock(t *testing.T) {
 
 func TestCleanStaleLocks_SkipsDirectories(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestCleanStaleLocks_SkipsDirectories(t *testing.T) {
 
 func TestCleanStaleLocks_SkipsNonPidFiles(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestCleanStaleLocks_SkipsNonPidFiles(t *testing.T) {
 
 func TestCleanStaleLocks_EmptyLocksDir(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestCleanStaleLocks_MissingLocksDir(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
 	// Remove .locks if it exists.
-	os.RemoveAll(filepath.Join(tasksDir, DirLocks))
+	os.RemoveAll(filepath.Join(tasksDir, dirs.Locks))
 
 	// Should not panic when .locks doesn't exist.
 	CleanStaleLocks(tasksDir)
@@ -115,7 +116,7 @@ func TestCleanStaleLocks_MissingLocksDir(t *testing.T) {
 
 func TestCleanStaleLocks_PreservesUnreadableLock(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestCleanStaleLocks_PreservesUnreadableLock(t *testing.T) {
 
 func TestAcquireReviewLock_SuccessWhenNoLock(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestAcquireReviewLock_SuccessWhenNoLock(t *testing.T) {
 
 func TestAcquireReviewLock_FailsWhenHeldByLiveProcess(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestAcquireReviewLock_FailsWhenHeldByLiveProcess(t *testing.T) {
 
 func TestAcquireReviewLock_ReclaimsStaleReviewLock(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -194,7 +195,7 @@ func TestAcquireReviewLock_ReclaimsStaleReviewLock(t *testing.T) {
 
 func TestAcquireReviewLock_CleanupRemovesLock(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestAcquireReviewLock_CleanupRemovesLock(t *testing.T) {
 
 func TestCleanStaleReviewLocks_RemovesDeadProcess(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -243,7 +244,7 @@ func TestCleanStaleReviewLocks_RemovesDeadProcess(t *testing.T) {
 
 func TestCleanStaleReviewLocks_PreservesUnreadableLock(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -265,7 +266,7 @@ func TestCleanStaleReviewLocks_PreservesUnreadableLock(t *testing.T) {
 
 func TestCleanStaleReviewLocks_PreservesLiveProcess(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -287,7 +288,7 @@ func TestCleanStaleReviewLocks_PreservesLiveProcess(t *testing.T) {
 
 func TestCleanStaleReviewLocks_WarnsOnRemoveFailure(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -320,7 +321,7 @@ func TestCleanStaleReviewLocks_WarnsOnRemoveFailure(t *testing.T) {
 
 func TestCleanStaleReviewLocks_SkipsNonReviewLocks(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	locksDir := filepath.Join(tasksDir, DirLocks)
+	locksDir := filepath.Join(tasksDir, dirs.Locks)
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		t.Fatalf("mkdir .locks: %v", err)
 	}
@@ -340,7 +341,7 @@ func TestCleanStaleReviewLocks_SkipsNonReviewLocks(t *testing.T) {
 
 func TestCleanStaleReviewLocks_MissingLocksDir(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
-	os.RemoveAll(filepath.Join(tasksDir, DirLocks))
+	os.RemoveAll(filepath.Join(tasksDir, dirs.Locks))
 
 	// Should not panic.
 	CleanStaleReviewLocks(tasksDir)

@@ -16,9 +16,9 @@ import (
 
 	"mato/internal/config"
 	"mato/internal/configresolve"
+	"mato/internal/dirs"
 	"mato/internal/doctor"
 	"mato/internal/git"
-	"mato/internal/queue"
 	"mato/internal/runner"
 	"mato/internal/setup"
 	"mato/internal/testutil"
@@ -393,10 +393,10 @@ func TestRunCmd_HelpDocumentsResolvedDefaults(t *testing.T) {
 	help := out.String()
 	for _, want := range []string{
 		"Target branch for merging (default: mato)",
-		"Copilot model for task agents (default: " + runner.DefaultTaskModel + ")",
-		"Copilot model for review agents (default: " + runner.DefaultReviewModel + ")",
-		"Reasoning effort for task agents (default: " + runner.DefaultReasoningEffort + ")",
-		"Reasoning effort for review agents (default: " + runner.DefaultReasoningEffort + ")",
+		"Copilot model for task agents (default: " + config.DefaultTaskModel + ")",
+		"Copilot model for review agents (default: " + config.DefaultReviewModel + ")",
+		"Reasoning effort for task agents (default: " + config.DefaultReasoningEffort + ")",
+		"Reasoning effort for review agents (default: " + config.DefaultReasoningEffort + ")",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("expected run help to contain %q, got:\n%s", want, help)
@@ -1232,8 +1232,8 @@ func TestDoctorCmd_IgnoresUnrelatedInvalidRunSettings(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if capturedOpts.DockerImage != runner.DefaultDockerImage {
-		t.Fatalf("DockerImage = %q, want %q", capturedOpts.DockerImage, runner.DefaultDockerImage)
+	if capturedOpts.DockerImage != config.DefaultDockerImage {
+		t.Fatalf("DockerImage = %q, want %q", capturedOpts.DockerImage, config.DefaultDockerImage)
 	}
 }
 
@@ -1720,7 +1720,7 @@ func TestInspectCmd_DelegatesToInspectShow(t *testing.T) {
 
 func TestInspectCmd_TextOutputUsesCommandWriters(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "sample.md"), "---\nid: sample\npriority: 1\n---\n# Sample task\n")
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "sample.md"), "---\nid: sample\npriority: 1\n---\n# Sample task\n")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1743,7 +1743,7 @@ func TestInspectCmd_TextOutputUsesCommandWriters(t *testing.T) {
 
 func TestInspectCmd_TextWriterErrorPropagates(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	testutil.WriteFile(t, filepath.Join(tasksDir, queue.DirBacklog, "sample.md"), "---\nid: sample\npriority: 1\n---\n# Sample task\n")
+	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "sample.md"), "---\nid: sample\npriority: 1\n---\n# Sample task\n")
 
 	writeErr := errors.New("broken pipe")
 	fw := &failAfterNWriter{n: 1, err: writeErr}
@@ -2401,7 +2401,7 @@ func TestCancelCmd_NoArgs(t *testing.T) {
 
 func TestCancelCmd_SingleTask(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2410,7 +2410,7 @@ func TestCancelCmd_SingleTask(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("cancel command failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "fix-bug.md")); err != nil {
 		t.Fatalf("task should be in failed after cancel: %v", err)
 	}
 }
@@ -2418,7 +2418,7 @@ func TestCancelCmd_SingleTask(t *testing.T) {
 func TestCancelCmd_MultiTask(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	for _, name := range []string{"one.md", "two.md"} {
-		if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, name), []byte("---\nid: "+strings.TrimSuffix(name, ".md")+"\n---\n# Task\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, name), []byte("---\nid: "+strings.TrimSuffix(name, ".md")+"\n---\n# Task\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2429,7 +2429,7 @@ func TestCancelCmd_MultiTask(t *testing.T) {
 		t.Fatalf("cancel command failed: %v", err)
 	}
 	for _, name := range []string{"one.md", "two.md"} {
-		if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, name)); err != nil {
+		if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, name)); err != nil {
 			t.Fatalf("task %s should be in failed after cancel: %v", name, err)
 		}
 	}
@@ -2437,7 +2437,7 @@ func TestCancelCmd_MultiTask(t *testing.T) {
 
 func TestCancelCmd_PartialFailure(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2454,14 +2454,14 @@ func TestCancelCmd_PartialFailure(t *testing.T) {
 	if !errors.As(execErr, &silentErr) {
 		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "good.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "good.md")); err != nil {
 		t.Fatalf("successful cancel should still move task: %v", err)
 	}
 }
 
 func TestCancelCmd_CompletedRefusal(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "done.md"), []byte("---\nid: done\n---\n# Done\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "done.md"), []byte("---\nid: done\n---\n# Done\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2496,7 +2496,7 @@ func TestCancelCmd_MissingMatoDir(t *testing.T) {
 
 func TestCancelCmd_InProgressWarning(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "running.md"), []byte("---\nid: running\n---\n# Running\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "running.md"), []byte("---\nid: running\n---\n# Running\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2522,7 +2522,7 @@ func TestCancelCmd_InProgressWarning(t *testing.T) {
 
 func TestCancelCmd_ReadyToMergeWarning(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "merge-me.md"), []byte("---\nid: merge-me\n---\n# Merge\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "merge-me.md"), []byte("---\nid: merge-me\n---\n# Merge\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2540,7 +2540,7 @@ func TestCancelCmd_ReadyToMergeWarning(t *testing.T) {
 
 func TestCancelCmd_ReadyForReviewWarning(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "reviewing.md"), []byte("---\nid: reviewing\n---\n# Reviewing\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "reviewing.md"), []byte("---\nid: reviewing\n---\n# Reviewing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2558,10 +2558,10 @@ func TestCancelCmd_ReadyForReviewWarning(t *testing.T) {
 
 func TestCancelCmd_DownstreamWarnings(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte("---\nid: waiter\ndepends_on: [dep]\n---\n# Waiter\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte("---\nid: waiter\ndepends_on: [dep]\n---\n# Waiter\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2583,7 +2583,7 @@ func TestCancelCmd_UsesRepoRootFromSubdir(t *testing.T) {
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2601,7 +2601,7 @@ func TestCancelCmd_UsesRepoRootFromSubdir(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("cancel command failed from subdir: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "fix-bug.md")); err != nil {
 		t.Fatalf("task should be cancelled into repo-root failed/: %v", err)
 	}
 }
@@ -2716,7 +2716,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
@@ -2728,7 +2728,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.DockerImage != "from-config:1.0" {
 			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-config:1.0")
 		}
@@ -2740,7 +2740,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.DockerImage != "from-env:2.0" {
 			t.Errorf("DockerImage = %q, want %q", opts.DockerImage, "from-env:2.0")
 		}
@@ -2753,7 +2753,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.AgentTimeout != time.Hour || opts.RetryCooldown != 90*time.Second {
 			t.Fatalf("opts = %+v", opts)
 		}
@@ -2771,7 +2771,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if !opts.ReviewSessionResumeEnabled {
 			t.Fatal("ReviewSessionResumeEnabled should default to true")
 		}
@@ -2784,7 +2784,7 @@ func TestResolveRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
-		opts := resolved.RunOptions()
+		opts := runOptionsFromResolvedConfig(resolved)
 		if opts.ReviewSessionResumeEnabled {
 			t.Fatal("ReviewSessionResumeEnabled should respect env override")
 		}
@@ -3136,14 +3136,14 @@ func TestRunCmd_TaskModelFlagOverridesResolvedOptions(t *testing.T) {
 		if opts.TaskModel != "claude-sonnet-4" {
 			t.Fatalf("TaskModel = %q, want %q", opts.TaskModel, "claude-sonnet-4")
 		}
-		if opts.ReviewModel != runner.DefaultReviewModel {
-			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, runner.DefaultReviewModel)
+		if opts.ReviewModel != config.DefaultReviewModel {
+			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, config.DefaultReviewModel)
 		}
-		if opts.TaskReasoningEffort != runner.DefaultReasoningEffort {
-			t.Fatalf("TaskReasoningEffort = %q, want %q", opts.TaskReasoningEffort, runner.DefaultReasoningEffort)
+		if opts.TaskReasoningEffort != config.DefaultReasoningEffort {
+			t.Fatalf("TaskReasoningEffort = %q, want %q", opts.TaskReasoningEffort, config.DefaultReasoningEffort)
 		}
-		if opts.ReviewReasoningEffort != runner.DefaultReasoningEffort {
-			t.Fatalf("ReviewReasoningEffort = %q, want %q", opts.ReviewReasoningEffort, runner.DefaultReasoningEffort)
+		if opts.ReviewReasoningEffort != config.DefaultReasoningEffort {
+			t.Fatalf("ReviewReasoningEffort = %q, want %q", opts.ReviewReasoningEffort, config.DefaultReasoningEffort)
 		}
 		return nil
 	}
@@ -3352,14 +3352,46 @@ func configFixture(branch *string) config.Config {
 
 func defaultResolvedRunOptions() runner.RunOptions {
 	return runner.RunOptions{
-		DockerImage:                runner.DefaultDockerImage,
-		TaskModel:                  runner.DefaultTaskModel,
-		ReviewModel:                runner.DefaultReviewModel,
+		DockerImage:                config.DefaultDockerImage,
+		TaskModel:                  config.DefaultTaskModel,
+		ReviewModel:                config.DefaultReviewModel,
 		ReviewSessionResumeEnabled: true,
-		TaskReasoningEffort:        runner.DefaultReasoningEffort,
-		ReviewReasoningEffort:      runner.DefaultReasoningEffort,
-		AgentTimeout:               runner.DefaultAgentTimeout,
-		RetryCooldown:              queue.DefaultRetryCooldown,
+		TaskReasoningEffort:        config.DefaultReasoningEffort,
+		ReviewReasoningEffort:      config.DefaultReasoningEffort,
+		AgentTimeout:               config.DefaultAgentTimeout,
+		RetryCooldown:              config.DefaultRetryCooldown,
+	}
+}
+
+func resolvedRunConfigFixture(dockerImage, taskModel, reviewModel string, reviewSessionResumeEnabled bool, taskReasoningEffort, reviewReasoningEffort string, agentTimeout, retryCooldown time.Duration) configresolve.RunConfig {
+	return configresolve.RunConfig{
+		DockerImage:                configresolve.Resolved[string]{Value: dockerImage},
+		TaskModel:                  configresolve.Resolved[string]{Value: taskModel},
+		ReviewModel:                configresolve.Resolved[string]{Value: reviewModel},
+		ReviewSessionResumeEnabled: configresolve.Resolved[bool]{Value: reviewSessionResumeEnabled},
+		TaskReasoningEffort:        configresolve.Resolved[string]{Value: taskReasoningEffort},
+		ReviewReasoningEffort:      configresolve.Resolved[string]{Value: reviewReasoningEffort},
+		AgentTimeout:               configresolve.Resolved[time.Duration]{Value: agentTimeout},
+		RetryCooldown:              configresolve.Resolved[time.Duration]{Value: retryCooldown},
+	}
+}
+
+func TestRunOptionsFromResolvedConfig(t *testing.T) {
+	runCfg := resolvedRunConfigFixture("custom:latest", "claude-sonnet-4", "gpt-5.4", false, "medium", "xhigh", 45*time.Minute, 90*time.Second)
+
+	got := runOptionsFromResolvedConfig(runCfg)
+	want := runner.RunOptions{
+		DockerImage:                "custom:latest",
+		TaskModel:                  "claude-sonnet-4",
+		ReviewModel:                "gpt-5.4",
+		ReviewSessionResumeEnabled: false,
+		TaskReasoningEffort:        "medium",
+		ReviewReasoningEffort:      "xhigh",
+		AgentTimeout:               45 * time.Minute,
+		RetryCooldown:              90 * time.Second,
+	}
+	if got != want {
+		t.Fatalf("runOptionsFromResolvedConfig() = %+v, want %+v", got, want)
 	}
 }
 
@@ -3621,7 +3653,7 @@ func TestRetryCmd_InvalidFormatRejected(t *testing.T) {
 
 func TestCancelCmd_FormatJSON_SingleTask(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3646,14 +3678,14 @@ func TestCancelCmd_FormatJSON_SingleTask(t *testing.T) {
 	if items[0]["cancelled"] != true {
 		t.Errorf("cancelled = %v, want true", items[0]["cancelled"])
 	}
-	if items[0]["prior_state"] != queue.DirBacklog {
-		t.Errorf("prior_state = %v, want %q", items[0]["prior_state"], queue.DirBacklog)
+	if items[0]["prior_state"] != dirs.Backlog {
+		t.Errorf("prior_state = %v, want %q", items[0]["prior_state"], dirs.Backlog)
 	}
 }
 
 func TestCancelCmd_FormatJSON_PartialFailure(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3684,10 +3716,10 @@ func TestCancelCmd_FormatJSON_PartialFailure(t *testing.T) {
 
 func TestCancelCmd_FormatJSON_DownstreamWarnings(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "dep.md"), []byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte("---\nid: waiter\ndepends_on: [dep]\n---\n# Waiter\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte("---\nid: waiter\ndepends_on: [dep]\n---\n# Waiter\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3727,7 +3759,7 @@ func TestCancelCmd_InvalidFormatRejected(t *testing.T) {
 
 func TestCancelCmd_YesSkipsPrompt(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3736,14 +3768,14 @@ func TestCancelCmd_YesSkipsPrompt(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("cancel --yes failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "fix-bug.md")); err != nil {
 		t.Fatalf("task should be in failed after cancel --yes: %v", err)
 	}
 }
 
 func TestCancelCmd_NonTTYSkipsPrompt(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3753,7 +3785,7 @@ func TestCancelCmd_NonTTYSkipsPrompt(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("cancel command failed (non-TTY): %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "fix-bug.md")); err != nil {
 		t.Fatalf("task should be in failed after cancel (non-TTY): %v", err)
 	}
 }
@@ -3801,7 +3833,7 @@ func TestCancelCmd_ConfirmAccept(t *testing.T) {
 
 func TestCancelCmd_FormatJSONSkipsPrompt(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3827,7 +3859,7 @@ func TestCancelCmd_FormatJSONSkipsPrompt(t *testing.T) {
 
 func TestCancelCmd_YesShortFlag(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3836,7 +3868,7 @@ func TestCancelCmd_YesShortFlag(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("cancel -y failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "fix-bug.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "fix-bug.md")); err != nil {
 		t.Fatalf("task should be in failed after cancel -y: %v", err)
 	}
 }
@@ -3848,7 +3880,7 @@ func TestCancelCmd_InteractiveMixedRefs(t *testing.T) {
 	// Errors for unresolved refs must appear exactly once — from the cancel
 	// loop after confirmation, not during prompt preparation.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3880,7 +3912,7 @@ func TestCancelCmd_InteractiveMixedRefs(t *testing.T) {
 		t.Fatalf("expected SilentError for partial failure, got %T: %v", execErr, execErr)
 	}
 
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "good.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "good.md")); err != nil {
 		t.Fatalf("valid task should be in failed/ after interactive partial cancel: %v", err)
 	}
 }
@@ -3889,7 +3921,7 @@ func TestCancelCmd_InteractiveRejectMixedRefs(t *testing.T) {
 	// When the user rejects the confirmation prompt with mixed refs,
 	// no task-not-found errors should be emitted and no tasks cancelled.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "good.md"), []byte("---\nid: good\n---\n# Good\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3915,7 +3947,7 @@ func TestCancelCmd_InteractiveRejectMixedRefs(t *testing.T) {
 	if strings.Contains(stderr, "task not found") {
 		t.Fatalf("rejecting prompt should not emit task-not-found errors, got stderr %q", stderr)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "good.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "good.md")); err != nil {
 		t.Fatalf("task should remain in backlog after rejected prompt: %v", err)
 	}
 }
@@ -4013,7 +4045,7 @@ func TestCompleteTaskNames_InspectAllDirs(t *testing.T) {
 	}
 
 	repo := repoRoot
-	fn := completeTaskNames(&repo, queue.AllDirs)
+	fn := completeTaskNames(&repo, dirs.All)
 	completions, directive := fn(nil, nil, "")
 
 	if directive != cobra.ShellCompDirectiveNoFileComp {
@@ -4050,7 +4082,7 @@ func TestCompleteTaskNames_CancelExcludesCompletedAndFailed(t *testing.T) {
 		}
 	}
 
-	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirFailed}
+	cancelDirs := []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Failed}
 	repo := repoRoot
 	fn := completeTaskNames(&repo, cancelDirs)
 	completions, _ := fn(nil, nil, "")
@@ -4087,7 +4119,7 @@ func TestCompleteTaskNames_RetryOnlyFailed(t *testing.T) {
 	}
 
 	repo := repoRoot
-	fn := completeTaskNames(&repo, []string{queue.DirFailed})
+	fn := completeTaskNames(&repo, []string{dirs.Failed})
 	completions, _ := fn(nil, nil, "")
 
 	if len(completions) != 1 || completions[0] != "retry-me" {
@@ -4110,7 +4142,7 @@ func TestCompleteTaskNames_PrefixFiltering(t *testing.T) {
 	}
 
 	repo := repoRoot
-	fn := completeTaskNames(&repo, queue.AllDirs)
+	fn := completeTaskNames(&repo, dirs.All)
 	completions, _ := fn(nil, nil, "add-")
 
 	for _, c := range completions {
@@ -4133,7 +4165,7 @@ func TestCompleteTaskNames_FrontmatterIDDiffersFromStem(t *testing.T) {
 	}
 
 	repo := repoRoot
-	fn := completeTaskNames(&repo, queue.AllDirs)
+	fn := completeTaskNames(&repo, dirs.All)
 	completions, _ := fn(nil, nil, "")
 
 	hasStem := false
@@ -4158,7 +4190,7 @@ func TestCompleteTaskNames_EmptyQueue(t *testing.T) {
 	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 
 	repo := repoRoot
-	fn := completeTaskNames(&repo, queue.AllDirs)
+	fn := completeTaskNames(&repo, dirs.All)
 	completions, directive := fn(nil, nil, "")
 
 	if len(completions) != 0 {
@@ -4171,7 +4203,7 @@ func TestCompleteTaskNames_EmptyQueue(t *testing.T) {
 
 func TestCompleteTaskNames_InvalidRepo(t *testing.T) {
 	badPath := t.TempDir()
-	fn := completeTaskNames(&badPath, queue.AllDirs)
+	fn := completeTaskNames(&badPath, dirs.All)
 	completions, directive := fn(nil, nil, "")
 
 	if len(completions) != 0 {
@@ -4186,7 +4218,7 @@ func TestCompleteTaskNames_GitRepoWithoutMato(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 
 	repo := repoRoot
-	fn := completeTaskNames(&repo, queue.AllDirs)
+	fn := completeTaskNames(&repo, dirs.All)
 	completions, directive := fn(nil, nil, "")
 
 	if len(completions) != 0 {
@@ -4212,7 +4244,7 @@ func TestCompleteTaskNames_ParseFailureInAllDirs(t *testing.T) {
 	}
 
 	repo := repoRoot
-	fn := completeTaskNames(&repo, queue.AllDirs)
+	fn := completeTaskNames(&repo, dirs.All)
 	completions, directive := fn(nil, nil, "")
 
 	if directive != cobra.ShellCompDirectiveNoFileComp {
@@ -4251,7 +4283,7 @@ func TestCompleteTaskNames_RetryParseFailureInFailed(t *testing.T) {
 	}
 
 	repo := repoRoot
-	fn := completeTaskNames(&repo, []string{queue.DirFailed})
+	fn := completeTaskNames(&repo, []string{dirs.Failed})
 	completions, _ := fn(nil, nil, "")
 
 	// Both stem and filename should be offered for the parse-failure entry.
@@ -4294,7 +4326,7 @@ func TestCompleteTaskNames_CancelExcludesParseFailureInTerminalStates(t *testing
 		}
 	}
 
-	cancelDirs := []string{queue.DirWaiting, queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview, queue.DirReadyMerge, queue.DirFailed}
+	cancelDirs := []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Failed}
 	repo := repoRoot
 	fn := completeTaskNames(&repo, cancelDirs)
 	completions, _ := fn(nil, nil, "")

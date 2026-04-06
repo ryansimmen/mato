@@ -8,7 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"mato/internal/dirs"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runner"
 	"mato/internal/testutil"
 )
@@ -21,7 +23,7 @@ func TestConcurrentReviewLockRace(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "review-race.md"
-	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, "# Review race\nTest task.\n")
+	writeTask(t, tasksDir, dirs.ReadyReview, taskFile, "# Review race\nTest task.\n")
 
 	const numGoroutines = 10
 	var wg sync.WaitGroup
@@ -87,7 +89,7 @@ func TestStaleReviewLockReclaim(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "stale-review.md"
-	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, "# Stale review\nTest task.\n")
+	writeTask(t, tasksDir, dirs.ReadyReview, taskFile, "# Stale review\nTest task.\n")
 
 	// Simulate a stale lock from a dead process (PID 2147483647 unlikely alive).
 	locksDir := filepath.Join(tasksDir, ".locks")
@@ -160,8 +162,8 @@ func TestReviewLocksIndependent(t *testing.T) {
 
 	taskA := "review-task-a.md"
 	taskB := "review-task-b.md"
-	writeTask(t, tasksDir, queue.DirReadyReview, taskA, "# Review A\nTest task A.\n")
-	writeTask(t, tasksDir, queue.DirReadyReview, taskB, "# Review B\nTest task B.\n")
+	writeTask(t, tasksDir, dirs.ReadyReview, taskA, "# Review A\nTest task A.\n")
+	writeTask(t, tasksDir, dirs.ReadyReview, taskB, "# Review B\nTest task B.\n")
 
 	// Acquire lock for task A.
 	cleanupA, okA := queue.AcquireReviewLock(tasksDir, taskA)
@@ -215,7 +217,7 @@ func TestConcurrentReviewLockMultipleTasks(t *testing.T) {
 	taskFiles := make([]string, numTasks)
 	for i := 0; i < numTasks; i++ {
 		taskFiles[i] = "concurrent-review-" + string(rune('a'+i)) + ".md"
-		writeTask(t, tasksDir, queue.DirReadyReview, taskFiles[i],
+		writeTask(t, tasksDir, dirs.ReadyReview, taskFiles[i],
 			"# Concurrent review "+string(rune('A'+i))+"\nTest.\n")
 	}
 
@@ -297,7 +299,7 @@ func TestReviewLockAcquireReleaseCycle(t *testing.T) {
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	taskFile := "cycle-review.md"
-	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, "# Cycle review\nTest.\n")
+	writeTask(t, tasksDir, dirs.ReadyReview, taskFile, "# Cycle review\nTest.\n")
 
 	lockPath := filepath.Join(tasksDir, ".locks", "review-"+taskFile+".lock")
 
@@ -327,12 +329,12 @@ func TestConcurrentReviewSelection_RequiresBranchMarkers(t *testing.T) {
 
 	// One valid review task with an explicit branch marker, plus one corrupted
 	// handoff missing the required marker.
-	writeTask(t, tasksDir, queue.DirReadyReview, "add_feature.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "add_feature.md",
 		"---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Underscore\n")
-	writeTask(t, tasksDir, queue.DirReadyReview, "add-feature.md",
+	writeTask(t, tasksDir, dirs.ReadyReview, "add-feature.md",
 		"<!-- branch: task/add-feature -->\n---\npriority: 20\nmax_retries: 3\n---\n# Add Feature Dash\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	first := runner.SelectTaskForReview(tasksDir, idx)
 	if first == nil {
 		t.Fatal("expected a review candidate, got nil")
@@ -342,18 +344,18 @@ func TestConcurrentReviewSelection_RequiresBranchMarkers(t *testing.T) {
 	}
 
 	// Remove the valid candidate so the next selection only sees the corrupted task.
-	src := filepath.Join(tasksDir, queue.DirReadyReview, first.Filename)
-	dst := filepath.Join(tasksDir, queue.DirInProgress, first.Filename)
+	src := filepath.Join(tasksDir, dirs.ReadyReview, first.Filename)
+	dst := filepath.Join(tasksDir, dirs.InProgress, first.Filename)
 	if err := os.Rename(src, dst); err != nil {
 		t.Fatalf("move first task: %v", err)
 	}
 
-	idx2 := queue.BuildIndex(tasksDir)
+	idx2 := queueview.BuildIndex(tasksDir)
 	second := runner.SelectTaskForReview(tasksDir, idx2)
 	if second != nil {
 		t.Fatalf("expected nil candidate for marker-less handoff, got %+v", second)
 	}
-	data, err := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyReview, "add_feature.md"))
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.ReadyReview, "add_feature.md"))
 	if err != nil {
 		t.Fatalf("ReadFile add_feature.md: %v", err)
 	}

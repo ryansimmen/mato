@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/merge"
 	"mato/internal/queue"
 	"mato/internal/runner"
-	"mato/internal/sessionmeta"
-	"mato/internal/taskstate"
+	"mato/internal/runtimedata"
 	"mato/internal/testutil"
 )
 
@@ -25,7 +25,7 @@ func TestResumeWorkAfterReviewRejection_ReusesBranchAndBranchContents(t *testing
 		"Implement the follow-up changes.",
 		"",
 	}, "\n")
-	writeTask(t, tasksDir, queue.DirBacklog, taskFile, taskContent)
+	writeTask(t, tasksDir, dirs.Backlog, taskFile, taskContent)
 
 	createTaskBranch(t, repoRoot, branch, map[string]string{"resume.txt": "from previous attempt\n"}, "previous attempt")
 
@@ -43,7 +43,7 @@ func TestResumeWorkAfterReviewRejection_ReusesBranchAndBranchContents(t *testing
 		t.Fatal("first claim should recognize pre-recorded branch marker")
 	}
 
-	readyReviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	readyReviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	if err := queue.WriteBranchMarker(firstClaim.TaskPath, branch); err != nil {
 		t.Fatalf("WriteBranchMarker: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestResumeWorkAfterReviewRejection_ReusesBranchAndBranchContents(t *testing
 		TaskPath: readyReviewPath,
 	})
 
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	mustExist(t, backlogPath)
 	backlogData := readFile(t, backlogPath)
 	if !strings.Contains(backlogData, "<!-- branch: "+branch+" -->") {
@@ -111,39 +111,39 @@ func TestReviewApprovalThenMerge_CleansTaskState(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "cleanup-taskstate.md"
 	branch := "task/cleanup-taskstate"
-	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, strings.Join([]string{
+	writeTask(t, tasksDir, dirs.ReadyReview, taskFile, strings.Join([]string{
 		"<!-- branch: " + branch + " -->",
 		"# Cleanup Taskstate",
 		"Review and merge this task.",
 		"",
 	}, "\n"))
 	createTaskBranch(t, repoRoot, branch, map[string]string{"cleanup.txt": "hello\n"}, "cleanup taskstate")
-	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewLaunched
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewLaunched
 		state.TaskBranch = branch
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
 
 	writeVerdict(t, tasksDir, taskFile, map[string]string{"verdict": "approve"})
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	runner.PostReviewAction(tasksDir, "review-host", &queue.ClaimedTask{
 		Filename: taskFile,
 		Branch:   branch,
 		Title:    "Cleanup Taskstate",
 		TaskPath: reviewPath,
 	})
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load after approval: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeReviewApproved {
-		t.Fatalf("taskstate after approval = %+v, want LastOutcome=%s", state, taskstate.OutcomeReviewApproved)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeReviewApproved {
+		t.Fatalf("taskstate after approval = %+v, want LastOutcome=%s", state, runtimedata.OutcomeReviewApproved)
 	}
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
-	state, err = taskstate.Load(tasksDir, taskFile)
+	state, err = runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load after merge: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "branch-rotate.md"
 
-	writeTask(t, tasksDir, queue.DirBacklog, taskFile, strings.Join([]string{
+	writeTask(t, tasksDir, dirs.Backlog, taskFile, strings.Join([]string{
 		"# Branch Rotate",
 		"Test session ID rotation on branch disambiguation.",
 		"",
@@ -182,12 +182,12 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 
 	// Runner creates a work session on branch A (as loadOrCreateSession does
 	// inside runOnce).
-	workA, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, branchA)
+	workA, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindWork, taskFile, branchA)
 	if err != nil {
 		t.Fatalf("LoadOrCreate work branchA: %v", err)
 	}
 	// Runner records head SHA after the agent commits (as recordSessionUpdate does).
-	if err := sessionmeta.Update(tasksDir, sessionmeta.KindWork, taskFile, func(s *sessionmeta.Session) {
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindWork, taskFile, func(s *runtimedata.Session) {
 		s.TaskBranch = branchA
 		s.LastHeadSHA = "abc123"
 	}); err != nil {
@@ -199,13 +199,13 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	if err := queue.WriteBranchMarker(firstClaim.TaskPath, branchA); err != nil {
 		t.Fatalf("WriteBranchMarker: %v", err)
 	}
-	readyReviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	readyReviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	mustRename(t, firstClaim.TaskPath, readyReviewPath)
 
 	// --- Review cycle on branch A ---
 	// Runner creates a review session on branch A (as loadOrCreateSession does
 	// inside runReview with reviewSessionResumeEnabled).
-	reviewA, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindReview, taskFile, branchA)
+	reviewA, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindReview, taskFile, branchA)
 	if err != nil {
 		t.Fatalf("LoadOrCreate review branchA: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 		Title:    "Branch Rotate",
 		TaskPath: readyReviewPath,
 	})
-	mustExist(t, filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	mustExist(t, filepath.Join(tasksDir, dirs.Backlog, taskFile))
 
 	// --- Force a branch collision ---
 	// Place a different task in in-progress/ that occupies branch A. When
@@ -232,7 +232,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	// branch marker (branch A) is taken and falls through to a disambiguated
 	// branch name.
 	collidingTask := "collider.md"
-	writeTask(t, tasksDir, queue.DirInProgress, collidingTask, strings.Join([]string{
+	writeTask(t, tasksDir, dirs.InProgress, collidingTask, strings.Join([]string{
 		"<!-- branch: " + branchA + " -->",
 		"<!-- claimed-by: agent-collider  claimed-at: 2026-01-01T00:00:00Z -->",
 		"# Collider",
@@ -260,7 +260,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	// Runner calls LoadOrCreate with the disambiguated branch (as
 	// loadOrCreateSession does inside runOnce). The returned
 	// CopilotSessionID is what the runner would pass via --resume.
-	workB, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, secondClaim.Branch)
+	workB, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindWork, taskFile, secondClaim.Branch)
 	if err != nil {
 		t.Fatalf("LoadOrCreate work disambiguated branch: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	}
 
 	// Same-branch reload must reuse the rotated session ID (no spurious rotation).
-	workB2, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindWork, taskFile, secondClaim.Branch)
+	workB2, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindWork, taskFile, secondClaim.Branch)
 	if err != nil {
 		t.Fatalf("LoadOrCreate work disambiguated branch again: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestSessionIDRotation_BranchDisambiguationRotatesSessionID(t *testing.T) {
 	}
 
 	// Review session ID must also rotate when loaded for the disambiguated branch.
-	reviewB, err := sessionmeta.LoadOrCreate(tasksDir, sessionmeta.KindReview, taskFile, secondClaim.Branch)
+	reviewB, err := runtimedata.LoadOrCreateSession(tasksDir, runtimedata.KindReview, taskFile, secondClaim.Branch)
 	if err != nil {
 		t.Fatalf("LoadOrCreate review disambiguated branch: %v", err)
 	}
@@ -304,21 +304,21 @@ func TestTerminalCleanup_RemovesSessionMetadata(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "cleanup-sessionmeta.md"
 	branch := "task/cleanup-sessionmeta"
-	writeTask(t, tasksDir, queue.DirReadyReview, taskFile, strings.Join([]string{
+	writeTask(t, tasksDir, dirs.ReadyReview, taskFile, strings.Join([]string{
 		"<!-- branch: " + branch + " -->",
 		"# Cleanup Sessionmeta",
 		"Review and merge this task.",
 		"",
 	}, "\n"))
 	createTaskBranch(t, repoRoot, branch, map[string]string{"cleanup.txt": "hello\n"}, "cleanup sessionmeta")
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		if _, err := sessionmeta.LoadOrCreate(tasksDir, kind, taskFile, branch); err != nil {
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		if _, err := runtimedata.LoadOrCreateSession(tasksDir, kind, taskFile, branch); err != nil {
 			t.Fatalf("seed %s session: %v", kind, err)
 		}
 	}
 
 	writeVerdict(t, tasksDir, taskFile, map[string]string{"verdict": "approve"})
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	runner.PostReviewAction(tasksDir, "review-host", &queue.ClaimedTask{
 		Filename: taskFile,
 		Branch:   branch,
@@ -328,8 +328,8 @@ func TestTerminalCleanup_RemovesSessionMetadata(t *testing.T) {
 	if got := merge.ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
 		t.Fatalf("merge.ProcessQueue() = %d, want 1", got)
 	}
-	for _, kind := range []string{sessionmeta.KindWork, sessionmeta.KindReview} {
-		session, err := sessionmeta.Load(tasksDir, kind, taskFile)
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		session, err := runtimedata.LoadSession(tasksDir, kind, taskFile)
 		if err != nil {
 			t.Fatalf("Load %s session after merge: %v", kind, err)
 		}

@@ -13,11 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"mato/internal/config"
 	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/identity"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 )
 
@@ -26,14 +28,6 @@ var taskInstructions string
 
 //go:embed review-instructions.md
 var reviewInstructions string
-
-// DefaultAgentTimeout is the default execution timeout for Docker agent
-// containers.
-const DefaultAgentTimeout = 30 * time.Minute
-
-const DefaultTaskModel = "claude-opus-4.6"
-const DefaultReviewModel = "gpt-5.4"
-const DefaultReasoningEffort = "high"
 
 // gracefulShutdownDelay is the time to wait after sending SIGTERM to a
 // Docker container before escalating to SIGKILL.
@@ -112,7 +106,7 @@ func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
-	subdirs := queue.AllDirs
+	subdirs := dirs.All
 
 	// Verify directory structure
 	missingDirs := 0
@@ -128,7 +122,7 @@ func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 	}
 
 	// Build a single shared index for all sections.
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	surfaceBuildWarnings(idx)
 
 	r := &DryRunRenderer{
@@ -149,7 +143,7 @@ func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 
 	r.RenderDependencySummary(tasksDir, idx)
 
-	backlogView := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	backlogView := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 	r.RenderAffectsConflicts(backlogView)
 
 	deferredSet := make(map[string]struct{}, len(backlogView.Deferred))
@@ -194,7 +188,7 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 		return fmt.Errorf("check docker: %w", err)
 	}
 
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			return fmt.Errorf("create %s subdirectory %s: %w", dirs.Root, sub, err)
 		}
@@ -251,11 +245,11 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail, repoRoot, tasksDir string, opts RunOptions) (envConfig, runContext) {
 	image := opts.DockerImage
 	if image == "" {
-		image = DefaultDockerImage
+		image = config.DefaultDockerImage
 	}
 	timeout := opts.AgentTimeout
 	if timeout <= 0 {
-		timeout = DefaultAgentTimeout
+		timeout = config.DefaultAgentTimeout
 	}
 	workdir := "/workspace"
 

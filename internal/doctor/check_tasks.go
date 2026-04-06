@@ -2,10 +2,9 @@ package doctor
 
 import (
 	"fmt"
+	"mato/internal/dirs"
 	"path/filepath"
 	"strings"
-
-	"mato/internal/queue"
 )
 
 // ---------- E. Task Parsing ----------
@@ -46,7 +45,7 @@ func checkTaskParsing(cc *checkContext) CheckReport {
 
 	// Total parsed count.
 	total := 0
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		total += len(idx.TasksByState(dir))
 	}
 	cr.Findings = append(cr.Findings, Finding{

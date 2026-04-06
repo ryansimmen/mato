@@ -1,7 +1,7 @@
 package queue
 
 import (
-	"fmt"
+	"mato/internal/dirs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,11 +11,11 @@ import (
 func TestComputeQueueManifest_PriorityOrder(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "low-prio.md",
+	writeTask(t, tasksDir, dirs.Backlog, "low-prio.md",
 		"---\nid: low-prio\npriority: 90\n---\n# Low\n")
-	writeTask(t, tasksDir, DirBacklog, "high-prio.md",
+	writeTask(t, tasksDir, dirs.Backlog, "high-prio.md",
 		"---\nid: high-prio\npriority: 10\n---\n# High\n")
-	writeTask(t, tasksDir, DirBacklog, "mid-prio.md",
+	writeTask(t, tasksDir, dirs.Backlog, "mid-prio.md",
 		"---\nid: mid-prio\npriority: 50\n---\n# Mid\n")
 
 	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
@@ -38,11 +38,11 @@ func TestComputeQueueManifest_PriorityOrder(t *testing.T) {
 func TestComputeQueueManifest_EqualPrioritySortByFilename(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "zebra.md",
+	writeTask(t, tasksDir, dirs.Backlog, "zebra.md",
 		"---\nid: zebra\npriority: 50\n---\n# Zebra\n")
-	writeTask(t, tasksDir, DirBacklog, "alpha.md",
+	writeTask(t, tasksDir, dirs.Backlog, "alpha.md",
 		"---\nid: alpha\npriority: 50\n---\n# Alpha\n")
-	writeTask(t, tasksDir, DirBacklog, "middle.md",
+	writeTask(t, tasksDir, dirs.Backlog, "middle.md",
 		"---\nid: middle\npriority: 50\n---\n# Middle\n")
 
 	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
@@ -79,15 +79,15 @@ func TestComputeQueueManifest_OnlyBacklogTasks(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
 	// Tasks in other directories should NOT appear in the manifest.
-	writeTask(t, tasksDir, DirWaiting, "waiting-task.md",
+	writeTask(t, tasksDir, dirs.Waiting, "waiting-task.md",
 		"---\nid: waiting-task\npriority: 10\n---\n# Waiting\n")
-	writeTask(t, tasksDir, DirInProgress, "in-progress-task.md",
+	writeTask(t, tasksDir, dirs.InProgress, "in-progress-task.md",
 		"---\nid: in-progress-task\npriority: 10\n---\n# In Progress\n")
-	writeTask(t, tasksDir, DirCompleted, "completed-task.md",
+	writeTask(t, tasksDir, dirs.Completed, "completed-task.md",
 		"---\nid: completed-task\npriority: 10\n---\n# Completed\n")
 
 	// Only backlog task should appear.
-	writeTask(t, tasksDir, DirBacklog, "backlog-task.md",
+	writeTask(t, tasksDir, dirs.Backlog, "backlog-task.md",
 		"---\nid: backlog-task\npriority: 50\n---\n# Backlog\n")
 
 	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
@@ -103,9 +103,9 @@ func TestComputeQueueManifest_OnlyBacklogTasks(t *testing.T) {
 func TestComputeQueueManifest_ExcludeSet(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "include.md",
+	writeTask(t, tasksDir, dirs.Backlog, "include.md",
 		"---\nid: include\npriority: 50\n---\n# Include\n")
-	writeTask(t, tasksDir, DirBacklog, "exclude.md",
+	writeTask(t, tasksDir, dirs.Backlog, "exclude.md",
 		"---\nid: exclude\npriority: 10\n---\n# Exclude\n")
 
 	exclude := map[string]struct{}{"exclude.md": {}}
@@ -123,9 +123,9 @@ func TestComputeQueueManifest_ExcludeSet(t *testing.T) {
 func TestComputeQueueManifest_WithIndex(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "z-task.md",
+	writeTask(t, tasksDir, dirs.Backlog, "z-task.md",
 		"---\nid: z-task\npriority: 20\n---\n# Z\n")
-	writeTask(t, tasksDir, DirBacklog, "a-task.md",
+	writeTask(t, tasksDir, dirs.Backlog, "a-task.md",
 		"---\nid: a-task\npriority: 20\n---\n# A\n")
 
 	idx := BuildIndex(tasksDir)
@@ -149,9 +149,9 @@ func TestComputeQueueManifest_WithIndex(t *testing.T) {
 func TestComputeQueueManifest_ExcludesDependencyBlockedBacklog(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "blocked.md",
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md",
 		"---\nid: blocked\ndepends_on: [missing-dep]\npriority: 10\n---\n# Blocked\n")
-	writeTask(t, tasksDir, DirBacklog, "runnable.md",
+	writeTask(t, tasksDir, dirs.Backlog, "runnable.md",
 		"---\nid: runnable\npriority: 20\n---\n# Runnable\n")
 
 	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
@@ -167,7 +167,7 @@ func TestComputeQueueManifest_ExcludesDependencyBlockedBacklog(t *testing.T) {
 func TestComputeQueueManifest_TrailingNewline(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "task.md",
+	writeTask(t, tasksDir, dirs.Backlog, "task.md",
 		"---\nid: task\n---\n# Task\n")
 
 	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
@@ -183,9 +183,9 @@ func TestComputeQueueManifest_TrailingNewline(t *testing.T) {
 func TestWriteQueueManifest(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "beta.md",
+	writeTask(t, tasksDir, dirs.Backlog, "beta.md",
 		"---\nid: beta\npriority: 30\n---\n# Beta\n")
-	writeTask(t, tasksDir, DirBacklog, "alpha.md",
+	writeTask(t, tasksDir, dirs.Backlog, "alpha.md",
 		"---\nid: alpha\npriority: 10\n---\n# Alpha\n")
 
 	if err := WriteQueueManifest(tasksDir, nil, nil); err != nil {
@@ -212,11 +212,11 @@ func TestWriteQueueManifest(t *testing.T) {
 func TestWriteQueueManifestFromView(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "blocked.md",
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md",
 		"---\nid: blocked\ndepends_on: [missing]\npriority: 5\n---\n# Blocked\n")
-	writeTask(t, tasksDir, DirBacklog, "alpha.md",
+	writeTask(t, tasksDir, dirs.Backlog, "alpha.md",
 		"---\nid: alpha\npriority: 10\n---\n# Alpha\n")
-	writeTask(t, tasksDir, DirBacklog, "beta.md",
+	writeTask(t, tasksDir, dirs.Backlog, "beta.md",
 		"---\nid: beta\npriority: 20\n---\n# Beta\n")
 
 	idx := BuildIndex(tasksDir)
@@ -255,11 +255,11 @@ func TestComputeQueueManifest_ParseFailureSkipped(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
 	// Good task.
-	writeTask(t, tasksDir, DirBacklog, "good.md",
+	writeTask(t, tasksDir, dirs.Backlog, "good.md",
 		"---\nid: good\npriority: 50\n---\n# Good\n")
 
 	// Bad YAML — should be skipped, not cause error.
-	writeTask(t, tasksDir, DirBacklog, "bad.md",
+	writeTask(t, tasksDir, dirs.Backlog, "bad.md",
 		"---\nbad: [unclosed\n---\n# Bad\n")
 
 	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)
@@ -275,17 +275,22 @@ func TestComputeQueueManifest_ParseFailureSkipped(t *testing.T) {
 func TestComputeQueueManifest_BacklogTaskWarningDoesNotAbort(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "good.md",
-		"---\nid: good\npriority: 50\n---\n# Good\n")
+	writeTask(t, tasksDir, dirs.Backlog, "good.md",
+		"---\nid: good\npriority: 50\naffects:\n  - main.go\n  - ../escape\n---\n# Good\n")
 
-	// Simulate per-task backlog warnings (invalid glob, unsafe affects)
-	// that should NOT cause manifest generation to fail.
+	// A runnable task can still carry a per-task warning (for example an unsafe
+	// affects entry that gets stripped) without aborting manifest generation.
 	idx := BuildIndex(tasksDir)
-	idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
-		State: DirBacklog,
-		Path:  filepath.Join(tasksDir, DirBacklog, "good.md"),
-		Err:   fmt.Errorf("invalid glob syntax in affects: [unclosed"),
-	})
+	foundWarning := false
+	for _, warn := range idx.BuildWarnings() {
+		if strings.Contains(warn.Err.Error(), "unsafe affects entry") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("expected unsafe affects warning, got %v", idx.BuildWarnings())
+	}
 
 	view := ComputeRunnableBacklogView(tasksDir, idx)
 	manifest, err := ComputeQueueManifestFromView(tasksDir, nil, idx, view)
@@ -300,16 +305,15 @@ func TestComputeQueueManifest_BacklogTaskWarningDoesNotAbort(t *testing.T) {
 func TestComputeQueueManifest_BacklogDirUnreadableAborts(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	// Simulate a directory-level read failure for the backlog directory.
-	idx := &PollIndex{
-		buildWarnings: []BuildWarning{{
-			State:    DirBacklog,
-			Path:     filepath.Join(tasksDir, DirBacklog),
-			Err:      os.ErrPermission,
-			DirLevel: true,
-		}},
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog)
+	if err := os.RemoveAll(backlogPath); err != nil {
+		t.Fatalf("remove backlog dir: %v", err)
+	}
+	if err := os.WriteFile(backlogPath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("create backlog file: %v", err)
 	}
 
+	idx := BuildIndex(tasksDir)
 	view := ComputeRunnableBacklogView(tasksDir, idx)
 	_, err := ComputeQueueManifestFromView(tasksDir, nil, idx, view)
 	if err == nil {
@@ -323,9 +327,9 @@ func TestComputeQueueManifest_BacklogDirUnreadableAborts(t *testing.T) {
 func TestComputeQueueManifest_InvalidGlobStillSucceeds(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	writeTask(t, tasksDir, DirBacklog, "good.md",
+	writeTask(t, tasksDir, dirs.Backlog, "good.md",
 		"---\nid: good\npriority: 50\n---\n# Good\n")
-	writeTask(t, tasksDir, DirBacklog, "bad-glob.md",
+	writeTask(t, tasksDir, dirs.Backlog, "bad-glob.md",
 		"---\nid: bad-glob\npriority: 30\naffects:\n  - \"[unclosed\"\n---\n# Bad Glob\n")
 
 	manifest, err := ComputeQueueManifest(tasksDir, nil, nil)

@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"mato/internal/dirs"
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/testutil"
@@ -20,8 +21,8 @@ import (
 func TestShowTo_TextMixedHistoryNewestFirst(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirFailed, "cleanup-reconcile.md", "# Cleanup reconcile\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed -->\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "tighten-review-tests.md", "# Tighten review tests\n\n<!-- review-rejection: reviewer-a at 2026-03-20T18:12:04Z — missing integration coverage -->\n")
+	writeTask(t, tasksDir, dirs.Failed, "cleanup-reconcile.md", "# Cleanup reconcile\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed -->\n")
+	writeTask(t, tasksDir, dirs.Backlog, "tighten-review-tests.md", "# Tighten review tests\n\n<!-- review-rejection: reviewer-a at 2026-03-20T18:12:04Z — missing integration coverage -->\n")
 	writeCompletion(t, tasksDir, messaging.CompletionDetail{
 		TaskID:       "add-log-command",
 		TaskFile:     "add-log-command.md",
@@ -55,8 +56,8 @@ func TestShowTo_TextMixedHistoryNewestFirst(t *testing.T) {
 func TestShowTo_JSONLimit(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirBacklog, "first.md", "# First\n\n<!-- review-rejection: reviewer-a at 2026-03-20T10:00:00Z — first -->\n")
-	writeTask(t, tasksDir, queue.DirFailed, "second.md", "# Second\n\n<!-- failure: worker-a at 2026-03-20T11:00:00Z step=WORK error=second -->\n")
+	writeTask(t, tasksDir, dirs.Backlog, "first.md", "# First\n\n<!-- review-rejection: reviewer-a at 2026-03-20T10:00:00Z — first -->\n")
+	writeTask(t, tasksDir, dirs.Failed, "second.md", "# Second\n\n<!-- failure: worker-a at 2026-03-20T11:00:00Z step=WORK error=second -->\n")
 	writeCompletion(t, tasksDir, messaging.CompletionDetail{
 		TaskID:    "third",
 		TaskFile:  "third.md",
@@ -121,7 +122,7 @@ func TestShowTo_EmptyHistoryWithoutCompletionsDir_UsesJSONArray(t *testing.T) {
 
 func TestShowTo_TextWriterError(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
-	writeTask(t, tasksDir, queue.DirFailed, "broken.md", "# Broken\n\n<!-- failure: worker-a at 2026-03-20T09:00:00Z step=WORK error=broken -->\n")
+	writeTask(t, tasksDir, dirs.Failed, "broken.md", "# Broken\n\n<!-- failure: worker-a at 2026-03-20T09:00:00Z step=WORK error=broken -->\n")
 
 	writeErr := errors.New("broken pipe")
 	fw := &failAfterNWriter{n: 1, err: writeErr}
@@ -140,10 +141,10 @@ func TestShowTo_WarnsAndSkipsMalformedCompletionAndUnreadableTask(t *testing.T) 
 
 	testutil.WriteFile(t, filepath.Join(tasksDir, "messages", "completions", "broken.json"), "{not json")
 	testutil.WriteFile(t, filepath.Join(tasksDir, "messages", "completions", "missing-fields.json"), `{"task_id":"missing-fields"}`)
-	writeTask(t, tasksDir, queue.DirBacklog, "good.md", "# Good\n\n<!-- review-rejection: reviewer-a at 2026-03-20T10:00:00Z — useful feedback -->\n")
-	writeTask(t, tasksDir, queue.DirFailed, "unreadable.md", "# Unreadable\n\n<!-- failure: worker-a at 2026-03-20T09:00:00Z step=WORK error=hidden -->\n")
+	writeTask(t, tasksDir, dirs.Backlog, "good.md", "# Good\n\n<!-- review-rejection: reviewer-a at 2026-03-20T10:00:00Z — useful feedback -->\n")
+	writeTask(t, tasksDir, dirs.Failed, "unreadable.md", "# Unreadable\n\n<!-- failure: worker-a at 2026-03-20T09:00:00Z step=WORK error=hidden -->\n")
 
-	unreadablePath := filepath.Join(tasksDir, queue.DirFailed, "unreadable.md")
+	unreadablePath := filepath.Join(tasksDir, dirs.Failed, "unreadable.md")
 	if err := os.Chmod(unreadablePath, 0o000); err != nil {
 		t.Fatalf("os.Chmod: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestShowTo_WarnsAndSkipsMalformedCompletionAndUnreadableTask(t *testing.T) 
 func TestShowTo_FailsWhenNoSourceReadableAndOneSourceFails(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		if err := os.RemoveAll(filepath.Join(tasksDir, dir)); err != nil {
 			t.Fatalf("os.RemoveAll(%s): %v", dir, err)
 		}
@@ -209,7 +210,7 @@ func TestShowTo_WarnsWhenCompletionSourceFailsButTaskSourceSucceeds(t *testing.T
 		t.Fatalf("os.WriteFile completions: %v", err)
 	}
 
-	writeTask(t, tasksDir, queue.DirFailed, "good-task.md",
+	writeTask(t, tasksDir, dirs.Failed, "good-task.md",
 		"# Good task\n\n<!-- failure: worker-a at 2026-03-20T10:00:00Z step=WORK error=build_failed -->\n")
 
 	var warnings bytes.Buffer
@@ -239,7 +240,7 @@ func TestShowTo_JSONPartialFailureWarnsToStderr(t *testing.T) {
 		t.Fatalf("os.WriteFile completions: %v", err)
 	}
 
-	writeTask(t, tasksDir, queue.DirFailed, "good-task.md",
+	writeTask(t, tasksDir, dirs.Failed, "good-task.md",
 		"# Good task\n\n<!-- failure: worker-a at 2026-03-20T10:00:00Z step=WORK error=build_failed -->\n")
 
 	var warnings bytes.Buffer
@@ -267,7 +268,7 @@ func TestShowTo_WarnsWhenTaskSourceFailsButCompletionSourceSucceeds(t *testing.T
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Remove all queue directories and replace them with regular files.
-	for _, dir := range queue.AllDirs {
+	for _, dir := range dirs.All {
 		dirPath := filepath.Join(tasksDir, dir)
 		if err := os.RemoveAll(dirPath); err != nil {
 			t.Fatalf("os.RemoveAll(%s): %v", dir, err)
@@ -352,7 +353,7 @@ func TestShowTo_TextRelativeTimeAnnotation(t *testing.T) {
 		Title:     "Recent merge",
 		MergedAt:  recentMerged,
 	})
-	writeTask(t, tasksDir, queue.DirFailed, "recent-failed.md",
+	writeTask(t, tasksDir, dirs.Failed, "recent-failed.md",
 		"# Recent failed\n\n<!-- failure: worker-a at "+recentFailedStr+" step=WORK error=build_broken -->\n")
 
 	// Text output should include both the absolute timestamp and [X ago].
@@ -399,9 +400,9 @@ func TestShowTo_TextRelativeTimeAnnotation(t *testing.T) {
 func TestRenderText_NoColorFallback(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
-	writeTask(t, tasksDir, queue.DirFailed, "broken.md",
+	writeTask(t, tasksDir, dirs.Failed, "broken.md",
 		"# Broken\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed -->\n")
-	writeTask(t, tasksDir, queue.DirBacklog, "rejected.md",
+	writeTask(t, tasksDir, dirs.Backlog, "rejected.md",
 		"# Rejected\n\n<!-- review-rejection: reviewer-a at 2026-03-20T18:12:04Z — missing coverage -->\n")
 	writeCompletion(t, tasksDir, messaging.CompletionDetail{
 		TaskID:    "merged-task",
@@ -538,7 +539,7 @@ func TestShowTo_TextNarrowTerminalFitsWidth(t *testing.T) {
 		Title:     "Long task title",
 		MergedAt:  mustParseTime(t, "2026-03-20T18:41:10Z"),
 	})
-	writeTask(t, tasksDir, queue.DirFailed, "another-long-named-task.md",
+	writeTask(t, tasksDir, dirs.Failed, "another-long-named-task.md",
 		"# Another long named task\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed_with_long_reason -->\n")
 
 	var buf bytes.Buffer
@@ -573,7 +574,7 @@ func TestShowTo_VerdictFallbackShowsRejectedEvent(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Task with no review-rejection markers.
-	writeTask(t, tasksDir, queue.DirBacklog, "rework.md", "# Needs Rework\n")
+	writeTask(t, tasksDir, dirs.Backlog, "rework.md", "# Needs Rework\n")
 	// Preserved verdict file.
 	writeVerdictFile(t, tasksDir, "rework.md", map[string]string{
 		"verdict": "reject",
@@ -618,7 +619,7 @@ func TestShowTo_VerdictFallbackNotUsedWhenMarkersExist(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Task with a durable rejection marker.
-	writeTask(t, tasksDir, queue.DirBacklog, "marked.md",
+	writeTask(t, tasksDir, dirs.Backlog, "marked.md",
 		"# Marked\n\n<!-- review-rejection: reviewer at 2026-03-20T10:00:00Z — durable reason -->\n")
 	// Verdict file with different reason.
 	writeVerdictFile(t, tasksDir, "marked.md", map[string]string{
@@ -656,7 +657,7 @@ func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
 
 	// Task in failed/ with no durable rejection marker, plus verdict file
 	// that should survive retry.
-	writeTask(t, tasksDir, queue.DirFailed, filename,
+	writeTask(t, tasksDir, dirs.Failed, filename,
 		"# Retry Keeps Log Verdict\n\n<!-- failure: abc at 2026-03-20T10:00:00Z step=WORK error=build -->\n")
 	writeVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",
@@ -693,7 +694,7 @@ func TestShowTo_VerdictFallbackClearedAfterCancel(t *testing.T) {
 	filename := "cancel-clears-log-verdict.md"
 
 	// Task in backlog/ with no durable rejection marker, plus stale verdict.
-	writeTask(t, tasksDir, queue.DirBacklog, filename,
+	writeTask(t, tasksDir, dirs.Backlog, filename,
 		"# Cancel Clears Log Verdict\n")
 	writeVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",

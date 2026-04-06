@@ -6,18 +6,19 @@ import (
 	"testing"
 
 	"mato/internal/dag"
+	"mato/internal/dirs"
 )
 
 func TestDiagnoseDependencies_DuplicateWaitingID(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Two waiting files with the same meta.ID.
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "aaa-first.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "aaa-first.md"),
 		[]byte("---\nid: shared\n---\n# First\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "bbb-second.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "bbb-second.md"),
 		[]byte("---\nid: shared\n---\n# Second\n"), 0o644)
 
 	diag := DiagnoseDependencies(tasksDir, nil)
@@ -46,21 +47,21 @@ func TestDiagnoseDependencies_DuplicateWaitingID(t *testing.T) {
 
 func TestDiagnoseDependencies_StemAlias(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Completed task with explicit ID "custom-id" but filename stem "dep-task".
-	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "dep-task.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-task.md"),
 		[]byte("---\nid: custom-id\n---\n# Dep\n"), 0o644)
 
 	// Waiting task depends on "dep-task" (stem) — should resolve via completedIDs
 	// because BuildIndex registers both stem and meta.ID.
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "consumer-stem.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "consumer-stem.md"),
 		[]byte("---\nid: consumer-stem\ndepends_on: [dep-task]\n---\n# Consumer by stem\n"), 0o644)
 
 	// Waiting task depends on "custom-id" (meta.ID) — should also resolve.
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "consumer-id.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "consumer-id.md"),
 		[]byte("---\nid: consumer-id\ndepends_on: [custom-id]\n---\n# Consumer by ID\n"), 0o644)
 
 	diag := DiagnoseDependencies(tasksDir, nil)
@@ -80,18 +81,18 @@ func TestDiagnoseDependencies_StemAlias(t *testing.T) {
 
 func TestDiagnoseDependencies_AmbiguousID(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Same ID in completed and failed (non-completed).
-	os.WriteFile(filepath.Join(tasksDir, DirCompleted, "ambig.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "ambig.md"),
 		[]byte("---\nid: ambig\n---\n# Done\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, DirFailed, "ambig.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "ambig.md"),
 		[]byte("---\nid: ambig\n---\n# Failed\n"), 0o644)
 
 	// Waiting task depends on ambiguous ID.
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "downstream.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "downstream.md"),
 		[]byte("---\nid: downstream\ndepends_on: [ambig]\n---\n# Downstream\n"), 0o644)
 
 	diag := DiagnoseDependencies(tasksDir, nil)
@@ -124,11 +125,11 @@ func TestDiagnoseDependencies_AmbiguousID(t *testing.T) {
 
 func TestDiagnoseDependencies_UnknownDependencyIssue(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "task.md"),
 		[]byte("---\nid: task\ndepends_on: [nonexistent]\n---\n# Task\n"), 0o644)
 
 	diag := DiagnoseDependencies(tasksDir, nil)
@@ -147,18 +148,18 @@ func TestDiagnoseDependencies_UnknownDependencyIssue(t *testing.T) {
 
 func TestDiagnoseDependencies_CycleIssues(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Self-cycle.
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "self.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "self.md"),
 		[]byte("---\nid: self\ndepends_on: [self]\n---\n# Self\n"), 0o644)
 
 	// 2-node cycle.
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "cycle-a.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "cycle-a.md"),
 		[]byte("---\nid: cycle-a\ndepends_on: [cycle-b]\n---\n# A\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "cycle-b.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "cycle-b.md"),
 		[]byte("---\nid: cycle-b\ndepends_on: [cycle-a]\n---\n# B\n"), 0o644)
 
 	diag := DiagnoseDependencies(tasksDir, nil)
@@ -189,12 +190,12 @@ func TestDiagnoseDependencies_CycleIssues(t *testing.T) {
 
 func TestDiagnoseDependencies_IssuesSorted(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create tasks that will produce multiple issue kinds.
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "task-a.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "task-a.md"),
 		[]byte("---\nid: task-a\ndepends_on: [unknown-z, unknown-a]\n---\n# A\n"), 0o644)
 
 	diag := DiagnoseDependencies(tasksDir, nil)
@@ -212,16 +213,16 @@ func TestDiagnoseDependencies_IssuesSorted(t *testing.T) {
 
 func TestDiagnoseDependencies_ThreeDuplicateWaitingIDs(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Three waiting files with the same meta.ID.
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "aaa.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "aaa.md"),
 		[]byte("---\nid: shared\n---\n# A\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "bbb.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "bbb.md"),
 		[]byte("---\nid: shared\n---\n# B\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, DirWaiting, "ccc.md"),
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "ccc.md"),
 		[]byte("---\nid: shared\n---\n# C\n"), 0o644)
 
 	diag := DiagnoseDependencies(tasksDir, nil)

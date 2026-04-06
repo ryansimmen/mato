@@ -17,14 +17,17 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"mato/internal/config"
+	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
+	"mato/internal/queueview"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/ui"
 )
 
@@ -87,22 +90,22 @@ func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 
 func testRunOptions() RunOptions {
 	return RunOptions{
-		TaskModel:                  DefaultTaskModel,
-		ReviewModel:                DefaultReviewModel,
+		TaskModel:                  config.DefaultTaskModel,
+		ReviewModel:                config.DefaultReviewModel,
 		ReviewSessionResumeEnabled: true,
-		TaskReasoningEffort:        DefaultReasoningEffort,
-		ReviewReasoningEffort:      DefaultReasoningEffort,
+		TaskReasoningEffort:        config.DefaultReasoningEffort,
+		ReviewReasoningEffort:      config.DefaultReasoningEffort,
 	}
 }
 
 func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "example-task.md"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
@@ -120,7 +123,7 @@ func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 	}
 
 	// Task should be in backlog/ with a failure record
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("task file not found in backlog/: %v", err)
@@ -135,16 +138,16 @@ func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 
 func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress, queue.DirReadyMerge} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyMerge} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "example-task.md"
 	// Task already moved to ready-to-merge by the agent (success case)
-	readyPath := filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyMerge, taskFile)
 	os.WriteFile(readyPath, []byte("# Example Task\n"), 0o644)
 
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
 		Branch:   "task/example-task",
@@ -156,7 +159,7 @@ func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 	recoverStuckTask(tasksDir, "agent1", claimed)
 
 	// backlog/ should remain empty
-	entries, _ := os.ReadDir(filepath.Join(tasksDir, queue.DirBacklog))
+	entries, _ := os.ReadDir(filepath.Join(tasksDir, dirs.Backlog))
 	if len(entries) != 0 {
 		t.Fatalf("expected backlog/ to be empty, got %d entries", len(entries))
 	}
@@ -169,16 +172,16 @@ func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 
 func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "example-task.md"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
 
 	// A file with the same name already exists in backlog/
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	os.WriteFile(backlogPath, []byte("# Existing Task\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
@@ -208,7 +211,7 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 
 func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress, queue.DirReadyReview} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -220,13 +223,13 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	}
 
 	taskFile := "pushed-task.md"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/pushed-task -->\n# Example Task\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
 		state.TaskBranch = "task/pushed-task"
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -241,10 +244,10 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	if strings.Contains(stderr, "warning:") {
 		t.Fatalf("expected no stderr warnings, got:\n%s", stderr)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to backlog, got err: %v", err)
 	}
-	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	data, err := os.ReadFile(readyPath)
 	if err != nil {
 		t.Fatalf("task should be moved to ready-for-review: %v", err)
@@ -252,12 +255,12 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	if !strings.Contains(string(data), "<!-- branch: task/pushed-task -->") {
 		t.Fatalf("ready-for-review task should keep branch marker, got:\n%s", string(data))
 	}
-	state, err := taskstate.Load(tasksDir, taskFile)
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
 	if err != nil {
 		t.Fatalf("Load taskstate: %v", err)
 	}
-	if state == nil || state.LastOutcome != taskstate.OutcomeWorkPushed {
-		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, taskstate.OutcomeWorkPushed)
+	if state == nil || state.LastOutcome != runtimedata.OutcomeWorkPushed {
+		t.Fatalf("taskstate = %+v, want LastOutcome=%s", state, runtimedata.OutcomeWorkPushed)
 	}
 	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
@@ -315,7 +318,7 @@ func TestBuildDockerArgs_ModelAndReasoningEffort_FromRunContext(t *testing.T) {
 
 func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirInProgress} {
+	for _, sub := range []string{dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
@@ -324,7 +327,7 @@ func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 
 	// Create a task that depends on "dep-a" and "dep-b"
 	taskFile := "my-task.md"
-	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	taskContent := "---\ndepends_on:\n  - dep-a\n  - dep-b\n---\n# My Task\n"
 	os.WriteFile(taskPath, []byte(taskContent), 0o644)
 
@@ -379,7 +382,7 @@ func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 
 func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirInProgress} {
+	for _, sub := range []string{dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
@@ -387,7 +390,7 @@ func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 	}
 
 	taskFile := "no-deps.md"
-	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	taskContent := "---\npriority: 5\n---\n# No deps\n"
 	os.WriteFile(taskPath, []byte(taskContent), 0o644)
 
@@ -406,7 +409,7 @@ func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 
 func TestWriteDependencyContextFile_NoCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirInProgress} {
+	for _, sub := range []string{dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
@@ -414,7 +417,7 @@ func TestWriteDependencyContextFile_NoCompletionFiles(t *testing.T) {
 	}
 
 	taskFile := "has-deps.md"
-	taskPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	taskContent := "---\ndepends_on:\n  - missing-dep\n---\n# Has deps\n"
 	os.WriteFile(taskPath, []byte(taskContent), 0o644)
 
@@ -873,15 +876,15 @@ func TestExtractReviewRejectionsWithVerdictFallback_ApproveVerdictIgnored(t *tes
 
 func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "readonly-task.md"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Read-only task\n"), 0o444)
 	t.Cleanup(func() {
-		os.Chmod(filepath.Join(tasksDir, queue.DirBacklog, taskFile), 0o644)
+		os.Chmod(filepath.Join(tasksDir, dirs.Backlog, taskFile), 0o644)
 	})
 
 	claimed := &queue.ClaimedTask{
@@ -894,7 +897,7 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	recoverStuckTask(tasksDir, "agent1", claimed)
 
 	// Task should be moved to backlog even though append will fail
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("task should be moved to backlog even when append fails: %v", err)
@@ -918,7 +921,7 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 
 func TestSelectTaskForReview_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, dirs.ReadyReview), 0o755)
 
 	got := selectTaskForReview(tasksDir, nil)
 	if got != nil {
@@ -935,7 +938,7 @@ func TestSelectTaskForReview_NonexistentDir(t *testing.T) {
 
 func TestSelectTaskForReview_SingleTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	content := "<!-- claimed-by: abc12345  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: test-task\npriority: 10\n---\n# Test Task\nDo something.\n\n<!-- branch: task/test-task -->\n"
@@ -958,7 +961,7 @@ func TestSelectTaskForReview_SingleTask(t *testing.T) {
 
 func TestSelectTaskForReview_HighestPriority(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	// Priority 20 — lower priority (higher number)
@@ -984,7 +987,7 @@ func TestSelectTaskForReview_HighestPriority(t *testing.T) {
 
 func TestSelectTaskForReview_SamePriorityAlphabetical(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	os.WriteFile(filepath.Join(reviewDir, "beta-task.md"), []byte(
@@ -1003,7 +1006,7 @@ func TestSelectTaskForReview_SamePriorityAlphabetical(t *testing.T) {
 
 func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	// Non-.md files should be ignored
@@ -1019,7 +1022,7 @@ func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 
 func TestSelectTaskForReview_RequiresBranchMarker(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	// No branch comment — should be skipped and recorded as a review failure.
@@ -1139,7 +1142,7 @@ func TestFailedDirUnavailable_IsPredicateFromRunner(t *testing.T) {
 
 func TestSelectAndLockReview_AcquiresLock(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
 
@@ -1168,7 +1171,7 @@ func TestSelectAndLockReview_AcquiresLock(t *testing.T) {
 
 func TestSelectAndLockReview_SkipsLockedTask(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	locksDir := filepath.Join(tasksDir, ".locks")
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(locksDir, 0o755)
@@ -1196,7 +1199,7 @@ func TestSelectAndLockReview_SkipsLockedTask(t *testing.T) {
 
 func TestSelectAndLockReview_AllLocked(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	locksDir := filepath.Join(tasksDir, ".locks")
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(locksDir, 0o755)
@@ -1218,7 +1221,7 @@ func TestSelectAndLockReview_AllLocked(t *testing.T) {
 
 func TestSelectAndLockReview_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, queue.DirReadyReview), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, dirs.ReadyReview), 0o755)
 
 	task, cleanup := selectAndLockReview(tasksDir, nil)
 	if task != nil {
@@ -1229,7 +1232,7 @@ func TestSelectAndLockReview_EmptyDir(t *testing.T) {
 
 func TestReviewCandidates_SortedByPriority(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	os.MkdirAll(reviewDir, 0o755)
 
 	os.WriteFile(filepath.Join(reviewDir, "low.md"), []byte(
@@ -1256,8 +1259,8 @@ func TestReviewCandidates_SortedByPriority(t *testing.T) {
 
 func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1304,8 +1307,8 @@ func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 
 func TestReviewCandidates_ExhaustedHasTerminalMarker(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1337,8 +1340,8 @@ func TestReviewCandidates_ExhaustedHasTerminalMarker(t *testing.T) {
 
 func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1366,8 +1369,8 @@ func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
 
 func TestSelectTaskForReview_SkipsRetryExhausted(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1393,8 +1396,8 @@ func TestSelectTaskForReview_SkipsRetryExhausted(t *testing.T) {
 
 func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1426,8 +1429,8 @@ func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 
 func TestReviewCandidates_TaskFailuresIgnored(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1461,8 +1464,8 @@ func TestReviewCandidates_TaskFailuresIgnored(t *testing.T) {
 
 func TestReviewCandidates_ReviewFailuresSeparateFromTaskFailures(t *testing.T) {
 	tasksDir := t.TempDir()
-	reviewDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	os.MkdirAll(reviewDir, 0o755)
 	os.MkdirAll(failedDir, 0o755)
 
@@ -1499,7 +1502,7 @@ func TestRunOnce_TimeoutKillsCommand(t *testing.T) {
 	}
 
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -1531,7 +1534,7 @@ func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 	}{
 		{
 			name: "default when unset",
-			want: DefaultAgentTimeout,
+			want: config.DefaultAgentTimeout,
 		},
 		{
 			name: "valid duration 1h",
@@ -1571,8 +1574,8 @@ func TestBuildEnvAndRunContext_AgentTimeoutResolution(t *testing.T) {
 }
 
 func TestDefaultAgentTimeout(t *testing.T) {
-	if DefaultAgentTimeout != 30*time.Minute {
-		t.Fatalf("expected default timeout of 30m, got %v", DefaultAgentTimeout)
+	if config.DefaultAgentTimeout != 30*time.Minute {
+		t.Fatalf("expected default timeout of 30m, got %v", config.DefaultAgentTimeout)
 	}
 }
 
@@ -1606,12 +1609,12 @@ func TestAgentWroteFailureRecord(t *testing.T) {
 
 func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "my-task.md"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	// Agent already wrote a failure record via ON_FAILURE.
 	os.WriteFile(inProgressPath, []byte(strings.Join([]string{
 		"<!-- claimed-by: agent-x -->\n# My Task",
@@ -1628,7 +1631,7 @@ func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 
 	recoverStuckTask(tasksDir, "agent-x", claimed)
 
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("task file not found in backlog/: %v", err)
@@ -1646,17 +1649,17 @@ func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 
 func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "example-task.md"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
 
 	// Place a stale file at the ready-for-review/ destination.
 	staleContent := []byte("<!-- claimed-by: old-agent -->\n# Stale Task\n")
-	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(readyPath, staleContent, 0o644)
 
 	// Set up a minimal git repo so postAgentPush can check for commits.
@@ -1720,13 +1723,13 @@ func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 
 func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "marker-fail.md"
 	taskContent := "<!-- claimed-by: agent1 -->\n# Marker Fail\n"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
 
 	// Set up a git repo with commits on a task branch.
@@ -1791,7 +1794,7 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 	}
 
 	// Task should NOT remain in ready-for-review/.
-	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	if _, statErr := os.Stat(readyPath); !os.IsNotExist(statErr) {
 		t.Fatal("task should not remain in ready-for-review/ after rollback")
 	}
@@ -1805,13 +1808,13 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 
 func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirInProgress, queue.DirReadyReview, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "stranded.md"
 	taskContent := "<!-- claimed-by: agent1 -->\n# Stranded\n"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
 
 	// Set up git repo.
@@ -1876,7 +1879,7 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 	}
 
 	// The ready-for-review/ file should still exist (stranded, since rollback failed).
-	readyPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	if _, statErr := os.Stat(readyPath); statErr != nil {
 		t.Fatalf("task should remain in ready-for-review/ when rollback fails: %v", statErr)
 	}
@@ -1884,12 +1887,12 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 
 func TestPostReviewAction_Approved(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write a verdict file (the new approach).
@@ -1906,14 +1909,14 @@ func TestPostReviewAction_Approved(t *testing.T) {
 	postReviewAction(tasksDir, "host-agent", task)
 
 	// Should be moved to ready-to-merge/.
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyMerge, taskFile)); err != nil {
 		t.Fatal("approved task not moved to ready-to-merge/")
 	}
 	if _, err := os.Stat(reviewPath); err == nil {
 		t.Fatal("approved task still in ready-for-review/")
 	}
 	// Task file should have the approval marker written by the host.
-	data, _ := os.ReadFile(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile))
+	data, _ := os.ReadFile(filepath.Join(tasksDir, dirs.ReadyMerge, taskFile))
 	if !strings.Contains(string(data), "<!-- reviewed:") {
 		t.Fatal("approval marker not written to task file")
 	}
@@ -1925,12 +1928,12 @@ func TestPostReviewAction_Approved(t *testing.T) {
 
 func TestPostReviewAction_Rejected(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write a rejection verdict file.
@@ -1947,14 +1950,14 @@ func TestPostReviewAction_Rejected(t *testing.T) {
 	postReviewAction(tasksDir, "host-agent", task)
 
 	// Should be moved to backlog/.
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); err != nil {
 		t.Fatal("rejected task not moved to backlog/")
 	}
 	if _, err := os.Stat(reviewPath); err == nil {
 		t.Fatal("rejected task still in ready-for-review/")
 	}
 	// Task file should have the rejection marker with the reason.
-	data, _ := os.ReadFile(filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	data, _ := os.ReadFile(filepath.Join(tasksDir, dirs.Backlog, taskFile))
 	if !strings.Contains(string(data), "<!-- review-rejection:") {
 		t.Fatal("rejection marker not written to task file")
 	}
@@ -1965,12 +1968,12 @@ func TestPostReviewAction_Rejected(t *testing.T) {
 
 func TestPostReviewAction_Rejected_SanitizesReason(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
@@ -1985,7 +1988,7 @@ func TestPostReviewAction_Rejected_SanitizesReason(t *testing.T) {
 
 	postReviewAction(tasksDir, "host-agent", task)
 
-	data, _ := os.ReadFile(filepath.Join(tasksDir, queue.DirBacklog, taskFile))
+	data, _ := os.ReadFile(filepath.Join(tasksDir, dirs.Backlog, taskFile))
 	if !strings.Contains(string(data), "missing tests —> injected") {
 		t.Fatalf("sanitized rejection reason not found in marker:\n%s", string(data))
 	}
@@ -1996,12 +1999,12 @@ func TestPostReviewAction_Rejected_SanitizesReason(t *testing.T) {
 
 func TestPostReviewAction_NoVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	task := &queue.ClaimedTask{
@@ -2028,12 +2031,12 @@ func TestPostReviewAction_NoVerdict(t *testing.T) {
 
 func TestPostReviewAction_ApprovalMarkerWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
 	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
@@ -2049,7 +2052,7 @@ func TestPostReviewAction_ApprovalMarkerWriteFailure(t *testing.T) {
 
 	// The task should still be moved to ready-to-merge/ (marker write is non-fatal
 	// after a successful move).
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyMerge, taskFile)); err != nil {
 		t.Fatal("task should be moved to ready-to-merge/ even when marker write fails after move")
 	}
 	if _, err := os.Stat(reviewPath); err == nil {
@@ -2066,12 +2069,12 @@ func TestPostReviewAction_ApprovalMarkerWriteFailure(t *testing.T) {
 
 func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
 	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"missing tests"}`), 0o644)
@@ -2087,7 +2090,7 @@ func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 
 	// The primary append fails but the fallback write (read-modify-write)
 	// should succeed, so the marker ends up in the task file.
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); err != nil {
 		t.Fatal("task should be moved to backlog/")
 	}
 	if _, err := os.Stat(reviewPath); err == nil {
@@ -2098,7 +2101,7 @@ func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 	}
 	// Fallback write should have written the marker, so review feedback
 	// must be available to the next work agent.
-	dstPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	dstPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	feedback := extractReviewRejections(dstPath)
 	if feedback == "" {
 		dstData, _ := os.ReadFile(dstPath)
@@ -2112,12 +2115,12 @@ func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 
 func TestPostReviewAction_ApprovalMarkerAndReviewFailureWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
 	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
@@ -2133,7 +2136,7 @@ func TestPostReviewAction_ApprovalMarkerAndReviewFailureWriteFailure(t *testing.
 
 	// The move succeeds, but the marker write (to destination) fails.
 	// The handoff is still considered successful.
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyMerge, taskFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyMerge, taskFile)); err != nil {
 		t.Fatal("task should be moved to ready-to-merge/ even when marker write fails")
 	}
 	if !strings.Contains(stderr, "could not write verdict marker") {
@@ -2143,12 +2146,12 @@ func TestPostReviewAction_ApprovalMarkerAndReviewFailureWriteFailure(t *testing.
 
 func TestPostReviewAction_ErrorVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write an error verdict file (review agent's ON_FAILURE).
@@ -2183,12 +2186,12 @@ func TestPostReviewAction_ErrorVerdict(t *testing.T) {
 
 func TestPostReviewAction_UnknownVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
@@ -2217,12 +2220,12 @@ func TestPostReviewAction_UnknownVerdict(t *testing.T) {
 
 func TestPostReviewAction_MalformedJSON(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
@@ -2251,12 +2254,12 @@ func TestPostReviewAction_MalformedJSON(t *testing.T) {
 
 func TestPostReviewAction_EmptyVerdictFile(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
@@ -2282,12 +2285,12 @@ func TestPostReviewAction_EmptyVerdictFile(t *testing.T) {
 
 func TestPostReviewAction_PartialRejectionMarkerTreatedAsNoVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirReadyReview, queue.DirReadyMerge, queue.DirBacklog, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
-	reviewPath := filepath.Join(tasksDir, queue.DirReadyReview, taskFile)
+	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	// Partial rejection marker (no closing -->, simulating agent crash during write)
 	os.WriteFile(reviewPath, []byte(strings.Join([]string{
 		"<!-- claimed-by: task-agent -->",
@@ -2311,7 +2314,7 @@ func TestPostReviewAction_PartialRejectionMarkerTreatedAsNoVerdict(t *testing.T)
 	if _, err := os.Stat(reviewPath); err != nil {
 		t.Fatal("task with partial rejection marker should stay in ready-for-review/")
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, taskFile)); err == nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); err == nil {
 		t.Fatal("task with partial rejection marker should not be moved to backlog/")
 	}
 	data, _ := os.ReadFile(reviewPath)
@@ -2404,8 +2407,8 @@ func TestIsTerminal(t *testing.T) {
 
 func TestMoveReviewedTask_Success(t *testing.T) {
 	tasksDir := t.TempDir()
-	srcDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	dstDir := filepath.Join(tasksDir, queue.DirReadyMerge)
+	srcDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	dstDir := filepath.Join(tasksDir, dirs.ReadyMerge)
 	msgDir := filepath.Join(tasksDir, "messages", "events")
 	for _, d := range []string{srcDir, dstDir, msgDir} {
 		os.MkdirAll(d, 0o755)
@@ -2423,7 +2426,7 @@ func TestMoveReviewedTask_Success(t *testing.T) {
 	}
 
 	ok := moveReviewedTask(tasksDir, "agent1", task, reviewDisposition{
-		dir:         queue.DirReadyMerge,
+		dir:         dirs.ReadyMerge,
 		messageBody: "approved",
 		logPrefix:   "review",
 	}, "\n<!-- reviewed: agent1 at 2026-01-01T00:00:00Z — approved -->\n")
@@ -2448,8 +2451,8 @@ func TestMoveReviewedTask_Success(t *testing.T) {
 
 func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 	tasksDir := t.TempDir()
-	srcDir := filepath.Join(tasksDir, queue.DirReadyReview)
-	dstDir := filepath.Join(tasksDir, queue.DirBacklog)
+	srcDir := filepath.Join(tasksDir, dirs.ReadyReview)
+	dstDir := filepath.Join(tasksDir, dirs.Backlog)
 	msgDir := filepath.Join(tasksDir, "messages", "events")
 	for _, d := range []string{srcDir, dstDir, msgDir} {
 		os.MkdirAll(d, 0o755)
@@ -2471,7 +2474,7 @@ func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 	}
 
 	ok := moveReviewedTask(tasksDir, "agent1", task, reviewDisposition{
-		dir:         queue.DirBacklog,
+		dir:         dirs.Backlog,
 		messageBody: "rejected",
 		logPrefix:   "review",
 	}, "\n<!-- review-rejection: agent1 at 2026-01-01T00:00:00Z — tests missing -->\n")
@@ -2699,14 +2702,14 @@ func TestDryRun_BasicValidation(t *testing.T) {
 	cmd.Run()
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	subdirs := queue.AllDirs
+	subdirs := dirs.All
 	for _, sub := range subdirs {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a valid backlog task
 	taskContent := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n---\n# Task A\nDo something.\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskContent), 0o644)
 
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
@@ -2727,13 +2730,13 @@ func TestDryRun_DetectsParseErrors(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a task with invalid frontmatter
 	badContent := "---\npriority: not-a-number\n---\n# Bad Task\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "bad-task.md"), []byte(badContent), 0o644)
 
 	// DryRun should succeed (parse errors are reported, not fatal)
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
@@ -2750,15 +2753,15 @@ func TestDryRun_DetectsOverlaps(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create two tasks with overlapping affects
 	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n---\n# Task A\n"
 	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n---\n# Task B\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
 
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
@@ -2781,7 +2784,7 @@ func TestDryRun_MissingDirectories(t *testing.T) {
 	tasksDir := filepath.Join(repoDir, ".mato")
 	os.MkdirAll(tasksDir, 0o755)
 	// Only create some subdirs, leaving others missing
-	os.MkdirAll(filepath.Join(tasksDir, queue.DirBacklog), 0o755)
+	os.MkdirAll(filepath.Join(tasksDir, dirs.Backlog), 0o755)
 
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err == nil {
@@ -2800,17 +2803,17 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a completed dependency
 	depContent := "---\nid: dep-task\npriority: 5\n---\n# Dep Task\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "dep-task.md"), []byte(depContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-task.md"), []byte(depContent), 0o644)
 
 	// Create a waiting task that depends on the completed task
 	waitingContent := "---\nid: child-task\npriority: 10\ndepends_on:\n  - dep-task\n---\n# Child Task\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "child-task.md"), []byte(waitingContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "child-task.md"), []byte(waitingContent), 0o644)
 
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
@@ -2818,10 +2821,10 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 	}
 
 	// DryRun is read-only: the waiting task should NOT be moved.
-	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirWaiting, "child-task.md")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Waiting, "child-task.md")); statErr != nil {
 		t.Fatal("child-task.md should still be in waiting/ (dry-run is read-only)")
 	}
-	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "child-task.md")); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "child-task.md")); statErr == nil {
 		t.Fatal("child-task.md should NOT have been promoted to backlog/ during dry-run")
 	}
 }
@@ -2834,13 +2837,13 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Add a backlog task — in normal run this would trigger Docker launch
 	taskContent := "---\nid: runnable\npriority: 1\n---\n# Runnable Task\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(taskContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "runnable.md"), []byte(taskContent), 0o644)
 
 	// DryRun should complete without attempting to claim or launch Docker
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
@@ -2849,10 +2852,10 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 	}
 
 	// The task should still be in backlog (not claimed/moved)
-	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "runnable.md")); statErr != nil {
 		t.Fatal("task should remain in backlog/ during dry-run")
 	}
-	if _, statErr := os.Stat(filepath.Join(tasksDir, queue.DirInProgress, "runnable.md")); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.InProgress, "runnable.md")); statErr == nil {
 		t.Fatal("task should NOT be moved to in-progress/ during dry-run")
 	}
 }
@@ -2865,7 +2868,7 @@ func TestDryRun_ResolvedSettingsOutput(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -2907,7 +2910,7 @@ func TestDryRun_ExecutionOrder(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -2916,9 +2919,9 @@ func TestDryRun_ExecutionOrder(t *testing.T) {
 	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n---\n# Task A\n"
 	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n---\n# Task B\n"
 	taskC := "---\nid: task-c\npriority: 5\naffects:\n  - other.go\n---\n# Task C\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-c.md"), []byte(taskC), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -2958,7 +2961,7 @@ func TestDryRun_BacklogTaskSummary(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -2969,10 +2972,10 @@ func TestDryRun_BacklogTaskSummary(t *testing.T) {
 	// Task with no affects or depends_on.
 	taskC := "---\nid: task-c\npriority: 5\n---\n# Task C\n"
 	depX := "---\nid: dep-x\n---\n# Dep X\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "dep-x.md"), []byte(depX), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-c.md"), []byte(taskC), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-x.md"), []byte(depX), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-c.md"), []byte(taskC), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3019,25 +3022,25 @@ func TestDryRun_DependencySummary(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// completed dependency
 	depCompleted := "---\nid: dep-completed\npriority: 5\n---\n# Completed\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "dep-completed.md"), []byte(depCompleted), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-completed.md"), []byte(depCompleted), 0o644)
 
 	// waiting dependency
 	depWaiting := "---\nid: dep-waiting\npriority: 5\ndepends_on:\n  - dep-completed\n---\n# Waiting\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "dep-waiting.md"), []byte(depWaiting), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "dep-waiting.md"), []byte(depWaiting), 0o644)
 
 	// failed dependency
 	depFailed := "---\nid: dep-failed\npriority: 5\n---\n# Failed\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirFailed, "dep-failed.md"), []byte(depFailed), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "dep-failed.md"), []byte(depFailed), 0o644)
 
 	// The main waiting task that depends on completed, waiting, failed, and unknown deps.
 	mainTask := "---\nid: main-task\npriority: 10\ndepends_on:\n  - dep-completed\n  - dep-waiting\n  - dep-failed\n  - dep-nonexistent\n---\n# Main Task\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "main-task.md"), []byte(mainTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "main-task.md"), []byte(mainTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3077,20 +3080,20 @@ func TestDryRun_DependencySummary_Ambiguous(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a task ID that exists in both completed and non-completed (backlog).
 	ambigCompleted := "---\nid: ambig-dep\npriority: 5\n---\n# Ambig Completed\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "ambig-dep.md"), []byte(ambigCompleted), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "ambig-dep.md"), []byte(ambigCompleted), 0o644)
 
 	ambigBacklog := "---\nid: ambig-dep\npriority: 5\n---\n# Ambig Backlog\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "ambig-dep-v2.md"), []byte(ambigBacklog), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "ambig-dep-v2.md"), []byte(ambigBacklog), 0o644)
 
 	// Waiting task that depends on the ambiguous ID.
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - ambig-dep\n---\n# Waiter\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3114,7 +3117,7 @@ func TestDryRun_DependencySummary_ActiveAndBacklogStates(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -3124,11 +3127,11 @@ func TestDryRun_DependencySummary_ActiveAndBacklogStates(t *testing.T) {
 	mergeTask := "---\nid: dep-merge\npriority: 5\n---\n# Merge\n"
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - dep-backlog\n  - dep-in-progress\n  - dep-review\n  - dep-merge\n---\n# Waiter\n"
 
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "dep-backlog.md"), []byte(backlogTask), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "dep-in-progress.md"), []byte(inProgressTask), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyReview, "dep-review.md"), []byte(reviewTask), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "dep-merge.md"), []byte(mergeTask), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "dep-backlog.md"), []byte(backlogTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "dep-in-progress.md"), []byte(inProgressTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "dep-review.md"), []byte(reviewTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "dep-merge.md"), []byte(mergeTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3158,7 +3161,7 @@ func TestDryRun_DependencySummary_DuplicateWaitingIDIsAmbiguous(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -3166,9 +3169,9 @@ func TestDryRun_DependencySummary_DuplicateWaitingIDIsAmbiguous(t *testing.T) {
 	dupB := "---\nid: dup-dep\npriority: 6\n---\n# Duplicate B\n"
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - dup-dep\n---\n# Waiter\n"
 
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "dup-a.md"), []byte(dupA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "dup-b.md"), []byte(dupB), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "dup-a.md"), []byte(dupA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "dup-b.md"), []byte(dupB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3192,15 +3195,15 @@ func TestDryRun_DependencySummary_ParseFailedTargetUsesQueueState(t *testing.T) 
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	badBacklog := "---\npriority: not-a-number\n---\n# Broken Backlog Task\n"
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - parse-target\n---\n# Waiter\n"
 
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "parse-target.md"), []byte(badBacklog), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "waiter.md"), []byte(waitingTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "parse-target.md"), []byte(badBacklog), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3227,14 +3230,14 @@ func TestDryRun_AffectsConflictDetail(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n  - unique-a.go\n---\n# Task A\n"
 	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n  - unique-b.go\n---\n# Task B\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-b.md"), []byte(taskB), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3264,14 +3267,14 @@ func TestDryRun_DependencyBlockedBacklogTask(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	blocked := "---\nid: blocked\ndepends_on:\n  - missing-dep\npriority: 10\n---\n# Blocked\n"
 	runnable := "---\nid: runnable\npriority: 20\n---\n# Runnable\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "blocked.md"), []byte(blocked), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "runnable.md"), []byte(runnable), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "blocked.md"), []byte(blocked), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "runnable.md"), []byte(runnable), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3304,17 +3307,17 @@ func TestDryRun_ParseErrorsWithValidTasks(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Valid backlog task.
 	validTask := "---\nid: valid-task\npriority: 10\naffects:\n  - file.go\n---\n# Valid Task\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "valid-task.md"), []byte(validTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "valid-task.md"), []byte(validTask), 0o644)
 
 	// Invalid backlog task (parse error).
 	badTask := "---\npriority: not-a-number\n---\n# Bad Task\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-task.md"), []byte(badTask), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "bad-task.md"), []byte(badTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3353,13 +3356,13 @@ func TestDryRun_ParseErrorsWithValidTasks(t *testing.T) {
 
 func TestSurfaceBuildWarnings_NoWarnings(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, d := range queue.AllDirs {
+	for _, d := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, d), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
 	}
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	_, stderr := captureStdoutStderr(t, func() {
 		if surfaceBuildWarnings(idx) {
 			t.Error("surfaceBuildWarnings should return false when there are no warnings")
@@ -3373,7 +3376,7 @@ func TestSurfaceBuildWarnings_NoWarnings(t *testing.T) {
 
 func TestSurfaceBuildWarnings_DirReadFailure(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, d := range queue.AllDirs {
+	for _, d := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, d), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -3381,7 +3384,7 @@ func TestSurfaceBuildWarnings_DirReadFailure(t *testing.T) {
 
 	// Replace the backlog directory with a regular file so ReadDir fails
 	// with a non-NotExist error, triggering a directory-level build warning.
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog)
 	if err := os.RemoveAll(backlogPath); err != nil {
 		t.Fatalf("remove backlog dir: %v", err)
 	}
@@ -3389,7 +3392,7 @@ func TestSurfaceBuildWarnings_DirReadFailure(t *testing.T) {
 		t.Fatalf("create backlog file: %v", err)
 	}
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	if len(idx.BuildWarnings()) == 0 {
 		t.Fatal("expected BuildWarnings from unreadable directory")
 	}
@@ -3403,14 +3406,14 @@ func TestSurfaceBuildWarnings_DirReadFailure(t *testing.T) {
 	if !strings.Contains(stderr, "warning: index build:") {
 		t.Errorf("expected warning on stderr, got: %s", stderr)
 	}
-	if !strings.Contains(stderr, queue.DirBacklog) {
-		t.Errorf("expected stderr to mention %q, got: %s", queue.DirBacklog, stderr)
+	if !strings.Contains(stderr, dirs.Backlog) {
+		t.Errorf("expected stderr to mention %q, got: %s", dirs.Backlog, stderr)
 	}
 }
 
 func TestSurfaceBuildWarnings_GlobWarningDoesNotTriggerPollError(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, d := range queue.AllDirs {
+	for _, d := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, d), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -3419,11 +3422,11 @@ func TestSurfaceBuildWarnings_GlobWarningDoesNotTriggerPollError(t *testing.T) {
 	// Create a task with an invalid glob pattern in affects to trigger a
 	// per-file build warning (not a directory-level failure).
 	taskContent := "---\nid: bad-glob\npriority: 10\naffects:\n  - \"[invalid\"\n---\n# Bad Glob\n"
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-glob.md"), []byte(taskContent), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "bad-glob.md"), []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("write task: %v", err)
 	}
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	if len(idx.BuildWarnings()) == 0 {
 		t.Fatal("expected BuildWarnings from invalid glob")
 	}
@@ -3447,12 +3450,12 @@ func TestDryRun_SurfacesBuildWarnings(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskContent := "---\nid: bad-glob\npriority: 10\naffects:\n  - \"[invalid\"\n---\n# Bad Glob\n"
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "bad-glob.md"), []byte(taskContent), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "bad-glob.md"), []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("write task: %v", err)
 	}
 
@@ -3476,12 +3479,12 @@ func TestGracefulShutdown_RecoversDuringSignal(t *testing.T) {
 	}
 
 	tasksDir := t.TempDir()
-	for _, sub := range []string{queue.DirBacklog, queue.DirInProgress} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "signal-test.md"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Signal Test\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
@@ -3525,7 +3528,7 @@ func TestGracefulShutdown_RecoversDuringSignal(t *testing.T) {
 	if _, err := os.Stat(inProgressPath); err == nil {
 		t.Fatal("task still in in-progress/ after shutdown recovery")
 	}
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, taskFile)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	data, err := os.ReadFile(backlogPath)
 	if err != nil {
 		t.Fatalf("task not found in backlog/: %v", err)
@@ -3663,7 +3666,7 @@ func TestReportBranchResolution_WarnsForCachedOrUnavailableBranch(t *testing.T) 
 func setupFullTasksDir(t *testing.T) string {
 	t.Helper()
 	tasksDir := t.TempDir()
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", sub, err)
 		}
@@ -3684,7 +3687,7 @@ func TestPollCleanup_RecoverOrphanedTask(t *testing.T) {
 
 	// Place an orphaned task in in-progress/ with a dead agent ID.
 	taskContent := "<!-- claimed-by: deadagent1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: orphan-task\npriority: 10\n---\n# Orphan\n"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, "orphan-task.md")
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, "orphan-task.md")
 	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
 
 	// No lock file for deadagent1, so the task should be recovered.
@@ -3695,7 +3698,7 @@ func TestPollCleanup_RecoverOrphanedTask(t *testing.T) {
 	if _, err := os.Stat(inProgressPath); err == nil {
 		t.Fatal("orphaned task should have been removed from in-progress/")
 	}
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, "orphan-task.md")
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, "orphan-task.md")
 	if _, err := os.Stat(backlogPath); err != nil {
 		t.Fatalf("orphaned task should have been moved to backlog/: %v", err)
 	}
@@ -3737,14 +3740,14 @@ func TestPollCleanup_EmptyDir(t *testing.T) {
 
 func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
 	tasksDir := setupFullTasksDir(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "active.md"), []byte("# Active\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "active.md"), []byte("# Active\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile active task: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "done.md"), []byte("# Done\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "done.md"), []byte("# Done\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile done task: %v", err)
 	}
 	for _, name := range []string{"active.md", "done.md", "gone.md"} {
-		if err := taskstate.Update(tasksDir, name, func(state *taskstate.TaskState) {
+		if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
 			state.LastOutcome = name
 		}); err != nil {
 			t.Fatalf("seed taskstate %s: %v", name, err)
@@ -3753,7 +3756,7 @@ func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
 	captureStdoutStderr(t, func() {
 		pollCleanup(tasksDir)
 	})
-	active, err := taskstate.Load(tasksDir, "active.md")
+	active, err := runtimedata.LoadTaskState(tasksDir, "active.md")
 	if err != nil {
 		t.Fatalf("Load active taskstate: %v", err)
 	}
@@ -3761,7 +3764,7 @@ func TestPollCleanup_SweepsStaleTaskState(t *testing.T) {
 		t.Fatal("active taskstate should remain after pollCleanup")
 	}
 	for _, name := range []string{"done.md", "gone.md"} {
-		state, err := taskstate.Load(tasksDir, name)
+		state, err := runtimedata.LoadTaskState(tasksDir, name)
 		if err != nil {
 			t.Fatalf("Load %s taskstate: %v", name, err)
 		}
@@ -3787,15 +3790,15 @@ func TestPollCleanup_RebuildsFileClaimsAfterRecoveringPushedTask(t *testing.T) {
 		"# Pushed Claims",
 		"",
 	}, "\n")
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, "pushed-claims.md")
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, "pushed-claims.md")
 	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, "pushed-claims.md", func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, "pushed-claims.md", func(state *runtimedata.TaskState) {
 		state.TaskBranch = "task/pushed-claims"
 		state.TargetBranch = "mato"
 		state.LastHeadSHA = "deadbeef"
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -3803,7 +3806,7 @@ func TestPollCleanup_RebuildsFileClaimsAfterRecoveringPushedTask(t *testing.T) {
 	captureStdoutStderr(t, func() {
 		pollCleanup(tasksDir)
 	})
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirReadyReview, "pushed-claims.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, "pushed-claims.md")); err != nil {
 		t.Fatalf("recovered pushed task should be in ready-for-review: %v", err)
 	}
 	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
@@ -3825,8 +3828,8 @@ func TestPollCleanup_RebuildsFileClaimsAfterRecoveringPushedTask(t *testing.T) {
 	if claim.Task != "pushed-claims.md" {
 		t.Fatalf("claim.Task = %q, want %q", claim.Task, "pushed-claims.md")
 	}
-	if claim.Status != queue.DirReadyReview {
-		t.Fatalf("claim.Status = %q, want %q", claim.Status, queue.DirReadyReview)
+	if claim.Status != dirs.ReadyReview {
+		t.Fatalf("claim.Status = %q, want %q", claim.Status, dirs.ReadyReview)
 	}
 	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
 	if err != nil {
@@ -3876,15 +3879,15 @@ func TestRecoverStuckTask_PushedTaskRecoveryUsesAffectsForMessageFiles(t *testin
 		"",
 	}, "\n")
 	taskFile := "recovered-files.md"
-	inProgressPath := filepath.Join(tasksDir, queue.DirInProgress, taskFile)
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile task: %v", err)
 	}
-	if err := taskstate.Update(tasksDir, taskFile, func(state *taskstate.TaskState) {
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
 		state.TaskBranch = "task/recovered-files"
 		state.TargetBranch = "mato"
 		state.LastHeadSHA = "deadbeef"
-		state.LastOutcome = taskstate.OutcomeWorkBranchPushed
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
 	}); err != nil {
 		t.Fatalf("seed taskstate: %v", err)
 	}
@@ -3943,11 +3946,11 @@ func TestPollReconcile_PromotesWaitingTask(t *testing.T) {
 
 	// Create a completed dependency task.
 	completedContent := "---\nid: dep-task\npriority: 10\n---\n# Dep\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirCompleted, "dep-task.md"), []byte(completedContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-task.md"), []byte(completedContent), 0o644)
 
 	// Create a waiting task that depends on the completed one.
 	waitingContent := "---\nid: child-task\npriority: 20\ndepends_on:\n  - dep-task\n---\n# Child\n"
-	waitingPath := filepath.Join(tasksDir, queue.DirWaiting, "child-task.md")
+	waitingPath := filepath.Join(tasksDir, dirs.Waiting, "child-task.md")
 	os.WriteFile(waitingPath, []byte(waitingContent), 0o644)
 
 	captureStdoutStderr(t, func() {
@@ -3964,7 +3967,7 @@ func TestPollReconcile_PromotesWaitingTask(t *testing.T) {
 	if _, err := os.Stat(waitingPath); err == nil {
 		t.Fatal("waiting task should have been promoted out of waiting/")
 	}
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog, "child-task.md")
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, "child-task.md")
 	if _, err := os.Stat(backlogPath); err != nil {
 		t.Fatalf("waiting task should have been promoted to backlog/: %v", err)
 	}
@@ -3974,7 +3977,7 @@ func TestPollReconcile_DirReadFailureFlagsError(t *testing.T) {
 	tasksDir := setupFullTasksDir(t)
 
 	// Replace backlog directory with a regular file to trigger ReadDir failure.
-	backlogPath := filepath.Join(tasksDir, queue.DirBacklog)
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog)
 	os.RemoveAll(backlogPath)
 	os.WriteFile(backlogPath, []byte("not a directory"), 0o644)
 
@@ -4001,8 +4004,8 @@ func TestPollClaimAndRun_NoTasksAvailable(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir}
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := make(map[string]struct{})
-	idx := queue.BuildIndex(tasksDir)
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 
 	var claimed, hadError bool
 	captureStdoutStderr(t, func() {
@@ -4026,8 +4029,8 @@ func TestPollClaimAndRun_FailedDirUnavailableExclusion(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir}
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := map[string]struct{}{"already-excluded.md": {}}
-	idx := queue.BuildIndex(tasksDir)
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 
 	captureStdoutStderr(t, func() {
 		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx, view)
@@ -4043,7 +4046,7 @@ func TestPollClaimAndRun_DeferredOverlapSkipped(t *testing.T) {
 
 	// Create a task in in-progress that claims affects on a path.
 	activeContent := "<!-- claimed-by: other-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/active -->\n---\nid: active-task\npriority: 5\naffects:\n  - src/main.go\n---\n# Active\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirInProgress, "active-task.md"), []byte(activeContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "active-task.md"), []byte(activeContent), 0o644)
 
 	// Register a lock for other-agent so it isn't orphan-recovered.
 	lockPath := filepath.Join(tasksDir, ".locks", "other-agent.pid")
@@ -4051,14 +4054,14 @@ func TestPollClaimAndRun_DeferredOverlapSkipped(t *testing.T) {
 
 	// Create a backlog task that overlaps the same affects.
 	backlogContent := "---\nid: overlap-task\npriority: 10\naffects:\n  - src/main.go\n---\n# Overlap\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "overlap-task.md"), []byte(backlogContent), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "overlap-task.md"), []byte(backlogContent), 0o644)
 
 	ctx := context.Background()
 	env := envConfig{tasksDir: tasksDir}
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := make(map[string]struct{})
-	idx := queue.BuildIndex(tasksDir)
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 
 	var claimed bool
 	captureStdoutStderr(t, func() {
@@ -4115,18 +4118,18 @@ func TestPollIterate_PausedSkipsClaimAndReviewButMerges(t *testing.T) {
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) {
 		return pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}, nil
 	})
-	setHook(t, &pollWriteManifestFn, func(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+	setHook(t, &pollWriteManifestFn, func(tasksDir string, failedDirExcluded map[string]struct{}, idx *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
 		manifestCalled = true
 		if _, ok := failedDirExcluded["excluded.md"]; !ok {
 			t.Fatalf("failedDirExcluded not preserved")
 		}
-		return queue.RunnableBacklogView{}, false
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		claimCalled = true
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		reviewCalled = true
 		return false
 	})
@@ -4164,13 +4167,13 @@ func TestPollIterate_PauseWarningThrottled(t *testing.T) {
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) {
 		return pause.State{Active: true, ProblemKind: pause.ProblemMalformed, Problem: `invalid timestamp: "bad"`}, nil
 	})
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4199,13 +4202,13 @@ func TestPollIterate_PausedMergeDoesNotResetHeartbeatThrottle(t *testing.T) {
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) {
 		return pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}, nil
 	})
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 1 })
@@ -4232,14 +4235,14 @@ func TestPollIterate_ClaimedCancelledSkipsReviewAndMerge(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return true, false
 	})
 	reviewCalled := false
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		reviewCalled = true
 		return false
 	})
@@ -4267,17 +4270,17 @@ func TestPollIterate_CancelledWithoutClaimSkipsReviewAndMerge(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex, view queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queueview.PollIndex, view queueview.RunnableBacklogView) (bool, bool) {
 		if ctx.Err() == nil {
 			t.Fatal("expected cancelled context in claim stub")
 		}
 		return false, false
 	})
 	reviewCalled := false
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		reviewCalled = true
 		return false
 	})
@@ -4305,18 +4308,18 @@ func TestPollIterate_CancelDuringClaimSkipsReviewAndMerge(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
 
 	// Simulate a context that gets cancelled during the claim phase.
 	ctx, cancel := context.WithCancel(context.Background())
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		cancel() // cancel context during claim
 		return false, false
 	})
 	reviewCalled := false
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		reviewCalled = true
 		return false
 	})
@@ -4340,7 +4343,7 @@ func TestPollIterate_CancelDuringClaimSkipsReviewAndMerge(t *testing.T) {
 
 func TestPollReview_CancelledContextReturnsImmediately(t *testing.T) {
 	tasksDir := setupFullTasksDir(t)
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -4367,18 +4370,18 @@ func TestPollLoop_CancelDuringIterationExits(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	iterations := 0
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		iterations++
 		cancel() // cancel during first iteration
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int {
@@ -4401,17 +4404,17 @@ func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int {
-		path := filepath.Join(tasksDir, queue.DirReadyReview, "new-review.md")
+		path := filepath.Join(tasksDir, dirs.ReadyReview, "new-review.md")
 		if err := os.WriteFile(path, []byte("<!-- branch: task/new-review -->\n---\nid: new-review\n---\n# Review\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
@@ -4427,19 +4430,19 @@ func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
 func TestPollIterate_IdleReviewProbeDoesNotQuarantineMalformedTasks(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
-	malformedPath := filepath.Join(tasksDir, queue.DirReadyReview, "malformed.md")
+	malformedPath := filepath.Join(tasksDir, dirs.ReadyReview, "malformed.md")
 	if err := os.WriteFile(malformedPath, []byte("---\npriority: [\n# broken\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile malformed review task: %v", err)
 	}
 
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4451,7 +4454,7 @@ func TestPollIterate_IdleReviewProbeDoesNotQuarantineMalformedTasks(t *testing.T
 	if _, err := os.Stat(malformedPath); err != nil {
 		t.Fatalf("malformed review task should remain in ready-for-review/: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "malformed.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "malformed.md")); !os.IsNotExist(err) {
 		t.Fatalf("malformed review task should not be moved to failed/, got err: %v", err)
 	}
 }
@@ -4462,19 +4465,19 @@ func TestPollIterate_IdleReviewProbeDoesNotMoveExhaustedTasks(t *testing.T) {
 	exhaustedContent := "---\npriority: 10\nmax_retries: 2\n---\n# Exhausted\n" +
 		"<!-- review-failure: a1 at 2026-01-01T00:00:00Z — f1 -->\n" +
 		"<!-- review-failure: a2 at 2026-01-02T00:00:00Z — f2 -->\n"
-	exhaustedPath := filepath.Join(tasksDir, queue.DirReadyReview, "exhausted.md")
+	exhaustedPath := filepath.Join(tasksDir, dirs.ReadyReview, "exhausted.md")
 	if err := os.WriteFile(exhaustedPath, []byte(exhaustedContent), 0o644); err != nil {
 		t.Fatalf("WriteFile exhausted review task: %v", err)
 	}
 
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4487,7 +4490,7 @@ func TestPollIterate_IdleReviewProbeDoesNotMoveExhaustedTasks(t *testing.T) {
 	if _, err := os.Stat(exhaustedPath); err != nil {
 		t.Fatalf("exhausted review task should remain in ready-for-review/: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tasksDir, queue.DirFailed, "exhausted.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "exhausted.md")); !os.IsNotExist(err) {
 		t.Fatalf("exhausted review task should not be moved to failed/ by idle probe, got err: %v", err)
 	}
 }
@@ -4497,19 +4500,19 @@ func TestPollIterate_IdleReviewProbeExcludesBranchlessHandoff(t *testing.T) {
 	tasksDir := setupFullTasksDir(t)
 	// Task with valid frontmatter and retry budget, but no branch marker.
 	branchlessContent := "---\npriority: 10\nmax_retries: 3\n---\n# Branchless Handoff\n"
-	branchlessPath := filepath.Join(tasksDir, queue.DirReadyReview, "branchless.md")
+	branchlessPath := filepath.Join(tasksDir, dirs.ReadyReview, "branchless.md")
 	if err := os.WriteFile(branchlessPath, []byte(branchlessContent), 0o644); err != nil {
 		t.Fatalf("WriteFile branchless review task: %v", err)
 	}
 
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4529,13 +4532,13 @@ func TestCollectBoundedRunState_BranchlessReviewIsIdle(t *testing.T) {
 	tasksDir := setupFullTasksDir(t)
 	// Task with valid frontmatter and retry budget, but no branch marker.
 	branchlessContent := "---\npriority: 10\nmax_retries: 3\n---\n# Branchless Handoff\n"
-	branchlessPath := filepath.Join(tasksDir, queue.DirReadyReview, "branchless.md")
+	branchlessPath := filepath.Join(tasksDir, dirs.ReadyReview, "branchless.md")
 	if err := os.WriteFile(branchlessPath, []byte(branchlessContent), 0o644); err != nil {
 		t.Fatalf("WriteFile branchless review task: %v", err)
 	}
 
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
 
 	state := collectBoundedRunState(tasksDir, map[string]struct{}{}, 0)
@@ -4672,32 +4675,32 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 	}{
 		{
 			name: "missing task model",
-			opts: RunOptions{ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "task model must not be empty",
 		},
 		{
 			name: "missing review model",
-			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: config.DefaultTaskModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "review model must not be empty",
 		},
 		{
 			name: "missing task reasoning effort",
-			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "task reasoning effort must not be empty",
 		},
 		{
 			name: "missing review reasoning effort",
-			opts: RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort},
 			want: "review reasoning effort must not be empty",
 		},
 		{
 			name: "whitespace task model",
-			opts: RunOptions{TaskModel: "   ", ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{TaskModel: "   ", ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "task model must not be empty",
 		},
 		{
 			name: "invalid run mode",
-			opts: RunOptions{Mode: RunMode(99), TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort},
+			opts: RunOptions{Mode: RunMode(99), TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort},
 			want: "invalid run mode",
 		},
 	}
@@ -4716,14 +4719,14 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 }
 
 func TestDefaultConstants(t *testing.T) {
-	if DefaultTaskModel != "claude-opus-4.6" {
-		t.Fatalf("DefaultTaskModel = %q, want %q", DefaultTaskModel, "claude-opus-4.6")
+	if config.DefaultTaskModel != "claude-opus-4.6" {
+		t.Fatalf("DefaultTaskModel = %q, want %q", config.DefaultTaskModel, "claude-opus-4.6")
 	}
-	if DefaultReviewModel != "gpt-5.4" {
-		t.Fatalf("DefaultReviewModel = %q, want %q", DefaultReviewModel, "gpt-5.4")
+	if config.DefaultReviewModel != "gpt-5.4" {
+		t.Fatalf("DefaultReviewModel = %q, want %q", config.DefaultReviewModel, "gpt-5.4")
 	}
-	if DefaultReasoningEffort != "high" {
-		t.Fatalf("DefaultReasoningEffort = %q, want %q", DefaultReasoningEffort, "high")
+	if config.DefaultReasoningEffort != "high" {
+		t.Fatalf("DefaultReasoningEffort = %q, want %q", config.DefaultReasoningEffort, "high")
 	}
 }
 
@@ -4744,7 +4747,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	}
 
 	env, run := buildEnvAndRunContext("main", tools, "agent-123", "Test User", "test@test.com",
-		"/repo", "/repo/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: 45 * time.Minute})
+		"/repo", "/repo/.mato", RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort, AgentTimeout: 45 * time.Minute})
 
 	if env.image == "" {
 		t.Error("expected default docker image to be set")
@@ -4767,17 +4770,17 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 	if run.timeout != 45*time.Minute {
 		t.Errorf("expected timeout %v, got %v", 45*time.Minute, run.timeout)
 	}
-	if run.model != DefaultTaskModel {
-		t.Errorf("expected task model %q, got %q", DefaultTaskModel, run.model)
+	if run.model != config.DefaultTaskModel {
+		t.Errorf("expected task model %q, got %q", config.DefaultTaskModel, run.model)
 	}
-	if run.reasoningEffort != DefaultReasoningEffort {
-		t.Errorf("expected task reasoning effort %q, got %q", DefaultReasoningEffort, run.reasoningEffort)
+	if run.reasoningEffort != config.DefaultReasoningEffort {
+		t.Errorf("expected task reasoning effort %q, got %q", config.DefaultReasoningEffort, run.reasoningEffort)
 	}
-	if env.reviewModel != DefaultReviewModel {
-		t.Errorf("expected review model %q, got %q", DefaultReviewModel, env.reviewModel)
+	if env.reviewModel != config.DefaultReviewModel {
+		t.Errorf("expected review model %q, got %q", config.DefaultReviewModel, env.reviewModel)
 	}
-	if env.reviewReasoningEffort != DefaultReasoningEffort {
-		t.Errorf("expected review reasoning effort %q, got %q", DefaultReasoningEffort, env.reviewReasoningEffort)
+	if env.reviewReasoningEffort != config.DefaultReasoningEffort {
+		t.Errorf("expected review reasoning effort %q, got %q", config.DefaultReasoningEffort, env.reviewReasoningEffort)
 	}
 	if !env.reviewSessionResumeEnabled {
 		t.Fatal("expected review session resume to be enabled")
@@ -4789,7 +4792,7 @@ func TestBuildEnvAndRunContext_BasicFields(t *testing.T) {
 
 func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, DockerImage: "custom:latest", AgentTimeout: time.Hour})
+	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort, DockerImage: "custom:latest", AgentTimeout: time.Hour})
 
 	if env.image != "custom:latest" {
 		t.Errorf("expected custom image %q, got %q", "custom:latest", env.image)
@@ -4819,7 +4822,7 @@ func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 
 func TestBuildEnvAndRunContext_PromptPlaceholders(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: DefaultTaskModel, ReviewModel: DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: DefaultReasoningEffort, ReviewReasoningEffort: DefaultReasoningEffort, AgentTimeout: time.Hour})
+	_, run := buildEnvAndRunContext("my-branch", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: config.DefaultTaskModel, ReviewModel: config.DefaultReviewModel, ReviewSessionResumeEnabled: true, TaskReasoningEffort: config.DefaultReasoningEffort, ReviewReasoningEffort: config.DefaultReasoningEffort, AgentTimeout: time.Hour})
 
 	if strings.Contains(run.prompt, "TASKS_DIR_PLACEHOLDER") {
 		t.Error("prompt still contains TASKS_DIR_PLACEHOLDER")
@@ -4957,15 +4960,15 @@ func TestPollLoop_RunModeOnceExitsAfterSingleIteration(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
 	iterations := 0
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		iterations++
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4985,13 +4988,13 @@ func TestPollLoop_RunModeUntilIdleExitsWhenQueueBecomesIdle(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -5007,17 +5010,17 @@ func TestPollLoop_RunModeUntilIdleExitsWhenQueueBecomesIdle(t *testing.T) {
 func TestPollLoop_RunModeUntilIdlePausedWithPendingMergeDoesNotExit(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
-	if err := os.WriteFile(filepath.Join(tasksDir, queue.DirReadyMerge, "pending.md"), []byte("# Pending\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "pending.md"), []byte("# Pending\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile pending merge task: %v", err)
 	}
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{Active: true}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -5052,13 +5055,13 @@ func TestPollLoop_BoundedModeReturnsErrorOnPollFailure(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, true
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, true
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -5237,7 +5240,7 @@ func TestDryRunRenderer_RenderValidation_Success(t *testing.T) {
 func TestDryRunRenderer_RenderValidation_Errors(t *testing.T) {
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
-	failures := []queue.ParseFailure{
+	failures := []queueview.ParseFailure{
 		{State: "backlog", Filename: "bad.md", Err: fmt.Errorf("invalid yaml")},
 	}
 	r.RenderValidation(failures, 3)
@@ -5268,7 +5271,7 @@ func TestDryRunRenderer_RenderExecutionOrder_Empty(t *testing.T) {
 func TestDryRunRenderer_RenderExecutionOrder_WithTasks(t *testing.T) {
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
-	tasks := []*queue.TaskSnapshot{
+	tasks := []*queueview.TaskSnapshot{
 		{Filename: "first.md", Meta: frontmatter.TaskMeta{Priority: 5}},
 		{Filename: "second.md", Meta: frontmatter.TaskMeta{Priority: 10}},
 	}
@@ -5338,15 +5341,15 @@ func TestDryRunRenderer_WarningFormatting(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create tasks that produce a dependency diagnostic warning.
 	task := "---\nid: warn-task\npriority: 10\ndepends_on:\n  - nonexistent\n---\n# Warn Task\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirWaiting, "warn-task.md"), []byte(task), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "warn-task.md"), []byte(task), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
 	r.RenderDependencySummary(tasksDir, idx)
@@ -5368,7 +5371,7 @@ func TestDryRunRenderer_NarrowWidth(t *testing.T) {
 		Width: 40,
 	}
 
-	tasks := []*queue.TaskSnapshot{
+	tasks := []*queueview.TaskSnapshot{
 		{Filename: "a-very-long-task-filename-that-exceeds-reasonable-bounds.md", Meta: frontmatter.TaskMeta{Priority: 1}},
 	}
 	r.RenderExecutionOrder(tasks)
@@ -5392,17 +5395,17 @@ func TestDryRunRenderer_RenderQueueSummary(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	task := "---\nid: task-1\npriority: 10\n---\n# Task 1\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, "task-1.md"), []byte(task), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-1.md"), []byte(task), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
-	r.RenderQueueSummary(idx, queue.AllDirs, map[string]int{}, 1)
+	r.RenderQueueSummary(idx, dirs.All, map[string]int{}, 1)
 	out := buf.String()
 
 	if !strings.Contains(out, "=== Queue Summary ===") {
@@ -5450,14 +5453,14 @@ func TestDryRun_WidthFromWriter(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// A task name that fits in 80 columns but would be truncated at 40.
 	longName := "this-is-a-moderately-long-task-name.md"
 	task := "---\nid: long-name\npriority: 10\n---\n# Long Name\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, longName), []byte(task), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -5484,13 +5487,13 @@ func TestDryRun_NarrowWidthTruncatesViaCommandPath(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	longName := "this-is-a-very-very-very-long-task-filename-that-should-be-truncated.md"
 	task := "---\nid: trunc-test\npriority: 10\n---\n# Truncation Test\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, longName), []byte(task), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -5549,22 +5552,22 @@ func TestDryRunRenderer_NarrowWidth_BacklogSummary(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	for _, sub := range queue.AllDirs {
+	for _, sub := range dirs.All {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	longName := "extremely-long-backlog-task-name-that-will-overflow.md"
 	task := "---\nid: overflow-test\npriority: 10\n---\n# Overflow\n"
-	os.WriteFile(filepath.Join(tasksDir, queue.DirBacklog, longName), []byte(task), 0o644)
+	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer
 	r := &DryRunRenderer{
 		W:     &buf,
 		Color: ui.NewColorSet(),
 		Width: 40,
 	}
-	r.RenderBacklogSummary(idx, map[string]struct{}{}, map[string][]queue.DependencyBlock{})
+	r.RenderBacklogSummary(idx, map[string]struct{}{}, map[string][]queueview.DependencyBlock{})
 	out := buf.String()
 
 	// The full long filename should be truncated to fit width 40 minus

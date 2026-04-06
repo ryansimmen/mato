@@ -1,9 +1,10 @@
-package queue
+package queueview
 
 import (
 	"sort"
 
 	"mato/internal/dag"
+	"mato/internal/dirs"
 )
 
 // DependencyIssueKind classifies a dependency diagnostic issue.
@@ -18,7 +19,7 @@ const (
 )
 
 // DependencyIssue describes a single dependency-related issue found during
-// diagnostics. Issues are informational — the caller decides how to act on
+// diagnostics. Issues are informational - the caller decides how to act on
 // them (emit warnings, move tasks, etc.).
 type DependencyIssue struct {
 	Kind      DependencyIssueKind
@@ -41,7 +42,7 @@ type DependencyDiagnostics struct {
 	// RetainedFiles maps each retained waiting task ID to its filename.
 	// When duplicate waiting IDs exist, only the first file seen is
 	// retained. Callers should use this map to filter
-	// idx.TasksByState(DirWaiting) so duplicate files are not promoted
+	// idx.TasksByState(dirs.Waiting) so duplicate files are not promoted
 	// or cycle-failed.
 	RetainedFiles map[string]string
 }
@@ -56,7 +57,6 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 	nonCompletedIDs := idx.NonCompletedIDs()
 	knownIDs := idx.AllIDs()
 
-	// Build safeCompleted: copy of completedIDs with ambiguous IDs removed.
 	safeCompleted := make(map[string]struct{}, len(completedIDs))
 	for id := range completedIDs {
 		safeCompleted[id] = struct{}{}
@@ -71,7 +71,6 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 
 	var issues []DependencyIssue
 
-	// Emit ambiguous ID issues.
 	sortedAmbiguous := sortedKeys(ambiguousIDs)
 	for _, id := range sortedAmbiguous {
 		issues = append(issues, DependencyIssue{
@@ -80,11 +79,9 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 		})
 	}
 
-	// Build waiting node list, detecting duplicate IDs.
-	waitingTasks := idx.TasksByState(DirWaiting)
-	seenIDs := make(map[string]string, len(waitingTasks)) // id -> first filename
+	waitingTasks := idx.TasksByState(dirs.Waiting)
+	seenIDs := make(map[string]string, len(waitingTasks))
 	var nodes []dag.Node
-	// nodeFilenames maps node ID to filename for issue reporting.
 	nodeFilenames := make(map[string]string, len(waitingTasks))
 
 	for _, snap := range waitingTasks {
@@ -93,9 +90,9 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 				Kind:      DependencyDuplicateID,
 				TaskID:    snap.Meta.ID,
 				Filename:  snap.Filename,
-				DependsOn: first, // reuse DependsOn field to report first filename
+				DependsOn: first,
 			})
-			continue // skip duplicate
+			continue
 		}
 		seenIDs[snap.Meta.ID] = snap.Filename
 		nodeFilenames[snap.Meta.ID] = snap.Filename
@@ -105,15 +102,10 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 		})
 	}
 
-	// Run DAG analysis.
 	analysis := dag.Analyze(nodes, safeCompleted, knownIDs, ambiguousIDs)
 
-	// Derive issues from analysis results.
-
-	// Cycle issues.
 	for _, scc := range analysis.Cycles {
 		if len(scc) == 1 {
-			// Self-cycle.
 			issues = append(issues, DependencyIssue{
 				Kind:      DependencySelfCycle,
 				TaskID:    scc[0],
@@ -121,7 +113,6 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 				DependsOn: scc[0],
 			})
 		} else {
-			// Multi-node cycle — emit an issue for each member.
 			for _, id := range scc {
 				issues = append(issues, DependencyIssue{
 					Kind:     DependencyCycle,
@@ -132,7 +123,6 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 		}
 	}
 
-	// Unknown dependency issues from Blocked entries.
 	for taskID, details := range analysis.Blocked {
 		for _, detail := range details {
 			if detail.Reason == dag.BlockedByUnknown {
@@ -146,7 +136,6 @@ func DiagnoseDependencies(tasksDir string, idx *PollIndex) DependencyDiagnostics
 		}
 	}
 
-	// Sort issues by (Kind, TaskID, DependsOn).
 	sort.Slice(issues, func(i, j int) bool {
 		if issues[i].Kind != issues[j].Kind {
 			return issues[i].Kind < issues[j].Kind

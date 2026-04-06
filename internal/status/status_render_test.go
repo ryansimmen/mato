@@ -7,9 +7,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"mato/internal/dirs"
 	"mato/internal/messaging"
 	"mato/internal/pause"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 )
 
@@ -75,7 +76,7 @@ func TestRenderQueueOverview_ZeroCounts(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{
 		queueCounts:    map[string]int{},
-		deferredDetail: map[string]queue.DeferralInfo{},
+		deferredDetail: map[string]queueview.DeferralInfo{},
 	}
 
 	renderQueueOverview(&buf, c, data)
@@ -95,8 +96,8 @@ func TestRenderQueueOverview_MergeLockActive(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		queueCounts:     map[string]int{queue.DirBacklog: 3, queue.DirInProgress: 2},
-		deferredDetail:  map[string]queue.DeferralInfo{},
+		queueCounts:     map[string]int{dirs.Backlog: 3, dirs.InProgress: 2},
+		deferredDetail:  map[string]queueview.DeferralInfo{},
 		runnable:        3,
 		mergeLockActive: true,
 	}
@@ -123,7 +124,7 @@ func TestRenderQueueOverview_PauseState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			renderQueueOverview(&buf, plainColorSet(), statusData{queueCounts: map[string]int{}, deferredDetail: map[string]queue.DeferralInfo{}, pauseState: tt.state})
+			renderQueueOverview(&buf, plainColorSet(), statusData{queueCounts: map[string]int{}, deferredDetail: map[string]queueview.DeferralInfo{}, pauseState: tt.state})
 			if !strings.Contains(buf.String(), tt.want) {
 				t.Fatalf("output missing %q, got:\n%s", tt.want, buf.String())
 			}
@@ -330,7 +331,7 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 				Name:     "wait-task.md",
 				Title:    "A waiting task",
 				Priority: 10,
-				State:    queue.DirBacklog,
+				State:    dirs.Backlog,
 				Dependencies: []waitingDep{
 					{ID: "dep-a", Status: "in-progress"},
 					{ID: "dep-b", Status: "completed"},
@@ -366,7 +367,7 @@ func TestRenderConflictDeferred_None(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		deferredDetail: map[string]queue.DeferralInfo{},
+		deferredDetail: map[string]queueview.DeferralInfo{},
 	}
 
 	renderConflictDeferred(&buf, c, data)
@@ -384,7 +385,7 @@ func TestRenderConflictDeferred_WithEntries(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		deferredDetail: map[string]queue.DeferralInfo{
+		deferredDetail: map[string]queueview.DeferralInfo{
 			"deferred-task.md": {
 				BlockedBy:          "active-task.md",
 				BlockedByDir:       "in-progress",
@@ -414,7 +415,7 @@ func TestRenderConflictDeferred_SortedByName(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		deferredDetail: map[string]queue.DeferralInfo{
+		deferredDetail: map[string]queueview.DeferralInfo{
 			"z-task.md": {BlockedBy: "x.md", BlockedByDir: "in-progress", ConflictingAffects: []string{"a.go"}},
 			"a-task.md": {BlockedBy: "x.md", BlockedByDir: "in-progress", ConflictingAffects: []string{"b.go"}},
 		},
@@ -711,11 +712,11 @@ func TestRenderCompactQueueSummary(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{
 		queueCounts: map[string]int{
-			queue.DirBacklog:     24,
-			queue.DirInProgress:  7,
-			queue.DirReadyReview: 3,
-			queue.DirReadyMerge:  1,
-			queue.DirFailed:      2,
+			dirs.Backlog:     24,
+			dirs.InProgress:  7,
+			dirs.ReadyReview: 3,
+			dirs.ReadyMerge:  1,
+			dirs.Failed:      2,
 		},
 		runnable: 9,
 	}
@@ -1670,7 +1671,7 @@ func TestRenderDependencyBlocked_NarrowTerminalTruncates(t *testing.T) {
 		waitingTasks: []waitingTaskSummary{{
 			Name:  "implement-very-long-feature-name-that-exceeds-terminal-width.md",
 			Title: "An extremely long title",
-			State: queue.DirWaiting,
+			State: dirs.Waiting,
 			Dependencies: []waitingDep{
 				{ID: "very-long-dependency-task-name-that-also-overflows", Status: "backlog"},
 			},
@@ -1692,7 +1693,7 @@ func TestRenderConflictDeferred_NarrowTerminalTruncates(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
 	data := statusData{
-		deferredDetail: map[string]queue.DeferralInfo{
+		deferredDetail: map[string]queueview.DeferralInfo{
 			"my-deferred-task.md": {
 				BlockedBy:          "some-very-long-blocking-task-name-that-exceeds-terminal-width.md",
 				BlockedByDir:       "in-progress",

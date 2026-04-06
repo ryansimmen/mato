@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"mato/internal/config"
 	"mato/internal/process"
 	"mato/internal/runner"
 	"mato/internal/testutil"
@@ -435,8 +436,8 @@ func TestDoctor_FullRunNonRepoDockerFallsBackToDefaultImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if inspectedImage != runner.DefaultDockerImage {
-		t.Fatalf("inspected image = %q, want %q", inspectedImage, runner.DefaultDockerImage)
+	if inspectedImage != config.DefaultDockerImage {
+		t.Fatalf("inspected image = %q, want %q", inspectedImage, config.DefaultDockerImage)
 	}
 	foundConfigNoRepo := false
 	for _, cr := range report.Checks {

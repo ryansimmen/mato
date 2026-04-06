@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/queue"
+	"mato/internal/dirs"
 	"mato/internal/ui"
 )
 
@@ -32,12 +32,12 @@ func renderCompactQueueSummary(w io.Writer, c colorSet, data statusData) error {
 	rw := renderWriter{w: w}
 	rw.printf("%s %s backlog | %s runnable | %s running | %s review | %s merge | %s failed\n",
 		c.Bold("Queue:"),
-		c.Green(data.queueCounts[queue.DirBacklog]),
+		c.Green(data.queueCounts[dirs.Backlog]),
 		c.Green(data.runnable),
-		c.Yellow(data.queueCounts[queue.DirInProgress]),
-		c.Cyan(data.queueCounts[queue.DirReadyReview]),
-		c.Cyan(data.queueCounts[queue.DirReadyMerge]),
-		c.Red(data.queueCounts[queue.DirFailed]),
+		c.Yellow(data.queueCounts[dirs.InProgress]),
+		c.Cyan(data.queueCounts[dirs.ReadyReview]),
+		c.Cyan(data.queueCounts[dirs.ReadyMerge]),
+		c.Red(data.queueCounts[dirs.Failed]),
 	)
 	rw.printf("%s %s   %s %s\n",
 		c.Bold("Pause:"), renderPauseState(c, data.pauseState),

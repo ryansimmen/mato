@@ -1,4 +1,4 @@
-package queue
+package queueview
 
 import (
 	"reflect"
@@ -26,33 +26,27 @@ func TestAffectsMatch(t *testing.T) {
 		{"empty a", "", "foo.go", false},
 		{"empty b", "foo.go", "", false},
 		{"both empty", "", "", true},
-		// Glob vs concrete path cases
 		{"glob matches file", "internal/runner/*.go", "internal/runner/task.go", true},
 		{"glob no match file", "internal/runner/*.go", "internal/queue/queue.go", false},
 		{"doublestar matches nested", "**/*.go", "internal/runner/task.go", true},
 		{"doublestar matches top-level", "**/*.go", "main.go", true},
 		{"glob no match extension", "internal/runner/*.go", "internal/runner/task.txt", false},
 		{"glob matches reverse", "internal/runner/task.go", "internal/runner/*.go", true},
-		// Glob vs directory prefix cases
 		{"glob vs dir prefix overlapping", "internal/runner/*.go", "internal/runner/", true},
 		{"glob vs dir prefix parent", "internal/runner/*.go", "internal/", true},
 		{"glob vs dir prefix disjoint", "internal/runner/*.go", "pkg/", false},
 		{"dir prefix vs glob overlapping", "internal/runner/", "internal/runner/*.go", true},
 		{"doublestar vs any dir prefix", "**/*.go", "internal/", true},
 		{"dir prefix vs doublestar", "internal/", "**/*.go", true},
-		// Glob vs glob cases
 		{"glob vs glob overlapping prefix", "internal/runner/*.go", "internal/runner/*_test.go", true},
 		{"glob vs glob disjoint prefix", "internal/runner/*.go", "pkg/client/*.go", false},
 		{"glob vs glob one doublestar", "**/*.go", "internal/runner/*.go", true},
 		{"glob vs glob both doublestar", "**/*.go", "**/*_test.go", true},
-		// Malformed glob conservatively conflicts via static prefix comparison.
 		{"malformed glob same prefix", "internal/[bad", "internal/runner/task.go", true},
 		{"malformed glob disjoint prefix", "internal/[bad", "pkg/client/http.go", false},
 		{"malformed glob empty prefix", "[bad", "anything.go", true},
-		// Glob with trailing slash is an invalid-glob entry.
 		{"glob trailing slash vs file under", "internal/*/", "internal/runner/task.go", true},
 		{"glob trailing slash vs disjoint", "internal/*/", "pkg/client.go", false},
-		// Invalid glob vs valid glob: valid side also reduced to static prefix.
 		{"malformed glob vs doublestar", "internal/[bad", "**/*.go", true},
 		{"malformed glob vs overlapping glob", "internal/[bad", "internal/runner/*.go", true},
 		{"malformed glob vs disjoint glob", "internal/[bad", "pkg/client/*.go", false},
@@ -72,37 +66,12 @@ func TestAffectsMatch(t *testing.T) {
 }
 
 func TestAffectsMatch_Symmetry(t *testing.T) {
-	pairs := [][2]string{
-		{"foo.go", "bar.go"},
-		{"pkg/client/", "pkg/client/http.go"},
-		{"internal/runner/*.go", "internal/runner/task.go"},
-		{"**/*.go", "internal/runner/task.go"},
-		{"internal/runner/*.go", "internal/runner/"},
-		{"**/*.go", "internal/"},
-		{"internal/runner/*.go", "pkg/client/*.go"},
-		{"internal/runner/*.go", "internal/runner/*_test.go"},
-		{"**/*.go", "**/*_test.go"},
-		{"internal/*.go", "internal/r*.go"},
-		// Invalid glob entries
-		{"internal/[bad", "internal/runner/task.go"},
-		{"internal/[bad", "pkg/client.go"},
-		{"[bad", "anything.go"},
-		{"internal/*/", "internal/runner/task.go"},
-		{"internal/*/", "pkg/client.go"},
-		// Invalid glob vs valid glob
-		{"internal/[bad", "**/*.go"},
-		{"internal/[bad", "internal/runner/*.go"},
-		{"internal/[bad", "pkg/client/*.go"},
-		{"internal/*/", "**/*.go"},
-		{"internal/*/", "internal/runner/*.go"},
-		{"internal/*/", "pkg/client/*.go"},
-	}
+	pairs := [][2]string{{"foo.go", "bar.go"}, {"pkg/client/", "pkg/client/http.go"}, {"internal/runner/*.go", "internal/runner/task.go"}, {"**/*.go", "internal/runner/task.go"}, {"internal/runner/*.go", "internal/runner/"}, {"**/*.go", "internal/"}, {"internal/runner/*.go", "pkg/client/*.go"}, {"internal/runner/*.go", "internal/runner/*_test.go"}, {"**/*.go", "**/*_test.go"}, {"internal/*.go", "internal/r*.go"}, {"internal/[bad", "internal/runner/task.go"}, {"internal/[bad", "pkg/client.go"}, {"[bad", "anything.go"}, {"internal/*/", "internal/runner/task.go"}, {"internal/*/", "pkg/client.go"}, {"internal/[bad", "**/*.go"}, {"internal/[bad", "internal/runner/*.go"}, {"internal/[bad", "pkg/client/*.go"}, {"internal/*/", "**/*.go"}, {"internal/*/", "internal/runner/*.go"}, {"internal/*/", "pkg/client/*.go"}}
 	for _, p := range pairs {
 		ab := affectsMatch(p[0], p[1])
 		ba := affectsMatch(p[1], p[0])
 		if ab != ba {
-			t.Errorf("asymmetric: affectsMatch(%q, %q)=%v but affectsMatch(%q, %q)=%v",
-				p[0], p[1], ab, p[1], p[0], ba)
+			t.Errorf("asymmetric: affectsMatch(%q, %q)=%v but affectsMatch(%q, %q)=%v", p[0], p[1], ab, p[1], p[0], ba)
 		}
 	}
 }
@@ -137,132 +106,27 @@ func TestOverlappingAffects(t *testing.T) {
 		a, b []string
 		want []string
 	}{
-		{
-			name: "exact match",
-			a:    []string{"foo.go", "bar.go"},
-			b:    []string{"bar.go", "baz.go"},
-			want: []string{"bar.go"},
-		},
-		{
-			name: "no overlap",
-			a:    []string{"foo.go"},
-			b:    []string{"bar.go"},
-			want: nil,
-		},
-		{
-			name: "nil a",
-			a:    nil,
-			b:    []string{"foo.go"},
-			want: nil,
-		},
-		{
-			name: "nil b",
-			a:    []string{"foo.go"},
-			b:    nil,
-			want: nil,
-		},
-		{
-			name: "both nil",
-			a:    nil,
-			b:    nil,
-			want: nil,
-		},
-		{
-			name: "empty strings filtered",
-			a:    []string{"", "foo.go"},
-			b:    []string{"foo.go", ""},
-			want: []string{"foo.go"},
-		},
-		{
-			name: "prefix in a matches file in b",
-			a:    []string{"pkg/client/"},
-			b:    []string{"pkg/client/http.go"},
-			want: []string{"pkg/client/", "pkg/client/http.go"},
-		},
-		{
-			name: "file in a matched by prefix in b",
-			a:    []string{"pkg/client/http.go"},
-			b:    []string{"pkg/client/"},
-			want: []string{"pkg/client/", "pkg/client/http.go"},
-		},
-		{
-			name: "prefix vs prefix nested",
-			a:    []string{"pkg/"},
-			b:    []string{"pkg/client/"},
-			want: []string{"pkg/", "pkg/client/"},
-		},
-		{
-			name: "non-overlapping prefixes",
-			a:    []string{"pkg/client/"},
-			b:    []string{"pkg/server/"},
-			want: nil,
-		},
-		{
-			name: "mixed exact and prefix",
-			a:    []string{"README.md", "pkg/client/"},
-			b:    []string{"pkg/client/http.go", "README.md"},
-			want: []string{"README.md", "pkg/client/", "pkg/client/http.go"},
-		},
-		{
-			name: "duplicate in b",
-			a:    []string{"foo.go"},
-			b:    []string{"foo.go", "foo.go"},
-			want: []string{"foo.go"},
-		},
-		{
-			name: "all exact no prefix fast path",
-			a:    []string{"a.go", "b.go", "c.go"},
-			b:    []string{"b.go", "c.go", "d.go"},
-			want: []string{"b.go", "c.go"},
-		},
-		{
-			name: "broad prefix matches multiple",
-			a:    []string{"internal/"},
-			b:    []string{"internal/queue/queue.go", "internal/merge/merge.go", "docs/readme.md"},
-			want: []string{"internal/", "internal/merge/merge.go", "internal/queue/queue.go"},
-		},
-		{
-			name: "glob matches exact file",
-			a:    []string{"internal/runner/*.go"},
-			b:    []string{"internal/runner/task.go"},
-			want: []string{"internal/runner/*.go", "internal/runner/task.go"},
-		},
-		{
-			name: "glob no match",
-			a:    []string{"internal/runner/*.go"},
-			b:    []string{"pkg/client/http.go"},
-			want: nil,
-		},
-		{
-			name: "glob vs prefix",
-			a:    []string{"internal/runner/*.go"},
-			b:    []string{"internal/runner/"},
-			want: []string{"internal/runner/", "internal/runner/*.go"},
-		},
-		{
-			name: "glob vs glob overlapping",
-			a:    []string{"internal/runner/*.go"},
-			b:    []string{"internal/runner/*_test.go"},
-			want: []string{"internal/runner/*.go", "internal/runner/*_test.go"},
-		},
-		{
-			name: "glob vs glob disjoint",
-			a:    []string{"internal/runner/*.go"},
-			b:    []string{"pkg/client/*.go"},
-			want: nil,
-		},
-		{
-			name: "doublestar matches everything",
-			a:    []string{"**/*.go"},
-			b:    []string{"internal/runner/task.go"},
-			want: []string{"**/*.go", "internal/runner/task.go"},
-		},
-		{
-			name: "mixed exact glob and prefix",
-			a:    []string{"README.md", "internal/runner/*.go"},
-			b:    []string{"internal/runner/task.go", "README.md"},
-			want: []string{"README.md", "internal/runner/*.go", "internal/runner/task.go"},
-		},
+		{"exact match", []string{"foo.go", "bar.go"}, []string{"bar.go", "baz.go"}, []string{"bar.go"}},
+		{"no overlap", []string{"foo.go"}, []string{"bar.go"}, nil},
+		{"nil a", nil, []string{"foo.go"}, nil},
+		{"nil b", []string{"foo.go"}, nil, nil},
+		{"both nil", nil, nil, nil},
+		{"empty strings filtered", []string{"", "foo.go"}, []string{"foo.go", ""}, []string{"foo.go"}},
+		{"prefix in a matches file in b", []string{"pkg/client/"}, []string{"pkg/client/http.go"}, []string{"pkg/client/", "pkg/client/http.go"}},
+		{"file in a matched by prefix in b", []string{"pkg/client/http.go"}, []string{"pkg/client/"}, []string{"pkg/client/", "pkg/client/http.go"}},
+		{"prefix vs prefix nested", []string{"pkg/"}, []string{"pkg/client/"}, []string{"pkg/", "pkg/client/"}},
+		{"non-overlapping prefixes", []string{"pkg/client/"}, []string{"pkg/server/"}, nil},
+		{"mixed exact and prefix", []string{"README.md", "pkg/client/"}, []string{"pkg/client/http.go", "README.md"}, []string{"README.md", "pkg/client/", "pkg/client/http.go"}},
+		{"duplicate in b", []string{"foo.go"}, []string{"foo.go", "foo.go"}, []string{"foo.go"}},
+		{"all exact no prefix fast path", []string{"a.go", "b.go", "c.go"}, []string{"b.go", "c.go", "d.go"}, []string{"b.go", "c.go"}},
+		{"broad prefix matches multiple", []string{"internal/"}, []string{"internal/queue/queue.go", "internal/merge/merge.go", "docs/readme.md"}, []string{"internal/", "internal/merge/merge.go", "internal/queue/queue.go"}},
+		{"glob matches exact file", []string{"internal/runner/*.go"}, []string{"internal/runner/task.go"}, []string{"internal/runner/*.go", "internal/runner/task.go"}},
+		{"glob no match", []string{"internal/runner/*.go"}, []string{"pkg/client/http.go"}, nil},
+		{"glob vs prefix", []string{"internal/runner/*.go"}, []string{"internal/runner/"}, []string{"internal/runner/", "internal/runner/*.go"}},
+		{"glob vs glob overlapping", []string{"internal/runner/*.go"}, []string{"internal/runner/*_test.go"}, []string{"internal/runner/*.go", "internal/runner/*_test.go"}},
+		{"glob vs glob disjoint", []string{"internal/runner/*.go"}, []string{"pkg/client/*.go"}, nil},
+		{"doublestar matches everything", []string{"**/*.go"}, []string{"internal/runner/task.go"}, []string{"**/*.go", "internal/runner/task.go"}},
+		{"mixed exact glob and prefix", []string{"README.md", "internal/runner/*.go"}, []string{"internal/runner/task.go", "README.md"}, []string{"README.md", "internal/runner/*.go", "internal/runner/task.go"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -280,7 +144,6 @@ func TestOverlappingAffects(t *testing.T) {
 func TestOverlappingAffects_SymmetricWhenPrefixesPresent(t *testing.T) {
 	a := []string{"pkg/client/", "README.md"}
 	b := []string{"pkg/client/http.go", "README.md"}
-
 	gotAB := overlappingAffects(a, b)
 	gotBA := overlappingAffects(b, a)
 	if !reflect.DeepEqual(gotAB, gotBA) {

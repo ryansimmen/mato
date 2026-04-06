@@ -17,10 +17,9 @@ import (
 	"mato/internal/git"
 	"mato/internal/messaging"
 	"mato/internal/queue"
-	"mato/internal/runtimecleanup"
-	"mato/internal/sessionmeta"
+	"mato/internal/queueview"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
-	"mato/internal/taskstate"
 	"mato/internal/ui"
 )
 
@@ -39,7 +38,7 @@ type reviewCandidate struct {
 	priority int
 }
 
-func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queue.ParseFailure) {
+func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queueview.ParseFailure) {
 	ui.Warnf("warning: quarantining unparseable review candidate %s: %v\n", pf.Filename, pf.Err)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
 		ui.Warnf("warning: could not create failed dir for %s: %v\n", pf.Filename, err)
@@ -56,11 +55,11 @@ func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queue.ParseFai
 	fmt.Printf("quarantined malformed review candidate %s to failed/\n", pf.Filename)
 }
 
-func reviewTaskReady(snap *queue.TaskSnapshot) bool {
+func reviewTaskReady(snap *queueview.TaskSnapshot) bool {
 	return snap != nil && snap.ReviewFailureCount < snap.Meta.MaxRetries
 }
 
-func buildReviewCandidate(tasksDir, failedDir string, snap *queue.TaskSnapshot) (*reviewCandidate, bool) {
+func buildReviewCandidate(tasksDir, failedDir string, snap *queueview.TaskSnapshot) (*reviewCandidate, bool) {
 	if snap == nil {
 		return nil, false
 	}
@@ -78,7 +77,7 @@ func buildReviewCandidate(tasksDir, failedDir string, snap *queue.TaskSnapshot) 
 			ui.Warnf("warning: could not move review-exhausted task %s to failed: %v\n", snap.Filename, moveErr)
 			return nil, false
 		}
-		runtimecleanup.DeleteAllPreservingVerdict(tasksDir, snap.Filename)
+		runtimedata.DeleteRuntimeArtifactsPreservingVerdict(tasksDir, snap.Filename)
 		fmt.Printf("review retry budget exhausted for %s (%d failures >= max_retries %d), moved to failed/\n",
 			snap.Filename, failures, maxRetries)
 		return nil, false
@@ -110,17 +109,17 @@ func buildReviewCandidate(tasksDir, failedDir string, snap *queue.TaskSnapshot) 
 //
 // When idx is non-nil, pre-parsed metadata from the index is used instead of
 // re-parsing each file from disk.
-func reviewCandidates(tasksDir string, idx *queue.PollIndex) []*queue.ClaimedTask {
+func reviewCandidates(tasksDir string, idx *queueview.PollIndex) []*queue.ClaimedTask {
 	if idx == nil {
-		idx = queue.BuildIndex(tasksDir)
+		idx = queueview.BuildIndex(tasksDir)
 	}
-	failedDir := filepath.Join(tasksDir, queue.DirFailed)
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 
-	candidates := make([]reviewCandidate, 0, len(idx.TasksByState(queue.DirReadyReview)))
+	candidates := make([]reviewCandidate, 0, len(idx.TasksByState(dirs.ReadyReview)))
 	for _, pf := range idx.ReviewParseFailures() {
 		quarantineMalformedReviewTask(tasksDir, failedDir, pf)
 	}
-	for _, snap := range idx.TasksByState(queue.DirReadyReview) {
+	for _, snap := range idx.TasksByState(dirs.ReadyReview) {
 		candidate, ok := buildReviewCandidate(tasksDir, failedDir, snap)
 		if ok {
 			candidates = append(candidates, *candidate)
@@ -146,8 +145,8 @@ func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
 
 	ui.Warnf("warning: review candidate %s is missing a required branch marker\n", filename)
 	recorded := appendReviewFailure(taskPath, "mato", reason)
-	recordTaskStateUpdate(tasksDir, filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-		state.LastOutcome = taskstate.OutcomeReviewBranchMarkerMissing
+	recordTaskStateUpdate(tasksDir, filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewBranchMarkerMissing
 	})
 	logReviewFailureOutcome("Review incomplete", filename, recorded, "missing required branch marker")
 }
@@ -162,7 +161,7 @@ func recordMissingReviewBranchMarker(tasksDir, taskPath, filename string) {
 // tasks. A task missing the branch marker will never be selected by
 // reviewCandidates, so counting it here would prevent idle detection.
 func hasReviewCandidates(tasksDir string) bool {
-	for _, snap := range queue.BuildIndex(tasksDir).TasksByState(queue.DirReadyReview) {
+	for _, snap := range queueview.BuildIndex(tasksDir).TasksByState(dirs.ReadyReview) {
 		if reviewTaskReady(snap) && strings.TrimSpace(snap.Branch) != "" {
 			return true
 		}
@@ -176,7 +175,7 @@ func hasReviewCandidates(tasksDir string) bool {
 // This does not acquire a lock; use selectAndLockReview for mutual exclusion.
 //
 // When idx is nil, the filesystem is scanned directly.
-func selectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTask {
+func selectTaskForReview(tasksDir string, idx *queueview.PollIndex) *queue.ClaimedTask {
 	candidates := reviewCandidates(tasksDir, idx)
 	if len(candidates) == 0 {
 		return nil
@@ -186,7 +185,7 @@ func selectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTa
 
 // SelectTaskForReview is the exported entry point for selecting the
 // highest-priority review candidate. It delegates to selectTaskForReview.
-func SelectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTask {
+func SelectTaskForReview(tasksDir string, idx *queueview.PollIndex) *queue.ClaimedTask {
 	return selectTaskForReview(tasksDir, idx)
 }
 
@@ -195,7 +194,7 @@ func SelectTaskForReview(tasksDir string, idx *queue.PollIndex) *queue.ClaimedTa
 // lock. Returns (nil, nil) when no unlocked review task is available.
 //
 // When idx is nil, the filesystem is scanned directly.
-func selectAndLockReview(tasksDir string, idx *queue.PollIndex) (*queue.ClaimedTask, func()) {
+func selectAndLockReview(tasksDir string, idx *queueview.PollIndex) (*queue.ClaimedTask, func()) {
 	for _, task := range reviewCandidates(tasksDir, idx) {
 		cleanup, ok := queue.AcquireReviewLock(tasksDir, task.Filename)
 		if ok {
@@ -228,18 +227,18 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 
 	run.cloneDir = cloneDir
 	if env.reviewSessionResumeEnabled {
-		session := loadOrCreateSession(env.tasksDir, sessionmeta.KindReview, task.Filename, task.Branch)
+		session := loadOrCreateSession(env.tasksDir, runtimedata.KindReview, task.Filename, task.Branch)
 		if session != nil {
 			run.resumeSessionID = session.CopilotSessionID
 		}
 	}
-	recordTaskStateUpdate(env.tasksDir, task.Filename, "record review launch taskstate", func(state *taskstate.TaskState) {
+	recordTaskStateUpdate(env.tasksDir, task.Filename, "record review launch taskstate", func(state *runtimedata.TaskState) {
 		state.TaskBranch = task.Branch
 		state.TargetBranch = branch
-		state.LastOutcome = taskstate.OutcomeReviewLaunched
+		state.LastOutcome = runtimedata.OutcomeReviewLaunched
 	})
 	if env.reviewSessionResumeEnabled {
-		recordSessionUpdate(env.tasksDir, sessionmeta.KindReview, task.Filename, "record review session", func(session *sessionmeta.Session) {
+		recordSessionUpdate(env.tasksDir, runtimedata.KindReview, task.Filename, "record review session", func(session *runtimedata.Session) {
 			session.TaskBranch = task.Branch
 			if currentTip != "unknown" {
 				session.LastHeadSHA = currentTip
@@ -254,7 +253,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 		"MATO_TASK_FILE=" + task.Filename,
 		"MATO_TASK_BRANCH=" + task.Branch,
 		"MATO_TASK_TITLE=" + task.Title,
-		fmt.Sprintf("MATO_TASK_PATH=%s/%s/%s/%s", env.workdir, dirs.Root, queue.DirReadyReview, task.Filename),
+		fmt.Sprintf("MATO_TASK_PATH=%s/%s/%s/%s", env.workdir, dirs.Root, dirs.ReadyReview, task.Filename),
 		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/%s/messages/verdict-%s.json", env.workdir, dirs.Root, task.Filename),
 	}
 
@@ -262,7 +261,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 		if !env.reviewSessionResumeEnabled {
 			return ""
 		}
-		return resetSession(env.tasksDir, sessionmeta.KindReview, task.Filename, task.Branch)
+		return resetSession(env.tasksDir, runtimedata.KindReview, task.Filename, task.Branch)
 	})
 }
 
@@ -275,13 +274,13 @@ type reviewDisposition struct {
 }
 
 var approveDisposition = reviewDisposition{
-	dir:         queue.DirReadyMerge,
+	dir:         dirs.ReadyMerge,
 	messageBody: "Review approved, ready for merge",
 	logPrefix:   "Review approved",
 }
 
 var rejectDisposition = reviewDisposition{
-	dir:         queue.DirBacklog,
+	dir:         dirs.Backlog,
 	messageBody: "Review rejected",
 	logPrefix:   "Review rejected",
 }
@@ -294,9 +293,9 @@ func VerifyReviewBranch(repoRoot, tasksDir string, task *queue.ClaimedTask, agen
 	if _, err := git.Output(repoRoot, "rev-parse", "--verify", "refs/heads/"+task.Branch); err != nil {
 		ui.Warnf("warning: task branch %s missing from host repo, recording review failure for %s\n", task.Branch, task.Filename)
 		appendReviewFailure(task.TaskPath, agentID, "task branch "+task.Branch+" not found in host repo")
-		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {
 			state.TaskBranch = task.Branch
-			state.LastOutcome = taskstate.OutcomeReviewBranchMissing
+			state.LastOutcome = runtimedata.OutcomeReviewBranchMissing
 		})
 		return false
 	}
@@ -344,8 +343,8 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 			detail = reason
 		}
 		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
-		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = taskstate.OutcomeReviewIncomplete
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {
+			state.LastOutcome = runtimedata.OutcomeReviewIncomplete
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, detail)
 		return
@@ -354,8 +353,8 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 	var verdict reviewVerdict
 	if err := json.Unmarshal(data, &verdict); err != nil {
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not parse verdict file: %v", err))
-		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = taskstate.OutcomeReviewIncomplete
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {
+			state.LastOutcome = runtimedata.OutcomeReviewIncomplete
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, "malformed verdict file")
 		os.Remove(verdictPath)
@@ -387,16 +386,16 @@ func postReviewAction(tasksDir, agentID string, task *queue.ClaimedTask) {
 			reason = "review agent reported an error"
 		}
 		recorded := appendReviewFailure(task.TaskPath, agentID, reason)
-		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = taskstate.OutcomeReviewError
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {
+			state.LastOutcome = runtimedata.OutcomeReviewError
 		})
 		logReviewFailureOutcome("Review error", task.Filename, recorded, reason)
 		os.Remove(verdictPath)
 
 	default:
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("unknown verdict: %q", verdict.Verdict))
-		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = taskstate.OutcomeReviewIncomplete
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {
+			state.LastOutcome = runtimedata.OutcomeReviewIncomplete
 		})
 		logReviewFailureOutcome("Review incomplete", task.Filename, recorded, fmt.Sprintf("unknown verdict %q", verdict.Verdict))
 		os.Remove(verdictPath)
@@ -418,8 +417,8 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 	if err := queue.AtomicMove(task.TaskPath, dst); err != nil {
 		ui.Warnf("warning: could not move reviewed task %s to %s: %v\n", task.Filename, disp.dir, err)
 		recorded := appendReviewFailure(task.TaskPath, agentID, fmt.Sprintf("could not move task to %s: %v", disp.dir, err))
-		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
-			state.LastOutcome = taskstate.OutcomeReviewMoveFailed
+		recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {
+			state.LastOutcome = runtimedata.OutcomeReviewMoveFailed
 		})
 		logReviewFailureOutcome("Review move failed", task.Filename, recorded, err.Error())
 		return false
@@ -431,7 +430,7 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 			// reviewer feedback that feeds MATO_REVIEW_FEEDBACK. Try a
 			// fallback write (read-modify-write) using a different I/O
 			// path before giving up.
-			if disp.dir == queue.DirBacklog {
+			if disp.dir == dirs.Backlog {
 				if fallbackErr := fallbackMarkerWrite(dst, marker); fallbackErr != nil {
 					ui.Warnf("warning: fallback marker write also failed for %s: %v\n", task.Filename, fallbackErr)
 					return false
@@ -440,11 +439,11 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 			}
 		}
 	}
-	outcome := taskstate.OutcomeReviewRejected
-	if disp.dir == queue.DirReadyMerge {
-		outcome = taskstate.OutcomeReviewApproved
+	outcome := runtimedata.OutcomeReviewRejected
+	if disp.dir == dirs.ReadyMerge {
+		outcome = runtimedata.OutcomeReviewApproved
 	}
-	recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *taskstate.TaskState) {
+	recordTaskStateUpdate(tasksDir, task.Filename, "record review outcome taskstate", func(state *runtimedata.TaskState) {
 		if strings.TrimSpace(state.LastHeadSHA) != "" {
 			state.LastReviewedSHA = strings.TrimSpace(state.LastHeadSHA)
 		}
@@ -524,8 +523,8 @@ func extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, filename str
 	return ""
 }
 
-func loadTaskStateForReview(tasksDir, filename string) *taskstate.TaskState {
-	state, err := taskstate.Load(tasksDir, filename)
+func loadTaskStateForReview(tasksDir, filename string) *runtimedata.TaskState {
+	state, err := runtimedata.LoadTaskState(tasksDir, filename)
 	if err != nil {
 		ui.Warnf("warning: could not load taskstate for %s: %v\n", filename, err)
 		return nil
@@ -546,7 +545,7 @@ func resolveReviewBranchTip(repoRoot string, task *queue.ClaimedTask) string {
 	return tip
 }
 
-func buildReviewContext(task *queue.ClaimedTask, currentTip string, state *taskstate.TaskState, previousRejection string) string {
+func buildReviewContext(task *queue.ClaimedTask, currentTip string, state *runtimedata.TaskState, previousRejection string) string {
 	// Keep this defensive guard so direct tests and future callers can pass an
 	// empty tip without first routing through resolveReviewBranchTip.
 	if strings.TrimSpace(currentTip) == "" {
@@ -585,7 +584,7 @@ func lastReviewRejectionReason(taskPath string) string {
 }
 
 func deleteTaskState(tasksDir, filename string) {
-	runtimecleanup.DeleteAll(tasksDir, filename)
+	runtimedata.DeleteRuntimeArtifacts(tasksDir, filename)
 }
 
 func truncateRunes(s string, max int) string {
