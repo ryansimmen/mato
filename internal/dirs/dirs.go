@@ -4,6 +4,8 @@
 package dirs
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -36,12 +38,33 @@ var active = []string{
 }
 
 // IsActive reports whether a task file exists in any non-terminal queue
-// directory.
-func IsActive(tasksDir, taskFilename string) bool {
+// directory. It returns an error when queue liveness cannot be determined
+// because one or more active directories could not be read.
+func IsActive(tasksDir, taskFilename string) (bool, error) {
+	var errs []error
 	for _, dir := range active {
-		if _, err := os.Stat(filepath.Join(tasksDir, dir, taskFilename)); err == nil {
-			return true
+		dirPath := filepath.Join(tasksDir, dir)
+		info, err := os.Stat(dirPath)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("stat %s: %w", dirPath, err))
+			continue
 		}
+		if !info.IsDir() {
+			errs = append(errs, fmt.Errorf("stat %s: not a directory", dirPath))
+			continue
+		}
+		path := filepath.Join(dirPath, taskFilename)
+		_, err = os.Stat(path)
+		if err == nil {
+			return true, nil
+		}
+		if os.IsNotExist(err) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("stat %s: %w", path, err))
 	}
-	return false
+	if len(errs) > 0 {
+		return false, errors.Join(errs...)
+	}
+	return false, nil
 }

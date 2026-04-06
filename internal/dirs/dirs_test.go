@@ -54,6 +54,11 @@ func TestIsActive(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tasksDir := t.TempDir()
+			for _, dir := range active {
+				if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+					t.Fatalf("MkdirAll %s: %v", dir, err)
+				}
+			}
 			taskPath := filepath.Join(tasksDir, tt.dir, "task.md")
 			if err := os.MkdirAll(filepath.Dir(taskPath), 0o755); err != nil {
 				t.Fatalf("MkdirAll: %v", err)
@@ -62,15 +67,78 @@ func TestIsActive(t *testing.T) {
 				t.Fatalf("WriteFile: %v", err)
 			}
 
-			if got := IsActive(tasksDir, "task.md"); got != tt.want {
+			got, err := IsActive(tasksDir, "task.md")
+			if err != nil {
+				t.Fatalf("IsActive() error = %v, want nil", err)
+			}
+			if got != tt.want {
 				t.Fatalf("IsActive() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 
 	t.Run("missing file", func(t *testing.T) {
-		if IsActive(t.TempDir(), "missing.md") {
+		tasksDir := t.TempDir()
+		for _, dir := range active {
+			if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+				t.Fatalf("MkdirAll %s: %v", dir, err)
+			}
+		}
+
+		got, err := IsActive(tasksDir, "missing.md")
+		if err != nil {
+			t.Fatalf("IsActive() error = %v, want nil", err)
+		}
+		if got {
 			t.Fatal("IsActive() = true, want false")
+		}
+	})
+
+	t.Run("active directory missing", func(t *testing.T) {
+		tasksDir := t.TempDir()
+		for _, dir := range active {
+			if dir == InProgress {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+				t.Fatalf("MkdirAll %s: %v", dir, err)
+			}
+		}
+
+		got, err := IsActive(tasksDir, "task.md")
+		if err == nil {
+			t.Fatal("IsActive() error = nil, want missing directory failure")
+		}
+		if got {
+			t.Fatal("IsActive() = true, want false when liveness is unknown")
+		}
+	})
+
+	t.Run("active directory unreadable", func(t *testing.T) {
+		tasksDir := t.TempDir()
+		for _, dir := range active {
+			if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+				t.Fatalf("MkdirAll %s: %v", dir, err)
+			}
+		}
+		activeDir := filepath.Join(tasksDir, InProgress)
+		taskPath := filepath.Join(activeDir, "task.md")
+		if err := os.WriteFile(taskPath, []byte("test"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.Chmod(activeDir, 0o000); err != nil {
+			t.Fatalf("Chmod: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = os.Chmod(activeDir, 0o755)
+		})
+
+		got, err := IsActive(tasksDir, "task.md")
+		if err == nil {
+			t.Fatal("IsActive() error = nil, want stat failure")
+		}
+		if got {
+			t.Fatal("IsActive() = true, want false when liveness is unknown")
 		}
 	})
 }
