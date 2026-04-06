@@ -773,6 +773,115 @@ func TestGatherStatus_RunnableExcludesDeferred(t *testing.T) {
 	}
 }
 
+func TestGatherStatus_MalformedActiveTaskRecoveredAffectsStillDefersOverlap(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeTask(t, tasksDir, dirs.ReadyReview, "broken.md", strings.Join([]string{
+		"---",
+		"affects:",
+		"  - src/main.go",
+		"priority: [oops",
+		"---",
+		"# Broken",
+		"",
+	}, "\n"))
+	writeTask(t, tasksDir, dirs.Backlog, "deferred.md", "---\nid: deferred\naffects:\n  - src/main.go\n---\n# Deferred\n")
+	writeTask(t, tasksDir, dirs.Backlog, "runnable.md", "---\nid: runnable\naffects:\n  - src/other.go\n---\n# Runnable\n")
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	if data.runnable != 1 {
+		t.Fatalf("runnable = %d, want 1", data.runnable)
+	}
+	if len(data.runnableBacklog) != 1 || data.runnableBacklog[0].name != "runnable.md" {
+		t.Fatalf("runnableBacklog = %#v, want only runnable.md", data.runnableBacklog)
+	}
+	info, ok := data.deferredDetail["deferred.md"]
+	if !ok {
+		t.Fatalf("expected deferred.md in deferredDetail, got %#v", data.deferredDetail)
+	}
+	if info.BlockedBy != "broken.md" || info.BlockedByDir != dirs.ReadyReview {
+		t.Fatalf("unexpected deferral info: %#v", info)
+	}
+}
+
+func TestGatherStatus_UnrecoverableMalformedActiveTaskFailsClosed(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeTask(t, tasksDir, dirs.InProgress, "broken.md", strings.Join([]string{
+		"---",
+		"affects: [unterminated",
+		"priority: 5",
+		"---",
+		"# Broken",
+		"",
+	}, "\n"))
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md", "---\nid: blocked\naffects:\n  - src/main.go\n---\n# Blocked\n")
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	if data.runnable != 0 {
+		t.Fatalf("runnable = %d, want 0", data.runnable)
+	}
+	if len(data.runnableBacklog) != 0 {
+		t.Fatalf("runnableBacklog = %#v, want empty", data.runnableBacklog)
+	}
+	info, ok := data.deferredDetail["blocked.md"]
+	if !ok {
+		t.Fatalf("expected blocked.md in deferredDetail, got %#v", data.deferredDetail)
+	}
+	if info.BlockedBy != "broken.md" || info.BlockedByDir != dirs.InProgress {
+		t.Fatalf("unexpected deferral info: %#v", info)
+	}
+}
+
+func TestGatherStatus_UnsafeRecoveredAffectsStillFailClosed(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeTask(t, tasksDir, dirs.InProgress, "broken.md", strings.Join([]string{
+		"---",
+		"affects:",
+		"  - /tmp/secret.txt",
+		"  - ../outside.go",
+		"priority: [oops",
+		"---",
+		"# Broken",
+		"",
+	}, "\n"))
+	writeTask(t, tasksDir, dirs.Backlog, "blocked.md", "---\nid: blocked\naffects:\n  - src/main.go\n---\n# Blocked\n")
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+
+	if data.runnable != 0 {
+		t.Fatalf("runnable = %d, want 0", data.runnable)
+	}
+	info, ok := data.deferredDetail["blocked.md"]
+	if !ok {
+		t.Fatalf("expected blocked.md in deferredDetail, got %#v", data.deferredDetail)
+	}
+	if info.BlockedBy != "broken.md" || info.BlockedByDir != dirs.InProgress {
+		t.Fatalf("unexpected deferral info: %#v", info)
+	}
+}
+
 func TestGatherStatus_DependencyBlockedBacklogExcludedFromRunnable(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	if err := messaging.Init(tasksDir); err != nil {

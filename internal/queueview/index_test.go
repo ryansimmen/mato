@@ -386,6 +386,108 @@ func TestBuildIndex_ActiveBranchTrackedForMalformedActiveTask(t *testing.T) {
 	}
 }
 
+func TestBuildIndex_ActiveParseFailureRecoversAffects(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, dirs.ReadyReview, "broken.md", strings.Join([]string{
+		"---",
+		"affects:",
+		"  - internal/queueview/index.go",
+		"  - internal/status/status_gather.go",
+		"priority: [oops",
+		"---",
+		"# Broken",
+		"",
+	}, "\n"))
+
+	idx := BuildIndex(tasksDir)
+	failures := idx.ParseFailures()
+	if len(failures) != 1 {
+		t.Fatalf("expected 1 parse failure, got %d", len(failures))
+	}
+	if !reflect.DeepEqual(failures[0].RecoveredAffects, []string{"internal/queueview/index.go", "internal/status/status_gather.go"}) {
+		t.Fatalf("RecoveredAffects = %v, want recovered affects", failures[0].RecoveredAffects)
+	}
+	if !idx.HasActiveOverlap([]string{"internal/queueview/index.go"}) {
+		t.Fatal("expected recovered affects to participate in active overlap checks")
+	}
+	if idx.HasActiveOverlap([]string{"docs/readme.md"}) {
+		t.Fatal("unexpected overlap for unrelated path")
+	}
+	active := idx.ActiveAffects()
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active affects entry, got %d", len(active))
+	}
+	if active[0].Name != "broken.md" || active[0].Dir != dirs.ReadyReview {
+		t.Fatalf("unexpected active task: %+v", active[0])
+	}
+	if !reflect.DeepEqual(active[0].Affects, failures[0].RecoveredAffects) {
+		t.Fatalf("ActiveAffects = %v, want %v", active[0].Affects, failures[0].RecoveredAffects)
+	}
+}
+
+func TestBuildIndex_UnrecoverableActiveParseFailureFailsClosed(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, dirs.InProgress, "broken.md", strings.Join([]string{
+		"---",
+		"affects: [unterminated",
+		"priority: 5",
+		"---",
+		"# Broken",
+		"",
+	}, "\n"))
+
+	idx := BuildIndex(tasksDir)
+	failures := idx.ParseFailures()
+	if len(failures) != 1 {
+		t.Fatalf("expected 1 parse failure, got %d", len(failures))
+	}
+	if len(failures[0].RecoveredAffects) != 0 {
+		t.Fatalf("RecoveredAffects = %v, want none", failures[0].RecoveredAffects)
+	}
+	if !idx.HasActiveOverlap([]string{"docs/readme.md"}) {
+		t.Fatal("expected unrecoverable active parse failure to block overlap checks conservatively")
+	}
+	if idx.HasActiveOverlap(nil) {
+		t.Fatal("nil affects should not report overlap")
+	}
+}
+
+func TestBuildIndex_UnsafeRecoveredAffectsStillFailClosed(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, dirs.InProgress, "broken.md", strings.Join([]string{
+		"---",
+		"affects:",
+		"  - /tmp/secret.txt",
+		"  - ../outside.go",
+		"priority: [oops",
+		"---",
+		"# Broken",
+		"",
+	}, "\n"))
+
+	idx := BuildIndex(tasksDir)
+	failures := idx.ParseFailures()
+	if len(failures) != 1 {
+		t.Fatalf("expected 1 parse failure, got %d", len(failures))
+	}
+	if len(failures[0].RecoveredAffects) != 0 {
+		t.Fatalf("RecoveredAffects = %v, want none", failures[0].RecoveredAffects)
+	}
+	if !idx.HasActiveOverlap([]string{"docs/readme.md"}) {
+		t.Fatal("expected stripped-only recovered affects to block overlap checks conservatively")
+	}
+	foundUnsafeWarning := false
+	for _, warning := range idx.BuildWarnings() {
+		if strings.Contains(warning.Err.Error(), "unsafe affects entry") {
+			foundUnsafeWarning = true
+			break
+		}
+	}
+	if !foundUnsafeWarning {
+		t.Fatalf("expected unsafe affects warning, got %v", idx.BuildWarnings())
+	}
+}
+
 func TestBuildIndex_BacklogParseFailures(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	writeTask(t, tasksDir, dirs.Backlog, "bad.md", "---\npriority: [oops\n---\n# Bad\n")

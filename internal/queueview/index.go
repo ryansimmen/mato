@@ -68,6 +68,10 @@ type ParseFailure struct {
 	// LastReviewRejectionReason is the reason from the last
 	// <!-- review-rejection: ... --> comment.
 	LastReviewRejectionReason string
+	// RecoveredAffects holds affects entries recovered from malformed active
+	// tasks for conservative overlap blocking. Nil when recovery was not needed
+	// or not possible.
+	RecoveredAffects []string
 }
 
 // BuildWarning records a non-fatal filesystem warning encountered while
@@ -124,6 +128,15 @@ type PollIndex struct {
 	// (in-progress, ready-for-review, ready-to-merge).
 	activeBranches map[string]struct{}
 
+	// activeRecoveredAffects holds affects recovered from active parse failures
+	// so overlap checks still see them even when the task snapshot is invalid.
+	activeRecoveredAffects []taskfile.ActiveTask
+
+	// activeUnknownOverlapBlockers records malformed active tasks whose
+	// affects could not be recovered safely. These conservatively block any
+	// incoming non-empty affects from being treated as overlap-free.
+	activeUnknownOverlapBlockers []activeOverlapBlocker
+
 	// parseFailures records files that failed to parse during build.
 	parseFailures []ParseFailure
 
@@ -150,6 +163,18 @@ type taskFileMetadata struct {
 	lastCycleFailureReason    string
 	lastTerminalFailureReason string
 	lastReviewRejectionReason string
+}
+
+type activeOverlapBlocker struct {
+	name string
+	dir  string
+}
+
+type recoveredActiveAffects struct {
+	affects  []string
+	stripped []frontmatter.StrippedAffect
+	globErr  error
+	blockAll bool
 }
 
 func scanTaskFileMetadata(tasksDir, filename string, data []byte) taskFileMetadata {
@@ -207,6 +232,135 @@ func snapshotFromData(state, filename, path string, data []byte, info taskFileMe
 		snap.GlobError = globErr
 	}
 	return snap, nil
+}
+
+func indexActiveAffects(idx *PollIndex, name string, affects []string, prefixSet, globSet map[string]struct{}) {
+	if len(affects) == 0 {
+		return
+	}
+	for _, af := range affects {
+		idx.activeAffects[af] = append(idx.activeAffects[af], name)
+		if isDirPrefix(af) {
+			if _, ok := prefixSet[af]; ok {
+				continue
+			}
+			prefixSet[af] = struct{}{}
+			idx.activeAffectsPrefixes = append(idx.activeAffectsPrefixes, af)
+			continue
+		}
+		if isGlob(af) {
+			if _, ok := globSet[af]; ok {
+				continue
+			}
+			globSet[af] = struct{}{}
+			idx.activeAffectsGlobs = append(idx.activeAffectsGlobs, af)
+		}
+	}
+}
+
+func appendRecoveredAffectsWarnings(idx *PollIndex, dir, path string, recovered recoveredActiveAffects) {
+	if recovered.globErr != nil {
+		idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
+			State: dir,
+			Path:  path,
+			Err:   recovered.globErr,
+		})
+	}
+	for _, sa := range recovered.stripped {
+		idx.buildWarnings = append(idx.buildWarnings, BuildWarning{
+			State: dir,
+			Path:  path,
+			Err:   fmt.Errorf("unsafe affects entry %q: %s", sa.Entry, sa.Reason),
+		})
+	}
+}
+
+func recoverActiveAffectsFromMalformedTask(path string, data []byte) recoveredActiveAffects {
+	block, ok := rawFrontmatterBlock(data)
+	if !ok {
+		return recoveredActiveAffects{blockAll: true}
+	}
+	snippet, found := extractAffectsSnippet(block)
+	if !found {
+		return recoveredActiveAffects{blockAll: true}
+	}
+	meta, _, err := frontmatter.ParseTaskData([]byte("---\n"+snippet+"\n---\n"), path)
+	if err != nil {
+		return recoveredActiveAffects{blockAll: true}
+	}
+	blockAll := len(meta.Affects) == 0 && len(meta.StrippedAffects) > 0
+	return recoveredActiveAffects{
+		affects:  meta.Affects,
+		stripped: meta.StrippedAffects,
+		globErr:  frontmatter.ValidateAffectsGlobs(meta.Affects),
+		blockAll: blockAll,
+	}
+}
+
+func rawFrontmatterBlock(data []byte) (string, bool) {
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	start := 0
+	for start < len(lines) {
+		trimmed := strings.TrimSpace(lines[start])
+		if trimmed == "" || isStandaloneCommentLine(trimmed) {
+			start++
+			continue
+		}
+		break
+	}
+	if start >= len(lines) || strings.TrimSpace(lines[start]) != "---" {
+		return "", false
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start+1:end], "\n"), true
+}
+
+func isStandaloneCommentLine(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "<!--") && strings.HasSuffix(trimmed, "-->")
+}
+
+func extractAffectsSnippet(block string) (string, bool) {
+	lines := strings.Split(block, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if indent != 0 {
+			continue
+		}
+		key, _, ok := strings.Cut(trimmed, ":")
+		if !ok || strings.TrimSpace(key) != "affects" {
+			continue
+		}
+		end := i + 1
+		for end < len(lines) {
+			next := lines[end]
+			nextTrimmed := strings.TrimSpace(next)
+			if nextTrimmed == "" || strings.HasPrefix(nextTrimmed, "#") {
+				end++
+				continue
+			}
+			nextIndent := len(next) - len(strings.TrimLeft(next, " \t"))
+			if nextIndent == 0 {
+				if nextKey, _, ok := strings.Cut(nextTrimmed, ":"); ok && strings.TrimSpace(nextKey) != "" {
+					break
+				}
+			}
+			end++
+		}
+		return strings.Join(lines[i:end], "\n"), true
+	}
+	return "", false
 }
 
 // LoadTaskSnapshot reads and parses one task file into a snapshot.
@@ -284,16 +438,23 @@ func BuildIndex(tasksDir string) *PollIndex {
 
 			data, err := os.ReadFile(path)
 			if err != nil {
-				idx.parseFailures = append(idx.parseFailures, ParseFailure{
+				pf := ParseFailure{
 					Filename: name, State: dir, Path: path, Err: err,
-				})
+				}
+				idx.parseFailures = append(idx.parseFailures, pf)
+				if isActive[dir] {
+					idx.activeUnknownOverlapBlockers = append(idx.activeUnknownOverlapBlockers, activeOverlapBlocker{
+						name: name,
+						dir:  dir,
+					})
+				}
 				continue
 			}
 
 			info := scanTaskFileMetadata(tasksDir, name, data)
 			snap, err := snapshotFromData(dir, name, path, data, info)
 			if err != nil {
-				idx.parseFailures = append(idx.parseFailures, ParseFailure{
+				pf := ParseFailure{
 					Filename:                  name,
 					State:                     dir,
 					Path:                      path,
@@ -307,10 +468,30 @@ func BuildIndex(tasksDir string) *PollIndex {
 					LastCycleFailureReason:    info.lastCycleFailureReason,
 					LastTerminalFailureReason: info.lastTerminalFailureReason,
 					LastReviewRejectionReason: info.lastReviewRejectionReason,
-				})
+				}
 				if isActive[dir] && info.branch != "" {
 					idx.activeBranches[info.branch] = struct{}{}
 				}
+				if isActive[dir] {
+					recovered := recoverActiveAffectsFromMalformedTask(path, data)
+					appendRecoveredAffectsWarnings(idx, dir, path, recovered)
+					switch {
+					case len(recovered.affects) > 0:
+						pf.RecoveredAffects = append([]string(nil), recovered.affects...)
+						idx.activeRecoveredAffects = append(idx.activeRecoveredAffects, taskfile.ActiveTask{
+							Name:    name,
+							Dir:     dir,
+							Affects: append([]string(nil), recovered.affects...),
+						})
+						indexActiveAffects(idx, name, recovered.affects, activeAffectsPrefixSet, activeAffectsGlobSet)
+					case recovered.blockAll:
+						idx.activeUnknownOverlapBlockers = append(idx.activeUnknownOverlapBlockers, activeOverlapBlocker{
+							name: name,
+							dir:  dir,
+						})
+					}
+				}
+				idx.parseFailures = append(idx.parseFailures, pf)
 				continue
 			}
 			meta := snap.Meta
@@ -344,21 +525,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 				if info.branch != "" {
 					idx.activeBranches[info.branch] = struct{}{}
 				}
-				for _, af := range meta.Affects {
-					idx.activeAffects[af] = append(idx.activeAffects[af], name)
-					if isDirPrefix(af) {
-						if _, ok := activeAffectsPrefixSet[af]; ok {
-							continue
-						}
-						activeAffectsPrefixSet[af] = struct{}{}
-						idx.activeAffectsPrefixes = append(idx.activeAffectsPrefixes, af)
-					} else if isGlob(af) {
-						if _, ok := activeAffectsGlobSet[af]; !ok {
-							activeAffectsGlobSet[af] = struct{}{}
-							idx.activeAffectsGlobs = append(idx.activeAffectsGlobs, af)
-						}
-					}
-				}
+				indexActiveAffects(idx, name, meta.Affects, activeAffectsPrefixSet, activeAffectsGlobSet)
 			}
 		}
 
@@ -438,6 +605,9 @@ func (idx *PollIndex) HasActiveOverlap(affects []string) bool {
 	if idx == nil || len(affects) == 0 {
 		return false
 	}
+	if len(idx.activeUnknownOverlapBlockers) > 0 {
+		return true
+	}
 	for _, af := range affects {
 		if len(idx.activeAffects[af]) > 0 {
 			return true
@@ -509,6 +679,21 @@ func (idx *PollIndex) ActiveAffects() []taskfile.ActiveTask {
 				Affects: snap.Meta.Affects,
 			})
 		}
+	}
+	for _, recovered := range idx.activeRecoveredAffects {
+		if len(recovered.Affects) == 0 {
+			continue
+		}
+		key := taskKey{name: recovered.Name, dir: recovered.Dir}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, taskfile.ActiveTask{
+			Name:    recovered.Name,
+			Dir:     recovered.Dir,
+			Affects: append([]string(nil), recovered.Affects...),
+		})
 	}
 	return result
 }
