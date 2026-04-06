@@ -9,6 +9,7 @@ import (
 	"mato/internal/dirs"
 	"mato/internal/inspect"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/status"
 	"mato/internal/testutil"
 )
@@ -48,10 +49,10 @@ func TestCancelRetryLifecycle(t *testing.T) {
 	if _, err := queue.RetryTask(tasksDir, "task"); err != nil {
 		t.Fatalf("RetryTask: %v", err)
 	}
-	if _, err := queue.ResolveTask(queue.BuildIndex(tasksDir), "task"); err != nil {
+	if _, err := queueview.ResolveTask(queueview.BuildIndex(tasksDir), "task"); err != nil {
 		t.Fatalf("ResolveTask after retry: %v", err)
 	}
-	if snap := queue.BuildIndex(tasksDir).Snapshot(dirs.Backlog, "task.md"); snap == nil {
+	if snap := queueview.BuildIndex(tasksDir).Snapshot(dirs.Backlog, "task.md"); snap == nil {
 		t.Fatal("expected task in backlog after retry")
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"mato/internal/pause"
 	"mato/internal/process"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/ui"
@@ -3361,7 +3362,7 @@ func TestSurfaceBuildWarnings_NoWarnings(t *testing.T) {
 		}
 	}
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	_, stderr := captureStdoutStderr(t, func() {
 		if surfaceBuildWarnings(idx) {
 			t.Error("surfaceBuildWarnings should return false when there are no warnings")
@@ -3391,7 +3392,7 @@ func TestSurfaceBuildWarnings_DirReadFailure(t *testing.T) {
 		t.Fatalf("create backlog file: %v", err)
 	}
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	if len(idx.BuildWarnings()) == 0 {
 		t.Fatal("expected BuildWarnings from unreadable directory")
 	}
@@ -3425,7 +3426,7 @@ func TestSurfaceBuildWarnings_GlobWarningDoesNotTriggerPollError(t *testing.T) {
 		t.Fatalf("write task: %v", err)
 	}
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	if len(idx.BuildWarnings()) == 0 {
 		t.Fatal("expected BuildWarnings from invalid glob")
 	}
@@ -4003,8 +4004,8 @@ func TestPollClaimAndRun_NoTasksAvailable(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir}
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := make(map[string]struct{})
-	idx := queue.BuildIndex(tasksDir)
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 
 	var claimed, hadError bool
 	captureStdoutStderr(t, func() {
@@ -4028,8 +4029,8 @@ func TestPollClaimAndRun_FailedDirUnavailableExclusion(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir}
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := map[string]struct{}{"already-excluded.md": {}}
-	idx := queue.BuildIndex(tasksDir)
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 
 	captureStdoutStderr(t, func() {
 		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx, view)
@@ -4059,8 +4060,8 @@ func TestPollClaimAndRun_DeferredOverlapSkipped(t *testing.T) {
 	env := envConfig{tasksDir: tasksDir}
 	run := runContext{agentID: "test-agent"}
 	failedDirExcluded := make(map[string]struct{})
-	idx := queue.BuildIndex(tasksDir)
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 
 	var claimed bool
 	captureStdoutStderr(t, func() {
@@ -4117,18 +4118,18 @@ func TestPollIterate_PausedSkipsClaimAndReviewButMerges(t *testing.T) {
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) {
 		return pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}, nil
 	})
-	setHook(t, &pollWriteManifestFn, func(tasksDir string, failedDirExcluded map[string]struct{}, idx *queue.PollIndex) (queue.RunnableBacklogView, bool) {
+	setHook(t, &pollWriteManifestFn, func(tasksDir string, failedDirExcluded map[string]struct{}, idx *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
 		manifestCalled = true
 		if _, ok := failedDirExcluded["excluded.md"]; !ok {
 			t.Fatalf("failedDirExcluded not preserved")
 		}
-		return queue.RunnableBacklogView{}, false
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		claimCalled = true
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		reviewCalled = true
 		return false
 	})
@@ -4166,13 +4167,13 @@ func TestPollIterate_PauseWarningThrottled(t *testing.T) {
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) {
 		return pause.State{Active: true, ProblemKind: pause.ProblemMalformed, Problem: `invalid timestamp: "bad"`}, nil
 	})
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4201,13 +4202,13 @@ func TestPollIterate_PausedMergeDoesNotResetHeartbeatThrottle(t *testing.T) {
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) {
 		return pause.State{Active: true, Since: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}, nil
 	})
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 1 })
@@ -4234,14 +4235,14 @@ func TestPollIterate_ClaimedCancelledSkipsReviewAndMerge(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return true, false
 	})
 	reviewCalled := false
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		reviewCalled = true
 		return false
 	})
@@ -4269,17 +4270,17 @@ func TestPollIterate_CancelledWithoutClaimSkipsReviewAndMerge(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queue.PollIndex, view queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queueview.PollIndex, view queueview.RunnableBacklogView) (bool, bool) {
 		if ctx.Err() == nil {
 			t.Fatal("expected cancelled context in claim stub")
 		}
 		return false, false
 	})
 	reviewCalled := false
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		reviewCalled = true
 		return false
 	})
@@ -4307,18 +4308,18 @@ func TestPollIterate_CancelDuringClaimSkipsReviewAndMerge(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
 
 	// Simulate a context that gets cancelled during the claim phase.
 	ctx, cancel := context.WithCancel(context.Background())
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		cancel() // cancel context during claim
 		return false, false
 	})
 	reviewCalled := false
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		reviewCalled = true
 		return false
 	})
@@ -4342,7 +4343,7 @@ func TestPollIterate_CancelDuringClaimSkipsReviewAndMerge(t *testing.T) {
 
 func TestPollReview_CancelledContextReturnsImmediately(t *testing.T) {
 	tasksDir := setupFullTasksDir(t)
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -4369,18 +4370,18 @@ func TestPollLoop_CancelDuringIterationExits(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	iterations := 0
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		iterations++
 		cancel() // cancel during first iteration
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int {
@@ -4403,13 +4404,13 @@ func TestPollIterate_ReviewAvailabilityUsesFreshScanAfterMerge(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int {
@@ -4435,13 +4436,13 @@ func TestPollIterate_IdleReviewProbeDoesNotQuarantineMalformedTasks(t *testing.T
 	}
 
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4470,13 +4471,13 @@ func TestPollIterate_IdleReviewProbeDoesNotMoveExhaustedTasks(t *testing.T) {
 	}
 
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4505,13 +4506,13 @@ func TestPollIterate_IdleReviewProbeExcludesBranchlessHandoff(t *testing.T) {
 	}
 
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4536,8 +4537,8 @@ func TestCollectBoundedRunState_BranchlessReviewIsIdle(t *testing.T) {
 		t.Fatalf("WriteFile branchless review task: %v", err)
 	}
 
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
 
 	state := collectBoundedRunState(tasksDir, map[string]struct{}{}, 0)
@@ -4959,15 +4960,15 @@ func TestPollLoop_RunModeOnceExitsAfterSingleIteration(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
 	iterations := 0
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		iterations++
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -4987,13 +4988,13 @@ func TestPollLoop_RunModeUntilIdleExitsWhenQueueBecomesIdle(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -5013,13 +5014,13 @@ func TestPollLoop_RunModeUntilIdlePausedWithPendingMergeDoesNotExit(t *testing.T
 		t.Fatalf("WriteFile pending merge task: %v", err)
 	}
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{Active: true}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, false
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -5054,13 +5055,13 @@ func TestPollLoop_BoundedModeReturnsErrorOnPollFailure(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
 	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
-	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queue.PollIndex) (queue.RunnableBacklogView, bool) {
-		return queue.RunnableBacklogView{}, true
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, true
 	})
-	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queue.PollIndex, queue.RunnableBacklogView) (bool, bool) {
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
 		return false, false
 	})
-	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queue.PollIndex) bool {
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
 		return false
 	})
 	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
@@ -5239,7 +5240,7 @@ func TestDryRunRenderer_RenderValidation_Success(t *testing.T) {
 func TestDryRunRenderer_RenderValidation_Errors(t *testing.T) {
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
-	failures := []queue.ParseFailure{
+	failures := []queueview.ParseFailure{
 		{State: "backlog", Filename: "bad.md", Err: fmt.Errorf("invalid yaml")},
 	}
 	r.RenderValidation(failures, 3)
@@ -5270,7 +5271,7 @@ func TestDryRunRenderer_RenderExecutionOrder_Empty(t *testing.T) {
 func TestDryRunRenderer_RenderExecutionOrder_WithTasks(t *testing.T) {
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
-	tasks := []*queue.TaskSnapshot{
+	tasks := []*queueview.TaskSnapshot{
 		{Filename: "first.md", Meta: frontmatter.TaskMeta{Priority: 5}},
 		{Filename: "second.md", Meta: frontmatter.TaskMeta{Priority: 10}},
 	}
@@ -5348,7 +5349,7 @@ func TestDryRunRenderer_WarningFormatting(t *testing.T) {
 	task := "---\nid: warn-task\npriority: 10\ndepends_on:\n  - nonexistent\n---\n# Warn Task\n"
 	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "warn-task.md"), []byte(task), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
 	r.RenderDependencySummary(tasksDir, idx)
@@ -5370,7 +5371,7 @@ func TestDryRunRenderer_NarrowWidth(t *testing.T) {
 		Width: 40,
 	}
 
-	tasks := []*queue.TaskSnapshot{
+	tasks := []*queueview.TaskSnapshot{
 		{Filename: "a-very-long-task-filename-that-exceeds-reasonable-bounds.md", Meta: frontmatter.TaskMeta{Priority: 1}},
 	}
 	r.RenderExecutionOrder(tasks)
@@ -5401,7 +5402,7 @@ func TestDryRunRenderer_RenderQueueSummary(t *testing.T) {
 	task := "---\nid: task-1\npriority: 10\n---\n# Task 1\n"
 	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-1.md"), []byte(task), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
 	r.RenderQueueSummary(idx, dirs.All, map[string]int{}, 1)
@@ -5559,14 +5560,14 @@ func TestDryRunRenderer_NarrowWidth_BacklogSummary(t *testing.T) {
 	task := "---\nid: overflow-test\npriority: 10\n---\n# Overflow\n"
 	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer
 	r := &DryRunRenderer{
 		W:     &buf,
 		Color: ui.NewColorSet(),
 		Width: 40,
 	}
-	r.RenderBacklogSummary(idx, map[string]struct{}{}, map[string][]queue.DependencyBlock{})
+	r.RenderBacklogSummary(idx, map[string]struct{}{}, map[string][]queueview.DependencyBlock{})
 	out := buf.String()
 
 	// The full long filename should be truncated to fit width 40 minus

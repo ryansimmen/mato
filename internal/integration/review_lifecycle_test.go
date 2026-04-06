@@ -10,6 +10,7 @@ import (
 	"mato/internal/dirs"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runner"
 	"mato/internal/testutil"
 )
@@ -355,7 +356,7 @@ func TestReviewLifecycle_MalformedTaskQuarantined_Indexed(t *testing.T) {
 	goodPath := writeTask(t, tasksDir, dirs.ReadyReview, goodFile,
 		"<!-- branch: task/good-indexed -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good Indexed Task\n")
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	task := runner.SelectTaskForReview(tasksDir, idx)
 

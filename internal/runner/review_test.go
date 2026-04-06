@@ -17,6 +17,7 @@ import (
 	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/testutil"
@@ -928,7 +929,7 @@ func TestReviewCandidates_Indexed_PrioritySort(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "mid-pri.md"),
 		[]byte("<!-- branch: task/mid-pri -->\n---\npriority: 20\nmax_retries: 3\n---\n# Mid Priority\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	candidates := reviewCandidates(tasksDir, idx)
 	if len(candidates) != 3 {
 		t.Fatalf("expected 3 candidates, got %d", len(candidates))
@@ -952,7 +953,7 @@ func TestReviewCandidates_Indexed_SamePrioritySortsByFilename(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "alpha.md"),
 		[]byte("<!-- branch: task/alpha -->\n---\npriority: 10\nmax_retries: 3\n---\n# Alpha\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	candidates := reviewCandidates(tasksDir, idx)
 	if len(candidates) != 2 {
 		t.Fatalf("expected 2 candidates, got %d", len(candidates))
@@ -979,7 +980,7 @@ func TestReviewCandidates_Indexed_ExhaustedBudget(t *testing.T) {
 	validContent := "<!-- branch: task/valid -->\n---\npriority: 20\nmax_retries: 3\n---\n# Valid\n"
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "valid.md"), []byte(validContent), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	stdout, _ := captureStdoutStderr(t, func() {
 		candidates := reviewCandidates(tasksDir, idx)
@@ -1015,7 +1016,7 @@ func TestReviewCandidates_Indexed_ExhaustedBudget_PreservesVerdict(t *testing.T)
 	verdictPayload, _ := json.Marshal(map[string]string{"verdict": "reject", "reason": "needs improvement"})
 	os.WriteFile(taskfile.VerdictPath(tasksDir, "exhausted.md"), verdictPayload, 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	captureStdoutStderr(t, func() {
 		candidates := reviewCandidates(tasksDir, idx)
@@ -1047,7 +1048,7 @@ func TestReviewCandidates_Indexed_BranchFromSnapshot(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "with-branch.md"),
 		[]byte("<!-- branch: task/custom-branch -->\n---\npriority: 10\nmax_retries: 3\n---\n# With Branch\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	candidates := reviewCandidates(tasksDir, idx)
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate, got %d", len(candidates))
@@ -1071,7 +1072,7 @@ func TestReviewCandidates_IndexedMatchesFilesystemFallback(t *testing.T) {
 		[]byte("<!-- branch: task/top -->\n---\npriority: 5\nmax_retries: 3\n---\n# Top\n"), 0o644)
 
 	noIndex := reviewCandidates(tasksDir, nil)
-	indexed := reviewCandidates(tasksDir, queue.BuildIndex(tasksDir))
+	indexed := reviewCandidates(tasksDir, queueview.BuildIndex(tasksDir))
 
 	if len(noIndex) != len(indexed) {
 		t.Fatalf("len(candidates) mismatch: no-index=%d indexed=%d", len(noIndex), len(indexed))
@@ -1098,7 +1099,7 @@ func TestReviewCandidates_Indexed_MissingBranchMarkerRecordsFailure(t *testing.T
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "no-branch.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# No Branch\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	stdout, stderr := captureStdoutStderr(t, func() {
 		candidates := reviewCandidates(tasksDir, idx)
 		if len(candidates) != 0 {
@@ -1129,7 +1130,7 @@ func TestReviewCandidates_Indexed_TitleExtracted(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "titled.md"),
 		[]byte("<!-- branch: task/titled -->\n---\npriority: 10\nmax_retries: 3\n---\n# My Custom Title\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	candidates := reviewCandidates(tasksDir, idx)
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate, got %d", len(candidates))
@@ -1226,7 +1227,7 @@ func TestReviewCandidates_Indexed_MalformedQuarantined(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "good.md"),
 		[]byte("<!-- branch: task/good -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good Task\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	stdout, stderr := captureStdoutStderr(t, func() {
 		candidates := reviewCandidates(tasksDir, idx)
@@ -1742,7 +1743,7 @@ func TestReviewCandidates_Indexed_MissingBranchMarkersAreSkipped(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "add-feature.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Add Feature Dash\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	stdout, _ := captureStdoutStderr(t, func() {
 		candidates := reviewCandidates(tasksDir, idx)
 		if len(candidates) != 0 {
@@ -1775,7 +1776,7 @@ func TestReviewCandidates_ExplicitBranchUnchanged(t *testing.T) {
 	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "add_feature.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# Synthesized\n"), 0o644)
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	candidates := reviewCandidates(tasksDir, idx)
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate, got %d", len(candidates))
