@@ -9,6 +9,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 
 	"github.com/spf13/cobra"
@@ -59,7 +60,7 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 			// Interactive confirmation when stdin is a TTY,
 			// --yes is not set, and output is not JSON.
 			if !yes && format != "json" && stdinIsTerminalFn() {
-				idx := queue.BuildIndex(tasksDir)
+				idx := queueview.BuildIndex(tasksDir)
 				type taskInfo struct {
 					stem  string
 					state string
@@ -67,7 +68,7 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 				}
 				var resolved []taskInfo
 				for _, ref := range args {
-					match, err := queue.ResolveTask(idx, ref)
+					match, err := queueview.ResolveTask(idx, ref)
 					if err != nil {
 						// Silently skip unresolved refs during prompt
 						// preparation so errors are only reported once

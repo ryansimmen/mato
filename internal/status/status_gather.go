@@ -12,7 +12,7 @@ import (
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 )
 
 // statusMessageLimit is the maximum number of recent messages read by
@@ -34,7 +34,7 @@ type statusData struct {
 	readyForReview  []taskEntry
 	readyToMerge    []taskEntry
 	waitingTasks    []waitingTaskSummary
-	deferredDetail  map[string]queue.DeferralInfo
+	deferredDetail  map[string]queueview.DeferralInfo
 	failedTasks     []taskEntry
 	completions     []messaging.CompletionDetail
 	recentMessages  []messaging.Message
@@ -60,7 +60,7 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	var data statusData
 
 	// Build one index for the entire gather cycle.
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	// Queue counts derived from the index snapshot.
 	// Include parse-failed files in counts to match old countMarkdownFiles behavior.
@@ -87,7 +87,7 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	}
 	data.presenceMap = presenceMap
 
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 
 	pauseState, pauseErr := pauseReadFn(tasksDir)
 	if pauseErr != nil {

@@ -14,7 +14,7 @@ import (
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 )
 
@@ -67,8 +67,8 @@ type candidate struct {
 	state        string
 	stem         string
 	explicitID   string
-	snapshot     *queue.TaskSnapshot
-	parseFailure *queue.ParseFailure
+	snapshot     *queueview.TaskSnapshot
+	parseFailure *queueview.ParseFailure
 }
 
 type dependencyLocation struct {
@@ -77,16 +77,16 @@ type dependencyLocation struct {
 }
 
 type inspectContext struct {
-	idx               *queue.PollIndex
-	diag              queue.DependencyDiagnostics
-	view              queue.RunnableBacklogView
+	idx               *queueview.PollIndex
+	diag              queueview.DependencyDiagnostics
+	view              queueview.RunnableBacklogView
 	locationsByRef    map[string][]dependencyLocation
 	cycleByID         map[string][]string
 	blockedByFilename map[string][]dag.BlockDetail
 	runnablePos       map[string]int
 	runnableTotal     int
-	deferredByName    map[string]queue.DeferralInfo
-	depBlockedByName  map[string][]queue.DependencyBlock
+	deferredByName    map[string]queueview.DeferralInfo
+	depBlockedByName  map[string][]queueview.DependencyBlock
 	retainedWaiting   map[string]string
 }
 
@@ -123,7 +123,7 @@ func ShowTo(w io.Writer, repoRoot, taskRef, format string) error {
 }
 
 func inspectTask(tasksDir, taskRef string) (inspectResult, error) {
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	match, err := resolveCandidate(idx, taskRef)
 	if err != nil {
 		return inspectResult{}, err
@@ -133,8 +133,8 @@ func inspectTask(tasksDir, taskRef string) (inspectResult, error) {
 	return buildResult(match, ctx), nil
 }
 
-func resolveCandidate(idx *queue.PollIndex, taskRef string) (candidate, error) {
-	match, err := queue.ResolveTask(idx, taskRef)
+func resolveCandidate(idx *queueview.PollIndex, taskRef string) (candidate, error) {
+	match, err := queueview.ResolveTask(idx, taskRef)
 	if err != nil {
 		return candidate{}, err
 	}
@@ -153,9 +153,9 @@ func resolveCandidate(idx *queue.PollIndex, taskRef string) (candidate, error) {
 	return cand, nil
 }
 
-func buildInspectContext(tasksDir string, idx *queue.PollIndex) inspectContext {
-	diag := queue.DiagnoseDependencies(tasksDir, idx)
-	view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+func buildInspectContext(tasksDir string, idx *queueview.PollIndex) inspectContext {
+	diag := queueview.DiagnoseDependencies(tasksDir, idx)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 	ctx := inspectContext{
 		idx:               idx,
 		diag:              diag,
@@ -175,7 +175,7 @@ func buildInspectContext(tasksDir string, idx *queue.PollIndex) inspectContext {
 	return ctx
 }
 
-func buildLocationsByRef(idx *queue.PollIndex) map[string][]dependencyLocation {
+func buildLocationsByRef(idx *queueview.PollIndex) map[string][]dependencyLocation {
 	locations := make(map[string][]dependencyLocation)
 	for _, dir := range dirs.All {
 		for _, snap := range idx.TasksByState(dir) {
@@ -214,7 +214,7 @@ func buildCycleMap(cycles [][]string) map[string][]string {
 	return byID
 }
 
-func buildBlockedByFilename(idx *queue.PollIndex, blocked map[string][]dag.BlockDetail) map[string][]dag.BlockDetail {
+func buildBlockedByFilename(idx *queueview.PollIndex, blocked map[string][]dag.BlockDetail) map[string][]dag.BlockDetail {
 	byFilename := make(map[string][]dag.BlockDetail)
 	for _, snap := range idx.TasksByState(dirs.Waiting) {
 		if details, ok := blocked[snap.Meta.ID]; ok {
@@ -231,7 +231,7 @@ func buildResult(match candidate, ctx inspectContext) inspectResult {
 	return buildSnapshotResult(match.snapshot, ctx)
 }
 
-func buildParseFailureResult(pf queue.ParseFailure) inspectResult {
+func buildParseFailureResult(pf queueview.ParseFailure) inspectResult {
 	result := inspectResult{
 		TaskID:                frontmatter.TaskFileStem(pf.Filename),
 		Filename:              pf.Filename,
@@ -281,7 +281,7 @@ func buildParseFailureResult(pf queue.ParseFailure) inspectResult {
 	return result
 }
 
-func buildSnapshotResult(snap *queue.TaskSnapshot, ctx inspectContext) inspectResult {
+func buildSnapshotResult(snap *queueview.TaskSnapshot, ctx inspectContext) inspectResult {
 	result := inspectResult{
 		TaskID:                snapshotTaskID(snap),
 		Filename:              snap.Filename,
@@ -341,7 +341,7 @@ func buildSnapshotResult(snap *queue.TaskSnapshot, ctx inspectContext) inspectRe
 	return result
 }
 
-func buildWaitingResult(result *inspectResult, snap *queue.TaskSnapshot, ctx inspectContext) {
+func buildWaitingResult(result *inspectResult, snap *queueview.TaskSnapshot, ctx inspectContext) {
 	if snap.GlobError != nil {
 		result.Status = "invalid"
 		result.Reason = fmt.Sprintf("task has invalid affects glob syntax: %v", snap.GlobError)
@@ -384,7 +384,7 @@ func buildWaitingResult(result *inspectResult, snap *queue.TaskSnapshot, ctx ins
 	result.NextStep = "run reconcile or wait for the next poll cycle"
 }
 
-func buildBacklogResult(result *inspectResult, snap *queue.TaskSnapshot, ctx inspectContext) {
+func buildBacklogResult(result *inspectResult, snap *queueview.TaskSnapshot, ctx inspectContext) {
 	if snap.GlobError != nil {
 		result.Status = "invalid"
 		result.Reason = fmt.Sprintf("task has invalid affects glob syntax: %v", snap.GlobError)
@@ -417,7 +417,7 @@ func buildBacklogResult(result *inspectResult, snap *queue.TaskSnapshot, ctx ins
 	result.NextStep = "wait for an agent to claim the task from backlog/"
 }
 
-func buildFailedResult(result *inspectResult, snap *queue.TaskSnapshot) {
+func buildFailedResult(result *inspectResult, snap *queueview.TaskSnapshot) {
 	result.Status = "failed"
 	switch {
 	case snap.Cancelled:
@@ -443,7 +443,7 @@ func buildFailedResult(result *inspectResult, snap *queue.TaskSnapshot) {
 	}
 }
 
-func runningReason(snap *queue.TaskSnapshot) string {
+func runningReason(snap *queueview.TaskSnapshot) string {
 	if snap.ClaimedBy == "" && snap.ClaimedAt.IsZero() {
 		return "task is currently being worked on"
 	}
@@ -470,7 +470,7 @@ func buildBlockedDependencies(details []dag.BlockDetail, locationsByRef map[stri
 	return deps
 }
 
-func buildQueueDependencyBlocks(blocks []queue.DependencyBlock, locationsByRef map[string][]dependencyLocation) []blockingDependency {
+func buildQueueDependencyBlocks(blocks []queueview.DependencyBlock, locationsByRef map[string][]dependencyLocation) []blockingDependency {
 	deps := make([]blockingDependency, 0, len(blocks))
 	for _, block := range blocks {
 		dep := blockingDependency{ID: block.DependencyID, State: block.State, Reason: block.State}
@@ -528,7 +528,7 @@ func sortedKeys(m map[string]struct{}) []string {
 	return keys
 }
 
-func snapshotTaskID(snap *queue.TaskSnapshot) string {
+func snapshotTaskID(snap *queueview.TaskSnapshot) string {
 	if snap.Meta.ID != "" {
 		return snap.Meta.ID
 	}

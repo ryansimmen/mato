@@ -74,15 +74,15 @@ messaging.CleanOldMessages(tasksDir, 24*time.Hour)
 taskstate.Sweep(tasksDir)
 sessionmeta.Sweep(tasksDir)
 
-idx := queue.BuildIndex(tasksDir)          // build poll index once
+idx := queueview.BuildIndex(tasksDir)      // build poll index once
 queue.ReconcileReadyQueue(tasksDir, idx)
-idx = queue.BuildIndex(tasksDir)           // rebuild after reconcile
+idx = queueview.BuildIndex(tasksDir)       // rebuild after reconcile
 
-view := queue.ComputeRunnableBacklogView(tasksDir, idx)
+view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 // apply failedDirExcluded and refresh derived .queue
 queue.WriteQueueManifestFromView(tasksDir, failedDirExcluded, idx, view)
 if not paused:
-    candidates := queue.OrderedRunnableFilenames(view, failedDirExcluded)
+    candidates := queueview.OrderedRunnableFilenames(view, failedDirExcluded)
     claimed, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, candidates, cooldown, idx)
 if FailedDirUnavailableError → add task to failedDirExcluded
 if claimed != nil:
@@ -97,11 +97,11 @@ else if no claimed task and no ready-to-merge: print idle message
 wait for signal or 10 seconds
 ```
 Important details from the implementation:
-- The poll loop builds a `PollIndex` (`queue.BuildIndex(tasksDir)`) at the start of each cycle. The index reads every task file once and provides O(1) lookups for task IDs, active branches, `affects` metadata, and state. All consumers in the cycle share this snapshot instead of independently scanning directories and parsing YAML frontmatter. The index is rebuilt after `ReconcileReadyQueue` since it may promote tasks from `waiting/` to `backlog/`. Functions that accept a `*PollIndex` parameter treat `nil` as "build a temporary index internally", preserving backward compatibility for callers outside the poll loop (e.g., `DryRun`, `status`, integration tests).
+- The poll loop builds a `PollIndex` (`queueview.BuildIndex(tasksDir)`) at the start of each cycle. The index reads every task file once and provides O(1) lookups for task IDs, active branches, `affects` metadata, and state. All consumers in the cycle share this snapshot instead of independently scanning directories and parsing YAML frontmatter. The index is rebuilt after `ReconcileReadyQueue` since it may promote tasks from `waiting/` to `backlog/`. Read-only consumers now use `queueview` directly; queue mutation helpers still accept a `*PollIndex` and treat `nil` as "build a temporary index internally" for compatibility.
 - Orphan recovery happens before new work so abandoned `in-progress/` tasks can be retried.
 - Queue cleanup is fully filesystem-based; there is no database or daemon.
 - `.queue` is written once per iteration, after dependency enforcement and overlap deferral, so the manifest reflects the effective runnable backlog. The manifest is a newline-separated list of task filenames (e.g. `my-task.md`), ordered by priority ascending (lower number = higher priority), then alphabetically by filename. It is written atomically by the host via `WriteQueueManifestFromView()`. Dependency-blocked backlog tasks and conflict-deferred tasks are excluded from the manifest. This refresh still happens while the repo is paused.
-- `queue.SelectAndClaimTask(...)` now receives an ordered candidate slice from the caller instead of reading `.queue`. In the polling loop that candidate list is derived from `ComputeRunnableBacklogView()`, so claim order, `mato status`, `mato inspect`, and `.queue` all share the same runnable backlog model. `SelectAndClaimTask(...)` still reparses each candidate from disk before claim-time validation, re-checks `depends_on`, counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget—moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). Dependency-blocked candidates are moved back to `waiting/` as a safety net if they were edited or requeued after the last reconcile pass. `HasAvailableTasks` is a separate helper but is not called in the polling loop.
+- `queue.SelectAndClaimTask(...)` now receives an ordered candidate slice from the caller instead of reading `.queue`. In the polling loop that candidate list is derived from `queueview.ComputeRunnableBacklogView()`, so claim order, `mato status`, `mato inspect`, and `.queue` all share the same runnable backlog model. `SelectAndClaimTask(...)` still reparses each candidate from disk before claim-time validation, re-checks `depends_on`, counts `<!-- failure: ... -->` records, applies the resolved retry cooldown, atomically moves the candidate from `backlog/` to `in-progress/`, then checks the failure record budget moving exhausted tasks to `failed/` (or returning a `FailedDirUnavailableError` if `failed/` is unavailable). Dependency-blocked candidates are moved back to `waiting/` as a safety net if they were edited or requeued after the last reconcile pass. `HasAvailableTasks` is a separate helper but is not called in the polling loop.
 - When a `FailedDirUnavailableError` is returned, the host loop adds the task filename to a persistent `failedDirExcluded` set. On each subsequent iteration, that set is applied as an extra exclusion when deriving ordered runnable candidates, preventing the same task (whose failure record budget is exhausted) from being re-selected and livelocking the host loop.
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
@@ -229,7 +229,7 @@ Dependency resolution is built on a shared analysis pass in `internal/dag/`. `da
 - **Cycles**: strongly connected components with more than one member, or self-edges, detected via Tarjan's SCC algorithm. Only actual cycle members are failed — downstream tasks that depend on a cycle member remain in `Blocked` with `BlockedByWaiting` referencing the cycle member.
 The analysis produces deterministic, sorted output for all three categories.
 ### Diagnostics Wrapper
-`queue.DiagnoseDependencies(tasksDir, idx)` in `queue/diagnostics.go` bridges the `PollIndex` and `dag.Analyze()`. It builds the `completedIDs` (safe, unambiguous completions), `ambiguousIDs` (IDs that map to multiple completed tasks via stem/explicit-ID aliasing), and `knownIDs` (IDs present in any queue directory) sets from the index, constructs the node list from waiting tasks, runs `dag.Analyze()`, and produces sorted `DependencyIssue` entries for structured warning output.
+`queueview.DiagnoseDependencies(tasksDir, idx)` bridges the `PollIndex` and `dag.Analyze()`. It builds the `completedIDs` (safe, unambiguous completions), `ambiguousIDs` (IDs that map to multiple completed tasks via stem/explicit-ID aliasing), and `knownIDs` (IDs present in any queue directory) sets from the index, constructs the node list from waiting tasks, runs `dag.Analyze()`, and produces sorted `DependencyIssue` entries for structured warning output.
 ### Reconcile Flow
 `ReconcileReadyQueue(tasksDir, idx)` calls `DiagnoseDependencies()` once per reconcile cycle, then:
 1. Emits structured warnings from `diag.Issues` (duplicate waiting IDs, unknown dependencies, ambiguous completed IDs, cycles).
@@ -330,7 +330,7 @@ After the host pushes a task branch and moves the task to `ready-for-review/`, i
 - The review verdict is communicated via a JSON verdict file. The host writes the HTML comment markers to the task file for state tracking after reading the verdict.
 
 ## 8. Conflict Prevention
-`queue.DeferredOverlappingTasks(tasksDir, idx)` (in `queue/overlap.go`) prevents multiple backlog tasks from claiming the same files simultaneously.
+`queueview.DeferredOverlappingTasks(tasksDir, idx)` prevents multiple backlog tasks from claiming the same files simultaneously.
 Algorithm:
 1. Collect active tasks (`in-progress/`, `ready-for-review/`, `ready-to-merge/`) and backlog tasks from the `PollIndex` (or by scanning the filesystem when no index is provided).
 2. Parse each task's `priority` and `affects`.
@@ -367,22 +367,23 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 - Review lifecycle: `selectTaskForReview`, `runReview`, `postReviewAction` (`review.go`).
 
 ### `internal/queue/`
-- Poll index — `BuildIndex`, `PollIndex`, `TaskSnapshot` (`index.go`).
 - Task claiming and failure-record counting (`claim.go`).
-- Queue directory constants — re-exports from `internal/dirs` (`dirs.go`).
 - Agent registration — `RegisterAgent` (`queue.go`).
 - Lock file management — `CleanStaleLocks`, `AcquireReviewLock` (`locks.go`).
 - Queue manifest writing (`manifest.go`).
-- Overlap deferral — `DeferredOverlappingTasks` (`overlap.go`).
 - Dependency promotion — `ReconcileReadyQueue` (`reconcile.go`).
-- Dependency diagnostics — `DiagnoseDependencies` (`diagnostics.go`).
 - Orphan recovery — `RecoverOrphanedTasks` (`queue.go`).
-- Task file enumeration — `ListTaskFiles` (`taskfiles.go`).
 - Atomic file moves — `AtomicMove` (`queue.go`).
-- Runnable backlog computation — `ComputeRunnableBacklogView` (`runnable_backlog.go`).
-- Task reference resolution — `ResolveTask` by filename, stem, or explicit ID (`resolve.go`).
 - Task cancellation — `CancelTask` (`cancel.go`).
 - Task retry — `RetryTask` (`retry.go`).
+
+### `internal/queueview/`
+- Poll index — `BuildIndex`, `PollIndex`, `TaskSnapshot` (`index.go`).
+- Dependency diagnostics — `DiagnoseDependencies` (`diagnostics.go`).
+- Overlap deferral — `DeferredOverlappingTasks` (`overlap.go`).
+- Runnable backlog computation — `ComputeRunnableBacklogView` (`runnable_backlog.go`).
+- Task reference resolution — `ResolveTask` by filename, stem, or explicit ID (`resolve.go`).
+- Read-only dependency/deferral view types used by status, doctor, graph, inspect, and dry-run rendering.
 
 ### `internal/dag/`
 - Shared dependency graph analysis — `Analyze` builds a DAG from waiting tasks, classifies nodes as deps-satisfied, blocked (with reason), or cyclic (`dag.go`).
@@ -451,7 +452,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 
 ### `internal/inspect/`
 - `mato inspect` single-task troubleshooting command — `Show`, `ShowTo` (`inspect.go`).
-- Reuses `queue.BuildIndex(...)`, `queue.DiagnoseDependencies(...)`, and `queue.ComputeRunnableBacklogView(...)` so explanations match current scheduler behavior.
+- Reuses `queueview.BuildIndex(...)`, `queueview.DiagnoseDependencies(...)`, and `queueview.ComputeRunnableBacklogView(...)` so explanations match current scheduler behavior.
 - Resolves one task reference across indexed snapshots and parse failures, then renders either compact text or JSON without mutating the queue.
 
 ### `internal/doctor/`

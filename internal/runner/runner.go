@@ -19,6 +19,7 @@ import (
 	"mato/internal/identity"
 	"mato/internal/messaging"
 	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 )
 
@@ -121,7 +122,7 @@ func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 	}
 
 	// Build a single shared index for all sections.
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 	surfaceBuildWarnings(idx)
 
 	r := &DryRunRenderer{
@@ -142,7 +143,7 @@ func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 
 	r.RenderDependencySummary(tasksDir, idx)
 
-	backlogView := queue.ComputeRunnableBacklogView(tasksDir, idx)
+	backlogView := queueview.ComputeRunnableBacklogView(tasksDir, idx)
 	r.RenderAffectsConflicts(backlogView)
 
 	deferredSet := make(map[string]struct{}, len(backlogView.Deferred))

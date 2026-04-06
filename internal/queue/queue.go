@@ -372,6 +372,9 @@ func crossDeviceMove(src, dst string) error {
 
 func finalizeAtomicMove(src, dst, mode string) error {
 	if err := removeFn(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		cleanupErr := removeFn(dst)
 		if cleanupErr != nil && !os.IsNotExist(cleanupErr) {
 			return fmt.Errorf("atomic move %s → %s: remove source after %s: %w (also failed to remove destination during rollback: %v)", src, dst, mode, err, cleanupErr)

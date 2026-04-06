@@ -23,7 +23,7 @@ import (
 	"mato/internal/git"
 	"mato/internal/lockfile"
 	"mato/internal/messaging"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 )
 
 type textViewMode int
@@ -96,7 +96,7 @@ type taskEntry struct {
 // for the given directory, replacing the old listTasksInDir which performed
 // its own filesystem scan. Tasks with parse failures are included with
 // default metadata to preserve visibility.
-func listTasksFromIndex(idx *queue.PollIndex, dir string) []taskEntry {
+func listTasksFromIndex(idx *queueview.PollIndex, dir string) []taskEntry {
 	snaps := idx.TasksByState(dir)
 	tasks := make([]taskEntry, 0, len(snaps))
 	for _, snap := range snaps {
@@ -209,7 +209,7 @@ func activeAgents(tasksDir string) ([]statusAgent, []string, error) {
 // PollIndex snapshot and the already-computed backlog dependency blockers. It
 // populates structured dependency data (ID + status) without any presentation
 // formatting so the same model can drive both text and JSON output.
-func waitingTasksFromIndex(idx *queue.PollIndex, blockedBacklog map[string][]queue.DependencyBlock) []waitingTaskSummary {
+func waitingTasksFromIndex(idx *queueview.PollIndex, blockedBacklog map[string][]queueview.DependencyBlock) []waitingTaskSummary {
 	snaps := idx.TasksByState(dirs.Waiting)
 
 	// Build ID→state map from the index.
@@ -264,7 +264,7 @@ func waitingTasksFromIndex(idx *queue.PollIndex, blockedBacklog map[string][]que
 
 // taskStatesByIDFromIndex builds an ID→state map from the PollIndex snapshot,
 // replacing taskStatesByID which performed its own full directory scans.
-func taskStatesByIDFromIndex(idx *queue.PollIndex) map[string]string {
+func taskStatesByIDFromIndex(idx *queueview.PollIndex) map[string]string {
 	states := make(map[string]string)
 	for _, dir := range dirs.All {
 		for _, snap := range idx.TasksByState(dir) {
@@ -282,7 +282,7 @@ func taskStatesByIDFromIndex(idx *queue.PollIndex) map[string]string {
 
 // reverseDepsFromIndex derives reverse dependencies from the PollIndex snapshot,
 // replacing reverseDependencies which performed its own filesystem scan.
-func reverseDepsFromIndex(idx *queue.PollIndex) map[string][]string {
+func reverseDepsFromIndex(idx *queueview.PollIndex) map[string][]string {
 	snaps := idx.TasksByState(dirs.Waiting)
 	result := make(map[string][]string)
 	for _, snap := range snaps {

@@ -7,7 +7,7 @@ import (
 
 	"mato/internal/dag"
 	"mato/internal/dirs"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 )
 
 // ---------- H. Dependency Integrity ----------
@@ -16,7 +16,7 @@ func checkDependencies(cc *checkContext) CheckReport {
 	cr := CheckReport{Name: "deps", Status: CheckRan, Findings: []Finding{}}
 
 	idx := cc.ensureIndex()
-	diag := queue.DiagnoseDependencies(cc.tasksDir, idx)
+	diag := queueview.DiagnoseDependencies(cc.tasksDir, idx)
 
 	// Map DependencyIssue entries to Finding structs.
 	for _, issue := range diag.Issues {
@@ -25,23 +25,23 @@ func checkDependencies(cc *checkContext) CheckReport {
 		var msg string
 
 		switch issue.Kind {
-		case queue.DependencyAmbiguousID:
+		case queueview.DependencyAmbiguousID:
 			code = "deps.ambiguous_id"
 			sev = SeverityWarning
 			msg = fmt.Sprintf("task ID %q exists in both completed and non-completed directories", issue.TaskID)
-		case queue.DependencyDuplicateID:
+		case queueview.DependencyDuplicateID:
 			code = "deps.duplicate_id"
 			sev = SeverityError
 			msg = fmt.Sprintf("duplicate waiting task ID %q (retained: %s, duplicate: %s) — duplicate will be moved to failed/", issue.TaskID, issue.DependsOn, issue.Filename)
-		case queue.DependencySelfCycle:
+		case queueview.DependencySelfCycle:
 			code = "deps.self_dependency"
 			sev = SeverityWarning
 			msg = fmt.Sprintf("task %q depends on itself", issue.TaskID)
-		case queue.DependencyCycle:
+		case queueview.DependencyCycle:
 			code = "deps.cycle"
 			sev = SeverityWarning
 			msg = fmt.Sprintf("task %q is part of a circular dependency", issue.TaskID)
-		case queue.DependencyUnknownID:
+		case queueview.DependencyUnknownID:
 			code = "deps.unknown_id"
 			sev = SeverityWarning
 			msg = fmt.Sprintf("task %q depends on unknown ID %q", issue.TaskID, issue.DependsOn)
@@ -82,7 +82,7 @@ func checkDependencies(cc *checkContext) CheckReport {
 		}
 	}
 
-	blockedBacklog := queue.DependencyBlockedBacklogTasksDetailed(cc.tasksDir, idx)
+	blockedBacklog := queueview.DependencyBlockedBacklogTasksDetailed(cc.tasksDir, idx)
 	blockedNames := make([]string, 0, len(blockedBacklog))
 	for name := range blockedBacklog {
 		blockedNames = append(blockedNames, name)
@@ -93,7 +93,7 @@ func checkDependencies(cc *checkContext) CheckReport {
 		cr.Findings = append(cr.Findings, Finding{
 			Code:     "deps.backlog_blocked",
 			Severity: SeverityWarning,
-			Message:  fmt.Sprintf("backlog task %q is dependency-blocked and should be in waiting/ (blocked by %s)", name, queue.FormatDependencyBlocks(details)),
+			Message:  fmt.Sprintf("backlog task %q is dependency-blocked and should be in waiting/ (blocked by %s)", name, queueview.FormatDependencyBlocks(details)),
 			Path:     filepath.Join(cc.tasksDir, dirs.Backlog, name),
 		})
 	}

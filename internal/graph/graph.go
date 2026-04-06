@@ -15,7 +15,7 @@ import (
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
 	"mato/internal/git"
-	"mato/internal/queue"
+	"mato/internal/queueview"
 	"mato/internal/ui"
 )
 
@@ -108,8 +108,8 @@ func classifyRef(ref string, safeCompleted, ambiguousIDs, allIDs map[string]stru
 }
 
 // Build constructs the dependency graph from a PollIndex.
-func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
-	diag := queue.DiagnoseDependencies(tasksDir, idx)
+func Build(tasksDir string, idx *queueview.PollIndex, showAll bool) GraphData {
+	diag := queueview.DiagnoseDependencies(tasksDir, idx)
 
 	// Derive safeCompleted and ambiguousIDs (same logic as DiagnoseDependencies).
 	completedIDs := idx.CompletedIDs()
@@ -144,7 +144,7 @@ func Build(tasksDir string, idx *queue.PollIndex, showAll bool) GraphData {
 // buildNodes iterates queue directories, constructs GraphNode entries, populates
 // the alias map used for edge resolution, and emits duplicate warnings for
 // waiting tasks that share a meta.ID.
-func buildNodes(data *GraphData, idx *queue.PollIndex, diag *queue.DependencyDiagnostics, showAll bool) map[string][]string {
+func buildNodes(data *GraphData, idx *queueview.PollIndex, diag *queueview.DependencyDiagnostics, showAll bool) map[string][]string {
 	aliasMap := make(map[string][]string) // ref → []nodeKey
 	retainedWaitingIDs := diag.RetainedFiles
 	seenWaitingIDs := make(map[string]string) // meta.ID → retained filename
@@ -246,7 +246,7 @@ func resolveEdges(data *GraphData, aliasMap map[string][]string, safeCompleted, 
 
 // attachBlockDetails populates BlockDetail entries on waiting nodes from
 // the dependency diagnosis results.
-func attachBlockDetails(data *GraphData, diag *queue.DependencyDiagnostics) {
+func attachBlockDetails(data *GraphData, diag *queueview.DependencyDiagnostics) {
 	retainedWaitingIDs := diag.RetainedFiles
 	for i := range data.Nodes {
 		node := &data.Nodes[i]
@@ -269,7 +269,7 @@ func attachBlockDetails(data *GraphData, diag *queue.DependencyDiagnostics) {
 
 // annotateCycles maps cycle member IDs to node keys, records cycle groups,
 // and sets IsCycleMember on the corresponding nodes.
-func annotateCycles(data *GraphData, diag *queue.DependencyDiagnostics) {
+func annotateCycles(data *GraphData, diag *queueview.DependencyDiagnostics) {
 	retainedWaitingIDs := diag.RetainedFiles
 	waitingIDToKey := make(map[string]string)
 	for id, filename := range retainedWaitingIDs {
@@ -300,7 +300,7 @@ func annotateCycles(data *GraphData, diag *queue.DependencyDiagnostics) {
 
 // appendParseFailures collects task files that could not be parsed from
 // the index.
-func appendParseFailures(data *GraphData, idx *queue.PollIndex, showAll bool) {
+func appendParseFailures(data *GraphData, idx *queueview.PollIndex, showAll bool) {
 	for _, pf := range idx.ParseFailures() {
 		if !showAll && (pf.State == dirs.Completed || pf.State == dirs.Failed) {
 			continue
@@ -370,7 +370,7 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 		return err
 	}
 
-	idx := queue.BuildIndex(tasksDir)
+	idx := queueview.BuildIndex(tasksDir)
 
 	// Fail on directory-level read errors only; skip glob warnings.
 	for _, bw := range idx.BuildWarnings() {
@@ -397,7 +397,7 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 
 // isGlobWarning returns true if the build warning is a glob/affects
 // validation warning rather than a directory-level read error.
-func isGlobWarning(bw queue.BuildWarning) bool {
+func isGlobWarning(bw queueview.BuildWarning) bool {
 	msg := bw.Err.Error()
 	return strings.Contains(msg, "glob") || strings.Contains(msg, "affects")
 }
