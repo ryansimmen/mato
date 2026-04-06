@@ -51,6 +51,16 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(data)
 }
 
+func seedWorkLaunchedState(t *testing.T, tasksDir, taskFile, branch string) {
+	t.Helper()
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TaskBranch = branch
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
+	}
+}
+
 func TestAtomicMove_MissingSource(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "missing.md")
@@ -646,6 +656,7 @@ func TestRecoverOrphanedTasks(t *testing.T) {
 
 	orphan := filepath.Join(tasksDir, dirs.InProgress, "fix-bug.md")
 	os.WriteFile(orphan, []byte("# Fix bug\nDo the thing.\n"), 0o644)
+	seedWorkLaunchedState(t, tasksDir, "fix-bug.md", "task/fix-bug")
 
 	_ = RecoverOrphanedTasks(tasksDir)
 
@@ -768,6 +779,98 @@ func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	}
 }
 
+func TestRecoverOrphanedTasks_MissingTaskStateFailsClosed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "missing-taskstate.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, name)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent-1 -->\n<!-- branch: task/missing-taskstate -->\n# Missing Taskstate\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "pushed-task recovery metadata is missing") {
+		t.Fatalf("expected missing metadata warning, got %q", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("task should remain in in-progress/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, name)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, name)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to ready-for-review, stat err = %v", err)
+	}
+}
+
+func TestRecoverOrphanedTasks_CorruptTaskStateFailsClosed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, "runtime", "runtime/taskstate"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "corrupt-taskstate.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, name)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent-1 -->\n<!-- branch: task/corrupt-taskstate -->\n# Corrupt Taskstate\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "runtime", "taskstate", name+".json"), []byte("{oops\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile taskstate: %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "pushed-task recovery metadata is unavailable") {
+		t.Fatalf("expected unavailable metadata warning, got %q", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("task should remain in in-progress/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, name)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
+	}
+}
+
+func TestRecoverOrphanedTasks_UnreadableTaskStateFailsClosed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "unreadable-taskstate.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, name)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent-1 -->\n<!-- branch: task/unreadable-taskstate -->\n# Unreadable Taskstate\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+	seedWorkLaunchedState(t, tasksDir, name, "task/unreadable-taskstate")
+	testutil.MakeUnreadablePath(t, filepath.Join(tasksDir, "runtime", "taskstate", name+".json"))
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "pushed-task recovery metadata is unavailable") {
+		t.Fatalf("expected unavailable metadata warning, got %q", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); err != nil {
+		t.Fatalf("task should remain in in-progress/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, name)); !os.IsNotExist(err) {
+		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
+	}
+}
+
 func TestRecoverOrphanedTasks_PushedTaskUsesBranchMarkerHook(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
@@ -822,6 +925,7 @@ func TestRecoverOrphanedTasks_CollisionIdenticalContent(t *testing.T) {
 	orphanPath := filepath.Join(tasksDir, dirs.InProgress, "fix-bug.md")
 	os.WriteFile(backlogPath, content, 0o644)
 	os.WriteFile(orphanPath, content, 0o644)
+	seedWorkLaunchedState(t, tasksDir, "fix-bug.md", "task/fix-bug")
 
 	stderr := captureStderr(t, func() {
 		_ = RecoverOrphanedTasks(tasksDir)
@@ -854,6 +958,7 @@ func TestRecoverOrphanedTasks_CollisionDifferentContent(t *testing.T) {
 	orphanPath := filepath.Join(tasksDir, dirs.InProgress, "fix-bug.md")
 	os.WriteFile(backlogPath, []byte("# Existing task\n"), 0o644)
 	os.WriteFile(orphanPath, []byte("# Recovered task\n"), 0o644)
+	seedWorkLaunchedState(t, tasksDir, "fix-bug.md", "task/fix-bug")
 
 	stderr := captureStderr(t, func() {
 		_ = RecoverOrphanedTasks(tasksDir)
@@ -1222,6 +1327,7 @@ func TestRecoverOrphanedTasks_AppendFailureLogsWarning(t *testing.T) {
 
 	orphan := filepath.Join(tasksDir, dirs.InProgress, "unwritable.md")
 	os.WriteFile(orphan, []byte("# Unwritable task\n"), 0o644)
+	seedWorkLaunchedState(t, tasksDir, "unwritable.md", "task/unwritable")
 
 	// Make backlog directory writable so the rename succeeds,
 	// but make the destination file read-only after rename by
@@ -1272,6 +1378,7 @@ func TestRecoverOrphanedTasks_StillMovesWhenAppendFails(t *testing.T) {
 
 	orphan := filepath.Join(tasksDir, dirs.InProgress, "readonly-task.md")
 	os.WriteFile(orphan, []byte("# Read-only task\n"), 0o644)
+	seedWorkLaunchedState(t, tasksDir, "readonly-task.md", "task/readonly-task")
 	// Make file read-only so OpenFile with O_WRONLY will fail after rename
 	os.Chmod(orphan, 0o444)
 	t.Cleanup(func() {
@@ -1320,6 +1427,7 @@ func TestRecoverOrphanedTasks_ConcurrentCalls(t *testing.T) {
 		if err := os.WriteFile(path, []byte(fmt.Sprintf("# Task %d\n", i)), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
+		seedWorkLaunchedState(t, tasksDir, name, fmt.Sprintf("task/task-%d", i))
 	}
 
 	start := make(chan struct{})

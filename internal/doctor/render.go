@@ -28,37 +28,57 @@ func colorIndicator(indicator string) string {
 }
 
 // RenderText writes a human-readable text report to w.
-func RenderText(w io.Writer, r Report) {
-	fmt.Fprintln(w, formatSummaryLine(r.Summary))
-	fmt.Fprintln(w)
+func RenderText(w io.Writer, r Report) error {
+	if _, err := fmt.Fprintln(w, formatSummaryLine(r.Summary)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
 
 	for _, cr := range r.Checks {
 		indicator := colorIndicator(categoryIndicator(cr))
 		fixed := fixedCount(cr)
 
 		if cr.Status == CheckSkipped {
-			fmt.Fprintf(w, "%s %s\n", indicator, cr.Name)
-			fmt.Fprintln(w)
+			if _, err := fmt.Fprintf(w, "%s %s\n", indicator, cr.Name); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(w); err != nil {
+				return err
+			}
 			continue
 		}
 
 		if fixed > 0 {
-			fmt.Fprintf(w, "%s %s (%s)\n", indicator, cr.Name, pluralize(fixed, "fixed", "fixed"))
+			if _, err := fmt.Fprintf(w, "%s %s (%s)\n", indicator, cr.Name, pluralize(fixed, "fixed", "fixed")); err != nil {
+				return err
+			}
 		} else {
-			fmt.Fprintf(w, "%s %s\n", indicator, cr.Name)
+			if _, err := fmt.Fprintf(w, "%s %s\n", indicator, cr.Name); err != nil {
+				return err
+			}
 		}
 
 		for _, f := range cr.Findings {
 			suffix := severitySuffix(f)
 			if f.Path != "" {
-				fmt.Fprintf(w, "  - %s: %s%s\n", f.Path, f.Message, suffix)
+				if _, err := fmt.Fprintf(w, "  - %s: %s%s\n", f.Path, f.Message, suffix); err != nil {
+					return err
+				}
 			} else {
-				fmt.Fprintf(w, "  - %s%s\n", f.Message, suffix)
+				if _, err := fmt.Fprintf(w, "  - %s%s\n", f.Message, suffix); err != nil {
+					return err
+				}
 			}
 		}
 
-		fmt.Fprintln(w)
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // RenderJSON writes a JSON report to w.

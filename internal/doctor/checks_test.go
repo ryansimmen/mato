@@ -318,6 +318,43 @@ func TestDoctor_StaleMergeLock_LivePID(t *testing.T) {
 	}
 }
 
+func TestDoctor_StaleMergeLock_Unreadable(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	lockPath := filepath.Join(tasksDir, ".locks", "merge.lock")
+	testutil.MakeUnreadablePath(t, lockPath)
+
+	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	foundUnreadable := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "hygiene.stale_merge_lock" {
+				t.Fatalf("unreadable merge.lock must not be reported as stale: %+v", f)
+			}
+			if f.Code == "hygiene.merge_lock_unreadable" {
+				foundUnreadable = true
+				if f.Path != lockPath {
+					t.Fatalf("path = %q, want %q", f.Path, lockPath)
+				}
+				if !strings.HasPrefix(f.Message, "cannot read merge.lock: ") {
+					t.Fatalf("message = %q, want unreadable error prefix", f.Message)
+				}
+				if len(f.Message) <= len("cannot read merge.lock: ") {
+					t.Fatalf("message = %q, want underlying error detail", f.Message)
+				}
+			}
+		}
+	}
+	if !foundUnreadable {
+		t.Fatal("expected hygiene.merge_lock_unreadable finding for unreadable merge.lock")
+	}
+}
+
 func TestDoctor_DoesNotTreatUnreadableAgentLockAsStale(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	allOK(t)

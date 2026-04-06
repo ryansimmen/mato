@@ -23,7 +23,7 @@ task and review containers still launch but Go LSP features are unavailable and
 mato [--version] [--repo <path>]
 mato config [--repo <path>] [--format text|json]
 mato run [--repo <path>] [--branch <name>] [--dry-run | --once | --until-idle] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
-mato init [--repo <path>] [--branch <name>]
+mato init [--repo <path>] [--branch <name>] [--format text|json]
 mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json] [--verbose]
 mato log [--repo <path>] [--limit <n>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
@@ -176,10 +176,13 @@ and `--help`/`-h`.
 
 When the target branch does not already exist locally, `mato init` checks the live `origin` branch before creating it. If the remote branch exists, `mato init` creates the local branch from `origin/<branch>`. If the remote is reachable and the branch does not exist there, `mato init` creates the branch from the current `HEAD` and ignores any stale cached `origin/<branch>` ref. If `origin` is unavailable, `mato init` may still fall back to a cached `origin/<branch>` ref and reports that choice in its output.
 
+Use `--format json` for automation and CI bootstrap flows. The JSON form emits the same initialization result as a structured object, including fields such as `dirs_created`, `gitignore_updated`, `branch_name`, `branch_source`, and `tasks_dir`, so scripts do not need to parse the human-readable text output.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. The command resolves it to the repository top level. |
 | `--branch <name>` | `mato` | Target branch to create or check out. |
+| `--format` | `text` | Output format: `text` or `json`. |
 
 `mato init` always creates the queue at `<repo>/.mato` and ensures `/.mato/` is present in `.gitignore`. When the repository has no commits and `/.mato/` is already ignored, mato still creates the bootstrap commit through normal `git commit` semantics so commit hooks, signing, and other commit-time policy checks still run without staging unrelated files.
 

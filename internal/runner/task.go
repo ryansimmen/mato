@@ -56,7 +56,21 @@ func allowRecordedBranchResume(source git.BranchSource) bool {
 	}
 }
 
+func recordWorkLaunchState(tasksDir, targetBranch string, claimed *queue.ClaimedTask, startingTip string) {
+	if claimed == nil {
+		return
+	}
+	recordTaskStateUpdate(tasksDir, claimed.Filename, "record work launch taskstate", func(state *runtimedata.TaskState) {
+		state.TaskBranch = claimed.Branch
+		state.TargetBranch = targetBranch
+		state.LastHeadSHA = strings.TrimSpace(startingTip)
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	})
+}
+
 func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.ClaimedTask) error {
+	recordWorkLaunchState(env.tasksDir, env.targetBranch, claimed, "")
+
 	cloneDir, err := createCloneFn(env.repoRoot)
 	if err != nil {
 		return fmt.Errorf("create clone: %w", err)
@@ -98,6 +112,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 			return fmt.Errorf("capture starting tip for %s: %w", claimed.Branch, err)
 		}
 		startingTip = strings.TrimSpace(startingTip)
+		recordWorkLaunchState(env.tasksDir, env.targetBranch, claimed, startingTip)
 		session := loadOrCreateSession(env.tasksDir, runtimedata.KindWork, claimed.Filename, claimed.Branch)
 		if session != nil {
 			run.resumeSessionID = session.CopilotSessionID
@@ -277,9 +292,10 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 }
 
 // recoverStuckTask checks whether a claimed task is still in in-progress/
-// after the agent container exits and post-agent push completes. If so, the
-// agent did not commit successfully (failure, crash, timeout, etc.), so the
-// host moves the task back to backlog/ with a failure record.
+// after the agent container exits and post-agent push completes. If the
+// runtime taskstate still shows a pre-push work launch, the host moves the
+// task back to backlog/ with a failure record. If pushed-task metadata is
+// missing or unusable, recovery fails closed and leaves the task in in-progress/.
 func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
 		// Task was moved (to ready-for-review by post-agent push); nothing to do.
@@ -315,11 +331,21 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (bool, string, string, []string) {
 	state, err := runtimedata.LoadTaskState(tasksDir, claimed.Filename)
 	if err != nil {
-		ui.Warnf("warning: could not load taskstate for %s during pushed-task recovery: %v\n", claimed.Filename, err)
-		return false, "", "", nil
+		ui.Warnf("warning: pushed-task recovery metadata for %s is unavailable; leaving it in in-progress/: %v\n", claimed.Filename, err)
+		return true, "", "", nil
 	}
-	if state == nil || state.LastOutcome != runtimedata.OutcomeWorkBranchPushed {
+	if state == nil {
+		ui.Warnf("warning: pushed-task recovery metadata for %s is missing; leaving it in in-progress/\n", claimed.Filename)
+		return true, "", "", nil
+	}
+	switch state.LastOutcome {
+	case runtimedata.OutcomeWorkLaunched:
 		return false, "", "", nil
+	case runtimedata.OutcomeWorkBranchPushed:
+		// continue
+	default:
+		ui.Warnf("warning: pushed-task recovery metadata for %s is unusable (last outcome %q); leaving it in in-progress/\n", claimed.Filename, state.LastOutcome)
+		return true, "", "", nil
 	}
 
 	branch := strings.TrimSpace(state.TaskBranch)

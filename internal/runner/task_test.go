@@ -23,6 +23,30 @@ import (
 	"mato/internal/ui"
 )
 
+func assertWorkLaunchTaskState(t *testing.T, tasksDir, taskFile, branch, targetBranch, lastHead string) {
+	t.Helper()
+
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to be written")
+	}
+	if state.TaskBranch != branch {
+		t.Fatalf("TaskBranch = %q, want %q", state.TaskBranch, branch)
+	}
+	if state.TargetBranch != targetBranch {
+		t.Fatalf("TargetBranch = %q, want %q", state.TargetBranch, targetBranch)
+	}
+	if state.LastHeadSHA != lastHead {
+		t.Fatalf("LastHeadSHA = %q, want %q", state.LastHeadSHA, lastHead)
+	}
+	if state.LastOutcome != runtimedata.OutcomeWorkLaunched {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeWorkLaunched)
+	}
+}
+
 func TestMoveTaskToReviewWithMarker_Success(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview} {
@@ -488,12 +512,83 @@ func TestRunOnce_BranchSetupFailureDoesNotCreateWorkSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected runOnce error")
 	}
+	assertWorkLaunchTaskState(t, tasksDir, "task.md", claimed.Branch, "mato", "")
 	session, loadErr := runtimedata.LoadSession(tasksDir, runtimedata.KindWork, "task.md")
 	if loadErr != nil {
 		t.Fatalf("Load work session: %v", loadErr)
 	}
 	if session != nil {
 		t.Fatalf("work session should not exist after pre-launch failure, got %+v", session)
+	}
+}
+
+func TestRunOnce_CreateCloneFailureLeavesRecoverableTaskState(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	setHook(t, &createCloneFn, func(string) (string, error) {
+		return "", fmt.Errorf("simulated clone failure")
+	})
+
+	taskFile := "clone-failure.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(taskPath, []byte("# Clone Failure\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	env := envConfig{repoRoot: t.TempDir(), tasksDir: tasksDir, targetBranch: "mato"}
+	run := runContext{agentID: "agent1", timeout: time.Second}
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/clone-failure", Title: "Clone Failure", TaskPath: taskPath}
+
+	err := runOnce(context.Background(), env, run, claimed)
+	if err == nil {
+		t.Fatal("expected runOnce error")
+	}
+	if !strings.Contains(err.Error(), "create clone") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertWorkLaunchTaskState(t, tasksDir, taskFile, claimed.Branch, "mato", "")
+
+	recoverStuckTask(tasksDir, "agent1", claimed)
+
+	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); statErr != nil {
+		t.Fatalf("task should be recoverable to backlog after clone failure: %v", statErr)
+	}
+}
+
+func TestRunOnce_StartingTipFailureLeavesRecoverableTaskState(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir := t.TempDir()
+	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
+	setHook(t, &removeCloneFn, func(string) {})
+	setHook(t, &ensureBranchFn, func(string, string) (git.EnsureBranchResult, error) {
+		return git.EnsureBranchResult{Source: git.BranchSourceLocal}, nil
+	})
+
+	taskFile := "starting-tip-failure.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(taskPath, []byte("# Starting Tip Failure\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, targetBranch: "mato"}
+	run := runContext{agentID: "agent1", timeout: time.Second}
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/starting-tip-failure", Title: "Starting Tip Failure", TaskPath: taskPath}
+
+	err := runOnce(context.Background(), env, run, claimed)
+	if err == nil {
+		t.Fatal("expected runOnce error")
+	}
+	if !strings.Contains(err.Error(), "capture starting tip") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertWorkLaunchTaskState(t, tasksDir, taskFile, claimed.Branch, "mato", "")
+
+	recoverStuckTask(tasksDir, "agent1", claimed)
+
+	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); statErr != nil {
+		t.Fatalf("task should be recoverable to backlog after starting-tip failure: %v", statErr)
 	}
 }
 
@@ -969,6 +1064,12 @@ func TestRecoverStuckTask_AppendsFailureWithTimestamp(t *testing.T) {
 		Branch:   "task/timestamp",
 		Title:    "Timestamp Task",
 		TaskPath: inProgressPath,
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TaskBranch = claimed.Branch
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
 	}
 
 	captureStdoutStderr(t, func() {

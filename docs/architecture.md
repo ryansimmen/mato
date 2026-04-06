@@ -106,7 +106,7 @@ Important details from the implementation:
 - After claiming, the host writes a best-effort `intent` message, then launches `runOnce(...)`.
 - `recoverStuckTask(...)` runs immediately after `runOnce(...)` returns: if the task file is still in `in-progress/`, the agent did not complete its lifecycle, so the host appends a failure record and moves the task back to `backlog/`.
 - Merge processing happens after any agent run in the same outer loop.
-- Runtime sidecar data lives under `.mato/runtime/`. Work pushes and review launches/completions update `.mato/runtime/taskstate/<task-filename>.json` best-effort so follow-up reviews can carry explicit host-curated context even before durable Copilot session resume exists.
+- Runtime sidecar data lives under `.mato/runtime/`. Work launches, work pushes, and review launches/completions update `.mato/runtime/taskstate/<task-filename>.json` best-effort so follow-up reviews can carry explicit host-curated context even before durable Copilot session resume exists.
 - Durable Copilot resume metadata lives under `.mato/runtime/sessionmeta/work-<task-filename>.json` and `.mato/runtime/sessionmeta/review-<task-filename>.json`. Work and review sessions are intentionally separate. Terminal task transitions delete both task-state and session records; the host also sweeps stale runtime sidecar files whose task is no longer active.
 - Pause mode is controlled by `.mato/.paused`, which stores the UTC RFC3339 time
   when the repo was paused. While present, the host skips new claims and review
@@ -197,7 +197,7 @@ State-by-state behavior:
 - `COMMIT`: `git add -A`, commit with the task title, and exit. The host detects commits and handles push + review transition.
 - `ON_FAILURE`: append a structured `<!-- failure: ... -->` record, try to check out the target branch, then always move the task back to `backlog/`. The host checks the failure record budget on the next cycle via `SelectAndClaimTask`.
 
-After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, updates `.mato/runtime/taskstate/<task-filename>.json` with the pushed branch tip and outcome, updates the `work` session's `last_head_sha`, and sends `conflict-warning` and `completion` messages. That branch marker is the durable handoff record for all post-work phases; if a `ready-for-review/` or `ready-to-merge/` task is missing it, the host records a failure/requeue instead of synthesizing a branch from the filename.
+Immediately after claim handoff, the host records a best-effort `work-launched` taskstate with the claimed task branch and target branch so pre-push setup failures (clone creation, branch setup, starting-tip capture) remain safely requeueable. Once branch setup succeeds and the starting tip is known, `runOnce(...)` refreshes that same taskstate with the captured `last_head_sha`. After the agent exits, the host (`postAgentPush` in `task.go`) checks for commits on the task branch. If commits exist and the task is still in `in-progress/`, the host pushes the branch with `--force-with-lease`, writes the `<!-- branch: ... -->` marker, moves the task to `ready-for-review/`, updates `.mato/runtime/taskstate/<task-filename>.json` with the pushed branch tip and outcome, updates the `work` session's `last_head_sha`, and sends `conflict-warning` and `completion` messages. That branch marker is the durable handoff record for all post-work phases; if a `ready-for-review/` or `ready-to-merge/` task is missing it, the host records a failure/requeue instead of synthesizing a branch from the filename. When orphan recovery cannot read usable work taskstate, it still fails closed and leaves the task in `in-progress/` instead of downgrading possibly pushed work back to `backlog/`.
 
 The prompt enforces several invariants: one task per run; agents never push any branches (the host handles all pushes); they send at most 4 messages per task (3 `progress` + 1 for `ON_FAILURE`). The `intent` message is sent by the host before the agent starts.
 ## 4. Task Queue States
@@ -271,7 +271,7 @@ This is the main multi-process safety mechanism for host-side merges.
 For each task:
 1. Parse the task file with `frontmatter.ParseTaskFile(...)`.
 2. Derive the task title with `frontmatter.ExtractTitle(...)` from the first non-empty body line; leading `#` is stripped. Build the squash commit message via `formatSquashCommitMessage(task, agentLog)` in `squash.go` (see [Squash commit message format](#squash-commit-message-format) below).
-3. Read `<!-- branch: ... -->` from the task file when present; if absent, fall back to `task/<sanitizeBranchName(filename)>`.
+3. Read the required `<!-- branch: ... -->` marker from the task file. If it is missing, treat the task as a corrupted post-work handoff, append `<!-- failure: merge-queue ... -->`, and move it through the normal merge-failure path to `backlog/` or `failed/` depending on retry budget.
 4. Create a fresh temp clone.
 5. Configure clone identity from repo Git config, then global config, with fallbacks `mato` and `mato@local.invalid`.
 6. `git fetch origin`
@@ -304,10 +304,11 @@ Affects: internal/runner/runner.go, internal/runner/runner_test.go
 
 ### Conflict and failure handling
 Merge failure handling is branch-specific:
-1. Missing task branch: append `<!-- failure: merge-queue ... -->` and move the task to `backlog/` if retries remain, or `failed/` if `max_retries` is exhausted.
-2. Squash merge conflict: append `<!-- failure: merge-queue ... -->`, move the task to `backlog/` (or `failed/` if retries exhausted). When the task is requeued to `backlog/`, mato also deletes the stale task branch locally and on `origin` and clears the task file's branch marker so the next work run can start from a fresh branch. Terminal `failed/` tasks keep their branch marker/history.
-3. Push failure after a successful squash commit: append `<!-- failure: merge-queue ... -->` but leave the task file in `ready-to-merge/` for retry on the next merge pass.
-4. Parse errors are also recorded as merge-queue failures and requeued to `backlog/`.
+1. Missing required branch marker on a `ready-to-merge/` task: treat the file as a corrupted post-work handoff, append `<!-- failure: merge-queue ... -->`, and move it to `backlog/` if retries remain, or `failed/` if `max_retries` is exhausted.
+2. Missing task branch on `origin`: append `<!-- failure: merge-queue ... -->` and move the task to `backlog/` if retries remain, or `failed/` if `max_retries` is exhausted.
+3. Squash merge conflict: append `<!-- failure: merge-queue ... -->`, move the task to `backlog/` (or `failed/` if retries exhausted). When the task is requeued to `backlog/`, mato also deletes the stale task branch locally and on `origin` and clears the task file's branch marker so the next work run can start from a fresh branch. Terminal `failed/` tasks keep their branch marker/history.
+4. Push failure after a successful squash commit: append `<!-- failure: merge-queue ... -->` but leave the task file in `ready-to-merge/` for retry on the next merge pass.
+5. Parse errors are also recorded as merge-queue failures and requeued to `backlog/`.
 ## 7. Review Agent
 After the host pushes a task branch and moves the task to `ready-for-review/`, it launches a review agent to evaluate the changes before merging.
 

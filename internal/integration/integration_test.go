@@ -16,6 +16,7 @@ import (
 	"mato/internal/messaging"
 	"mato/internal/queue"
 	"mato/internal/queueview"
+	"mato/internal/runtimedata"
 	"mato/internal/status"
 	"mato/internal/testutil"
 )
@@ -242,6 +243,12 @@ func TestOrphanRecoveryAndRequeue(t *testing.T) {
 
 	inProgressTask := writeTask(t, tasksDir, dirs.InProgress, "recover-me.md", "<!-- claimed-by: dead-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# Recover me\nTry again.\n")
 	testutil.WriteFile(t, filepath.Join(tasksDir, ".locks", "dead-agent.pid"), "2147483647")
+	if err := runtimedata.UpdateTaskState(tasksDir, "recover-me.md", func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/recover-me"
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
+	}
 
 	_ = queue.RecoverOrphanedTasks(tasksDir)
 

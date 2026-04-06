@@ -15,6 +15,7 @@ import (
 
 	"mato/internal/config"
 	"mato/internal/dirs"
+	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
 	"mato/internal/testutil"
 	"mato/internal/ui"
@@ -803,6 +804,12 @@ func TestRecoverOrphanedTasks_HandlesStrandedWithoutClaimedBy(t *testing.T) {
 	// Simulate a task stranded in in-progress without a claimed-by marker
 	// (the scenario that occurs after a double failure).
 	testutil.WriteFile(t, filepath.Join(dir, dirs.InProgress, "orphan.md"), "# Orphan\nDo orphan.\n")
+	if err := runtimedata.UpdateTaskState(dir, "orphan.md", func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/orphan"
+		state.LastOutcome = runtimedata.OutcomeWorkLaunched
+	}); err != nil {
+		t.Fatalf("seed work-launched taskstate: %v", err)
+	}
 
 	_ = RecoverOrphanedTasks(dir)
 

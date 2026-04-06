@@ -157,10 +157,18 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskRecovery, bool, error) {
 	state, err := runtimedata.LoadTaskState(tasksDir, name)
 	if err != nil {
-		return nil, false, fmt.Errorf("load taskstate: %w", err)
+		return nil, true, fmt.Errorf("pushed-task recovery metadata is unavailable: %w", err)
 	}
-	if state == nil || state.LastOutcome != runtimedata.OutcomeWorkBranchPushed {
+	if state == nil {
+		return nil, true, fmt.Errorf("pushed-task recovery metadata is missing")
+	}
+	switch state.LastOutcome {
+	case runtimedata.OutcomeWorkLaunched:
 		return nil, false, nil
+	case runtimedata.OutcomeWorkBranchPushed:
+		// continue
+	default:
+		return nil, true, fmt.Errorf("pushed-task recovery metadata is unusable (last outcome %q)", state.LastOutcome)
 	}
 
 	branch := strings.TrimSpace(state.TaskBranch)

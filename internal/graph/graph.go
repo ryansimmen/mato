@@ -383,7 +383,9 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 
 	switch format {
 	case "dot":
-		RenderDOT(w, data)
+		if err := RenderDOT(w, data); err != nil {
+			return fmt.Errorf("render dot graph: %w", err)
+		}
 		return nil
 	case "json":
 		return RenderJSON(w, data)
