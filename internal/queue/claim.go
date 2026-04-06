@@ -257,6 +257,22 @@ func chooseClaimBranch(name string, activeBranches map[string]struct{}, existing
 	return branch
 }
 
+func isBenignClaimMoveRace(src, dst string, err error) bool {
+	if errors.Is(err, ErrDestinationExists) {
+		return true
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if _, statErr := os.Stat(src); !os.IsNotExist(statErr) {
+		return false
+	}
+	if _, statErr := os.Stat(filepath.Dir(dst)); statErr != nil {
+		return false
+	}
+	return true
+}
+
 // handleRetryExhaustedTask moves a retry-exhausted task from in-progress/ to
 // failed/. If the move to failed/ fails, it rolls back to backlog/ and returns
 // a FailedDirUnavailableError so the host can avoid livelocking. Returns nil
@@ -342,7 +358,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		}
 
 		if err := claimMoveFn(src, dst); err != nil {
-			if errors.Is(err, ErrDestinationExists) || errors.Is(err, os.ErrNotExist) {
+			if isBenignClaimMoveRace(src, dst, err) {
 				// Another agent won the claim race first, either by creating the
 				// destination before we linked or by moving the source away first.
 				continue

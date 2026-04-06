@@ -1578,6 +1578,9 @@ func TestSelectAndClaimTask_MissingSourceMoveRaceSkipsToNextCandidate(t *testing
 	t.Cleanup(func() { claimMoveFn = origMove })
 	claimMoveFn = func(src, dst string) error {
 		if filepath.Base(src) == "gone.md" {
+			if err := os.Remove(src); err != nil {
+				t.Fatalf("remove gone.md: %v", err)
+			}
 			return fmt.Errorf("move candidate: %w", os.ErrNotExist)
 		}
 		return origMove(src, dst)
@@ -1593,8 +1596,38 @@ func TestSelectAndClaimTask_MissingSourceMoveRaceSkipsToNextCandidate(t *testing
 	if task.Filename != "ok.md" {
 		t.Fatalf("Filename = %q, want %q", task.Filename, "ok.md")
 	}
-	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "gone.md")); err != nil {
-		t.Fatalf("gone.md should remain in backlog after skipped race: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "gone.md")); !os.IsNotExist(err) {
+		t.Fatalf("gone.md should be gone after skipped source-missing race: %v", err)
+	}
+}
+
+func TestSelectAndClaimTask_MissingInProgressDirMoveFailureSurfaced(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "broken.md"), "# Broken\n")
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "ok.md"), "# OK\n")
+
+	if err := os.Remove(filepath.Join(dir, dirs.InProgress)); err != nil {
+		t.Fatalf("remove in-progress/: %v", err)
+	}
+
+	task, claimErr := SelectAndClaimTask(dir, "agent-race", candidates("broken.md", "ok.md"), 0, nil)
+	if claimErr == nil {
+		t.Fatal("expected missing in-progress/ move failure to be returned")
+	}
+	if !errors.Is(claimErr, os.ErrNotExist) {
+		t.Fatalf("claim error = %v, want wrapped os.ErrNotExist", claimErr)
+	}
+	if !strings.Contains(claimErr.Error(), "move backlog task broken.md to in-progress/") {
+		t.Fatalf("claim error = %q, want backlog move context", claimErr)
+	}
+	if task != nil {
+		t.Fatalf("expected nil task on missing in-progress/ failure, got %+v", task)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "broken.md")); err != nil {
+		t.Fatalf("broken.md should remain in backlog after move failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.Backlog, "ok.md")); err != nil {
+		t.Fatalf("ok.md should remain in backlog after hard move failure: %v", err)
 	}
 }
 
