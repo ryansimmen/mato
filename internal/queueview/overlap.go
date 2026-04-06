@@ -102,7 +102,19 @@ func deferredOverlappingTasksDetailedForSnapshots(idx *PollIndex, backlogSnaps [
 			affects: at.Affects,
 		})
 	}
+	var unknownBlocker *activeOverlapBlocker
+	if len(idx.activeUnknownOverlapBlockers) > 0 {
+		unknownBlocker = &idx.activeUnknownOverlapBlockers[0]
+	}
 	for _, task := range tasks {
+		if unknownBlocker != nil && len(task.affects) > 0 {
+			deferred[task.name] = DeferralInfo{
+				BlockedBy:          unknownBlocker.name,
+				BlockedByDir:       unknownBlocker.dir,
+				ConflictingAffects: append([]string(nil), task.affects...),
+			}
+			continue
+		}
 		isDef := false
 		for _, other := range kept {
 			overlap := overlappingAffects(task.affects, other.affects)
