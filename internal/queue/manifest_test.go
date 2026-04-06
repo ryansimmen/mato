@@ -305,14 +305,15 @@ func TestComputeQueueManifest_BacklogTaskWarningDoesNotAbort(t *testing.T) {
 func TestComputeQueueManifest_BacklogDirUnreadableAborts(t *testing.T) {
 	tasksDir := setupTasksDirs(t)
 
-	// Simulate a directory-level read failure for the backlog directory.
-	idx := newPollIndexWithWarnings([]BuildWarning{{
-		State:    dirs.Backlog,
-		Path:     filepath.Join(tasksDir, dirs.Backlog),
-		Err:      os.ErrPermission,
-		DirLevel: true,
-	}})
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog)
+	if err := os.RemoveAll(backlogPath); err != nil {
+		t.Fatalf("remove backlog dir: %v", err)
+	}
+	if err := os.WriteFile(backlogPath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("create backlog file: %v", err)
+	}
 
+	idx := BuildIndex(tasksDir)
 	view := ComputeRunnableBacklogView(tasksDir, idx)
 	_, err := ComputeQueueManifestFromView(tasksDir, nil, idx, view)
 	if err == nil {

@@ -131,7 +131,7 @@ func RetryTask(tasksDir, taskRef string) (RetryResult, error) {
 		removeWarning = fmt.Sprintf("could not remove %s after requeue: %v", failedPath, err)
 	}
 
-	// Clean up stale runtime state (taskstate, sessionmeta) from the
+	// Clean up stale runtime sidecar data from the
 	// previous failed attempt so a fresh agent run starts clean.
 	runtimedata.DeleteRuntimeArtifactsPreservingVerdict(tasksDir, match.Filename)
 

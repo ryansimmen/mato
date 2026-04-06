@@ -43,22 +43,30 @@ internal/          All library packages:
   config/          Repository-local .mato.yaml loading
   configresolve/   Repo config resolution + source attribution
   dag/             Dependency graph analysis (Kahn + Tarjan)
+  dirs/            Queue directory name constants
   doctor/          Health checks for repo and task queue
   frontmatter/     YAML frontmatter parser
   graph/           Dependency graph visualization
   git/             Git helpers (clone, checkout, commit, push)
+  history/         Durable outcome timeline for mato log
   identity/        Agent ID generation (8-char hex)
+  inspect/         Single-task troubleshooting command
   integration/     Integration tests (package integration_test)
   lockfile/        PID-based lock files
   merge/           Squash-merge queue
   messaging/       Inter-agent messaging protocol
+  pause/           Durable .paused sentinel management
   process/         Process detection via /proc
   queue/           Task queue management + claiming
+  queueview/       Read-only queue index and diagnostics
   runner/          Agent lifecycle, Docker, embedded prompts
+  runtimedata/     Runtime sidecar state and cleanup
   setup/           Repository bootstrap and init workflow
   status/          mato status command
   taskfile/        Task file helpers (metadata parsing, active-affects collection)
   testutil/        Shared test helpers (SetupRepo, SetupRepoWithTasks)
+  timeutil/        Shared time-formatting helpers
+  ui/              Shared CLI formatting helpers
 docs/              Architecture, configuration, messaging, task-format docs
 .github/skills/mato/SKILL.md     Task planning skill
 ```
