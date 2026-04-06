@@ -68,11 +68,11 @@ func retryClaimability(failures, maxRetries int, lastFailureAt time.Time, cooldo
 	return false, true
 }
 
-func immediatelyClaimableTask(snap *TaskSnapshot, depLookup dependencyLookup, cooldown time.Duration) bool {
+func immediatelyClaimableTask(idx *PollIndex, snap *TaskSnapshot, cooldown time.Duration) bool {
 	if snap == nil {
 		return false
 	}
-	if blocks := depLookup.blockedDependencies(snap.Meta.DependsOn); len(blocks) > 0 {
+	if blocks := dependencyBlocksFor(idx, snap.Meta.DependsOn); len(blocks) > 0 {
 		return false
 	}
 	retryExhausted, cooledDown := retryClaimability(snap.FailureCount, snap.Meta.MaxRetries, snap.LastFailureAt, cooldown)
@@ -264,8 +264,6 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
 
 	activeBranches := CollectActiveBranches(tasksDir, idx)
-	depLookup := newDependencyLookup(idx)
-
 	for _, name := range candidates {
 		name, ok := normalizeClaimCandidate(name)
 		if !ok {
@@ -285,7 +283,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		title := frontmatter.ExtractTitle(name, snap.Body)
 		retryExhausted, cooledDown := retryClaimability(snap.FailureCount, meta.MaxRetries, snap.LastFailureAt, cooldown)
 
-		if blocks := depLookup.blockedDependencies(meta.DependsOn); len(blocks) > 0 {
+		if blocks := dependencyBlocksFor(idx, meta.DependsOn); len(blocks) > 0 {
 			waitingPath := filepath.Join(tasksDir, dirs.Waiting, name)
 			if err := AtomicMove(src, waitingPath); err != nil {
 				ui.Warnf("warning: could not move dependency-blocked backlog task %s back to waiting/: %v\n", name, err)
