@@ -355,6 +355,49 @@ func TestDoctor_StaleMergeLock_Unreadable(t *testing.T) {
 	}
 }
 
+func TestDoctor_UnreadableReviewLock_NotFixedByFix(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	allOK(t)
+
+	lockPath := filepath.Join(tasksDir, ".locks", "review-test.md.lock")
+	testutil.MakeUnreadablePath(t, lockPath)
+
+	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Lstat(lockPath); err != nil {
+		t.Fatalf("expected unreadable review lock to remain after --fix: %v", err)
+	}
+
+	foundUnreadable := false
+	for _, cr := range report.Checks {
+		for _, f := range cr.Findings {
+			if f.Code == "locks.stale_review" && f.Path == lockPath {
+				t.Fatalf("unreadable review lock must not be reported as stale: %+v", f)
+			}
+			if f.Code == "locks.unreadable_review" {
+				foundUnreadable = true
+				if f.Path != lockPath {
+					t.Fatalf("path = %q, want %q", f.Path, lockPath)
+				}
+				if f.Fixable {
+					t.Fatal("unreadable review lock should not be fixable")
+				}
+				if f.Fixed {
+					t.Fatal("unreadable review lock should not be marked fixed")
+				}
+				if !strings.HasPrefix(f.Message, "unreadable review lock: review-test.md.lock: ") {
+					t.Fatalf("message = %q, want unreadable review lock prefix", f.Message)
+				}
+			}
+		}
+	}
+	if !foundUnreadable {
+		t.Fatal("expected locks.unreadable_review finding for unreadable review lock")
+	}
+}
+
 func TestDoctor_DoesNotTreatUnreadableAgentLockAsStale(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	allOK(t)

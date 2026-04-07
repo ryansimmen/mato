@@ -64,9 +64,12 @@ func renderQueueOverview(w io.Writer, c colorSet, data statusData) error {
 	rw.printf("  ready-to-merge: %s\n", c.Cyan(data.queueCounts[dirs.ReadyMerge]))
 	rw.printf("  completed:      %s\n", c.Green(data.queueCounts[dirs.Completed]))
 	rw.printf("  failed:         %s\n", c.Red(data.queueCounts[dirs.Failed]))
-	if data.mergeLockActive {
+	switch data.mergeQueueState() {
+	case "active":
 		rw.printf("  merge queue:    %s\n", c.Yellow("active"))
-	} else {
+	case "unknown":
+		rw.printf("  merge queue:    %s\n", c.Yellow("unknown"))
+	default:
 		rw.printf("  merge queue:    %s\n", c.Dim("idle"))
 	}
 	rw.printf("  pause state:    %s\n", renderPauseState(c, data.pauseState))
@@ -325,4 +328,3 @@ func renderReadyForReview(w io.Writer, c colorSet, data statusData) error {
 	}
 	return rw.err
 }
-

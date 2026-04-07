@@ -139,10 +139,7 @@ func statusDataToJSON(data statusData) StatusJSON {
 			"completed":      data.queueCounts[dirs.Completed],
 			"failed":         data.queueCounts[dirs.Failed],
 		},
-		MergeQueue: "idle",
-	}
-	if data.mergeLockActive {
-		out.MergeQueue = "active"
+		MergeQueue: data.mergeQueueState(),
 	}
 	if data.pauseState.Active {
 		out.Paused.Active = true
