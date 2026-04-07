@@ -2033,9 +2033,9 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 	}
 }
 
-func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
+func TestPostAgentPush_BranchMarkerRollbackFailureQuarantinesReadyReviewCopy(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
+	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, dirs.Failed, "messages", "messages/events"} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 
@@ -2098,6 +2098,9 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "rollback failed") {
 		t.Fatalf("error should mention rollback failure, got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "moved task to failed/") {
+		t.Fatalf("error should mention quarantine to failed/, got: %v", err)
+	}
 
 	// The in-progress/ file should be the "other" agent's copy (not overwritten).
 	data, _ := os.ReadFile(inProgressPath)
@@ -2105,10 +2108,21 @@ func TestPostAgentPush_BranchMarkerRollbackFails(t *testing.T) {
 		t.Fatal("in-progress/ file should be the racing agent's copy, not overwritten")
 	}
 
-	// The ready-for-review/ file should still exist (stranded, since rollback failed).
+	// The authoritative ready-for-review/ copy should be quarantined to failed/.
 	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	if _, statErr := os.Stat(readyPath); statErr != nil {
-		t.Fatalf("task should remain in ready-for-review/ when rollback fails: %v", statErr)
+	if _, statErr := os.Stat(readyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("task should not remain in ready-for-review/ when rollback fails: %v", statErr)
+	}
+
+	failedData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, taskFile))
+	if err != nil {
+		t.Fatalf("task should be quarantined to failed/: %v", err)
+	}
+	if !strings.Contains(string(failedData), "Stranded") {
+		t.Fatalf("failed task should contain the original task content, got:\n%s", string(failedData))
+	}
+	if !taskfile.ContainsTerminalFailure(failedData) {
+		t.Fatal("failed task should include terminal-failure marker")
 	}
 }
 

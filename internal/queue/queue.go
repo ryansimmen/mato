@@ -191,7 +191,7 @@ func RecoverPushedTaskHandoff(tasksDir, name, src string, writeBranchMarker func
 	}
 	if err := writeBranchMarker(dst, branch); err != nil {
 		if rollbackErr := AtomicMove(dst, src); rollbackErr != nil {
-			return quarantinePushedTaskRecovery(tasksDir, name, src, fmt.Sprintf("write branch marker to %s: %v (rollback failed: %v)", dst, err, rollbackErr))
+			return quarantinePushedTaskRecovery(tasksDir, name, dst, fmt.Sprintf("write branch marker to %s: %v (rollback failed: %v)", dst, err, rollbackErr))
 		}
 		return quarantinePushedTaskRecovery(tasksDir, name, src, fmt.Sprintf("write branch marker to %s: %v (rolled back to in-progress/)", dst, err))
 	}
@@ -208,12 +208,20 @@ func RecoverPushedTaskHandoff(tasksDir, name, src string, writeBranchMarker func
 	return &PushedTaskRecovery{Filename: name, Branch: branch, TargetBranch: targetBranch, LastHeadSHA: lastHeadSHA}, true, nil
 }
 
-func quarantinePushedTaskRecovery(tasksDir, name, src, detail string) (*PushedTaskRecovery, bool, error) {
+// QuarantinePushedTaskHandoff appends a terminal-failure marker to the task at
+// taskPath and moves it to failed/ so an untrustworthy review handoff is never
+// left in ready-for-review/.
+func QuarantinePushedTaskHandoff(tasksDir, name, taskPath, detail string) error {
+	_, _, err := quarantinePushedTaskRecovery(tasksDir, name, taskPath, detail)
+	return err
+}
+
+func quarantinePushedTaskRecovery(tasksDir, name, taskPath, detail string) (*PushedTaskRecovery, bool, error) {
 	reason := pushedTaskRecoveryFailureReason(detail)
-	ensureTerminalFailureRecord(src, name, reason)
+	ensureTerminalFailureRecord(taskPath, name, reason)
 
 	dst := filepath.Join(tasksDir, dirs.Failed, name)
-	if err := AtomicMove(src, dst); err != nil {
+	if err := AtomicMove(taskPath, dst); err != nil {
 		return nil, true, fmt.Errorf("move task to failed/: %w", err)
 	}
 	runtimedata.DeleteRuntimeArtifacts(tasksDir, name)
