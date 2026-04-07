@@ -1282,13 +1282,18 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	os.WriteFile(task, []byte(content), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, dirs.Locks, agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
 
-	_ = RecoverOrphanedTasks(tasksDir)
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
 
 	if _, err := os.Stat(task); err != nil {
 		t.Fatal("task claimed by active agent should NOT be recovered")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "active-task.md")); err == nil {
 		t.Fatal("task claimed by active agent should NOT appear in backlog")
+	}
+	if strings.Contains(stderr, "Skipping in-progress task active-task.md") {
+		t.Fatalf("expected active in-progress task to be skipped silently, got %q", stderr)
 	}
 }
 

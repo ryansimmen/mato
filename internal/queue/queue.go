@@ -112,7 +112,6 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 				continue
 			}
 			if status == identity.AgentActive {
-				fmt.Fprintf(os.Stderr, "Skipping in-progress task %s (agent %s still active)\n", name, agent)
 				continue
 			}
 		}
