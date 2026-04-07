@@ -161,7 +161,7 @@ Field meanings:
 
 ### How dependent tasks use it
 
-When the host claims a task that has `depends_on` entries, `runner.writeDependencyContextFile(...)` reads the completion detail file for each resolved dependency and writes them as a JSON array to `.mato/messages/dependency-context-<filename>.json`. If any completion files are found, the host injects the file path as the `MATO_DEPENDENCY_CONTEXT` environment variable. The agent prompt reads this file during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks. The context file is cleaned up after the agent container exits.
+When the host claims a task that has `depends_on` entries, `runner.writeDependencyContextFile(...)` reads the completion detail file for each resolved dependency and writes them as a JSON array to `.mato/messages/dependency-context-<filename>.json`. Resolution uses the same completed-task alias rules as scheduling: either the completed task's explicit `id` or its filename stem can satisfy `depends_on`, unless that token is ambiguous because it also exists in a non-completed state. If any completion files are found, the host injects the file path as the `MATO_DEPENDENCY_CONTEXT` environment variable. The agent prompt reads this file during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks. The context file is cleaned up after the agent container exits.
 
 ### Filename encoding
 

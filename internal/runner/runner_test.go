@@ -438,7 +438,7 @@ func TestBuildDockerArgs_ModelAndReasoningEffort_FromRunContext(t *testing.T) {
 
 func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.InProgress} {
+	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
 		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
@@ -450,6 +450,13 @@ func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	taskContent := "---\ndepends_on:\n  - dep-a\n  - dep-b\n---\n# My Task\n"
 	os.WriteFile(taskPath, []byte(taskContent), 0o644)
+
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-a.md"), []byte("---\nid: dep-a\n---\n# Dep A\n"), 0o644); err != nil {
+		t.Fatalf("write completed dep-a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-b.md"), []byte("---\nid: dep-b\n---\n# Dep B\n"), 0o644); err != nil {
+		t.Fatalf("write completed dep-b: %v", err)
+	}
 
 	// Write completion detail for dep-a only
 	if err := messaging.WriteCompletionDetail(tasksDir, messaging.CompletionDetail{

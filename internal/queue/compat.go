@@ -52,3 +52,7 @@ func FormatDependencyBlocks(blocks []DependencyBlock) string {
 func ResolveTask(idx *PollIndex, taskRef string) (TaskMatch, error) {
 	return queueview.ResolveTask(idx, taskRef)
 }
+
+func CompletedDependencyTaskIDs(idx *PollIndex, depRef string) []string {
+	return queueview.CompletedDependencyTaskIDs(idx, depRef)
+}

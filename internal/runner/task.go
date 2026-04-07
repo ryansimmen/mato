@@ -406,14 +406,15 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 	if err != nil || len(meta.DependsOn) == 0 {
 		return ""
 	}
+	idx := queue.BuildIndex(tasksDir)
 	var details []messaging.CompletionDetail
 	for _, dep := range meta.DependsOn {
-		detail, err := messaging.ReadCompletionDetail(tasksDir, dep)
+		detail, err := readResolvedDependencyCompletionDetail(tasksDir, idx, dep)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
 			ui.Warnf("warning: could not read completion detail for dependency %s of task %s: %v\n", dep, claimed.Filename, err)
+			continue
+		}
+		if detail == nil {
 			continue
 		}
 		details = append(details, *detail)
@@ -432,6 +433,23 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 		return ""
 	}
 	return depCtxPath
+}
+
+func readResolvedDependencyCompletionDetail(tasksDir string, idx *queue.PollIndex, dep string) (*messaging.CompletionDetail, error) {
+	for _, taskID := range queue.CompletedDependencyTaskIDs(idx, dep) {
+		detail, err := messaging.ReadCompletionDetail(tasksDir, taskID)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if taskID != dep {
+				return nil, fmt.Errorf("resolved as %s: %w", taskID, err)
+			}
+			return nil, err
+		}
+		return detail, nil
+	}
+	return nil, nil
 }
 
 // removeDependencyContextFile removes the dependency context file for the
