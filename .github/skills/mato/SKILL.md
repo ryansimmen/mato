@@ -85,7 +85,7 @@ Most tasks only need the markdown body plus a few common scheduler fields
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `id` | string | filename without `.md` | Stable task identifier. |
-| `priority` | int | `50` | Lower = higher priority. **1-10** critical, **11-30** important, **31-50** normal, **51+** low. |
+| `priority` | int | `50` | Lower = higher priority. Omitting the field, leaving it as an empty scalar (`priority:`), or setting it to YAML `null` all resolve to the default `50`; an explicit `0` is preserved. **1-10** critical, **11-30** important, **31-50** normal, **51+** low. |
 | `depends_on` | string[] | `[]` | IDs of tasks that must complete first. Use when fixing issue B requires issue A to land first (e.g., both touch the same function, or B builds on A's new API). |
 | `affects` | string[] | `[]` | File paths this task is expected to touch. **Always populate this** with the specific files that need changing. Prefer precise file paths (e.g. `src/db/connection.go`) over broad globs or directory prefixes — use globs only when the task genuinely spans many files in a directory. Include likely test files when the task will add or update tests (e.g. `src/db/connection_test.go`), and include documentation files when the task changes user-visible behavior (e.g. `docs/configuration.md`). Used to prevent conflicting concurrent work when a task scheduler runs multiple agents in parallel. An entry ending with `/` is treated as a directory prefix that matches any path underneath it (e.g. `pkg/client/` conflicts with `pkg/client/http.go`). Entries containing glob metacharacters (`*`, `?`, `[`, `{`) are matched as glob patterns — `*` matches within a single path segment, `**` matches across path separators, `?` matches a single character, `[abc]` matches character classes, and `{a,b}` supports brace expansion (e.g. `internal/runner/*.go`). Combining glob metacharacters with a trailing `/` is invalid. |
 
@@ -93,7 +93,7 @@ Most tasks only need the markdown body plus a few common scheduler fields
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `max_retries` | int | `3` | Max allowed failures before the task is moved to `failed/`. Only relevant when using mato as the task scheduler; can be omitted otherwise. |
+| `max_retries` | int | `3` | Max allowed failures before the task is moved to `failed/`. Omitting the field, leaving it as an empty scalar (`max_retries:`), or setting it to YAML `null` all resolve to the default `3`; an explicit `0` is preserved. Only relevant when using mato as the task scheduler; can be omitted otherwise. |
 
 ### Example: strong `affects` list
 

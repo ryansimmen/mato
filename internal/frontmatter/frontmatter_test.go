@@ -120,6 +120,96 @@ func TestParseTaskFile_EmptyFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParseTaskData_DefaultsForOmittedAndNullScalars(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantMeta TaskMeta
+		wantBody string
+	}{
+		{
+			name: "omitted values",
+			content: `---
+id: omitted-values
+depends_on: [task-a]
+---
+# Title
+Body.
+`,
+			wantMeta: TaskMeta{
+				ID:         "omitted-values",
+				Priority:   50,
+				DependsOn:  []string{"task-a"},
+				MaxRetries: 3,
+			},
+			wantBody: "# Title\nBody.\n",
+		},
+		{
+			name: "empty scalar values",
+			content: `---
+priority:
+max_retries:
+---
+# Title
+Body.
+`,
+			wantMeta: TaskMeta{
+				ID:         "defaults-test",
+				Priority:   50,
+				MaxRetries: 3,
+			},
+			wantBody: "# Title\nBody.\n",
+		},
+		{
+			name: "explicit null values",
+			content: `---
+priority: null
+max_retries: null
+---
+# Title
+Body.
+`,
+			wantMeta: TaskMeta{
+				ID:         "defaults-test",
+				Priority:   50,
+				MaxRetries: 3,
+			},
+			wantBody: "# Title\nBody.\n",
+		},
+		{
+			name: "explicit zero values",
+			content: `---
+priority: 0
+max_retries: 0
+---
+# Title
+Body.
+`,
+			wantMeta: TaskMeta{
+				ID:         "defaults-test",
+				Priority:   0,
+				MaxRetries: 0,
+			},
+			wantBody: "# Title\nBody.\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta, body, err := ParseTaskData([]byte(tt.content), "defaults-test.md")
+			if err != nil {
+				t.Fatalf("ParseTaskData: %v", err)
+			}
+			if !reflect.DeepEqual(meta, tt.wantMeta) {
+				t.Fatalf("meta = %#v, want %#v", meta, tt.wantMeta)
+			}
+			if body != tt.wantBody {
+				t.Fatalf("body = %q, want %q", body, tt.wantBody)
+			}
+		})
+	}
+}
+
 func TestParseTaskFile_StripsOnlyManagedCommentLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commented-task.md")
 	content := "<!-- claimed-by: abc -->\n# Title\n<!-- failure: x -->\n<!-- cancelled: operator at 2026-01-01T00:00:00Z -->\n<!-- This is a user note -->\nBody text\n"
