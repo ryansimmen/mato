@@ -376,6 +376,26 @@ func TestBuildDockerArgs_MessagingEnvVars(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_DisablesGitPagers(t *testing.T) {
+	env := envConfig{
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
+	}
+	run := runContext{prompt: "test"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"GIT_PAGER=cat",
+		"PAGER=cat",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in docker args", want)
+		}
+	}
+}
+
 func TestBuildDockerArgs_ModelAndReasoningEffort(t *testing.T) {
 	env := envConfig{
 		homeDir: "/home/test",
