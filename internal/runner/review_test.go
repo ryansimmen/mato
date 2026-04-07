@@ -1121,6 +1121,139 @@ func TestReviewCandidates_Indexed_MissingBranchMarkerRecordsFailure(t *testing.T
 	}
 }
 
+func TestSelectAndLockReview_RevalidatesStaleReviewFailureCountAfterLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range dirs.All {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+
+	taskPath := filepath.Join(tasksDir, dirs.ReadyReview, "stale-budget.md")
+	initial := strings.Join([]string{
+		"<!-- branch: task/stale-budget -->",
+		"---",
+		"priority: 10",
+		"max_retries: 2",
+		"---",
+		"# Stale Budget",
+		"<!-- review-failure: a1 at 2026-01-01T00:00:00Z — first -->",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile initial task: %v", err)
+	}
+
+	idx := queueview.BuildIndex(tasksDir)
+
+	exhausted := strings.Join([]string{
+		"<!-- branch: task/stale-budget -->",
+		"---",
+		"priority: 10",
+		"max_retries: 2",
+		"---",
+		"# Stale Budget",
+		"<!-- review-failure: a1 at 2026-01-01T00:00:00Z — first -->",
+		"<!-- review-failure: a2 at 2026-01-02T00:00:00Z — second -->",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(exhausted), 0o644); err != nil {
+		t.Fatalf("WriteFile exhausted task: %v", err)
+	}
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		task, cleanup := selectAndLockReview(tasksDir, idx)
+		if task != nil || cleanup != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			t.Fatalf("expected stale candidate to be rejected after lock, got %+v", task)
+		}
+	})
+
+	if !strings.Contains(stdout, "review retry budget exhausted for stale-budget.md") {
+		t.Fatalf("expected lock-time budget exhaustion log, got:\n%s", stdout)
+	}
+	if _, err := os.Stat(taskPath); !os.IsNotExist(err) {
+		t.Fatalf("stale-budget.md should leave ready-for-review/, got err %v", err)
+	}
+	failedPath := filepath.Join(tasksDir, dirs.Failed, "stale-budget.md")
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("ReadFile failed task: %v", err)
+	}
+	if !strings.Contains(string(data), "review retry budget exhausted") {
+		t.Fatalf("expected terminal failure marker in failed task, got:\n%s", string(data))
+	}
+	lockPath := filepath.Join(tasksDir, ".locks", "review-stale-budget.md.lock")
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("review lock should be released when stale candidate is skipped, got err %v", err)
+	}
+}
+
+func TestSelectAndLockReview_RevalidatesMissingBranchMarkerAfterLock(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range dirs.All {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+
+	taskPath := filepath.Join(tasksDir, dirs.ReadyReview, "stale-branch.md")
+	initial := strings.Join([]string{
+		"<!-- branch: task/stale-branch -->",
+		"---",
+		"priority: 10",
+		"max_retries: 3",
+		"---",
+		"# Stale Branch",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile initial task: %v", err)
+	}
+
+	idx := queueview.BuildIndex(tasksDir)
+
+	branchless := strings.Join([]string{
+		"---",
+		"priority: 10",
+		"max_retries: 3",
+		"---",
+		"# Stale Branch",
+		"",
+	}, "\n")
+	if err := os.WriteFile(taskPath, []byte(branchless), 0o644); err != nil {
+		t.Fatalf("WriteFile branchless task: %v", err)
+	}
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		task, cleanup := selectAndLockReview(tasksDir, idx)
+		if task != nil || cleanup != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			t.Fatalf("expected stale branchless candidate to be skipped after lock, got %+v", task)
+		}
+	})
+
+	if !strings.Contains(stderr, "missing a required branch marker") {
+		t.Fatalf("expected lock-time branch marker warning, got:\n%s", stderr)
+	}
+	if !strings.Contains(stdout, "recorded review-failure for stale-branch.md") {
+		t.Fatalf("expected lock-time review-failure log, got:\n%s", stdout)
+	}
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("ReadFile branchless task: %v", err)
+	}
+	if !strings.Contains(string(data), "missing required") || !strings.Contains(string(data), "ready-for-review") {
+		t.Fatalf("expected review-failure marker after lock-time revalidation, got:\n%s", string(data))
+	}
+	lockPath := filepath.Join(tasksDir, ".locks", "review-stale-branch.md.lock")
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("review lock should be released when branchless candidate is skipped, got err %v", err)
+	}
+}
+
 func TestReviewCandidates_Indexed_TitleExtracted(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range dirs.All {
