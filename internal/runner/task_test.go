@@ -1029,6 +1029,74 @@ func TestWriteDependencyContextFile_ResolvesCompletedAliases(t *testing.T) {
 	}
 }
 
+func TestWriteDependencyContextFile_CompletedAliasCollisionUsesSchedulerOrder(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeCompleted := func(filename, body string, detail messaging.CompletionDetail) {
+		t.Helper()
+
+		path := filepath.Join(tasksDir, dirs.Completed, filename)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write completed task %s: %v", filename, err)
+		}
+		if err := messaging.WriteCompletionDetail(tasksDir, detail); err != nil {
+			t.Fatalf("write completion detail %s: %v", detail.TaskID, err)
+		}
+	}
+
+	writeCompleted("foo.md", "---\nid: canonical-id\n---\n# Canonical Foo\n", messaging.CompletionDetail{
+		TaskID:    "canonical-id",
+		TaskFile:  "foo.md",
+		Branch:    "task/canonical-id",
+		Title:     "Canonical Foo",
+		CommitSHA: "abc123",
+	})
+	writeCompleted("zzz.md", "---\nid: foo\n---\n# Literal Foo\n", messaging.CompletionDetail{
+		TaskID:    "foo",
+		TaskFile:  "zzz.md",
+		Branch:    "task/foo",
+		Title:     "Literal Foo",
+		CommitSHA: "def456",
+	})
+
+	taskFile := "consumer.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	taskContent := "---\ndepends_on:\n  - foo\n---\n# Consumer\n"
+	if err := os.WriteFile(taskPath, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("write in-progress task: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/consumer",
+		Title:    "Consumer",
+		TaskPath: taskPath,
+	}
+
+	result := writeDependencyContextFile(tasksDir, claimed)
+	if result == "" {
+		t.Fatal("expected dependency context file path")
+	}
+	details := readDependencyContextDetails(t, result)
+	if len(details) != 1 {
+		t.Fatalf("details count = %d, want 1", len(details))
+	}
+	if details[0].TaskID != "canonical-id" {
+		t.Fatalf("TaskID = %q, want %q", details[0].TaskID, "canonical-id")
+	}
+	if details[0].TaskFile != "foo.md" {
+		t.Fatalf("TaskFile = %q, want %q", details[0].TaskFile, "foo.md")
+	}
+}
+
 func TestWriteDependencyContextFile_InvalidFrontmatter(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, dirs.InProgress), 0o755)
