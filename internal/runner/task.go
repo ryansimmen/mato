@@ -294,17 +294,21 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 // recoverStuckTask checks whether a claimed task is still in in-progress/
 // after the agent container exits and post-agent push completes. If the
 // runtime taskstate still shows a pre-push work launch, the host moves the
-// task back to backlog/ with a failure record. If pushed-task metadata is
-// missing or unusable, recovery fails closed and leaves the task in in-progress/.
+// task back to backlog/ with a failure record. If pushed-task handoff metadata
+// is missing or unusable, the host quarantines the task to failed/ with a
+// terminal marker instead of leaving it stranded in in-progress/.
 func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
 		// Task was moved (to ready-for-review by post-agent push); nothing to do.
 		return
 	}
 
-	if recovered, branch, currentTip, filesChanged := recoverPushedTaskToReview(tasksDir, claimed); recovered {
-		if branch != "" {
-			finalizePushedTask(tasksDir, loadRecoveredTargetBranch(tasksDir, claimed.Filename), "host-recovery", claimed.Filename, branch, currentTip, filesChanged, false)
+	if recovery, recovered, err := queue.RecoverPushedTaskHandoff(tasksDir, claimed.Filename, claimed.TaskPath, writeBranchMarkerFn); recovered {
+		if err != nil {
+			ui.Warnf("warning: could not recover pushed task %s to ready-for-review: %v\n", claimed.Filename, err)
+		} else if recovery != nil {
+			fmt.Printf("Recovered pushed task %s to ready-for-review/\n", claimed.Filename)
+			finalizePushedTask(tasksDir, recovery.TargetBranch, "host-recovery", claimed.Filename, recovery.Branch, recovery.LastHeadSHA, recoveredFilesChanged(tasksDir, claimed.Filename), false)
 		}
 		return
 	}
@@ -326,50 +330,6 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	}
 
 	fmt.Printf("Recovered task %s after agent exit\n", claimed.Filename)
-}
-
-func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (bool, string, string, []string) {
-	state, err := runtimedata.LoadTaskState(tasksDir, claimed.Filename)
-	if err != nil {
-		ui.Warnf("warning: pushed-task recovery metadata for %s is unavailable; leaving it in in-progress/: %v\n", claimed.Filename, err)
-		return true, "", "", nil
-	}
-	if state == nil {
-		ui.Warnf("warning: pushed-task recovery metadata for %s is missing; leaving it in in-progress/\n", claimed.Filename)
-		return true, "", "", nil
-	}
-	switch state.LastOutcome {
-	case runtimedata.OutcomeWorkLaunched:
-		return false, "", "", nil
-	case runtimedata.OutcomeWorkBranchPushed:
-		// continue
-	default:
-		ui.Warnf("warning: pushed-task recovery metadata for %s is unusable (last outcome %q); leaving it in in-progress/\n", claimed.Filename, state.LastOutcome)
-		return true, "", "", nil
-	}
-
-	branch := strings.TrimSpace(state.TaskBranch)
-	if branch == "" {
-		branch = claimed.Branch
-	}
-	if strings.TrimSpace(branch) == "" {
-		ui.Warnf("warning: pushed task %s is missing task branch metadata; leaving it in in-progress/\n", claimed.Filename)
-		return true, "", "", nil
-	}
-	if err := moveTaskToReviewWithMarker(tasksDir, claimed, branch); err != nil {
-		ui.Warnf("warning: could not recover pushed task %s to ready-for-review: %v\n", claimed.Filename, err)
-		return true, "", "", nil
-	}
-	fmt.Printf("Recovered pushed task %s to ready-for-review/\n", claimed.Filename)
-	return true, branch, strings.TrimSpace(state.LastHeadSHA), recoveredFilesChanged(tasksDir, claimed.Filename)
-}
-
-func loadRecoveredTargetBranch(tasksDir, filename string) string {
-	state, err := runtimedata.LoadTaskState(tasksDir, filename)
-	if err != nil || state == nil {
-		return ""
-	}
-	return strings.TrimSpace(state.TargetBranch)
 }
 
 func recoveredFilesChanged(tasksDir, filename string) []string {

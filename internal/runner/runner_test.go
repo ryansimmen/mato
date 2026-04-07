@@ -320,9 +320,9 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 	}
 }
 
-func TestRecoverStuckTask_MissingTaskStateFailsClosed(t *testing.T) {
+func TestRecoverStuckTask_MissingTaskStateMovesToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -338,11 +338,14 @@ func TestRecoverStuckTask_MissingTaskStateFailsClosed(t *testing.T) {
 	_, stderr := captureStdoutStderr(t, func() {
 		recoverStuckTask(tasksDir, "agent1", claimed)
 	})
-	if !strings.Contains(stderr, "pushed-task recovery metadata for "+taskFile+" is missing") {
+	if !strings.Contains(stderr, "pushed-task recovery metadata is missing") {
 		t.Fatalf("expected missing metadata warning, got:\n%s", stderr)
 	}
-	if _, err := os.Stat(inProgressPath); err != nil {
-		t.Fatalf("task should remain in in-progress/: %v", err)
+	if !strings.Contains(stderr, "moved task to failed/") {
+		t.Fatalf("expected failed quarantine warning, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress/: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
@@ -350,11 +353,29 @@ func TestRecoverStuckTask_MissingTaskStateFailsClosed(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, taskFile)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to ready-for-review, stat err = %v", err)
 	}
+	failedPath := filepath.Join(tasksDir, dirs.Failed, taskFile)
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
+	if !strings.Contains(string(data), "automatic handoff recovery could not prove a safe ready-for-review destination") {
+		t.Fatalf("terminal-failure marker should explain failed handoff recovery, got:\n%s", string(data))
+	}
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should be deleted after quarantine, got %+v", state)
+	}
 }
 
-func TestRecoverStuckTask_CorruptTaskStateFailsClosed(t *testing.T) {
+func TestRecoverStuckTask_CorruptTaskStateMovesToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, "runtime", "runtime/taskstate"} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed, "runtime", "runtime/taskstate"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -373,20 +394,27 @@ func TestRecoverStuckTask_CorruptTaskStateFailsClosed(t *testing.T) {
 	_, stderr := captureStdoutStderr(t, func() {
 		recoverStuckTask(tasksDir, "agent1", claimed)
 	})
-	if !strings.Contains(stderr, "pushed-task recovery metadata for "+taskFile+" is unavailable") {
+	if !strings.Contains(stderr, "pushed-task recovery metadata is unavailable") {
 		t.Fatalf("expected unavailable metadata warning, got:\n%s", stderr)
 	}
-	if _, err := os.Stat(inProgressPath); err != nil {
-		t.Fatalf("task should remain in in-progress/: %v", err)
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress/: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
 	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, taskFile))
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
 }
 
-func TestRecoverStuckTask_UnreadableTaskStateFailsClosed(t *testing.T) {
+func TestRecoverStuckTask_UnreadableTaskStateMovesToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -404,14 +432,84 @@ func TestRecoverStuckTask_UnreadableTaskStateFailsClosed(t *testing.T) {
 	_, stderr := captureStdoutStderr(t, func() {
 		recoverStuckTask(tasksDir, "agent1", claimed)
 	})
-	if !strings.Contains(stderr, "pushed-task recovery metadata for "+taskFile+" is unavailable") {
+	if !strings.Contains(stderr, "pushed-task recovery metadata is unavailable") {
 		t.Fatalf("expected unavailable metadata warning, got:\n%s", stderr)
 	}
-	if _, err := os.Stat(inProgressPath); err != nil {
-		t.Fatalf("task should remain in in-progress/: %v", err)
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress/: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, taskFile))
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
+}
+
+func TestRecoverStuckTask_MissingTaskBranchMovesToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "missing-branch.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/missing-branch", Title: "Example Task", TaskPath: inProgressPath}
+	_, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+	if !strings.Contains(stderr, "missing task branch") {
+		t.Fatalf("expected missing branch warning, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, taskFile)); err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+}
+
+func TestRecoverStuckTask_UnusablePushedOutcomeMovesToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "unusable-outcome.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/unusable-outcome -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/unusable-outcome"
+		state.LastOutcome = runtimedata.OutcomeWorkPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/unusable-outcome", Title: "Example Task", TaskPath: inProgressPath}
+	_, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+	if !strings.Contains(stderr, `unusable (last outcome "work-pushed")`) {
+		t.Fatalf("expected unusable metadata warning, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, taskFile)); err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
 	}
 }
 
