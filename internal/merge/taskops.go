@@ -97,10 +97,19 @@ func appendMergeFailureRecord(path, reason string) error {
 }
 
 func markTaskMerged(path string) error {
+	return markTaskMergedAt(path, time.Time{})
+}
+
+func markTaskMergedAt(path string, mergedAt time.Time) error {
 	if taskHasMergeSuccessRecord(path) {
 		return nil
 	}
-	if err := appendTaskRecord(path, "%s%s -->", mergedTaskRecordPrefix, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if mergedAt.IsZero() {
+		mergedAt = time.Now().UTC()
+	} else {
+		mergedAt = mergedAt.UTC()
+	}
+	if err := appendTaskRecord(path, "%s%s -->", mergedTaskRecordPrefix, mergedAt.Format(time.RFC3339)); err != nil {
 		return fmt.Errorf("append merged record: %w", err)
 	}
 	return nil
