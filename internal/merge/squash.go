@@ -3,6 +3,7 @@ package merge
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"mato/internal/git"
 	"mato/internal/ui"
@@ -54,11 +55,8 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	// metadata so the caller can write the completion detail that was
 	// missed on the prior run, without creating a duplicate commit.
 	if _, err := gitOutput(cloneDir, "diff", "--cached", "--quiet"); err == nil {
-		sha, filesChanged := recoverMergedTaskMetadata(cloneDir, branch, task)
-		return &mergeResult{
-			commitSHA:    sha,
-			filesChanged: filesChanged,
-		}, nil
+		result := recoverMergedTaskMetadata(cloneDir, branch, task)
+		return &result, nil
 	}
 
 	if _, err := gitOutput(cloneDir, "commit", "-m", formatSquashCommitMessage(task, agentLog)); err != nil {
@@ -76,21 +74,30 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	}
 	filesOut, _ := gitOutput(cloneDir, "diff", "--name-only", "HEAD~1..HEAD")
 	filesChanged := parseFilesChanged(filesOut)
+	mergedAt := commitTimestampForRef(cloneDir, "HEAD")
 
 	return &mergeResult{
 		commitSHA:    strings.TrimSpace(sha),
 		filesChanged: filesChanged,
+		mergedAt:     mergedAt,
 	}, nil
 }
 
-func recoverMergedTaskMetadata(cloneDir, branch string, task mergeQueueTask) (string, []string) {
+func recoverMergedTaskMetadata(cloneDir, branch string, task mergeQueueTask) mergeResult {
 	if sha := findMergedTaskCommit(cloneDir, branch, task.id); sha != "" {
-		return sha, filesChangedForCommit(cloneDir, sha)
+		return mergeResult{
+			commitSHA:    sha,
+			filesChanged: filesChangedForCommit(cloneDir, sha),
+			mergedAt:     commitTimestampForRef(cloneDir, sha),
+		}
 	}
 
 	sha, _ := gitOutput(cloneDir, "rev-parse", "HEAD")
 	filesOut, _ := gitOutput(cloneDir, "diff", "--name-only", "origin/"+branch+"...origin/"+taskBranchName(task))
-	return strings.TrimSpace(sha), parseFilesChanged(filesOut)
+	return mergeResult{
+		commitSHA:    strings.TrimSpace(sha),
+		filesChanged: parseFilesChanged(filesOut),
+	}
 }
 
 func findMergedTaskCommit(cloneDir, branch, taskID string) string {
@@ -118,6 +125,21 @@ func filesChangedForCommit(cloneDir, sha string) []string {
 		return nil
 	}
 	return parseFilesChanged(out)
+}
+
+func commitTimestampForRef(cloneDir, ref string) time.Time {
+	if strings.TrimSpace(ref) == "" {
+		return time.Time{}
+	}
+	out, err := gitOutput(cloneDir, "log", "-1", "--format=%cI", ref)
+	if err != nil {
+		return time.Time{}
+	}
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(out))
+	if err != nil {
+		return time.Time{}
+	}
+	return ts.UTC()
 }
 
 func parseFilesChanged(out string) []string {

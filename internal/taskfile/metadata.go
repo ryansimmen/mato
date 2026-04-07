@@ -116,6 +116,27 @@ func HasMergedMarker(data []byte) bool {
 	return found
 }
 
+// ParseMergedMarkerTimestamp extracts the timestamp from the first standalone
+// <!-- merged: merge-queue at ... --> marker outside code fences.
+func ParseMergedMarkerTimestamp(data []byte) (time.Time, bool) {
+	var ts time.Time
+	var ok bool
+	forEachMarkerLine(data, func(trimmed string) bool {
+		m := mergedMarkerRe.FindStringSubmatch(trimmed)
+		if len(m) < 2 || m[0] != trimmed {
+			return false
+		}
+		parsed, err := time.Parse(time.RFC3339, m[1])
+		if err != nil {
+			return false
+		}
+		ts = parsed.UTC()
+		ok = true
+		return true
+	})
+	return ts, ok
+}
+
 // ReplaceBranchMarkerLine replaces the first standalone branch marker line
 // outside code fences. It preserves leading and trailing horizontal whitespace
 // on the replaced line.

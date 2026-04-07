@@ -130,9 +130,9 @@ When the host merge queue successfully squash-merges a task branch, it writes a 
 
 ### Who writes it
 
-The merge queue (`merge.ProcessQueue`) writes the file immediately after a successful squash-merge commit and push, before moving the task to `completed/`.
+The merge queue (`merge.ProcessQueue`) writes the file immediately after a successful squash-merge commit and push, before moving the task to `completed/`. If that write fails, the task stays in `ready-to-merge/` and the task branch/runtime metadata are preserved so a later merge cycle can recover deterministically instead of finalizing without dependency context.
 
-If a prior push succeeded but post-push bookkeeping failed (e.g. the move to `completed/` was interrupted), the next merge cycle detects the already-merged branch via the idempotent squash path. In this recovery scenario, the merge queue recovers metadata — the target branch HEAD as the commit SHA and the task branch's changed files — and writes the completion detail before finishing the bookkeeping. This ensures downstream dependent tasks always receive dependency context, even after a partial failure and retry.
+If a prior push succeeded but post-push bookkeeping failed (for example, the completion-detail write or the move to `completed/` was interrupted), the next merge cycle detects the already-merged task, reconstructs the completion detail, and only then finishes the bookkeeping. Recovery preserves the original merge timestamp: it prefers the persisted `<!-- merged: merge-queue at ... -->` marker when present and otherwise falls back to the merge commit timestamp from git history. This ensures downstream dependent tasks always receive dependency context, even after a partial failure and retry.
 
 ### Format
 
