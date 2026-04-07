@@ -268,7 +268,9 @@ func finalizePushedTask(tasksDir, targetBranch, agentID, filename, branch, curre
 
 // moveTaskToReviewWithMarker atomically moves a task from in-progress/ to
 // ready-for-review/ and writes the branch marker. If the marker write fails,
-// the move is rolled back by moving the file back to in-progress/.
+// the move is rolled back by moving the file back to in-progress/. If that
+// rollback also fails, the authoritative ready-for-review copy is quarantined
+// to failed/ with a terminal-failure marker.
 func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, branch string) error {
 	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, claimed.Filename)
 
@@ -283,8 +285,12 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 	if err := writeBranchMarkerFn(readyPath, branch); err != nil {
 		// Roll back: move file from ready-for-review/ back to in-progress/.
 		if rollbackErr := queue.AtomicMove(readyPath, claimed.TaskPath); rollbackErr != nil {
-			fmt.Fprintf(os.Stderr, "error: branch marker write failed and rollback to in-progress/ also failed: %v\n", rollbackErr)
-			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", readyPath, err, rollbackErr)
+			detail := fmt.Sprintf("write branch marker to %s: %v (rollback failed: %v)", readyPath, err, rollbackErr)
+			if quarantineErr := queue.QuarantinePushedTaskHandoff(tasksDir, claimed.Filename, readyPath, detail); quarantineErr != nil {
+				fmt.Fprintf(os.Stderr, "error: branch marker write failed, rollback to in-progress/ also failed, and quarantine to failed/ also failed: %v\n", quarantineErr)
+				return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v; quarantine to failed/ also failed: %v)", readyPath, err, rollbackErr, quarantineErr)
+			}
+			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v; moved task to failed/)", readyPath, err, rollbackErr)
 		}
 		return fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", readyPath, err)
 	}

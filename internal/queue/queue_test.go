@@ -1006,6 +1006,67 @@ func TestRecoverOrphanedTasks_PushedTaskMoveRetryFailureMovesToFailed(t *testing
 	}
 }
 
+func TestRecoverOrphanedTasks_PushedTaskRollbackFailureQuarantinesReadyReviewCopy(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "rollback-failure.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, name)
+	content := strings.Join([]string{
+		"<!-- claimed-by: agent-1 -->",
+		"<!-- branch: task/rollback-failure -->",
+		"# Rollback Failure",
+		"",
+	}, "\n")
+	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/rollback-failure"
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	withWriteBranchMarkerRecoveryFn(t, func(path, branch string) error {
+		if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: other -->\n# Other\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile racing in-progress copy: %v", err)
+		}
+		return fmt.Errorf("simulated marker failure")
+	})
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "rollback failed") {
+		t.Fatalf("expected rollback failure warning, got %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, name)); !os.IsNotExist(err) {
+		t.Fatalf("task should not remain in ready-for-review after rollback failure: %v", err)
+	}
+	data, err := os.ReadFile(inProgressPath)
+	if err != nil {
+		t.Fatalf("racing in-progress copy should remain: %v", err)
+	}
+	if !strings.Contains(string(data), "Other") {
+		t.Fatalf("in-progress/ should keep the racing copy, got:\n%s", string(data))
+	}
+	failedData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, name))
+	if err != nil {
+		t.Fatalf("authoritative ready-for-review copy should be quarantined to failed/: %v", err)
+	}
+	if !strings.Contains(string(failedData), "Rollback Failure") {
+		t.Fatalf("failed task should contain the original task content, got:\n%s", string(failedData))
+	}
+	if !taskfile.ContainsTerminalFailure(failedData) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
+}
+
 func TestRecoverOrphanedTasks_CollisionIdenticalContent(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
