@@ -35,6 +35,8 @@ type PushedTaskRecovery struct {
 	LastHeadSHA  string
 }
 
+const pushedTaskRecoveryFailurePrefix = "pushed work exists but automatic handoff recovery could not prove a safe ready-for-review destination"
+
 // ParseClaimedBy extracts the agent ID from a task file's claimed-by metadata.
 func ParseClaimedBy(path string) string {
 	data, err := os.ReadFile(path)
@@ -71,12 +73,12 @@ func RegisterAgent(tasksDir, agentID string) (func(), error) {
 	return lockfile.Register(locksDir, agentID)
 }
 
-// RecoverOrphanedTasks moves any files in in-progress/ back to backlog/.
-// This handles the case where a previous run was killed (e.g. Ctrl+C)
-// before the agent could clean up. A failure record is appended so the
-// retry-count logic can eventually move it to failed/.
-// Tasks claimed by a still-active agent are skipped.
-// If the same task already exists in a later-state directory, the
+// RecoverOrphanedTasks repairs files left in in-progress/ after a dead agent.
+// Safe pushed-task handoffs are reconstructed into ready-for-review/,
+// unrecoverable pushed handoffs are quarantined to failed/ with a
+// terminal-failure marker, and confirmed pre-push work is moved back to
+// backlog/ with a normal failure record. Tasks claimed by a still-active agent
+// are skipped. If the same task already exists in a later-state directory, the
 // in-progress copy is treated as stale and removed instead of recovered.
 func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 	var pushedRecoveries []PushedTaskRecovery
@@ -115,10 +117,11 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 			}
 		}
 
-		if recovery, recovered, err := recoverPushedTaskToReadyReview(tasksDir, name, src); recovered {
+		if recovery, recovered, err := RecoverPushedTaskHandoff(tasksDir, name, src, writeBranchMarkerRecoveryFn); recovered {
 			if err != nil {
 				ui.Warnf("warning: could not recover pushed task %s to ready-for-review: %v\n", name, err)
 			} else if recovery != nil {
+				fmt.Fprintf(os.Stderr, "Recovered pushed task %s to ready-for-review\n", name)
 				pushedRecoveries = append(pushedRecoveries, *recovery)
 			}
 			continue
@@ -154,13 +157,17 @@ func RecoverOrphanedTasks(tasksDir string) []PushedTaskRecovery {
 	return pushedRecoveries
 }
 
-func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskRecovery, bool, error) {
+// RecoverPushedTaskHandoff repairs an in-progress task whose work branch may
+// already have been pushed. It only reconstructs ready-for-review/ when the
+// review handoff metadata is trustworthy; otherwise it quarantines the task to
+// failed/ with a terminal-failure marker instead of leaving it stranded.
+func RecoverPushedTaskHandoff(tasksDir, name, src string, writeBranchMarker func(string, string) error) (*PushedTaskRecovery, bool, error) {
 	state, err := runtimedata.LoadTaskState(tasksDir, name)
 	if err != nil {
-		return nil, true, fmt.Errorf("pushed-task recovery metadata is unavailable: %w", err)
+		return quarantinePushedTaskRecovery(tasksDir, name, src, fmt.Sprintf("pushed-task recovery metadata is unavailable: %v", err))
 	}
 	if state == nil {
-		return nil, true, fmt.Errorf("pushed-task recovery metadata is missing")
+		return quarantinePushedTaskRecovery(tasksDir, name, src, "pushed-task recovery metadata is missing")
 	}
 	switch state.LastOutcome {
 	case runtimedata.OutcomeWorkLaunched:
@@ -168,23 +175,26 @@ func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskReco
 	case runtimedata.OutcomeWorkBranchPushed:
 		// continue
 	default:
-		return nil, true, fmt.Errorf("pushed-task recovery metadata is unusable (last outcome %q)", state.LastOutcome)
+		return quarantinePushedTaskRecovery(tasksDir, name, src, fmt.Sprintf("pushed-task recovery metadata is unusable (last outcome %q)", state.LastOutcome))
 	}
 
 	branch := strings.TrimSpace(state.TaskBranch)
 	if branch == "" {
-		return nil, true, fmt.Errorf("taskstate for %s is missing task branch", name)
+		branch = strings.TrimSpace(taskfile.ParseBranch(src))
+	}
+	if branch == "" {
+		return quarantinePushedTaskRecovery(tasksDir, name, src, "pushed-task recovery metadata is missing task branch")
 	}
 
 	dst := filepath.Join(tasksDir, dirs.ReadyReview, name)
 	if err := AtomicMove(src, dst); err != nil {
-		return nil, true, fmt.Errorf("move task to ready-for-review: %w", err)
+		return quarantinePushedTaskRecovery(tasksDir, name, src, fmt.Sprintf("move task to ready-for-review: %v", err))
 	}
-	if err := writeBranchMarkerRecoveryFn(dst, branch); err != nil {
+	if err := writeBranchMarker(dst, branch); err != nil {
 		if rollbackErr := AtomicMove(dst, src); rollbackErr != nil {
-			return nil, true, fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", dst, err, rollbackErr)
+			return quarantinePushedTaskRecovery(tasksDir, name, src, fmt.Sprintf("write branch marker to %s: %v (rollback failed: %v)", dst, err, rollbackErr))
 		}
-		return nil, true, fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", dst, err)
+		return quarantinePushedTaskRecovery(tasksDir, name, src, fmt.Sprintf("write branch marker to %s: %v (rolled back to in-progress/)", dst, err))
 	}
 	targetBranch := strings.TrimSpace(state.TargetBranch)
 	lastHeadSHA := strings.TrimSpace(state.LastHeadSHA)
@@ -196,8 +206,28 @@ func recoverPushedTaskToReadyReview(tasksDir, name, src string) (*PushedTaskReco
 	}); err != nil {
 		ui.Warnf("warning: could not record recovered pushed taskstate for %s: %v\n", name, err)
 	}
-	fmt.Fprintf(os.Stderr, "Recovered pushed task %s to ready-for-review\n", name)
 	return &PushedTaskRecovery{Filename: name, Branch: branch, TargetBranch: targetBranch, LastHeadSHA: lastHeadSHA}, true, nil
+}
+
+func quarantinePushedTaskRecovery(tasksDir, name, src, detail string) (*PushedTaskRecovery, bool, error) {
+	reason := pushedTaskRecoveryFailureReason(detail)
+	ensureTerminalFailureRecord(src, name, reason)
+
+	dst := filepath.Join(tasksDir, dirs.Failed, name)
+	if err := AtomicMove(src, dst); err != nil {
+		return nil, true, fmt.Errorf("move task to failed/: %w", err)
+	}
+	runtimedata.DeleteRuntimeArtifacts(tasksDir, name)
+	ui.Warnf("warning: %s for %s; moved task to failed/\n", detail, name)
+	return nil, true, nil
+}
+
+func pushedTaskRecoveryFailureReason(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return pushedTaskRecoveryFailurePrefix
+	}
+	return fmt.Sprintf("%s: %s", pushedTaskRecoveryFailurePrefix, detail)
 }
 
 // resolveOrphanCollision handles the case where an orphan in in-progress/

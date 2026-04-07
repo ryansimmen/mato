@@ -170,6 +170,100 @@ func TestMoveTaskToReviewWithMarker_AppendFailsRollback(t *testing.T) {
 	}
 }
 
+func TestRecoverStuckTask_PushedTaskUsesRecordedBranchMarkerWhenTaskStateBranchMissing(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, "messages", "messages/events", "messages/completions", "messages/presence"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "branch-fallback.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/branch-fallback -->\n# Branch Fallback\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TargetBranch = "main"
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/branch-fallback",
+		Title:    "Branch Fallback",
+		TaskPath: inProgressPath,
+	}
+
+	captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
+	data, err := os.ReadFile(readyPath)
+	if err != nil {
+		t.Fatalf("task should be moved to ready-for-review: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- branch: task/branch-fallback -->") {
+		t.Fatalf("ready-for-review task should keep recovered branch marker, got:\n%s", string(data))
+	}
+}
+
+func TestRecoverStuckTask_PushedTaskRetryFailureMovesToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "retry-failure.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/retry-failure -->\n# Retry Failure\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/retry-failure"
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/retry-failure",
+		Title:    "Retry Failure",
+		TaskPath: inProgressPath,
+	}
+
+	setHook(t, &writeBranchMarkerFn, func(path, branch string) error {
+		return fmt.Errorf("simulated marker failure")
+	})
+
+	_, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+
+	if !strings.Contains(stderr, "write branch marker") {
+		t.Fatalf("expected branch marker warning, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress after retry failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("task should not remain in ready-for-review after retry failure: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, taskFile))
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
+}
+
 func TestMoveTaskToReviewWithMarker_ReplacesDuplicateMarkers(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview} {
