@@ -363,3 +363,71 @@ func TestConcurrentReviewSelection_RequiresBranchMarkers(t *testing.T) {
 		t.Fatalf("expected review-failure marker, got:\n%s", string(data))
 	}
 }
+
+func TestConcurrentReviewSelection_RevalidatesRetryBudgetAfterLock(t *testing.T) {
+	_, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	taskFile := "stale-budget.md"
+	taskPath := writeTask(t, tasksDir, dirs.ReadyReview, taskFile, strings.Join([]string{
+		"<!-- branch: task/stale-budget -->",
+		"---",
+		"priority: 10",
+		"max_retries: 2",
+		"---",
+		"# Stale Budget",
+		"<!-- review-failure: reviewer-a at 2026-01-01T00:00:00Z — first -->",
+		"",
+	}, "\n"))
+
+	idx := queueview.BuildIndex(tasksDir)
+	stale := runner.SelectTaskForReview(tasksDir, idx)
+	if stale == nil {
+		t.Fatal("expected stale snapshot to select a review candidate")
+	}
+	if stale.Filename != taskFile {
+		t.Fatalf("stale snapshot selected %q, want %q", stale.Filename, taskFile)
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		updated := strings.Join([]string{
+			"<!-- branch: task/stale-budget -->",
+			"---",
+			"priority: 10",
+			"max_retries: 2",
+			"---",
+			"# Stale Budget",
+			"<!-- review-failure: reviewer-a at 2026-01-01T00:00:00Z — first -->",
+			"<!-- review-failure: reviewer-b at 2026-01-02T00:00:00Z — second -->",
+			"",
+		}, "\n")
+		if err := os.WriteFile(taskPath, []byte(updated), 0o644); err != nil {
+			t.Errorf("WriteFile updated task: %v", err)
+		}
+	}()
+	close(start)
+	wg.Wait()
+
+	task, cleanup := runner.SelectAndLockReview(tasksDir, idx)
+	if cleanup != nil {
+		cleanup()
+	}
+	if task != nil {
+		t.Fatalf("expected lock-time revalidation to skip exhausted task, got %+v", task)
+	}
+
+	mustNotExist(t, taskPath)
+	failedPath := filepath.Join(tasksDir, dirs.Failed, taskFile)
+	mustExist(t, failedPath)
+	data, err := os.ReadFile(failedPath)
+	if err != nil {
+		t.Fatalf("ReadFile failed task: %v", err)
+	}
+	if !strings.Contains(string(data), "review retry budget exhausted") {
+		t.Fatalf("expected failed task to record retry-budget exhaustion, got:\n%s", string(data))
+	}
+}

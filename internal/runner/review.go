@@ -189,19 +189,71 @@ func SelectTaskForReview(tasksDir string, idx *queueview.PollIndex) *queue.Claim
 	return selectTaskForReview(tasksDir, idx)
 }
 
+// revalidateLockedReviewCandidate rereads a locked ready-for-review task from
+// disk so the final go/no-go decision uses the current review-failure count and
+// branch marker rather than a stale poll snapshot.
+func revalidateLockedReviewCandidate(tasksDir, failedDir string, task *queue.ClaimedTask) (*queue.ClaimedTask, bool) {
+	data, err := os.ReadFile(task.TaskPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false
+		}
+		ui.Warnf("warning: could not re-read locked review candidate %s: %v\n", task.Filename, err)
+		return nil, false
+	}
+
+	meta, body, err := frontmatter.ParseTaskData(data, task.TaskPath)
+	if err != nil {
+		quarantineMalformedReviewTask(tasksDir, failedDir, queueview.ParseFailure{
+			Filename: task.Filename,
+			State:    dirs.ReadyReview,
+			Path:     task.TaskPath,
+			Err:      err,
+		})
+		return nil, false
+	}
+
+	branch, _ := taskfile.ParseBranchMarkerLine(data)
+	snap := &queueview.TaskSnapshot{
+		Filename:           task.Filename,
+		State:              dirs.ReadyReview,
+		Path:               task.TaskPath,
+		Meta:               meta,
+		Body:               body,
+		Branch:             branch,
+		ReviewFailureCount: taskfile.CountReviewFailureMarkers(data),
+	}
+	candidate, ok := buildReviewCandidate(tasksDir, failedDir, snap)
+	if !ok {
+		return nil, false
+	}
+	return candidate.task, true
+}
+
 // selectAndLockReview returns the highest-priority review candidate that this
 // agent can exclusively lock, along with a cleanup function to release the
 // lock. Returns (nil, nil) when no unlocked review task is available.
 //
 // When idx is nil, the filesystem is scanned directly.
 func selectAndLockReview(tasksDir string, idx *queueview.PollIndex) (*queue.ClaimedTask, func()) {
+	failedDir := filepath.Join(tasksDir, dirs.Failed)
 	for _, task := range reviewCandidates(tasksDir, idx) {
 		cleanup, ok := queue.AcquireReviewLock(tasksDir, task.Filename)
 		if ok {
-			return task, cleanup
+			revalidated, ok := revalidateLockedReviewCandidate(tasksDir, failedDir, task)
+			if ok {
+				return revalidated, cleanup
+			}
+			cleanup()
 		}
 	}
 	return nil, nil
+}
+
+// SelectAndLockReview is the exported entry point for selecting and locking the
+// highest-priority review candidate. It delegates to selectAndLockReview.
+func SelectAndLockReview(tasksDir string, idx *queueview.PollIndex) (*queue.ClaimedTask, func()) {
+	return selectAndLockReview(tasksDir, idx)
 }
 
 func runReview(ctx context.Context, env envConfig, run runContext, task *queue.ClaimedTask, branch string) error {
