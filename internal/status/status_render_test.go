@@ -753,6 +753,28 @@ func TestRenderCompactQueueSummary(t *testing.T) {
 	}
 }
 
+func TestRenderCompactQueueSummary_MergeLockUnknown(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		queueCounts: map[string]int{
+			dirs.Backlog: 1,
+		},
+		runnable:        1,
+		mergeLockStatus: lockfile.StatusUnknown,
+	}
+
+	renderCompactQueueSummary(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "Merge queue: unknown") {
+		t.Fatalf("compact merge queue should show unknown, got:\n%s", output)
+	}
+	if strings.Contains(output, "Merge queue: idle") {
+		t.Fatalf("compact merge queue should not fall back to idle, got:\n%s", output)
+	}
+}
+
 func TestRenderCompactAgents_WithPresenceNoProgress(t *testing.T) {
 	var buf bytes.Buffer
 	c := plainColorSet()
