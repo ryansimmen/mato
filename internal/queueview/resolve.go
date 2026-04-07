@@ -85,6 +85,47 @@ func CollectTaskMatches(idx *PollIndex, taskRef string, states []string) (string
 	return ref, matches, nil
 }
 
+// CompletedDependencyTaskIDs returns the completion-detail task IDs that can
+// satisfy depRef using the same completed-task alias rules as dependency
+// scheduling. The returned IDs are ordered deterministically and may include
+// both the literal dependency token and any resolved completed-task IDs.
+func CompletedDependencyTaskIDs(idx *PollIndex, depRef string) []string {
+	ref := strings.TrimSpace(depRef)
+	if idx == nil || ref == "" {
+		return nil
+	}
+
+	completedIDs := idx.CompletedIDs()
+	if _, ok := completedIDs[ref]; !ok {
+		return nil
+	}
+	if _, ambiguous := idx.NonCompletedIDs()[ref]; ambiguous {
+		return nil
+	}
+
+	candidates := []string{ref}
+	seen := map[string]struct{}{ref: {}}
+
+	_, matches, err := CollectTaskMatches(idx, ref, []string{dirs.Completed})
+	if err != nil {
+		return candidates
+	}
+	SortTaskMatches(matches)
+	for _, match := range matches {
+		id := taskMatchID(match)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		candidates = append(candidates, id)
+		seen[id] = struct{}{}
+	}
+
+	return candidates
+}
+
 // SortTaskMatches applies the canonical deterministic ordering for task-match
 // lists.
 func SortTaskMatches(matches []TaskMatch) {
