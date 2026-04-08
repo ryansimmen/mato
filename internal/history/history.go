@@ -41,11 +41,6 @@ const (
 	sourceFailed sourceStatus = "failed"
 )
 
-// Show writes durable task history to stdout.
-func Show(repo string, limit int, format string) error {
-	return ShowTo(os.Stdout, repo, limit, format)
-}
-
 // ShowTo writes durable task history to w.
 func ShowTo(w io.Writer, repo string, limit int, format string) error {
 	if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {

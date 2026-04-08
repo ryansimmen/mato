@@ -4,7 +4,6 @@ package inspect
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -88,11 +87,6 @@ type inspectContext struct {
 	deferredByName    map[string]queueview.DeferralInfo
 	depBlockedByName  map[string][]queueview.DependencyBlock
 	retainedWaiting   map[string]string
-}
-
-// Show writes the inspection result to stdout.
-func Show(repoRoot, taskRef, format string) error {
-	return ShowTo(os.Stdout, repoRoot, taskRef, format)
 }
 
 // ShowTo writes the inspection result to w.
