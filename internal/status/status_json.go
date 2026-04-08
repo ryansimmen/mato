@@ -188,7 +188,7 @@ func statusDataToJSON(data statusData) StatusJSON {
 	for _, wt := range data.waitingTasks {
 		deps := make([]DependencyJSON, 0, len(wt.Dependencies))
 		for _, d := range wt.Dependencies {
-			deps = append(deps, DependencyJSON{ID: d.ID, Status: d.Status})
+			deps = append(deps, DependencyJSON(d))
 		}
 		out.Waiting = append(out.Waiting, WaitingTaskJSON{
 			Name:         wt.Name,

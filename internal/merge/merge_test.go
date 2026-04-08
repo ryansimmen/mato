@@ -1652,9 +1652,13 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		// Ensure cleanup can remove the file.
-		os.Chmod(taskFile, 0o644)
+		if err := os.Chmod(taskFile, 0o644); err != nil {
+			t.Errorf("os.Chmod restore task permissions: %v", err)
+		}
 		completedFile := filepath.Join(tasksDir, dirs.Completed, "readonly-task.md")
-		os.Chmod(completedFile, 0o644)
+		if err := os.Chmod(completedFile, 0o644); err != nil && !os.IsNotExist(err) {
+			t.Errorf("os.Chmod restore completed task permissions: %v", err)
+		}
 	})
 
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
@@ -2025,14 +2029,24 @@ func TestFailMergeTask_MovesTaskEvenWhenAppendFails(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, dirs.ReadyMerge)
 	dst := filepath.Join(dir, dirs.Backlog)
-	os.MkdirAll(src, 0o755)
-	os.MkdirAll(dst, 0o755)
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", src, err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", dst, err)
+	}
 
 	taskFile := filepath.Join(src, "broken-append.md")
-	os.WriteFile(taskFile, []byte("# Broken append task\n"), 0o444)
+	if err := os.WriteFile(taskFile, []byte("# Broken append task\n"), 0o444); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", taskFile, err)
+	}
 	t.Cleanup(func() {
-		os.Chmod(taskFile, 0o644)
-		os.Chmod(filepath.Join(dst, "broken-append.md"), 0o644)
+		if err := os.Chmod(taskFile, 0o644); err != nil && !os.IsNotExist(err) {
+			t.Errorf("os.Chmod restore source permissions: %v", err)
+		}
+		if err := os.Chmod(filepath.Join(dst, "broken-append.md"), 0o644); err != nil && !os.IsNotExist(err) {
+			t.Errorf("os.Chmod restore destination permissions: %v", err)
+		}
 	})
 
 	dstPath := filepath.Join(dst, "broken-append.md")
@@ -2063,12 +2077,18 @@ func TestFailMergeTask_MovesTaskEvenWhenAppendFails(t *testing.T) {
 func TestFailMergeTask_NoDst_ReturnsAppendError(t *testing.T) {
 	dir := t.TempDir()
 	taskFile := filepath.Join(dir, "task.md")
-	os.WriteFile(taskFile, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(taskFile, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", taskFile, err)
+	}
 
 	// Make directory read-only so temp file creation fails during atomic write.
-	os.Chmod(dir, 0o555)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("os.Chmod(%s): %v", dir, err)
+	}
 	t.Cleanup(func() {
-		os.Chmod(dir, 0o755)
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore directory permissions: %v", err)
+		}
 	})
 
 	// When dst is empty and append fails, should return the error
@@ -2081,14 +2101,20 @@ func TestFailMergeTask_NoDst_ReturnsAppendError(t *testing.T) {
 func TestFailMergeTask_MoveFailureDoesNotAppendRecord(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "tasks")
-	os.MkdirAll(subdir, 0o755)
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", subdir, err)
+	}
 	taskFile := filepath.Join(subdir, "task.md")
-	os.WriteFile(taskFile, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(taskFile, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", taskFile, err)
+	}
 
 	// Create a regular file where the destination directory should be,
 	// so MkdirAll fails when trying to create subdirectories under it.
 	blocker := filepath.Join(dir, "blocked-dir")
-	os.WriteFile(blocker, []byte("not a directory"), 0o644)
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", blocker, err)
+	}
 
 	dstPath := filepath.Join(blocker, "sub", "task.md")
 
@@ -2299,7 +2325,11 @@ func TestAppendTaskRecord_ReadOnlyDir(t *testing.T) {
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatalf("os.Chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore directory permissions: %v", err)
+		}
+	})
 
 	err := appendTaskRecord(path, "<!-- failure: test -->")
 	if err == nil {

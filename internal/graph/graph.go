@@ -224,10 +224,8 @@ func resolveEdges(data *GraphData, aliasMap map[string][]string, safeCompleted, 
 
 			targets := aliasMap[ref]
 			if len(targets) > 0 {
+				// Self-edges are still emitted so cycle rendering remains intact.
 				for _, target := range targets {
-					if target == node.Key {
-						// Self-edge handled by cycles; still create the edge.
-					}
 					data.Edges = append(data.Edges, Edge{
 						From:      target,
 						To:        node.Key,

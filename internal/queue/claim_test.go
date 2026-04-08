@@ -1080,7 +1080,11 @@ func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 	if err := os.Chmod(taskPath, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(taskPath, 0o644) })
+	t.Cleanup(func() {
+		if err := os.Chmod(taskPath, 0o644); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	// Also add a readable fallback task.
 	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "readable.md"), "# Readable\nDo stuff.\n")

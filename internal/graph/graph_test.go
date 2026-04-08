@@ -592,7 +592,11 @@ func TestBuild_ShowTo_DirReadError(t *testing.T) {
 	if err := os.Chmod(waitingDir, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(waitingDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(waitingDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	var buf bytes.Buffer
 	err := ShowTo(&buf, repoDir, "json", false)

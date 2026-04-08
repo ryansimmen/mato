@@ -47,7 +47,9 @@ func TestDoctor_OrphanedMessages_Stale(t *testing.T) {
 	eventFile := filepath.Join(tasksDir, "messages", "events", "old-event.json")
 	testutil.WriteFile(t, eventFile, `{"id":"old","type":"progress"}`)
 	old := time.Now().Add(-25 * time.Hour)
-	os.Chtimes(eventFile, old, old)
+	if err := os.Chtimes(eventFile, old, old); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", eventFile, err)
+	}
 
 	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
@@ -80,7 +82,9 @@ func TestDoctor_OrphanedMessages_Fix(t *testing.T) {
 	eventFile := filepath.Join(tasksDir, "messages", "events", "old-event.json")
 	testutil.WriteFile(t, eventFile, `{"id":"old","type":"progress"}`)
 	old := time.Now().Add(-25 * time.Hour)
-	os.Chtimes(eventFile, old, old)
+	if err := os.Chtimes(eventFile, old, old); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", eventFile, err)
+	}
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
@@ -113,7 +117,9 @@ func TestDoctor_OrphanedMessages_NonJSONIgnored(t *testing.T) {
 	nonJSON := filepath.Join(tasksDir, "messages", "events", "readme.txt")
 	testutil.WriteFile(t, nonJSON, "just a text file")
 	old := time.Now().Add(-48 * time.Hour)
-	os.Chtimes(nonJSON, old, old)
+	if err := os.Chtimes(nonJSON, old, old); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", nonJSON, err)
+	}
 
 	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
@@ -446,7 +452,11 @@ func TestDoctor_StaleMergeLock_Fix_RemoveError(t *testing.T) {
 	if err := os.Chmod(locksDir, 0o555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(locksDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
@@ -488,7 +498,11 @@ func TestDoctor_StaleReviewLock_Fix_RemoveError(t *testing.T) {
 	if err := os.Chmod(locksDir, 0o555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(locksDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
@@ -528,7 +542,11 @@ func TestDoctor_StalePIDLock_Fix_RemoveError(t *testing.T) {
 	if err := os.Chmod(locksDir, 0o555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(locksDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
@@ -644,7 +662,9 @@ func TestDoctor_LeftoverTempFiles_Fix_OldFiles(t *testing.T) {
 	testutil.WriteFile(t, tmpFile, "partial write")
 	// Backdate beyond the 1-hour threshold.
 	old := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(tmpFile, old, old)
+	if err := os.Chtimes(tmpFile, old, old); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", tmpFile, err)
+	}
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
@@ -796,7 +816,9 @@ func TestDoctor_LeftoverXdevFiles_Fix_OldFiles(t *testing.T) {
 	testutil.WriteFile(t, xdevFile, "partial xdev write")
 	// Backdate beyond the 1-hour threshold.
 	old := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(xdevFile, old, old)
+	if err := os.Chtimes(xdevFile, old, old); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", xdevFile, err)
+	}
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {
@@ -890,7 +912,9 @@ func TestDoctor_LeftoverRetryFiles_Fix_OldFiles(t *testing.T) {
 	testutil.WriteFile(t, retryFile, "partial retry write")
 	// Backdate beyond the 1-hour threshold.
 	old := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(retryFile, old, old)
+	if err := os.Chtimes(retryFile, old, old); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", retryFile, err)
+	}
 
 	report, err := Run(context.Background(), repoRoot, Options{Fix: true, Format: "text"})
 	if err != nil {

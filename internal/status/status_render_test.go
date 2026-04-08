@@ -80,7 +80,9 @@ func TestRenderQueueOverview_ZeroCounts(t *testing.T) {
 		deferredDetail: map[string]queueview.DeferralInfo{},
 	}
 
-	renderQueueOverview(&buf, c, data)
+	if err := renderQueueOverview(&buf, c, data); err != nil {
+		t.Fatalf("renderQueueOverview: %v", err)
+	}
 	output := buf.String()
 
 	for _, want := range []string{"Queue Overview", "runnable:", "deferred:", "blocked:", "in-progress:", "ready-review:", "ready-to-merge:", "completed:", "failed:", "merge queue:"} {
@@ -103,7 +105,9 @@ func TestRenderQueueOverview_MergeLockActive(t *testing.T) {
 		mergeLockStatus: lockfile.StatusActive,
 	}
 
-	renderQueueOverview(&buf, c, data)
+	if err := renderQueueOverview(&buf, c, data); err != nil {
+		t.Fatalf("renderQueueOverview: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "active") {
@@ -120,7 +124,9 @@ func TestRenderQueueOverview_MergeLockUnknown(t *testing.T) {
 		mergeLockStatus: lockfile.StatusUnknown,
 	}
 
-	renderQueueOverview(&buf, c, data)
+	if err := renderQueueOverview(&buf, c, data); err != nil {
+		t.Fatalf("renderQueueOverview: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "unknown") {
@@ -142,7 +148,9 @@ func TestRenderQueueOverview_PauseState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			renderQueueOverview(&buf, plainColorSet(), statusData{queueCounts: map[string]int{}, deferredDetail: map[string]queueview.DeferralInfo{}, pauseState: tt.state})
+			if err := renderQueueOverview(&buf, plainColorSet(), statusData{queueCounts: map[string]int{}, deferredDetail: map[string]queueview.DeferralInfo{}, pauseState: tt.state}); err != nil {
+				t.Fatalf("renderQueueOverview: %v", err)
+			}
 			if !strings.Contains(buf.String(), tt.want) {
 				t.Fatalf("output missing %q, got:\n%s", tt.want, buf.String())
 			}
@@ -155,7 +163,9 @@ func TestRenderActiveAgents_None(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderActiveAgents(&buf, c, data)
+	if err := renderActiveAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderActiveAgents: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Active Agents") {
@@ -176,7 +186,9 @@ func TestRenderActiveAgents_WithPresence(t *testing.T) {
 		},
 	}
 
-	renderActiveAgents(&buf, c, data)
+	if err := renderActiveAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderActiveAgents: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "agent-abc12345") {
@@ -201,7 +213,9 @@ func TestRenderActiveAgents_WithoutPresence(t *testing.T) {
 		presenceMap: map[string]messaging.PresenceInfo{},
 	}
 
-	renderActiveAgents(&buf, c, data)
+	if err := renderActiveAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderActiveAgents: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "agent-noinfo01") {
@@ -221,7 +235,9 @@ func TestRenderAgentProgress_None(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderAgentProgress(&buf, c, data)
+	if err := renderAgentProgress(&buf, c, data); err != nil {
+		t.Fatalf("renderAgentProgress: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Current Agent Progress") {
@@ -242,7 +258,9 @@ func TestRenderAgentProgress_WithEntries(t *testing.T) {
 		},
 	}
 
-	renderAgentProgress(&buf, c, data)
+	if err := renderAgentProgress(&buf, c, data); err != nil {
+		t.Fatalf("renderAgentProgress: %v", err)
+	}
 	output := buf.String()
 
 	for _, want := range []string{"agent-a1", "Step: WORK", "task-a.md", "2 min", "agent-b2", "Step: COMMIT", "task-b.md", "30 sec"} {
@@ -257,7 +275,9 @@ func TestRenderInProgressTasks_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderInProgressTasks(&buf, c, data)
+	if err := renderInProgressTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderInProgressTasks: %v", err)
+	}
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty in-progress, got:\n%s", buf.String())
@@ -269,7 +289,9 @@ func TestRenderReadyToMerge_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderReadyToMerge(&buf, c, data)
+	if err := renderReadyToMerge(&buf, c, data); err != nil {
+		t.Fatalf("renderReadyToMerge: %v", err)
+	}
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty ready-to-merge, got:\n%s", buf.String())
@@ -286,7 +308,9 @@ func TestRenderReadyToMerge_WithTasks(t *testing.T) {
 		},
 	}
 
-	renderReadyToMerge(&buf, c, data)
+	if err := renderReadyToMerge(&buf, c, data); err != nil {
+		t.Fatalf("renderReadyToMerge: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Ready to Merge") {
@@ -312,7 +336,9 @@ func TestRenderReadyToMerge_NoTitle(t *testing.T) {
 		},
 	}
 
-	renderReadyToMerge(&buf, c, data)
+	if err := renderReadyToMerge(&buf, c, data); err != nil {
+		t.Fatalf("renderReadyToMerge: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "no-title.md") {
@@ -329,7 +355,9 @@ func TestRenderDependencyBlocked_None(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderDependencyBlocked(&buf, c, data)
+	if err := renderDependencyBlocked(&buf, c, data); err != nil {
+		t.Fatalf("renderDependencyBlocked: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Dependency-Blocked") {
@@ -358,7 +386,9 @@ func TestRenderDependencyBlocked_WithTasks(t *testing.T) {
 		},
 	}
 
-	renderDependencyBlocked(&buf, c, data)
+	if err := renderDependencyBlocked(&buf, c, data); err != nil {
+		t.Fatalf("renderDependencyBlocked: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "wait-task.md") {
@@ -388,7 +418,9 @@ func TestRenderConflictDeferred_None(t *testing.T) {
 		deferredDetail: map[string]queueview.DeferralInfo{},
 	}
 
-	renderConflictDeferred(&buf, c, data)
+	if err := renderConflictDeferred(&buf, c, data); err != nil {
+		t.Fatalf("renderConflictDeferred: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Conflict-Deferred") {
@@ -412,7 +444,9 @@ func TestRenderConflictDeferred_WithEntries(t *testing.T) {
 		},
 	}
 
-	renderConflictDeferred(&buf, c, data)
+	if err := renderConflictDeferred(&buf, c, data); err != nil {
+		t.Fatalf("renderConflictDeferred: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "deferred-task.md") {
@@ -439,7 +473,9 @@ func TestRenderConflictDeferred_SortedByName(t *testing.T) {
 		},
 	}
 
-	renderConflictDeferred(&buf, c, data)
+	if err := renderConflictDeferred(&buf, c, data); err != nil {
+		t.Fatalf("renderConflictDeferred: %v", err)
+	}
 	output := buf.String()
 
 	aIdx := strings.Index(output, "a-task.md")
@@ -457,7 +493,9 @@ func TestRenderFailedTasks_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderFailedTasks(&buf, c, data)
+	if err := renderFailedTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderFailedTasks: %v", err)
+	}
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty failed tasks, got:\n%s", buf.String())
@@ -469,7 +507,9 @@ func TestRenderRecentCompletions_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderRecentCompletions(&buf, c, data)
+	if err := renderRecentCompletions(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentCompletions: %v", err)
+	}
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty completions, got:\n%s", buf.String())
@@ -491,7 +531,9 @@ func TestRenderRecentCompletions_WithEntries(t *testing.T) {
 		},
 	}
 
-	renderRecentCompletions(&buf, c, data)
+	if err := renderRecentCompletions(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentCompletions: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Recent Completions") {
@@ -525,7 +567,9 @@ func TestRenderRecentCompletions_TruncatesTo5(t *testing.T) {
 	}
 	data := statusData{completions: completions}
 
-	renderRecentCompletions(&buf, c, data)
+	if err := renderRecentCompletions(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentCompletions: %v", err)
+	}
 	output := buf.String()
 
 	// Should show first 5 completions (indices 0-4), not 5-7.
@@ -551,7 +595,9 @@ func TestRenderRecentCompletions_SingleFile(t *testing.T) {
 		},
 	}
 
-	renderRecentCompletions(&buf, c, data)
+	if err := renderRecentCompletions(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentCompletions: %v", err)
+	}
 	output := buf.String()
 
 	// Should use singular "file" not "files".
@@ -574,7 +620,9 @@ func TestRenderRecentCompletions_ShortSHA(t *testing.T) {
 		},
 	}
 
-	renderRecentCompletions(&buf, c, data)
+	if err := renderRecentCompletions(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentCompletions: %v", err)
+	}
 	output := buf.String()
 
 	// Short SHA should be shown as-is (not truncated further).
@@ -588,7 +636,9 @@ func TestRenderRecentMessages_None(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderRecentMessages(&buf, c, data)
+	if err := renderRecentMessages(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentMessages: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Recent Messages") {
@@ -609,7 +659,9 @@ func TestRenderRecentMessages_WithMessages(t *testing.T) {
 		},
 	}
 
-	renderRecentMessages(&buf, c, data)
+	if err := renderRecentMessages(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentMessages: %v", err)
+	}
 	output := buf.String()
 
 	// Bare agent ID should get "agent-" prefix.
@@ -639,7 +691,9 @@ func TestRenderRecentMessages_ReverseOrder(t *testing.T) {
 		},
 	}
 
-	renderRecentMessages(&buf, c, data)
+	if err := renderRecentMessages(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentMessages: %v", err)
+	}
 	output := buf.String()
 
 	// Most recent message should appear first (reversed order).
@@ -662,7 +716,9 @@ func TestRenderRecentMessages_EmptyBody(t *testing.T) {
 		},
 	}
 
-	renderRecentMessages(&buf, c, data)
+	if err := renderRecentMessages(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentMessages: %v", err)
+	}
 	output := buf.String()
 
 	// Empty body should fall back to showing just the type.
@@ -676,7 +732,9 @@ func TestRenderWarnings_None(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderWarnings(&buf, c, data)
+	if err := renderWarnings(&buf, c, data); err != nil {
+		t.Fatalf("renderWarnings: %v", err)
+	}
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty warnings, got:\n%s", buf.String())
@@ -688,7 +746,9 @@ func TestRenderWarnings_WithWarnings(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{warnings: []string{"could not read agent presence: boom", "could not read completion details: nope"}}
 
-	renderWarnings(&buf, c, data)
+	if err := renderWarnings(&buf, c, data); err != nil {
+		t.Fatalf("renderWarnings: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Warnings") {
@@ -715,7 +775,9 @@ func TestRenderCompactAgents_PrefixedAgentIDUsesProgress(t *testing.T) {
 		}},
 	}
 
-	renderCompactAgents(&buf, c, data)
+	if err := renderCompactAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactAgents: %v", err)
+	}
 	output := buf.String()
 
 	for _, want := range []string{"agent-abc12345", "task-a.md", "WORK", "2 min"} {
@@ -739,7 +801,9 @@ func TestRenderCompactQueueSummary(t *testing.T) {
 		runnable: 9,
 	}
 
-	renderCompactQueueSummary(&buf, c, data)
+	if err := renderCompactQueueSummary(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactQueueSummary: %v", err)
+	}
 	output := buf.String()
 
 	for _, want := range []string{
@@ -764,7 +828,9 @@ func TestRenderCompactQueueSummary_MergeLockUnknown(t *testing.T) {
 		mergeLockStatus: lockfile.StatusUnknown,
 	}
 
-	renderCompactQueueSummary(&buf, c, data)
+	if err := renderCompactQueueSummary(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactQueueSummary: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Merge queue: unknown") {
@@ -785,7 +851,9 @@ func TestRenderCompactAgents_WithPresenceNoProgress(t *testing.T) {
 		},
 	}
 
-	renderCompactAgents(&buf, c, data)
+	if err := renderCompactAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactAgents: %v", err)
+	}
 	output := buf.String()
 
 	for _, want := range []string{"agent-abc12345", "my-task.md", "task/my-task"} {
@@ -811,7 +879,9 @@ func TestRenderCompactAgents_WithProgressNoPresenceFallsBackToProgressTask(t *te
 		}},
 	}
 
-	renderCompactAgents(&buf, c, data)
+	if err := renderCompactAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactAgents: %v", err)
+	}
 	output := buf.String()
 
 	for _, want := range []string{"agent-abc12345", "fallback-task.md", "COMMIT", "30 sec"} {
@@ -829,7 +899,9 @@ func TestRenderCompactAgents_TruncatesLongList(t *testing.T) {
 		agents = append(agents, statusAgent{ID: "agent-" + intToStr(i), PID: 1000 + i})
 	}
 
-	renderCompactAgents(&buf, c, statusData{agents: agents})
+	if err := renderCompactAgents(&buf, c, statusData{agents: agents}); err != nil {
+		t.Fatalf("renderCompactAgents: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "... +2 more") {
@@ -850,7 +922,9 @@ func TestRenderCompactAttention_OrphanedInProgressTaskShown(t *testing.T) {
 		}},
 	}
 
-	renderCompactAttention(&buf, c, data)
+	if err := renderCompactAttention(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactAttention: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "orphaned-task.md") {
@@ -866,7 +940,9 @@ func TestRenderCompactAttention_ShowsWarningsInlineWhenShort(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{warnings: []string{"warning one", "warning two"}}
 
-	renderCompactAttention(&buf, c, data)
+	if err := renderCompactAttention(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactAttention: %v", err)
+	}
 	output := buf.String()
 
 	for _, want := range []string{"Attention", "warning: warning one", "warning: warning two"} {
@@ -881,7 +957,9 @@ func TestRenderCompactAttention_SummarizesWarningsWhenMany(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{warnings: []string{"one", "two", "three", "four"}}
 
-	renderCompactAttention(&buf, c, data)
+	if err := renderCompactAttention(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactAttention: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "4 warnings") {
@@ -900,7 +978,9 @@ func TestRenderCompactNextUp_TruncatesLongList(t *testing.T) {
 		tasks = append(tasks, taskEntry{name: "task-" + intToStr(i) + ".md", title: "Task " + intToStr(i)})
 	}
 
-	renderCompactNextUp(&buf, c, statusData{runnableBacklog: tasks})
+	if err := renderCompactNextUp(&buf, c, statusData{runnableBacklog: tasks}); err != nil {
+		t.Fatalf("renderCompactNextUp: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "... +2 more") {
@@ -936,7 +1016,9 @@ func TestRenderReadyForReview_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderReadyForReview(&buf, c, data)
+	if err := renderReadyForReview(&buf, c, data); err != nil {
+		t.Fatalf("renderReadyForReview: %v", err)
+	}
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output for empty ready-for-review, got:\n%s", buf.String())
@@ -948,7 +1030,9 @@ func TestRenderRunnableBacklog_Empty(t *testing.T) {
 	c := plainColorSet()
 	data := statusData{}
 
-	renderRunnableBacklog(&buf, c, data)
+	if err := renderRunnableBacklog(&buf, c, data); err != nil {
+		t.Fatalf("renderRunnableBacklog: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Runnable Backlog") {
@@ -970,7 +1054,9 @@ func TestRenderRunnableBacklog_Ordering(t *testing.T) {
 		},
 	}
 
-	renderRunnableBacklog(&buf, c, data)
+	if err := renderRunnableBacklog(&buf, c, data); err != nil {
+		t.Fatalf("renderRunnableBacklog: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "Runnable Backlog (execution order)") {
@@ -1015,7 +1101,9 @@ func TestRenderRunnableBacklog_NoTitle(t *testing.T) {
 		},
 	}
 
-	renderRunnableBacklog(&buf, c, data)
+	if err := renderRunnableBacklog(&buf, c, data); err != nil {
+		t.Fatalf("renderRunnableBacklog: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "no-title.md") {
@@ -1039,7 +1127,9 @@ func TestRenderFailedTasks_TerminalFailureOnly(t *testing.T) {
 		}},
 	}
 
-	renderFailedTasks(&buf, c, data)
+	if err := renderFailedTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderFailedTasks: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "structural failure: unparseable frontmatter") {
@@ -1061,7 +1151,9 @@ func TestRenderFailedTasks_Cancelled(t *testing.T) {
 		}},
 	}
 
-	renderFailedTasks(&buf, c, data)
+	if err := renderFailedTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderFailedTasks: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "cancelled.md") || !strings.Contains(output, "(cancelled)") {
@@ -1083,7 +1175,9 @@ func TestRenderFailedTasks_TerminalWithRegularFailures(t *testing.T) {
 		}},
 	}
 
-	renderFailedTasks(&buf, c, data)
+	if err := renderFailedTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderFailedTasks: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "structural failure: invalid glob") {
@@ -1110,7 +1204,9 @@ func TestRenderFailedTasks_TerminalAndCycleFailure(t *testing.T) {
 		}},
 	}
 
-	renderFailedTasks(&buf, c, data)
+	if err := renderFailedTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderFailedTasks: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "structural failure: review retry exhaustion") {
@@ -1139,7 +1235,9 @@ func TestRenderCompactAgents_NarrowTerminalTruncates(t *testing.T) {
 		},
 	}
 
-	renderCompactAgents(&buf, c, data)
+	if err := renderCompactAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactAgents: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1170,7 +1268,9 @@ func TestRenderCompactAgents_NarrowTerminalWithStageAgeFitsWidth(t *testing.T) {
 		}},
 	}
 
-	renderCompactAgents(&buf, c, data)
+	if err := renderCompactAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactAgents: %v", err)
+	}
 
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
 		if strings.HasPrefix(line, "  ") && utf8.RuneCountInString(line) > termW {
@@ -1205,7 +1305,9 @@ func TestRenderCompactAgents_VeryNarrowTerminalTruncatesAgentID(t *testing.T) {
 				},
 			}
 
-			renderCompactAgents(&buf, c, data)
+			if err := renderCompactAgents(&buf, c, data); err != nil {
+				t.Fatalf("renderCompactAgents: %v", err)
+			}
 
 			for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
 				if strings.HasPrefix(line, "  ") && utf8.RuneCountInString(line) > tt.termW {
@@ -1241,7 +1343,9 @@ func TestRenderCompactAgents_ExtremelyNarrowTerminal(t *testing.T) {
 				},
 			}
 
-			renderCompactAgents(&buf, c, data)
+			if err := renderCompactAgents(&buf, c, data); err != nil {
+				t.Fatalf("renderCompactAgents: %v", err)
+			}
 
 			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 			for i, line := range lines {
@@ -1281,7 +1385,9 @@ func TestRenderCompactAgents_OverflowSummaryBoundedOnTinyTerminals(t *testing.T)
 				agents = append(agents, statusAgent{ID: "agent-" + intToStr(i), PID: 1000 + i})
 			}
 
-			renderCompactAgents(&buf, c, statusData{agents: agents})
+			if err := renderCompactAgents(&buf, c, statusData{agents: agents}); err != nil {
+				t.Fatalf("renderCompactAgents: %v", err)
+			}
 
 			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 			wantLines := compactListLimit + 2 // header + compact rows + summary
@@ -1321,7 +1427,9 @@ func TestRenderCompactNextUp_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderCompactNextUp(&buf, c, data)
+	if err := renderCompactNextUp(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactNextUp: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1344,7 +1452,9 @@ func TestRenderRecentMessages_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderRecentMessages(&buf, c, data)
+	if err := renderRecentMessages(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentMessages: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1370,7 +1480,9 @@ func TestRenderActiveAgents_NarrowTerminalTruncates(t *testing.T) {
 		},
 	}
 
-	renderActiveAgents(&buf, c, data)
+	if err := renderActiveAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderActiveAgents: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1392,7 +1504,9 @@ func TestRenderRunnableBacklog_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderRunnableBacklog(&buf, c, data)
+	if err := renderRunnableBacklog(&buf, c, data); err != nil {
+		t.Fatalf("renderRunnableBacklog: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1414,7 +1528,9 @@ func TestRenderReadyForReview_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderReadyForReview(&buf, c, data)
+	if err := renderReadyForReview(&buf, c, data); err != nil {
+		t.Fatalf("renderReadyForReview: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1438,7 +1554,9 @@ func TestRenderRecentCompletions_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderRecentCompletions(&buf, c, data)
+	if err := renderRecentCompletions(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentCompletions: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1466,7 +1584,9 @@ func TestRenderActiveAgents_VeryNarrowTerminalTruncates(t *testing.T) {
 		},
 	}
 
-	renderActiveAgents(&buf, c, data)
+	if err := renderActiveAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderActiveAgents: %v", err)
+	}
 	output := buf.String()
 
 	// At width=20, the fixed prefix (indent + name + PID) already exceeds
@@ -1500,7 +1620,9 @@ func TestRenderRunnableBacklog_VeryNarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderRunnableBacklog(&buf, c, data)
+	if err := renderRunnableBacklog(&buf, c, data); err != nil {
+		t.Fatalf("renderRunnableBacklog: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1525,7 +1647,9 @@ func TestRenderActiveAgents_NarrowTerminalFitsWidth(t *testing.T) {
 		},
 	}
 
-	renderActiveAgents(&buf, c, data)
+	if err := renderActiveAgents(&buf, c, data); err != nil {
+		t.Fatalf("renderActiveAgents: %v", err)
+	}
 	output := buf.String()
 
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
@@ -1550,7 +1674,9 @@ func TestRenderAgentProgress_VeryNarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderAgentProgress(&buf, c, data)
+	if err := renderAgentProgress(&buf, c, data); err != nil {
+		t.Fatalf("renderAgentProgress: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1573,7 +1699,9 @@ func TestRenderRecentMessages_VeryNarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderRecentMessages(&buf, c, data)
+	if err := renderRecentMessages(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentMessages: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1597,7 +1725,9 @@ func TestRenderRecentCompletions_VeryNarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderRecentCompletions(&buf, c, data)
+	if err := renderRecentCompletions(&buf, c, data); err != nil {
+		t.Fatalf("renderRecentCompletions: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1619,7 +1749,9 @@ func TestRenderReadyForReview_VeryNarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderReadyForReview(&buf, c, data)
+	if err := renderReadyForReview(&buf, c, data); err != nil {
+		t.Fatalf("renderReadyForReview: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1640,7 +1772,9 @@ func TestRenderCompactNextUp_VeryNarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderCompactNextUp(&buf, c, data)
+	if err := renderCompactNextUp(&buf, c, data); err != nil {
+		t.Fatalf("renderCompactNextUp: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1665,7 +1799,9 @@ func TestRenderInProgressTasks_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderInProgressTasks(&buf, c, data)
+	if err := renderInProgressTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderInProgressTasks: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1690,7 +1826,9 @@ func TestRenderReadyToMerge_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderReadyToMerge(&buf, c, data)
+	if err := renderReadyToMerge(&buf, c, data); err != nil {
+		t.Fatalf("renderReadyToMerge: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1718,7 +1856,9 @@ func TestRenderDependencyBlocked_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderDependencyBlocked(&buf, c, data)
+	if err := renderDependencyBlocked(&buf, c, data); err != nil {
+		t.Fatalf("renderDependencyBlocked: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1742,7 +1882,9 @@ func TestRenderConflictDeferred_NarrowTerminalTruncates(t *testing.T) {
 		},
 	}
 
-	renderConflictDeferred(&buf, c, data)
+	if err := renderConflictDeferred(&buf, c, data); err != nil {
+		t.Fatalf("renderConflictDeferred: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1766,7 +1908,9 @@ func TestRenderFailedTasks_NarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderFailedTasks(&buf, c, data)
+	if err := renderFailedTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderFailedTasks: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1794,7 +1938,9 @@ func TestRenderInProgressTasks_VeryNarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderInProgressTasks(&buf, c, data)
+	if err := renderInProgressTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderInProgressTasks: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {
@@ -1818,7 +1964,9 @@ func TestRenderFailedTasks_VeryNarrowTerminalTruncates(t *testing.T) {
 		}},
 	}
 
-	renderFailedTasks(&buf, c, data)
+	if err := renderFailedTasks(&buf, c, data); err != nil {
+		t.Fatalf("renderFailedTasks: %v", err)
+	}
 	output := buf.String()
 
 	if !strings.Contains(output, "…") {

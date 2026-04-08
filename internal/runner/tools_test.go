@@ -57,6 +57,7 @@ func (f fakeFileInfo) Sys() any           { return nil }
 func setTestSeams(t *testing.T, lp func(string) (string, error), st func(string) (os.FileInfo, error), home func() (string, error), gep func() (string, error)) {
 	t.Helper()
 	setHook(t, &mkdirAllFn, func(string, os.FileMode) error { return nil })
+	setHook(t, &goEnvGOROOTFn, func() (string, error) { return "/usr/local/go", nil })
 	if lp != nil {
 		setHook(t, &lookPathFn, lp)
 	}

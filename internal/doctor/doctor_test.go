@@ -1574,7 +1574,11 @@ func TestDoctor_UnreadableLocksDir(t *testing.T) {
 	if err := os.Chmod(locksDir, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(locksDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(locksDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	report, err := Run(context.Background(), repoRoot, Options{Format: "text"})
 	if err != nil {
