@@ -145,12 +145,22 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		}
 	}
 	extraEnvs = append(extraEnvs, fmt.Sprintf("MATO_MAX_RETRIES=%d", maxRetries))
+	restoreOrigin, err := prepareCloneOriginForContainer(cloneDir)
+	if err != nil {
+		return fmt.Errorf("prepare clone origin for container: %w", err)
+	}
 	agentErr := runCopilotCommand(ctx, env, run, extraEnvs, nil, "agent", func() string {
 		if claimed == nil {
 			return ""
 		}
 		return resetSession(env.tasksDir, runtimedata.KindWork, claimed.Filename, claimed.Branch)
 	})
+	if restoreErr := restoreOrigin(); restoreErr != nil {
+		if agentErr != nil {
+			return errors.Join(agentErr, restoreErr)
+		}
+		return restoreErr
+	}
 
 	// Post-agent: if the task is still in in-progress/ and the agent made
 	// commits, push the branch and move the task to ready-for-review/.

@@ -429,8 +429,10 @@ ownership.
 | Host path | Container path | Notes |
 | --- | --- | --- |
 | temporary clone of the repo | `/workspace` | The agent works in an isolated clone so multiple agents can run concurrently. |
-| `<repo>/.mato` | `/workspace/.mato` | Shares the task queue and messaging state with the host. |
-| resolved repo root | same absolute host path | Keeps the clone's `origin` local-path remote reachable for fetch/push. |
+| resolved repo root | `/mato-host-repo` (ro) | Exposes the host repository to the container as a read-only Git remote for `origin` fetches. |
+| `<repo>/.mato/in-progress` | `/workspace/.mato/in-progress` (ro) | Lets work agents read the claimed task file via `MATO_TASK_PATH`. |
+| `<repo>/.mato/ready-for-review` | `/workspace/.mato/ready-for-review` (ro) | Lets review agents read the review task file via `MATO_TASK_PATH`. |
+| `<repo>/.mato/messages` | `/workspace/.mato/messages` | Lets agents write coordination events and review verdict files. |
 | host `copilot` binary | `/usr/local/bin/copilot` (ro) | Runs Copilot CLI inside the container. |
 | host `git` binary | `/usr/local/bin/git` (ro) | Provides Git inside the container. |
 | host `git-upload-pack` | `/usr/local/bin/git-upload-pack` (ro) | Needed when Git fetches from the local-path remote. |
@@ -450,9 +452,10 @@ ownership.
 - `HOME` inside the container is set to the host home directory path.
 - `GOROOT=/usr/local/go` and `PATH` are set so mounted Go and CLI binaries are usable.
 - `GOPATH`, `GOMODCACHE`, and `GOCACHE` point at the mounted host cache paths.
-- `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=*` allow Git to trust mounted worktrees even if ownership looks unusual.
+- Before launching the container, `mato` rewrites the clone's `origin` remote to `/mato-host-repo` and restores the original host path afterwards so in-container `git fetch origin ...` still works without exposing the host repo as writable.
+- `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=/workspace` trust only the container clone path instead of every directory visible inside the container.
 - If Git user name/email are configured on the host repository or globally, `mato` forwards them as `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL`.
-- The container command is `copilot [--resume=<session-id>] -p <embedded prompt> --autopilot --allow-all --model <resolved-model> --reasoning-effort <resolved-effort>`. `mato` only appends `--resume=<session-id>` when durable session metadata exists for the current task or review phase.
+- The container command is `copilot [--resume=<session-id>] -p <embedded prompt> --autopilot --allow-all-tools --model <resolved-model> --reasoning-effort <resolved-effort>`. `mato` only appends `--resume=<session-id>` when durable session metadata exists for the current task or review phase.
 - If `gopls` is not found on the host `PATH`, `mato` warns before launching the container so missing Go LSP support is explicit instead of surfacing later as a generic Copilot LSP failure.
 When choosing a custom Docker image via `MATO_DOCKER_IMAGE` or `.mato.yaml`, use an image compatible with the mounted
 host binaries and standard Linux filesystem layout expected above.
