@@ -465,8 +465,10 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | `test` | Run `go test -race ./...`. |
 | `vet` | Run `go vet ./...`. |
 | `lint` | Run `golangci-lint run ./...`. |
+| `deadcode` | Run `go tool staticcheck -checks U1000 ./...` and `go tool deadcode -test ./...`. |
 | `help` | Print the target list and descriptions. |
 Additional behavior:
 - `all` runs `fmt`, `vet`, `build`, and `test`.
+- `deadcode` complements `lint`: it checks package-local unused code with `staticcheck`'s `U1000` rule and whole-program reachability with `go tool deadcode -test`.
 - `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --match 'v*' --always --dirty`, which ignores non-release tags, falls back to the commit hash when no matching release tag is reachable, and falls back to `dev` when git metadata is unavailable.
 - `REPO` is required for `make run` and may be supplied from `.env`.
