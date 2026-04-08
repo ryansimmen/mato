@@ -39,7 +39,7 @@ type statusData struct {
 	completions     []messaging.CompletionDetail
 	recentMessages  []messaging.Message
 	reverseDeps     map[string][]string
-	mergeLockActive bool
+	mergeLockStatus lockfile.Status
 	warnings        []string
 }
 
@@ -146,7 +146,10 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	data.completions = completions
 
 	// Merge lock.
-	data.mergeLockActive = isMergeLockActive(tasksDir)
+	data.mergeLockStatus, err = mergeLockState(tasksDir)
+	if err != nil {
+		data.warnings = append(data.warnings, fmt.Sprintf("could not read merge queue lock: %v", err))
+	}
 
 	// Messages — read only the most recent entries to avoid scanning
 	// thousands of old files in long-running repos.
@@ -216,8 +219,21 @@ func gatherStatus(tasksDir string) (statusData, error) {
 	return data, nil
 }
 
-// isMergeLockActive checks whether the merge queue lock is held by a live process.
-func isMergeLockActive(tasksDir string) bool {
+func (d statusData) mergeQueueState() string {
+	switch d.mergeLockStatus {
+	case lockfile.StatusActive:
+		return "active"
+	case lockfile.StatusUnknown:
+		return "unknown"
+	default:
+		return "idle"
+	}
+}
+
+// mergeLockState reads the merge queue lock state without collapsing unreadable
+// locks into idle.
+func mergeLockState(tasksDir string) (lockfile.Status, error) {
 	lockPath := filepath.Join(tasksDir, ".locks", "merge.lock")
-	return lockfile.IsHeld(lockPath)
+	meta, err := lockfile.ReadMetadata(lockPath)
+	return meta.Status, err
 }

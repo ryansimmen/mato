@@ -368,6 +368,44 @@ func TestHasMergedMarker(t *testing.T) {
 	}
 }
 
+func TestParseMergedMarkerTimestamp(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want time.Time
+		ok   bool
+	}{
+		{
+			name: "parses standalone merged marker",
+			data: "# Task\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n",
+			want: mustRFC3339(t, "2026-01-01T00:00:00Z"),
+			ok:   true,
+		},
+		{
+			name: "ignores prose marker",
+			data: "Mention <!-- merged: merge-queue at 2026-01-01T00:00:00Z --> in docs.\n",
+			ok:   false,
+		},
+		{
+			name: "ignores invalid timestamp",
+			data: "# Task\n<!-- merged: merge-queue at not-a-time -->\n",
+			ok:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseMergedMarkerTimestamp([]byte(tt.data))
+			if ok != tt.ok {
+				t.Fatalf("ParseMergedMarkerTimestamp() ok = %v, want %v", ok, tt.ok)
+			}
+			if !tt.want.IsZero() && !got.Equal(tt.want) {
+				t.Fatalf("ParseMergedMarkerTimestamp() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseReviewRejectionMarkers(t *testing.T) {
 	tests := []struct {
 		name string

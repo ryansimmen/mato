@@ -158,6 +158,8 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"-v", fmt.Sprintf("%s:/usr/local/go:ro", env.goRoot),
 		"-e", "GOROOT=/usr/local/go",
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"-e", "GIT_PAGER=cat",
+		"-e", "PAGER=cat",
 	}
 	if goplsPath := strings.TrimSpace(env.goplsPath); goplsPath != "" {
 		args = append(args, "-v", fmt.Sprintf("%s:/usr/local/bin/gopls:ro", goplsPath))

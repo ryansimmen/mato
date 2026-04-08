@@ -170,6 +170,100 @@ func TestMoveTaskToReviewWithMarker_AppendFailsRollback(t *testing.T) {
 	}
 }
 
+func TestRecoverStuckTask_PushedTaskUsesRecordedBranchMarkerWhenTaskStateBranchMissing(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, "messages", "messages/events", "messages/completions", "messages/presence"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "branch-fallback.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/branch-fallback -->\n# Branch Fallback\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TargetBranch = "main"
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/branch-fallback",
+		Title:    "Branch Fallback",
+		TaskPath: inProgressPath,
+	}
+
+	captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
+	data, err := os.ReadFile(readyPath)
+	if err != nil {
+		t.Fatalf("task should be moved to ready-for-review: %v", err)
+	}
+	if !strings.Contains(string(data), "<!-- branch: task/branch-fallback -->") {
+		t.Fatalf("ready-for-review task should keep recovered branch marker, got:\n%s", string(data))
+	}
+}
+
+func TestRecoverStuckTask_PushedTaskRetryFailureMovesToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	taskFile := "retry-failure.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/retry-failure -->\n# Retry Failure\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, taskFile, func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/retry-failure"
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/retry-failure",
+		Title:    "Retry Failure",
+		TaskPath: inProgressPath,
+	}
+
+	setHook(t, &writeBranchMarkerFn, func(path, branch string) error {
+		return fmt.Errorf("simulated marker failure")
+	})
+
+	_, stderr := captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+
+	if !strings.Contains(stderr, "write branch marker") {
+		t.Fatalf("expected branch marker warning, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress after retry failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("task should not remain in ready-for-review after retry failure: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, taskFile))
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
+}
+
 func TestMoveTaskToReviewWithMarker_ReplacesDuplicateMarkers(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview} {
@@ -791,6 +885,218 @@ func captureStderr(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func readDependencyContextDetails(t *testing.T, path string) []messaging.CompletionDetail {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read dependency context file: %v", err)
+	}
+
+	var details []messaging.CompletionDetail
+	if err := json.Unmarshal(data, &details); err != nil {
+		t.Fatalf("unmarshal dependency context file: %v", err)
+	}
+	return details
+}
+
+func TestWriteDependencyContextFile_ResolvesCompletedAliases(t *testing.T) {
+	tests := []struct {
+		name          string
+		completedFile string
+		completedBody string
+		detail        *messaging.CompletionDetail
+		dependsOn     string
+		wantResult    bool
+		wantTaskID    string
+		wantTaskFile  string
+	}{
+		{
+			name:          "filename stem resolves explicit id",
+			completedFile: "foo.md",
+			completedBody: "---\nid: canonical-id\n---\n# Foo\n",
+			detail: &messaging.CompletionDetail{
+				TaskID:    "canonical-id",
+				TaskFile:  "foo.md",
+				Branch:    "task/canonical-id",
+				Title:     "Foo",
+				CommitSHA: "abc123",
+			},
+			dependsOn:    "foo",
+			wantResult:   true,
+			wantTaskID:   "canonical-id",
+			wantTaskFile: "foo.md",
+		},
+		{
+			name:          "explicit id resolves different filename stem",
+			completedFile: "foo.md",
+			completedBody: "---\nid: canonical-id\n---\n# Foo\n",
+			detail: &messaging.CompletionDetail{
+				TaskID:    "canonical-id",
+				TaskFile:  "foo.md",
+				Branch:    "task/canonical-id",
+				Title:     "Foo",
+				CommitSHA: "def456",
+			},
+			dependsOn:    "canonical-id",
+			wantResult:   true,
+			wantTaskID:   "canonical-id",
+			wantTaskFile: "foo.md",
+		},
+		{
+			name:          "explicit id continues to work",
+			completedFile: "dep-task.md",
+			completedBody: "---\nid: dep-task\n---\n# Dep Task\n",
+			detail: &messaging.CompletionDetail{
+				TaskID:    "dep-task",
+				TaskFile:  "dep-task.md",
+				Branch:    "task/dep-task",
+				Title:     "Dep Task",
+				CommitSHA: "ghi789",
+			},
+			dependsOn:    "dep-task",
+			wantResult:   true,
+			wantTaskID:   "dep-task",
+			wantTaskFile: "dep-task.md",
+		},
+		{
+			name:          "missing completion detail is skipped cleanly",
+			completedFile: "foo.md",
+			completedBody: "---\nid: canonical-id\n---\n# Foo\n",
+			detail:        nil,
+			dependsOn:     "foo",
+			wantResult:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasksDir := t.TempDir()
+			for _, sub := range []string{dirs.Completed, dirs.InProgress} {
+				if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", sub, err)
+				}
+			}
+			if err := messaging.Init(tasksDir); err != nil {
+				t.Fatalf("messaging.Init: %v", err)
+			}
+
+			completedPath := filepath.Join(tasksDir, dirs.Completed, tt.completedFile)
+			if err := os.WriteFile(completedPath, []byte(tt.completedBody), 0o644); err != nil {
+				t.Fatalf("write completed task: %v", err)
+			}
+			if tt.detail != nil {
+				if err := messaging.WriteCompletionDetail(tasksDir, *tt.detail); err != nil {
+					t.Fatalf("write completion detail: %v", err)
+				}
+			}
+
+			taskFile := "consumer.md"
+			taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+			taskContent := fmt.Sprintf("---\ndepends_on:\n  - %s\n---\n# Consumer\n", tt.dependsOn)
+			if err := os.WriteFile(taskPath, []byte(taskContent), 0o644); err != nil {
+				t.Fatalf("write in-progress task: %v", err)
+			}
+
+			claimed := &queue.ClaimedTask{
+				Filename: taskFile,
+				Branch:   "task/consumer",
+				Title:    "Consumer",
+				TaskPath: taskPath,
+			}
+
+			result := writeDependencyContextFile(tasksDir, claimed)
+			if tt.wantResult {
+				if result == "" {
+					t.Fatal("expected dependency context file path")
+				}
+				details := readDependencyContextDetails(t, result)
+				if len(details) != 1 {
+					t.Fatalf("details count = %d, want 1", len(details))
+				}
+				if details[0].TaskID != tt.wantTaskID {
+					t.Fatalf("TaskID = %q, want %q", details[0].TaskID, tt.wantTaskID)
+				}
+				if details[0].TaskFile != tt.wantTaskFile {
+					t.Fatalf("TaskFile = %q, want %q", details[0].TaskFile, tt.wantTaskFile)
+				}
+				return
+			}
+			if result != "" {
+				t.Fatalf("expected empty result when completion detail is unavailable, got %q", result)
+			}
+		})
+	}
+}
+
+func TestWriteDependencyContextFile_CompletedAliasCollisionUsesSchedulerOrder(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	writeCompleted := func(filename, body string, detail messaging.CompletionDetail) {
+		t.Helper()
+
+		path := filepath.Join(tasksDir, dirs.Completed, filename)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write completed task %s: %v", filename, err)
+		}
+		if err := messaging.WriteCompletionDetail(tasksDir, detail); err != nil {
+			t.Fatalf("write completion detail %s: %v", detail.TaskID, err)
+		}
+	}
+
+	writeCompleted("foo.md", "---\nid: canonical-id\n---\n# Canonical Foo\n", messaging.CompletionDetail{
+		TaskID:    "canonical-id",
+		TaskFile:  "foo.md",
+		Branch:    "task/canonical-id",
+		Title:     "Canonical Foo",
+		CommitSHA: "abc123",
+	})
+	writeCompleted("zzz.md", "---\nid: foo\n---\n# Literal Foo\n", messaging.CompletionDetail{
+		TaskID:    "foo",
+		TaskFile:  "zzz.md",
+		Branch:    "task/foo",
+		Title:     "Literal Foo",
+		CommitSHA: "def456",
+	})
+
+	taskFile := "consumer.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	taskContent := "---\ndepends_on:\n  - foo\n---\n# Consumer\n"
+	if err := os.WriteFile(taskPath, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("write in-progress task: %v", err)
+	}
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/consumer",
+		Title:    "Consumer",
+		TaskPath: taskPath,
+	}
+
+	result := writeDependencyContextFile(tasksDir, claimed)
+	if result == "" {
+		t.Fatal("expected dependency context file path")
+	}
+	details := readDependencyContextDetails(t, result)
+	if len(details) != 1 {
+		t.Fatalf("details count = %d, want 1", len(details))
+	}
+	if details[0].TaskID != "canonical-id" {
+		t.Fatalf("TaskID = %q, want %q", details[0].TaskID, "canonical-id")
+	}
+	if details[0].TaskFile != "foo.md" {
+		t.Fatalf("TaskFile = %q, want %q", details[0].TaskFile, "foo.md")
+	}
+}
+
 func TestWriteDependencyContextFile_InvalidFrontmatter(t *testing.T) {
 	tasksDir := t.TempDir()
 	os.MkdirAll(filepath.Join(tasksDir, dirs.InProgress), 0o755)
@@ -842,9 +1148,15 @@ func TestWriteDependencyContextFile_DepsButNoCompletions(t *testing.T) {
 
 func TestWriteDependencyContextFile_WithMatchingCompletion(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.InProgress), 0o755)
+	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-task.md"), []byte("---\nid: dep-task\n---\n# Dep Task\n"), 0o644); err != nil {
+		t.Fatalf("write completed task: %v", err)
 	}
 
 	// Create a completion detail file for the dependency.
@@ -935,9 +1247,15 @@ func TestWriteDependencyContextFile_MissingCompletionSkipped(t *testing.T) {
 
 func TestWriteDependencyContextFile_MalformedCompletionWarns(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.InProgress), 0o755)
+	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "bad-dep.md"), []byte("---\nid: bad-dep\n---\n# Bad Dep\n"), 0o644); err != nil {
+		t.Fatalf("write completed task: %v", err)
 	}
 
 	// Write a malformed (non-JSON) completion detail file.
@@ -977,9 +1295,21 @@ func TestWriteDependencyContextFile_MalformedCompletionWarns(t *testing.T) {
 
 func TestWriteDependencyContextFile_MixedDeps(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.InProgress), 0o755)
+	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "good-dep.md"), []byte("---\nid: good-dep\n---\n# Good Dep\n"), 0o644); err != nil {
+		t.Fatalf("write completed good-dep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "broken-dep.md"), []byte("---\nid: broken-dep\n---\n# Broken Dep\n"), 0o644); err != nil {
+		t.Fatalf("write completed broken-dep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "missing-dep.md"), []byte("---\nid: missing-dep\n---\n# Missing Dep\n"), 0o644); err != nil {
+		t.Fatalf("write completed missing-dep: %v", err)
 	}
 
 	// Valid completion detail for one dependency.

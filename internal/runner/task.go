@@ -30,6 +30,7 @@ var removeCloneFn = git.RemoveClone
 var ensureBranchFn = git.EnsureBranch
 var writeBranchMarkerFn = queue.WriteBranchMarker
 var writeDebugMarkerFn = writeDebugMarker
+var moveTaskFileFn = queue.AtomicMove
 
 // debugMarkerFile is a sentinel file written into a clone directory when it
 // is intentionally preserved after a postAgentPush failure. Its presence
@@ -268,13 +269,15 @@ func finalizePushedTask(tasksDir, targetBranch, agentID, filename, branch, curre
 
 // moveTaskToReviewWithMarker atomically moves a task from in-progress/ to
 // ready-for-review/ and writes the branch marker. If the marker write fails,
-// the move is rolled back by moving the file back to in-progress/.
+// the move is rolled back by moving the file back to in-progress/. If that
+// rollback also fails, the authoritative ready-for-review copy is quarantined
+// to failed/ with a terminal-failure marker.
 func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, branch string) error {
 	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, claimed.Filename)
 
 	// AtomicMove uses os.Link + os.Remove to prevent silently overwriting a
 	// file that appeared at the destination after the pre-check (TOCTOU defense).
-	if err := queue.AtomicMove(claimed.TaskPath, readyPath); err != nil {
+	if err := moveTaskFileFn(claimed.TaskPath, readyPath); err != nil {
 		return fmt.Errorf("move task to ready-for-review: %w", err)
 	}
 
@@ -282,9 +285,13 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 	// leave the in-progress file with an incorrect marker.
 	if err := writeBranchMarkerFn(readyPath, branch); err != nil {
 		// Roll back: move file from ready-for-review/ back to in-progress/.
-		if rollbackErr := queue.AtomicMove(readyPath, claimed.TaskPath); rollbackErr != nil {
-			fmt.Fprintf(os.Stderr, "error: branch marker write failed and rollback to in-progress/ also failed: %v\n", rollbackErr)
-			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v)", readyPath, err, rollbackErr)
+		if rollbackErr := moveTaskFileFn(readyPath, claimed.TaskPath); rollbackErr != nil {
+			detail := fmt.Sprintf("write branch marker to %s: %v (rollback failed: %v)", readyPath, err, rollbackErr)
+			if quarantineErr := queue.QuarantinePushedTaskHandoff(tasksDir, claimed.Filename, readyPath, detail); quarantineErr != nil {
+				fmt.Fprintf(os.Stderr, "error: branch marker write failed, rollback to in-progress/ also failed, and quarantine to failed/ also failed: %v\n", quarantineErr)
+				return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v; quarantine to failed/ also failed: %v)", readyPath, err, rollbackErr, quarantineErr)
+			}
+			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v; moved task to failed/)", readyPath, err, rollbackErr)
 		}
 		return fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", readyPath, err)
 	}
@@ -294,17 +301,21 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 // recoverStuckTask checks whether a claimed task is still in in-progress/
 // after the agent container exits and post-agent push completes. If the
 // runtime taskstate still shows a pre-push work launch, the host moves the
-// task back to backlog/ with a failure record. If pushed-task metadata is
-// missing or unusable, recovery fails closed and leaves the task in in-progress/.
+// task back to backlog/ with a failure record. If pushed-task handoff metadata
+// is missing or unusable, the host quarantines the task to failed/ with a
+// terminal marker instead of leaving it stranded in in-progress/.
 func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
 		// Task was moved (to ready-for-review by post-agent push); nothing to do.
 		return
 	}
 
-	if recovered, branch, currentTip, filesChanged := recoverPushedTaskToReview(tasksDir, claimed); recovered {
-		if branch != "" {
-			finalizePushedTask(tasksDir, loadRecoveredTargetBranch(tasksDir, claimed.Filename), "host-recovery", claimed.Filename, branch, currentTip, filesChanged, false)
+	if recovery, recovered, err := queue.RecoverPushedTaskHandoff(tasksDir, claimed.Filename, claimed.TaskPath, writeBranchMarkerFn); recovered {
+		if err != nil {
+			ui.Warnf("warning: could not recover pushed task %s to ready-for-review: %v\n", claimed.Filename, err)
+		} else if recovery != nil {
+			fmt.Printf("Recovered pushed task %s to ready-for-review/\n", claimed.Filename)
+			finalizePushedTask(tasksDir, recovery.TargetBranch, "host-recovery", claimed.Filename, recovery.Branch, recovery.LastHeadSHA, recoveredFilesChanged(tasksDir, claimed.Filename), false)
 		}
 		return
 	}
@@ -326,50 +337,6 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	}
 
 	fmt.Printf("Recovered task %s after agent exit\n", claimed.Filename)
-}
-
-func recoverPushedTaskToReview(tasksDir string, claimed *queue.ClaimedTask) (bool, string, string, []string) {
-	state, err := runtimedata.LoadTaskState(tasksDir, claimed.Filename)
-	if err != nil {
-		ui.Warnf("warning: pushed-task recovery metadata for %s is unavailable; leaving it in in-progress/: %v\n", claimed.Filename, err)
-		return true, "", "", nil
-	}
-	if state == nil {
-		ui.Warnf("warning: pushed-task recovery metadata for %s is missing; leaving it in in-progress/\n", claimed.Filename)
-		return true, "", "", nil
-	}
-	switch state.LastOutcome {
-	case runtimedata.OutcomeWorkLaunched:
-		return false, "", "", nil
-	case runtimedata.OutcomeWorkBranchPushed:
-		// continue
-	default:
-		ui.Warnf("warning: pushed-task recovery metadata for %s is unusable (last outcome %q); leaving it in in-progress/\n", claimed.Filename, state.LastOutcome)
-		return true, "", "", nil
-	}
-
-	branch := strings.TrimSpace(state.TaskBranch)
-	if branch == "" {
-		branch = claimed.Branch
-	}
-	if strings.TrimSpace(branch) == "" {
-		ui.Warnf("warning: pushed task %s is missing task branch metadata; leaving it in in-progress/\n", claimed.Filename)
-		return true, "", "", nil
-	}
-	if err := moveTaskToReviewWithMarker(tasksDir, claimed, branch); err != nil {
-		ui.Warnf("warning: could not recover pushed task %s to ready-for-review: %v\n", claimed.Filename, err)
-		return true, "", "", nil
-	}
-	fmt.Printf("Recovered pushed task %s to ready-for-review/\n", claimed.Filename)
-	return true, branch, strings.TrimSpace(state.LastHeadSHA), recoveredFilesChanged(tasksDir, claimed.Filename)
-}
-
-func loadRecoveredTargetBranch(tasksDir, filename string) string {
-	state, err := runtimedata.LoadTaskState(tasksDir, filename)
-	if err != nil || state == nil {
-		return ""
-	}
-	return strings.TrimSpace(state.TargetBranch)
 }
 
 func recoveredFilesChanged(tasksDir, filename string) []string {
@@ -406,14 +373,15 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 	if err != nil || len(meta.DependsOn) == 0 {
 		return ""
 	}
+	idx := queue.BuildIndex(tasksDir)
 	var details []messaging.CompletionDetail
 	for _, dep := range meta.DependsOn {
-		detail, err := messaging.ReadCompletionDetail(tasksDir, dep)
+		detail, err := readResolvedDependencyCompletionDetail(tasksDir, idx, dep)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
 			ui.Warnf("warning: could not read completion detail for dependency %s of task %s: %v\n", dep, claimed.Filename, err)
+			continue
+		}
+		if detail == nil {
 			continue
 		}
 		details = append(details, *detail)
@@ -432,6 +400,23 @@ func writeDependencyContextFile(tasksDir string, claimed *queue.ClaimedTask) str
 		return ""
 	}
 	return depCtxPath
+}
+
+func readResolvedDependencyCompletionDetail(tasksDir string, idx *queue.PollIndex, dep string) (*messaging.CompletionDetail, error) {
+	for _, taskID := range queue.CompletedDependencyTaskIDs(idx, dep) {
+		detail, err := messaging.ReadCompletionDetail(tasksDir, taskID)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if taskID != dep {
+				return nil, fmt.Errorf("resolved as %s: %w", taskID, err)
+			}
+			return nil, err
+		}
+		return detail, nil
+	}
+	return nil, nil
 }
 
 // removeDependencyContextFile removes the dependency context file for the
