@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -17,6 +18,9 @@ var lookPathFn = exec.LookPath
 var statFn = os.Stat
 var mkdirAllFn = os.MkdirAll
 var userHomeDirFn = os.UserHomeDir
+
+//nolint:staticcheck // Compatibility fallback for standalone mato binaries when 'go' is unavailable on PATH.
+var runtimeGOROOTFn = runtime.GOROOT
 var goEnvGOROOTFn = func() (string, error) {
 	out, err := exec.Command("go", "env", "GOROOT").Output()
 	if err != nil {
@@ -82,11 +86,11 @@ func discoverHostTools() (hostTools, error) {
 	}
 	goplsPath, _ := lookPathFn("gopls")
 	goRoot, err := goEnvGOROOTFn()
-	if err != nil {
-		return hostTools{}, fmt.Errorf("resolve GOROOT via 'go env GOROOT': %w", err)
+	if err != nil || strings.TrimSpace(goRoot) == "" {
+		goRoot = strings.TrimSpace(runtimeGOROOTFn())
 	}
 	if goRoot == "" {
-		return hostTools{}, fmt.Errorf("resolve GOROOT via 'go env GOROOT': empty result")
+		return hostTools{}, fmt.Errorf("resolve GOROOT: neither 'go env GOROOT' nor runtime.GOROOT() returned a value")
 	}
 
 	gitTemplatesDir := "/usr/share/git-core/templates"
