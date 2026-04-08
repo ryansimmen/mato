@@ -13,6 +13,9 @@ import (
 )
 
 var validateBranchFn = func(name string) error {
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("invalid branch name %q: branch names must not begin with '-'", name)
+	}
 	out, err := exec.Command("git", "check-ref-format", "--branch", name).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("invalid branch name %q: git check-ref-format rejected it (%s)", name, strings.TrimSpace(string(out)))

@@ -2411,6 +2411,53 @@ func TestLoadMergeCandidates(t *testing.T) {
 	}
 }
 
+func TestLoadMergeCandidates_InvalidBranchMarkerRequeues(t *testing.T) {
+	tasksDir := t.TempDir()
+	readyDir := filepath.Join(tasksDir, dirs.ReadyMerge)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
+	for _, sub := range []string{readyDir, backlogDir} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	invalidTask := "<!-- branch: --bad -->\n---\nid: invalid-branch\npriority: 10\n---\n# Invalid branch\n"
+	if err := os.WriteFile(filepath.Join(readyDir, "invalid.md"), []byte(invalidTask), 0o644); err != nil {
+		t.Fatalf("write invalid.md: %v", err)
+	}
+	validTask := "<!-- branch: task/good -->\n---\nid: valid-branch\npriority: 20\n---\n# Valid branch\n"
+	if err := os.WriteFile(filepath.Join(readyDir, "valid.md"), []byte(validTask), 0o644); err != nil {
+		t.Fatalf("write valid.md: %v", err)
+	}
+
+	candidates, err := loadMergeCandidates(readyDir, tasksDir)
+	if err != nil {
+		t.Fatalf("loadMergeCandidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("got %d candidates, want 1", len(candidates))
+	}
+	if candidates[0].name != "valid.md" {
+		t.Fatalf("candidates[0].name = %q, want %q", candidates[0].name, "valid.md")
+	}
+
+	backlogPath := filepath.Join(backlogDir, "invalid.md")
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", backlogPath, err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "<!-- failure: merge-queue") {
+		t.Fatalf("invalid task missing merge failure record:\n%s", text)
+	}
+	if !strings.Contains(text, "invalid required") || !strings.Contains(text, "after work handoff") {
+		t.Fatalf("invalid task missing invalid-marker reason:\n%s", text)
+	}
+	if !strings.Contains(text, "invalid branch name") || !strings.Contains(text, "branch names must not begin with '-'") {
+		t.Fatalf("invalid task missing invalid branch detail:\n%s", text)
+	}
+}
+
 func TestLoadMergeCandidates_EmptyDir(t *testing.T) {
 	readyDir := t.TempDir()
 	tasksDir := t.TempDir()
