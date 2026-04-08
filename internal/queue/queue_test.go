@@ -779,9 +779,9 @@ func TestRecoverOrphanedTasks_PushedTaskMovesToReadyReview(t *testing.T) {
 	}
 }
 
-func TestRecoverOrphanedTasks_MissingTaskStateFailsClosed(t *testing.T) {
+func TestRecoverOrphanedTasks_MissingTaskStateMovesToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -799,8 +799,11 @@ func TestRecoverOrphanedTasks_MissingTaskStateFailsClosed(t *testing.T) {
 	if !strings.Contains(stderr, "pushed-task recovery metadata is missing") {
 		t.Fatalf("expected missing metadata warning, got %q", stderr)
 	}
-	if _, err := os.Stat(inProgressPath); err != nil {
-		t.Fatalf("task should remain in in-progress/: %v", err)
+	if !strings.Contains(stderr, "moved task to failed/") {
+		t.Fatalf("expected failed quarantine warning, got %q", stderr)
+	}
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress/: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, name)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
@@ -808,11 +811,18 @@ func TestRecoverOrphanedTasks_MissingTaskStateFailsClosed(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, name)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to ready-for-review, stat err = %v", err)
 	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, name))
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
 }
 
-func TestRecoverOrphanedTasks_CorruptTaskStateFailsClosed(t *testing.T) {
+func TestRecoverOrphanedTasks_CorruptTaskStateMovesToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, "runtime", "runtime/taskstate"} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed, "runtime", "runtime/taskstate"} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -833,17 +843,24 @@ func TestRecoverOrphanedTasks_CorruptTaskStateFailsClosed(t *testing.T) {
 	if !strings.Contains(stderr, "pushed-task recovery metadata is unavailable") {
 		t.Fatalf("expected unavailable metadata warning, got %q", stderr)
 	}
-	if _, err := os.Stat(inProgressPath); err != nil {
-		t.Fatalf("task should remain in in-progress/: %v", err)
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress/: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, name)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
 	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, name))
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
 }
 
-func TestRecoverOrphanedTasks_UnreadableTaskStateFailsClosed(t *testing.T) {
+func TestRecoverOrphanedTasks_UnreadableTaskStateMovesToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -863,17 +880,85 @@ func TestRecoverOrphanedTasks_UnreadableTaskStateFailsClosed(t *testing.T) {
 	if !strings.Contains(stderr, "pushed-task recovery metadata is unavailable") {
 		t.Fatalf("expected unavailable metadata warning, got %q", stderr)
 	}
-	if _, err := os.Stat(inProgressPath); err != nil {
-		t.Fatalf("task should remain in in-progress/: %v", err)
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress/: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, name)); !os.IsNotExist(err) {
 		t.Fatalf("task should not be moved to backlog, stat err = %v", err)
 	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, name))
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
 }
 
-func TestRecoverOrphanedTasks_PushedTaskUsesBranchMarkerHook(t *testing.T) {
+func TestRecoverOrphanedTasks_MissingTaskBranchMovesToFailed(t *testing.T) {
 	tasksDir := t.TempDir()
-	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview} {
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "missing-branch.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, name)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent-1 -->\n# Missing Branch\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "missing task branch") {
+		t.Fatalf("expected missing branch warning, got %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, name)); err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+}
+
+func TestRecoverOrphanedTasks_UnusablePushedOutcomeMovesToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "unusable-outcome.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, name)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent-1 -->\n<!-- branch: task/unusable-outcome -->\n# Unusable Outcome\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/unusable-outcome"
+		state.LastOutcome = runtimedata.OutcomeWorkPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, `unusable (last outcome "work-pushed")`) {
+		t.Fatalf("expected unusable metadata warning, got %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, name)); err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+}
+
+func TestRecoverOrphanedTasks_PushedTaskMoveRetryFailureMovesToFailed(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
 		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", sub, err)
 		}
@@ -906,11 +991,142 @@ func TestRecoverOrphanedTasks_PushedTaskUsesBranchMarkerHook(t *testing.T) {
 	if !strings.Contains(stderr, "write branch marker") {
 		t.Fatalf("expected branch marker warning, got %q", stderr)
 	}
-	if _, err := os.Stat(inProgressPath); err != nil {
-		t.Fatalf("task should roll back to in-progress after marker failure: %v", err)
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress after repeated marker failure: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, name)); !os.IsNotExist(err) {
 		t.Fatalf("task should not remain in ready-for-review after marker failure, stat err = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, name))
+	if err != nil {
+		t.Fatalf("task should be moved to failed/: %v", err)
+	}
+	if !taskfile.ContainsTerminalFailure(data) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
+}
+
+func TestRecoverOrphanedTasks_PushedTaskRollbackFailureQuarantinesReadyReviewCopy(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "rollback-failure.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, name)
+	content := strings.Join([]string{
+		"<!-- claimed-by: agent-1 -->",
+		"<!-- branch: task/rollback-failure -->",
+		"# Rollback Failure",
+		"",
+	}, "\n")
+	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/rollback-failure"
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	withWriteBranchMarkerRecoveryFn(t, func(path, branch string) error {
+		if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: other -->\n# Other\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile racing in-progress copy: %v", err)
+		}
+		return fmt.Errorf("simulated marker failure")
+	})
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "rollback failed") {
+		t.Fatalf("expected rollback failure warning, got %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, name)); !os.IsNotExist(err) {
+		t.Fatalf("task should not remain in ready-for-review after rollback failure: %v", err)
+	}
+	data, err := os.ReadFile(inProgressPath)
+	if err != nil {
+		t.Fatalf("racing in-progress copy should remain: %v", err)
+	}
+	if !strings.Contains(string(data), "Other") {
+		t.Fatalf("in-progress/ should keep the racing copy, got:\n%s", string(data))
+	}
+	failedData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, name))
+	if err != nil {
+		t.Fatalf("authoritative ready-for-review copy should be quarantined to failed/: %v", err)
+	}
+	if !strings.Contains(string(failedData), "Rollback Failure") {
+		t.Fatalf("failed task should contain the original task content, got:\n%s", string(failedData))
+	}
+	if !taskfile.ContainsTerminalFailure(failedData) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
+}
+
+func TestRecoverOrphanedTasks_PushedTaskPartialRollbackFailureRemovesDuplicateInProgressCopy(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, dirs.Failed} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	name := "partial-rollback.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, name)
+	content := strings.Join([]string{
+		"<!-- claimed-by: agent-1 -->",
+		"<!-- branch: task/partial-rollback -->",
+		"# Partial Rollback",
+		"",
+	}, "\n")
+	if err := os.WriteFile(inProgressPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile in-progress: %v", err)
+	}
+	if err := runtimedata.UpdateTaskState(tasksDir, name, func(state *runtimedata.TaskState) {
+		state.TaskBranch = "task/partial-rollback"
+		state.LastOutcome = runtimedata.OutcomeWorkBranchPushed
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, name)
+	failRollbackRemove := true
+	withRemoveFn(t, func(path string) error {
+		if path == readyPath && failRollbackRemove {
+			failRollbackRemove = false
+			return fmt.Errorf("simulated remove failure")
+		}
+		return os.Remove(path)
+	})
+	withWriteBranchMarkerRecoveryFn(t, func(path, branch string) error {
+		return fmt.Errorf("simulated marker failure")
+	})
+
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
+	if !strings.Contains(stderr, "rollback failed") {
+		t.Fatalf("expected rollback failure warning, got %q", stderr)
+	}
+	if _, err := os.Stat(readyPath); !os.IsNotExist(err) {
+		t.Fatalf("task should not remain in ready-for-review after quarantine: %v", err)
+	}
+	if _, err := os.Stat(inProgressPath); !os.IsNotExist(err) {
+		t.Fatalf("partial rollback duplicate should be removed from in-progress: %v", err)
+	}
+	failedData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, name))
+	if err != nil {
+		t.Fatalf("task should be quarantined to failed/: %v", err)
+	}
+	if !strings.Contains(string(failedData), "Partial Rollback") {
+		t.Fatalf("failed task should contain the original task content, got:\n%s", string(failedData))
+	}
+	if !taskfile.ContainsTerminalFailure(failedData) {
+		t.Fatal("failed task should include terminal-failure marker")
 	}
 }
 
@@ -1190,13 +1406,18 @@ func TestRecoverOrphanedTasks_SkipsActiveAgent(t *testing.T) {
 	os.WriteFile(task, []byte(content), 0o644)
 	os.WriteFile(filepath.Join(tasksDir, dirs.Locks, agentID+".pid"), []byte(process.LockIdentity(os.Getpid())), 0o644)
 
-	_ = RecoverOrphanedTasks(tasksDir)
+	stderr := captureStderr(t, func() {
+		_ = RecoverOrphanedTasks(tasksDir)
+	})
 
 	if _, err := os.Stat(task); err != nil {
 		t.Fatal("task claimed by active agent should NOT be recovered")
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "active-task.md")); err == nil {
 		t.Fatal("task claimed by active agent should NOT appear in backlog")
+	}
+	if strings.Contains(stderr, "Skipping in-progress task active-task.md") {
+		t.Fatalf("expected active in-progress task to be skipped silently, got %q", stderr)
 	}
 }
 

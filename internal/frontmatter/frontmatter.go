@@ -89,24 +89,25 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 			return TaskMeta{}, "", fmt.Errorf("unterminated frontmatter in %s", path)
 		}
 		block := strings.Join(lines[startLine+1:end], "\n")
-		blockKeys := map[string]struct{}{}
+		blockFields := map[string]topLevelFieldState{}
 		if strings.TrimSpace(block) != "" {
 			if err := yaml.Unmarshal([]byte(block), &meta); err != nil {
 				return TaskMeta{}, "", fmt.Errorf("parse frontmatter in %s: %w", path, err)
 			}
-			blockKeys = topLevelKeys(block)
+			blockFields = topLevelFieldStates(block)
 		}
-		// Restore defaults for zero-value fields that weren't set
+		// Restore defaults for zero-value fields that were omitted or explicitly
+		// set to YAML null (for example, "priority:" or "max_retries: null").
 		if meta.ID == "" {
 			meta.ID = TaskFileStem(path)
 		}
 		if meta.Priority == 0 {
-			if _, ok := blockKeys["priority"]; !ok {
+			if field, ok := blockFields["priority"]; !ok || field.isNull {
 				meta.Priority = 50
 			}
 		}
 		if meta.MaxRetries == 0 {
-			if _, ok := blockKeys["max_retries"]; !ok {
+			if field, ok := blockFields["max_retries"]; !ok || field.isNull {
 				meta.MaxRetries = 3
 			}
 		}
@@ -122,7 +123,11 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 	return meta, stripHTMLCommentLines(body), nil
 }
 
-func topLevelKeys(block string) map[string]struct{} {
+type topLevelFieldState struct {
+	isNull bool
+}
+
+func topLevelFieldStates(block string) map[string]topLevelFieldState {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(block), &doc); err != nil {
 		return nil
@@ -134,15 +139,25 @@ func topLevelKeys(block string) map[string]struct{} {
 	if mapping.Kind != yaml.MappingNode {
 		return nil
 	}
-	keys := make(map[string]struct{}, len(mapping.Content)/2)
+	fields := make(map[string]topLevelFieldState, len(mapping.Content)/2)
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		keyNode := mapping.Content[i]
+		valueNode := mapping.Content[i+1]
 		if keyNode.Kind != yaml.ScalarNode {
 			continue
 		}
-		keys[keyNode.Value] = struct{}{}
+		fields[keyNode.Value] = topLevelFieldState{
+			isNull: isNullScalarNode(valueNode),
+		}
 	}
-	return keys
+	return fields
+}
+
+func isNullScalarNode(node *yaml.Node) bool {
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return false
+	}
+	return node.Tag == "!!null"
 }
 
 func TaskFileStem(path string) string {

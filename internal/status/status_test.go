@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"mato/internal/dirs"
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/process"
@@ -504,6 +505,30 @@ func TestMergeLockActive(t *testing.T) {
 	}
 }
 
+func TestMergeLockUnknown(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Completed, dirs.Failed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	testutil.MakeUnreadablePath(t, filepath.Join(tasksDir, ".locks", "merge.lock"))
+
+	output := captureShowVerbose(t, repoRoot)
+
+	if !contains(output, "merge queue:    unknown") {
+		t.Errorf("output should contain 'merge queue:    unknown', got:\n%s", output)
+	}
+	if !contains(output, "could not read merge queue lock") {
+		t.Errorf("output should contain merge lock warning, got:\n%s", output)
+	}
+}
+
 func TestFailureReasonExtraction(t *testing.T) {
 	// Single failure.
 	single := []byte("<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n# Task\n")
@@ -568,14 +593,22 @@ func TestMergeLockIdle(t *testing.T) {
 	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
 
 	// No merge lock file — should be idle.
-	if isMergeLockActive(tasksDir) {
-		t.Error("isMergeLockActive should be false when no lock file exists")
+	state, err := mergeLockState(tasksDir)
+	if err != nil {
+		t.Fatalf("mergeLockState: %v", err)
+	}
+	if state != lockfile.StatusInactive {
+		t.Errorf("mergeLockState = %v, want %v", state, lockfile.StatusInactive)
 	}
 
 	// Dead process lock — should be idle.
 	os.WriteFile(filepath.Join(tasksDir, ".locks", "merge.lock"), []byte("2147483647"), 0o644)
-	if isMergeLockActive(tasksDir) {
-		t.Error("isMergeLockActive should be false for dead process")
+	state, err = mergeLockState(tasksDir)
+	if err != nil {
+		t.Fatalf("mergeLockState: %v", err)
+	}
+	if state != lockfile.StatusInactive {
+		t.Errorf("mergeLockState = %v, want %v", state, lockfile.StatusInactive)
 	}
 }
 
@@ -1600,6 +1633,47 @@ func TestShowJSON_ValidOutput(t *testing.T) {
 	}
 	if result.RunnableBacklog[0].Priority != 10 {
 		t.Errorf("expected priority 10, got %d", result.RunnableBacklog[0].Priority)
+	}
+}
+
+func TestShowJSON_MergeLockUnknown(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := filepath.Join(repoRoot, ".mato")
+	for _, sub := range []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Completed, dirs.Failed, ".locks"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", sub, err)
+		}
+	}
+	if err := messaging.Init(tasksDir); err != nil {
+		t.Fatalf("messaging.Init: %v", err)
+	}
+
+	testutil.MakeUnreadablePath(t, filepath.Join(tasksDir, ".locks", "merge.lock"))
+
+	var buf bytes.Buffer
+	if err := ShowJSON(&buf, repoRoot); err != nil {
+		t.Fatalf("ShowJSON: %v", err)
+	}
+
+	var result StatusJSON
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v\nraw output:\n%s", err, buf.String())
+	}
+	if result.MergeQueue != "unknown" {
+		t.Fatalf("expected merge_queue unknown, got %q", result.MergeQueue)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected warning for unreadable merge lock")
+	}
+	foundWarning := false
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "could not read merge queue lock") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("expected merge queue warning, got %v", result.Warnings)
 	}
 }
 

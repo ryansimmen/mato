@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"mato/internal/dirs"
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queueview"
@@ -99,7 +100,7 @@ func TestRenderQueueOverview_MergeLockActive(t *testing.T) {
 		queueCounts:     map[string]int{dirs.Backlog: 3, dirs.InProgress: 2},
 		deferredDetail:  map[string]queueview.DeferralInfo{},
 		runnable:        3,
-		mergeLockActive: true,
+		mergeLockStatus: lockfile.StatusActive,
 	}
 
 	renderQueueOverview(&buf, c, data)
@@ -107,6 +108,23 @@ func TestRenderQueueOverview_MergeLockActive(t *testing.T) {
 
 	if !strings.Contains(output, "active") {
 		t.Errorf("merge queue should show active, got:\n%s", output)
+	}
+}
+
+func TestRenderQueueOverview_MergeLockUnknown(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		queueCounts:     map[string]int{},
+		deferredDetail:  map[string]queueview.DeferralInfo{},
+		mergeLockStatus: lockfile.StatusUnknown,
+	}
+
+	renderQueueOverview(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "unknown") {
+		t.Errorf("merge queue should show unknown, got:\n%s", output)
 	}
 }
 
@@ -732,6 +750,28 @@ func TestRenderCompactQueueSummary(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q, got:\n%s", want, output)
 		}
+	}
+}
+
+func TestRenderCompactQueueSummary_MergeLockUnknown(t *testing.T) {
+	var buf bytes.Buffer
+	c := plainColorSet()
+	data := statusData{
+		queueCounts: map[string]int{
+			dirs.Backlog: 1,
+		},
+		runnable:        1,
+		mergeLockStatus: lockfile.StatusUnknown,
+	}
+
+	renderCompactQueueSummary(&buf, c, data)
+	output := buf.String()
+
+	if !strings.Contains(output, "Merge queue: unknown") {
+		t.Fatalf("compact merge queue should show unknown, got:\n%s", output)
+	}
+	if strings.Contains(output, "Merge queue: idle") {
+		t.Fatalf("compact merge queue should not fall back to idle, got:\n%s", output)
 	}
 }
 

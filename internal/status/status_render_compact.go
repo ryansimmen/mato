@@ -25,8 +25,11 @@ func renderCompactDashboard(w io.Writer, c colorSet, data statusData) error {
 
 func renderCompactQueueSummary(w io.Writer, c colorSet, data statusData) error {
 	mergeState := c.Dim("idle")
-	if data.mergeLockActive {
+	switch data.mergeQueueState() {
+	case "active":
 		mergeState = c.Yellow("active")
+	case "unknown":
+		mergeState = c.Yellow("unknown")
 	}
 
 	rw := renderWriter{w: w}

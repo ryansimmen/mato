@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
@@ -999,6 +1000,15 @@ func TestProcessQueue_DuplicateInCompletedIsRemoved(t *testing.T) {
 	if err := os.WriteFile(completedFile, []byte("<!-- branch: task/dup-task -->\n---\npriority: 5\n---\n# Dup\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile completed: %v", err)
 	}
+	if err := messaging.WriteCompletionDetail(tasksDir, messaging.CompletionDetail{
+		TaskID:   "dup-task",
+		TaskFile: "dup-task.md",
+		Branch:   "task/dup-task",
+		Title:    "Dup",
+		MergedAt: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("WriteCompletionDetail: %v", err)
+	}
 
 	// ProcessQueue should detect the duplicate and remove the ready-to-merge copy.
 	// We don't need a real repo since the task already has a merged record.
@@ -1053,7 +1063,8 @@ func TestProcessQueue_RecoveryPathWritesCompletionDetail(t *testing.T) {
 
 	// Place a task in ready-to-merge with a merged marker but no completion detail.
 	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, "recover-detail.md")
-	taskContent := "<!-- branch: task/recover-detail -->\n---\nid: recover-detail\npriority: 5\n---\n# Recover detail\nMerge this.\n\n<!-- merged: merge-queue at 2026-01-01T00:00:00Z -->\n"
+	mergedAt := "2026-01-01T00:00:00Z"
+	taskContent := "<!-- branch: task/recover-detail -->\n---\nid: recover-detail\npriority: 5\n---\n# Recover detail\nMerge this.\n\n<!-- merged: merge-queue at " + mergedAt + " -->\n"
 	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
 		t.Fatalf("os.WriteFile task: %v", err)
 	}
@@ -1091,6 +1102,13 @@ func TestProcessQueue_RecoveryPathWritesCompletionDetail(t *testing.T) {
 	}
 	if detail.Title != "Recover detail" {
 		t.Errorf("Title = %q, want %q", detail.Title, "Recover detail")
+	}
+	wantMergedAt, err := time.Parse(time.RFC3339, mergedAt)
+	if err != nil {
+		t.Fatalf("time.Parse mergedAt: %v", err)
+	}
+	if !detail.MergedAt.Equal(wantMergedAt) {
+		t.Fatalf("MergedAt = %v, want %v", detail.MergedAt, wantMergedAt)
 	}
 	foundRecover := false
 	for _, f := range detail.FilesChanged {
@@ -1438,6 +1456,156 @@ func TestProcessQueue_IdempotentMergeAfterBookkeepingFailure(t *testing.T) {
 		t.Fatalf("git branch --list after recovery: %v", err)
 	} else if strings.TrimSpace(out) != "" {
 		t.Fatal("task branch should be deleted after bookkeeping succeeds")
+	}
+}
+
+func TestProcessQueue_CompletionDetailWriteFailureRecoversLater(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	tasksDir := setupTasksDir(t)
+	if _, err := git.Output(repoRoot, "checkout", "-b", "mato"); err != nil {
+		t.Fatalf("git checkout -b mato: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "config", "receive.denyCurrentBranch", "updateInstead"); err != nil {
+		t.Fatalf("git config receive.denyCurrentBranch: %v", err)
+	}
+
+	taskName := "completion-recovery.md"
+	taskBranch := "task/completion-recovery"
+
+	if _, err := git.Output(repoRoot, "checkout", "-b", taskBranch, "mato"); err != nil {
+		t.Fatalf("git checkout %s: %v", taskBranch, err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "durable-detail.txt"), []byte("detail\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile durable-detail.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "add", "durable-detail.txt"); err != nil {
+		t.Fatalf("git add durable-detail.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "preserve completion detail"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "mato"); err != nil {
+		t.Fatalf("git checkout mato: %v", err)
+	}
+
+	taskFile := filepath.Join(tasksDir, dirs.ReadyMerge, taskName)
+	taskContent := "<!-- branch: " + taskBranch + " -->\n---\nid: completion-recovery\npriority: 5\n---\n# Completion recovery\nMerge this task.\n"
+	if err := os.WriteFile(taskFile, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task: %v", err)
+	}
+
+	if err := runtimedata.UpdateTaskState(tasksDir, taskName, func(state *runtimedata.TaskState) {
+		state.LastOutcome = runtimedata.OutcomeReviewApproved
+		state.TaskBranch = taskBranch
+		state.TargetBranch = "mato"
+	}); err != nil {
+		t.Fatalf("seed taskstate: %v", err)
+	}
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		if _, err := runtimedata.LoadOrCreateSession(tasksDir, kind, taskName, taskBranch); err != nil {
+			t.Fatalf("seed %s session: %v", kind, err)
+		}
+	}
+
+	origWrite := writeCompletionDetailFn
+	t.Cleanup(func() { writeCompletionDetailFn = origWrite })
+	attempts := 0
+	writeCompletionDetailFn = func(tasksDir string, detail messaging.CompletionDetail) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("injected completion detail failure")
+		}
+		return origWrite(tasksDir, detail)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 0 {
+		t.Fatalf("ProcessQueue() first run = %d, want 0", got)
+	}
+
+	if _, err := os.Stat(taskFile); err != nil {
+		t.Fatalf("task should remain in ready-to-merge after detail failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, taskName)); !os.IsNotExist(err) {
+		t.Fatalf("completed task should not exist yet, got err=%v", err)
+	}
+	if _, err := messaging.ReadCompletionDetail(tasksDir, "completion-recovery"); err == nil {
+		t.Fatal("completion detail should not exist after injected write failure")
+	}
+	if !taskHasMergeSuccessRecord(taskFile) {
+		t.Fatal("task should retain merged marker for deterministic recovery")
+	}
+	state, err := runtimedata.LoadTaskState(tasksDir, taskName)
+	if err != nil {
+		t.Fatalf("LoadTaskState after first run: %v", err)
+	}
+	if state == nil {
+		t.Fatal("taskstate should be preserved until completion detail is durable")
+	}
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		session, err := runtimedata.LoadSession(tasksDir, kind, taskName)
+		if err != nil {
+			t.Fatalf("LoadSession(%s) after first run: %v", kind, err)
+		}
+		if session == nil {
+			t.Fatalf("%s session should be preserved until completion detail is durable", kind)
+		}
+	}
+	if out, err := git.Output(repoRoot, "branch", "--list", taskBranch); err != nil {
+		t.Fatalf("git branch --list after first run: %v", err)
+	} else if strings.TrimSpace(out) == "" {
+		t.Fatal("task branch should remain until recovery bookkeeping succeeds")
+	}
+
+	mergeSHA, err := git.Output(repoRoot, "rev-parse", "mato")
+	if err != nil {
+		t.Fatalf("git rev-parse mato: %v", err)
+	}
+	mergedAtOut, err := git.Output(repoRoot, "log", "-1", "--format=%cI", "mato")
+	if err != nil {
+		t.Fatalf("git log merged_at: %v", err)
+	}
+	mergedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(mergedAtOut))
+	if err != nil {
+		t.Fatalf("time.Parse merged_at: %v", err)
+	}
+
+	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
+		t.Fatalf("ProcessQueue() second run = %d, want 1", got)
+	}
+
+	detail, err := messaging.ReadCompletionDetail(tasksDir, "completion-recovery")
+	if err != nil {
+		t.Fatalf("ReadCompletionDetail after recovery: %v", err)
+	}
+	if detail.CommitSHA != strings.TrimSpace(mergeSHA) {
+		t.Fatalf("CommitSHA = %q, want %q", detail.CommitSHA, strings.TrimSpace(mergeSHA))
+	}
+	if !detail.MergedAt.Equal(mergedAt.UTC()) {
+		t.Fatalf("MergedAt = %v, want %v", detail.MergedAt, mergedAt.UTC())
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, taskName)); err != nil {
+		t.Fatalf("completed task missing after recovery: %v", err)
+	}
+	state, err = runtimedata.LoadTaskState(tasksDir, taskName)
+	if err != nil {
+		t.Fatalf("LoadTaskState after recovery: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should be cleaned after recovery, got %+v", state)
+	}
+	for _, kind := range []string{runtimedata.KindWork, runtimedata.KindReview} {
+		session, err := runtimedata.LoadSession(tasksDir, kind, taskName)
+		if err != nil {
+			t.Fatalf("LoadSession(%s) after recovery: %v", kind, err)
+		}
+		if session != nil {
+			t.Fatalf("%s session should be cleaned after recovery, got %+v", kind, session)
+		}
+	}
+	if out, err := git.Output(repoRoot, "branch", "--list", taskBranch); err != nil {
+		t.Fatalf("git branch --list after recovery: %v", err)
+	} else if strings.TrimSpace(out) != "" {
+		t.Fatal("task branch should be deleted after recovery succeeds")
 	}
 }
 

@@ -136,7 +136,17 @@ func scanStaleReviewLocks(locksDir string, fix bool) []Finding {
 			continue
 		}
 		lockPath := filepath.Join(locksDir, e.Name())
-		if lockfile.IsHeld(lockPath) {
+		held, err := lockfile.CheckHeld(lockPath)
+		if err != nil {
+			findings = append(findings, Finding{
+				Code:     "locks.unreadable_review",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("unreadable review lock: %s: %v", e.Name(), err),
+				Path:     lockPath,
+			})
+			continue
+		}
+		if held {
 			continue
 		}
 
@@ -257,7 +267,8 @@ func countActiveAgents(locksDir string) int {
 			continue
 		}
 		lockPath := filepath.Join(locksDir, e.Name())
-		if lockfile.IsHeld(lockPath) {
+		meta, err := lockfile.ReadMetadata(lockPath)
+		if err == nil && meta.IsActive() {
 			count++
 		}
 	}

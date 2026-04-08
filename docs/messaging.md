@@ -130,9 +130,9 @@ When the host merge queue successfully squash-merges a task branch, it writes a 
 
 ### Who writes it
 
-The merge queue (`merge.ProcessQueue`) writes the file immediately after a successful squash-merge commit and push, before moving the task to `completed/`.
+The merge queue (`merge.ProcessQueue`) writes the file immediately after a successful squash-merge commit and push, before moving the task to `completed/`. If that write fails, the task stays in `ready-to-merge/` and the task branch/runtime metadata are preserved so a later merge cycle can recover deterministically instead of finalizing without dependency context.
 
-If a prior push succeeded but post-push bookkeeping failed (e.g. the move to `completed/` was interrupted), the next merge cycle detects the already-merged branch via the idempotent squash path. In this recovery scenario, the merge queue recovers metadata — the target branch HEAD as the commit SHA and the task branch's changed files — and writes the completion detail before finishing the bookkeeping. This ensures downstream dependent tasks always receive dependency context, even after a partial failure and retry.
+If a prior push succeeded but post-push bookkeeping failed (for example, the completion-detail write or the move to `completed/` was interrupted), the next merge cycle detects the already-merged task, reconstructs the completion detail, and only then finishes the bookkeeping. Recovery preserves the original merge timestamp: it prefers the persisted `<!-- merged: merge-queue at ... -->` marker when present and otherwise falls back to the merge commit timestamp from git history. This ensures downstream dependent tasks always receive dependency context, even after a partial failure and retry.
 
 ### Format
 
@@ -161,7 +161,7 @@ Field meanings:
 
 ### How dependent tasks use it
 
-When the host claims a task that has `depends_on` entries, `runner.writeDependencyContextFile(...)` reads the completion detail file for each resolved dependency and writes them as a JSON array to `.mato/messages/dependency-context-<filename>.json`. If any completion files are found, the host injects the file path as the `MATO_DEPENDENCY_CONTEXT` environment variable. The agent prompt reads this file during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks. The context file is cleaned up after the agent container exits.
+When the host claims a task that has `depends_on` entries, `runner.writeDependencyContextFile(...)` reads the completion detail file for each resolved dependency and writes them as a JSON array to `.mato/messages/dependency-context-<filename>.json`. Resolution uses the same completed-task alias rules as scheduling: either the completed task's explicit `id` or its filename stem can satisfy `depends_on`, unless that token is ambiguous because it also exists in a non-completed state. If any completion files are found, the host injects the file path as the `MATO_DEPENDENCY_CONTEXT` environment variable. The agent prompt reads this file during `VERIFY_CLAIM` so the agent knows what files changed, which commits were created, and what branches were used by prerequisite tasks. The context file is cleaned up after the agent container exits.
 
 ### Filename encoding
 

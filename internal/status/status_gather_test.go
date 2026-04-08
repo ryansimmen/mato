@@ -13,6 +13,7 @@ import (
 
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
+	"mato/internal/lockfile"
 	"mato/internal/messaging"
 	"mato/internal/pause"
 	"mato/internal/queue"
@@ -678,8 +679,8 @@ func TestGatherStatus_EmptyTasksDir(t *testing.T) {
 	if len(data.recentMessages) != 0 {
 		t.Errorf("recentMessages = %d, want 0", len(data.recentMessages))
 	}
-	if data.mergeLockActive {
-		t.Error("mergeLockActive should be false")
+	if got := data.mergeQueueState(); got != "idle" {
+		t.Errorf("mergeQueueState = %q, want idle", got)
 	}
 }
 
@@ -910,18 +911,57 @@ func TestGatherStatus_DependencyBlockedBacklogExcludedFromRunnable(t *testing.T)
 	}
 }
 
-func TestIsMergeLockActive_NoLock(t *testing.T) {
+func TestMergeLockState_NoLock(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	if isMergeLockActive(tasksDir) {
-		t.Error("isMergeLockActive should be false when no lock file exists")
+	state, err := mergeLockState(tasksDir)
+	if err != nil {
+		t.Fatalf("mergeLockState: %v", err)
+	}
+	if state != lockfile.StatusInactive {
+		t.Errorf("mergeLockState = %v, want %v", state, lockfile.StatusInactive)
 	}
 }
 
-func TestIsMergeLockActive_DeadProcess(t *testing.T) {
+func TestMergeLockState_DeadProcess(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	os.WriteFile(filepath.Join(tasksDir, ".locks", "merge.lock"), []byte("2147483647"), 0o644)
-	if isMergeLockActive(tasksDir) {
-		t.Error("isMergeLockActive should be false for dead process")
+	state, err := mergeLockState(tasksDir)
+	if err != nil {
+		t.Fatalf("mergeLockState: %v", err)
+	}
+	if state != lockfile.StatusInactive {
+		t.Errorf("mergeLockState = %v, want %v", state, lockfile.StatusInactive)
+	}
+}
+
+func TestMergeLockState_Unreadable(t *testing.T) {
+	tasksDir := setupTasksDir(t)
+	testutil.MakeUnreadablePath(t, filepath.Join(tasksDir, ".locks", "merge.lock"))
+
+	state, err := mergeLockState(tasksDir)
+	if err == nil {
+		t.Fatal("expected mergeLockState error for unreadable merge.lock")
+	}
+	if state != lockfile.StatusUnknown {
+		t.Errorf("mergeLockState = %v, want %v", state, lockfile.StatusUnknown)
+	}
+
+	data, err := gatherStatus(tasksDir)
+	if err != nil {
+		t.Fatalf("gatherStatus: %v", err)
+	}
+	if got := data.mergeQueueState(); got != "unknown" {
+		t.Fatalf("mergeQueueState = %q, want unknown", got)
+	}
+	foundWarning := false
+	for _, warning := range data.warnings {
+		if strings.Contains(warning, "could not read merge queue lock") {
+			foundWarning = true
+			break
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("expected warning about unreadable merge queue lock, got: %v", data.warnings)
 	}
 }
 
