@@ -628,7 +628,7 @@ func TestShowTo_MissingMatoDir(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error for missing .mato directory, got nil")
 			}
-			want := ".mato/ directory not found - run 'mato init' first"
+			want := ".mato/ directory not found"
 			if err.Error() != want {
 				t.Errorf("error = %q, want %q", err.Error(), want)
 			}

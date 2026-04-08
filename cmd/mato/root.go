@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -56,7 +59,7 @@ func newUsageError(cmd *cobra.Command, err error) error {
 	if err == nil {
 		return nil
 	}
-	return &UsageError{Err: err, Usage: cmd.UsageString()}
+	return &UsageError{Err: hintUsageError(err), Usage: cmd.UsageString()}
 }
 
 func usageNoArgs(cmd *cobra.Command, args []string) error {
@@ -101,13 +104,37 @@ func writeCommandError(w io.Writer, err error) int {
 
 	var usageErr *UsageError
 	if errors.As(err, &usageErr) {
-		fmt.Fprintf(w, "mato error: %v\n\n", usageErr.Err)
+		fmt.Fprintf(w, "mato error: %v\n", usageErr.Err)
+		writeCommandHint(w, usageErr.Err)
+		_, _ = io.WriteString(w, "\n")
 		_, _ = io.WriteString(w, usageErr.Usage)
 		return 1
 	}
 
 	fmt.Fprintf(w, "mato error: %v\n", err)
+	writeCommandHint(w, err)
 	return 1
+}
+
+func hintUsageError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := ui.ErrorHint(err); ok {
+		return err
+	}
+	if strings.Contains(err.Error(), "invalid duration") {
+		return ui.WithHint(err, "use a duration like 2s, 30s, or 1m")
+	}
+	return err
+}
+
+func writeCommandHint(w io.Writer, err error) {
+	hint, ok := ui.ErrorHint(err)
+	if !ok {
+		return
+	}
+	fmt.Fprintf(w, "  hint: %s\n", hint)
 }
 
 func newRootCmd() *cobra.Command {

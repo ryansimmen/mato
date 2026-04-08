@@ -5361,6 +5361,18 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want substring %q", err, tt.want)
 			}
+			switch tt.name {
+			case "missing task model":
+				hint, ok := ui.ErrorHint(err)
+				if !ok || !strings.Contains(hint, "--task-model") {
+					t.Fatalf("hint = %q, want task model hint", hint)
+				}
+			case "missing review model":
+				hint, ok := ui.ErrorHint(err)
+				if !ok || !strings.Contains(hint, "--review-model") {
+					t.Fatalf("hint = %q, want review model hint", hint)
+				}
+			}
 		})
 	}
 }

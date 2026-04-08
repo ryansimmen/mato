@@ -29,7 +29,7 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 				return newUsageError(cmd, err)
 			}
 			if initBranch != "" && strings.TrimSpace(initBranch) == "" {
-				return newUsageError(cmd, fmt.Errorf("--branch must not be whitespace-only"))
+				return newUsageError(cmd, ui.WithHint(fmt.Errorf("--branch must not be whitespace-only"), "pass --branch a valid git ref name such as mato or feature/my-change"))
 			}
 			repo, err := resolveRepo(*repoFlag)
 			if err != nil {
@@ -50,7 +50,7 @@ func newInitCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validateBranch(branch.Value); err != nil {
+			if err := validateResolvedBranch(branch); err != nil {
 				return err
 			}
 

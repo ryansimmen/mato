@@ -48,7 +48,7 @@ func showConfig(w io.Writer, repoRoot, format string) error {
 	if err != nil {
 		return err
 	}
-	if err := validateBranch(resolved.Branch.Value); err != nil {
+	if err := validateResolvedBranch(resolved.Branch); err != nil {
 		return err
 	}
 	if format == "json" {
