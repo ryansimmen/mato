@@ -237,6 +237,40 @@ func TestAtomicMove_PermissionError(t *testing.T) {
 	}
 }
 
+func TestAtomicMove_RejectsSymlinkSource(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "secret.md")
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+
+	if err := os.WriteFile(target, []byte("# Secret\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, src); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	var linkCalls int
+	withLinkFn(t, func(string, string) error {
+		linkCalls++
+		return nil
+	})
+
+	err := AtomicMove(src, dst)
+	if err == nil {
+		t.Fatal("AtomicMove should reject symlink sources")
+	}
+	if !errors.Is(err, taskfile.ErrTaskFileNotRegular) {
+		t.Fatalf("AtomicMove error = %v, want ErrTaskFileNotRegular", err)
+	}
+	if linkCalls != 0 {
+		t.Fatalf("linkFn called %d times, want 0", linkCalls)
+	}
+	if _, statErr := os.Lstat(dst); !os.IsNotExist(statErr) {
+		t.Fatalf("destination should not exist after rejected symlink move, got %v", statErr)
+	}
+}
+
 // withLinkFn overrides the linkFn hook for the duration of the test and
 // restores it on cleanup.
 func withLinkFn(t *testing.T, fn func(string, string) error) {
