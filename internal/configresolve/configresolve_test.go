@@ -8,6 +8,7 @@ import (
 
 	"mato/internal/config"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestResolveRepoDefaults_DefaultsOnly(t *testing.T) {
@@ -140,6 +141,10 @@ func TestResolveRunConfig(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), envAgentTimeout.Name) {
 			t.Fatalf("err = %v, want %s parse error", err, envAgentTimeout.Name)
 		}
+		hint, ok := ui.ErrorHint(err)
+		if !ok || !strings.Contains(hint, "positive duration like") || !strings.Contains(hint, envAgentTimeout.Name) {
+			t.Fatalf("hint = %q, want env duration hint", hint)
+		}
 	})
 
 	t.Run("invalid config duration", func(t *testing.T) {
@@ -153,6 +158,22 @@ func TestResolveRunConfig(t *testing.T) {
 		_, err := ResolveRunConfig(RunFlags{TaskReasoningEffort: "invalid"}, config.LoadResult{})
 		if err == nil || !strings.Contains(err.Error(), "task-reasoning-effort") {
 			t.Fatalf("err = %v, want reasoning effort error", err)
+		}
+		hint, ok := ui.ErrorHint(err)
+		if !ok || !strings.Contains(hint, "--task-reasoning-effort") {
+			t.Fatalf("hint = %q, want task reasoning hint", hint)
+		}
+	})
+
+	t.Run("branch whitespace env includes hint", func(t *testing.T) {
+		t.Setenv(envBranch.Name, "   ")
+		_, err := ResolveBranch(config.LoadResult{}, "")
+		if err == nil || !strings.Contains(err.Error(), envBranch.Name) {
+			t.Fatalf("err = %v, want branch env error", err)
+		}
+		hint, ok := ui.ErrorHint(err)
+		if !ok || !strings.Contains(hint, envBranch.Name) || !strings.Contains(hint, "valid git ref name") {
+			t.Fatalf("hint = %q, want branch hint", hint)
 		}
 	})
 }

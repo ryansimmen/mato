@@ -7,6 +7,7 @@ import (
 	"mato/internal/config"
 	"mato/internal/configresolve"
 	"mato/internal/runner"
+	"mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -41,7 +42,7 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 				return newUsageError(cmd, fmt.Errorf("--once and --until-idle are mutually exclusive"))
 			}
 			if branch != "" && strings.TrimSpace(branch) == "" {
-				return newUsageError(cmd, fmt.Errorf("--branch must not be whitespace-only"))
+				return newUsageError(cmd, ui.WithHint(fmt.Errorf("--branch must not be whitespace-only"), "pass --branch a valid git ref name such as mato or feature/my-change"))
 			}
 
 			repo, err := resolveRepo(*repoFlag)
@@ -63,7 +64,7 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validateBranch(resolvedBranch.Value); err != nil {
+			if err := validateResolvedBranch(resolvedBranch); err != nil {
 				return err
 			}
 			runCfg, err := configresolve.ResolveRunConfig(flags, load)

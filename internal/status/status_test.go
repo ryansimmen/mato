@@ -23,6 +23,7 @@ import (
 	"mato/internal/queueview"
 	"mato/internal/taskfile"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestShowWithPopulatedTasksDir(t *testing.T) {
@@ -2213,8 +2214,12 @@ func TestShow_UninitializedRepo(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for uninitialized repo, got nil")
 	}
-	if !strings.Contains(err.Error(), "mato init") {
-		t.Fatalf("expected error to mention 'mato init', got: %v", err)
+	if !strings.Contains(err.Error(), ".mato/ directory not found") {
+		t.Fatalf("expected missing .mato error, got: %v", err)
+	}
+	hint, ok := ui.ErrorHint(err)
+	if !ok || hint != "run 'mato init' first" {
+		t.Fatalf("hint = %q, want init guidance", hint)
 	}
 }
 
@@ -2226,7 +2231,11 @@ func TestShowJSON_UninitializedRepo(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for uninitialized repo, got nil")
 	}
-	if !strings.Contains(err.Error(), "mato init") {
-		t.Fatalf("expected error to mention 'mato init', got: %v", err)
+	if !strings.Contains(err.Error(), ".mato/ directory not found") {
+		t.Fatalf("expected missing .mato error, got: %v", err)
+	}
+	hint, ok := ui.ErrorHint(err)
+	if !ok || hint != "run 'mato init' first" {
+		t.Fatalf("hint = %q, want init guidance", hint)
 	}
 }

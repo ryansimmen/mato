@@ -159,6 +159,10 @@ func TestRequireTasksDir_NotExist(t *testing.T) {
 	if got := err.Error(); !contains(got, want) {
 		t.Errorf("error = %q, want to contain %q", got, want)
 	}
+	hint, ok := ErrorHint(err)
+	if !ok || hint != "run 'mato init' first" {
+		t.Fatalf("hint = %q, want init guidance", hint)
+	}
 }
 
 func TestRequireTasksDir_NotADir(t *testing.T) {

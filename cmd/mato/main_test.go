@@ -22,6 +22,7 @@ import (
 	"mato/internal/runner"
 	"mato/internal/setup"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -560,6 +561,43 @@ func TestWriteCommandError_RuntimeErrorOmitsUsage(t *testing.T) {
 	}
 	if !strings.Contains(out, "not a git repository") {
 		t.Fatalf("expected git repo error, got:\n%s", out)
+	}
+	if !strings.Contains(out, "  hint: run this command inside a git repository or pass --repo /path/to/repo") {
+		t.Fatalf("expected repo hint, got:\n%s", out)
+	}
+}
+
+func TestWriteCommandError_UsageErrorIncludesHint(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "--watch", "--interval=bad"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	out, code := renderCommandError(t, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "invalid duration") {
+		t.Fatalf("expected duration parse error, got:\n%s", out)
+	}
+	if !strings.Contains(out, "  hint: use a duration like 2s, 30s, or 1m") {
+		t.Fatalf("expected duration hint, got:\n%s", out)
+	}
+}
+
+func TestWriteCommandError_DirectHintedError(t *testing.T) {
+	out, code := renderCommandError(t, ui.WithHint(fmt.Errorf("task model must not be empty"), "set it with --task-model, MATO_TASK_MODEL, or task_model in .mato.yaml"))
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "mato error: task model must not be empty") {
+		t.Fatalf("unexpected output: %q", out)
+	}
+	if !strings.Contains(out, "  hint: set it with --task-model, MATO_TASK_MODEL, or task_model in .mato.yaml") {
+		t.Fatalf("unexpected output: %q", out)
 	}
 }
 
@@ -1666,7 +1704,7 @@ func TestGraphCmd_MissingMatoDir(t *testing.T) {
 		t.Fatal("expected error for missing .mato directory, got nil")
 	}
 	want := ".mato/ directory not found - run 'mato init' first"
-	if !strings.Contains(err.Error(), want) {
+	if !strings.Contains(err.Error(), ".mato/ directory not found") {
 		t.Fatalf("error = %q, want containing %q", err.Error(), want)
 	}
 }
@@ -1681,7 +1719,7 @@ func TestInspectCmd_MissingMatoDir(t *testing.T) {
 		t.Fatal("expected error for missing .mato directory, got nil")
 	}
 	want := ".mato/ directory not found - run 'mato init' first"
-	if !strings.Contains(err.Error(), want) {
+	if !strings.Contains(err.Error(), ".mato/ directory not found") {
 		t.Fatalf("error = %q, want containing %q", err.Error(), want)
 	}
 }
@@ -1994,6 +2032,14 @@ func TestRootCmd_InvalidBranchRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid branch name") {
 		t.Errorf("error = %q, want error containing 'invalid branch name'", err.Error())
 	}
+
+	out, code := renderCommandError(t, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "  hint: pass --branch a valid git ref name such as mato or feature/my-change") {
+		t.Fatalf("unexpected output: %q", out)
+	}
 }
 
 func TestRootCmd_NonRepoPathRejected(t *testing.T) {
@@ -2122,7 +2168,7 @@ func TestRetryCmd_MissingMatoDir(t *testing.T) {
 	if execErr == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(execErr.Error(), ".mato/ directory not found - run 'mato init' first") {
+	if !strings.Contains(execErr.Error(), ".mato/ directory not found") {
 		t.Fatalf("unexpected error: %v", execErr)
 	}
 	var silentErr *SilentError
@@ -2266,7 +2312,10 @@ func TestPauseResumeCmd_MissingTasksDir(t *testing.T) {
 			if code == 0 {
 				t.Fatal("expected non-zero exit code")
 			}
-			if !strings.Contains(out, ".mato/ directory not found - run 'mato init' first") {
+			if !strings.Contains(out, "mato error: .mato/ directory not found") {
+				t.Fatalf("unexpected output: %q", out)
+			}
+			if !strings.Contains(out, "  hint: run 'mato init' first") {
 				t.Fatalf("unexpected output: %q", out)
 			}
 		})
@@ -2527,7 +2576,7 @@ func TestCancelCmd_MissingMatoDir(t *testing.T) {
 	if execErr == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(execErr.Error(), ".mato/ directory not found - run 'mato init' first") {
+	if !strings.Contains(execErr.Error(), ".mato/ directory not found") {
 		t.Fatalf("unexpected error: %v", execErr)
 	}
 }
