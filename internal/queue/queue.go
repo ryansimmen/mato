@@ -217,6 +217,7 @@ func QuarantinePushedTaskHandoff(tasksDir, name, taskPath, detail string) error 
 }
 
 func quarantinePushedTaskRecovery(tasksDir, name, taskPath, detail string) (*PushedTaskRecovery, bool, error) {
+	originalData, haveOriginalData := readPushedTaskRecoveryData(taskPath)
 	reason := pushedTaskRecoveryFailureReason(detail)
 	ensureTerminalFailureRecord(taskPath, name, reason)
 
@@ -224,9 +225,72 @@ func quarantinePushedTaskRecovery(tasksDir, name, taskPath, detail string) (*Pus
 	if err := AtomicMove(taskPath, dst); err != nil {
 		return nil, true, fmt.Errorf("move task to failed/: %w", err)
 	}
+	if err := removePushedTaskRecoveryDuplicates(tasksDir, name, taskPath, dst, originalData, haveOriginalData); err != nil {
+		return nil, true, fmt.Errorf("remove duplicate live copy after quarantine: %w", err)
+	}
 	runtimedata.DeleteRuntimeArtifacts(tasksDir, name)
 	ui.Warnf("warning: %s for %s; moved task to failed/\n", detail, name)
 	return nil, true, nil
+}
+
+func readPushedTaskRecoveryData(taskPath string) ([]byte, bool) {
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+func removePushedTaskRecoveryDuplicates(tasksDir, name, taskPath, failedPath string, originalData []byte, haveOriginalData bool) error {
+	for _, candidate := range pushedTaskRecoveryDuplicateCandidates(tasksDir, name, taskPath) {
+		removeCandidate, err := shouldRemovePushedTaskRecoveryDuplicate(candidate, failedPath, originalData, haveOriginalData)
+		if err != nil {
+			return err
+		}
+		if !removeCandidate {
+			continue
+		}
+		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove duplicate live copy %s: %w", candidate, err)
+		}
+	}
+	return nil
+}
+
+func pushedTaskRecoveryDuplicateCandidates(tasksDir, name, taskPath string) []string {
+	switch filepath.Base(filepath.Dir(taskPath)) {
+	case dirs.InProgress:
+		return []string{filepath.Join(tasksDir, dirs.ReadyReview, name)}
+	case dirs.ReadyReview:
+		return []string{filepath.Join(tasksDir, dirs.InProgress, name)}
+	default:
+		return nil
+	}
+}
+
+func shouldRemovePushedTaskRecoveryDuplicate(candidatePath, failedPath string, originalData []byte, haveOriginalData bool) (bool, error) {
+	candidateInfo, err := os.Stat(candidatePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat duplicate live copy %s: %w", candidatePath, err)
+	}
+	failedInfo, err := os.Stat(failedPath)
+	if err != nil {
+		return false, fmt.Errorf("stat failed task %s: %w", failedPath, err)
+	}
+	if os.SameFile(candidateInfo, failedInfo) {
+		return true, nil
+	}
+	if !haveOriginalData {
+		return false, nil
+	}
+	candidateData, err := os.ReadFile(candidatePath)
+	if err != nil {
+		return false, fmt.Errorf("read duplicate live copy %s: %w", candidatePath, err)
+	}
+	return bytes.Equal(candidateData, originalData), nil
 }
 
 func pushedTaskRecoveryFailureReason(detail string) string {

@@ -30,6 +30,7 @@ var removeCloneFn = git.RemoveClone
 var ensureBranchFn = git.EnsureBranch
 var writeBranchMarkerFn = queue.WriteBranchMarker
 var writeDebugMarkerFn = writeDebugMarker
+var moveTaskFileFn = queue.AtomicMove
 
 // debugMarkerFile is a sentinel file written into a clone directory when it
 // is intentionally preserved after a postAgentPush failure. Its presence
@@ -276,7 +277,7 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 
 	// AtomicMove uses os.Link + os.Remove to prevent silently overwriting a
 	// file that appeared at the destination after the pre-check (TOCTOU defense).
-	if err := queue.AtomicMove(claimed.TaskPath, readyPath); err != nil {
+	if err := moveTaskFileFn(claimed.TaskPath, readyPath); err != nil {
 		return fmt.Errorf("move task to ready-for-review: %w", err)
 	}
 
@@ -284,7 +285,7 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 	// leave the in-progress file with an incorrect marker.
 	if err := writeBranchMarkerFn(readyPath, branch); err != nil {
 		// Roll back: move file from ready-for-review/ back to in-progress/.
-		if rollbackErr := queue.AtomicMove(readyPath, claimed.TaskPath); rollbackErr != nil {
+		if rollbackErr := moveTaskFileFn(readyPath, claimed.TaskPath); rollbackErr != nil {
 			detail := fmt.Sprintf("write branch marker to %s: %v (rollback failed: %v)", readyPath, err, rollbackErr)
 			if quarantineErr := queue.QuarantinePushedTaskHandoff(tasksDir, claimed.Filename, readyPath, detail); quarantineErr != nil {
 				fmt.Fprintf(os.Stderr, "error: branch marker write failed, rollback to in-progress/ also failed, and quarantine to failed/ also failed: %v\n", quarantineErr)

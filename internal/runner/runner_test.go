@@ -2126,6 +2126,96 @@ func TestPostAgentPush_BranchMarkerRollbackFailureQuarantinesReadyReviewCopy(t *
 	}
 }
 
+func TestPostAgentPush_BranchMarkerPartialRollbackFailureRemovesDuplicateInProgressCopy(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, dirs.Failed, "messages", "messages/events"} {
+		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+	}
+
+	taskFile := "partial-rollback.md"
+	taskContent := "<!-- claimed-by: agent1 -->\n# Partial Rollback\n"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+
+	cloneDir := t.TempDir()
+	remoteDir := t.TempDir()
+	gitRun := func(dir string, args ...string) {
+		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	gitRun(remoteDir, "git", "init", "--bare", "-b", "main")
+	gitRun(cloneDir, "git", "init", "-b", "main")
+	gitRun(cloneDir, "git", "config", "user.name", "test")
+	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "init")
+	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
+	gitRun(cloneDir, "git", "push", "origin", "main")
+	gitRun(cloneDir, "git", "checkout", "-b", "task/partial-rollback")
+	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	gitRun(cloneDir, "git", "add", ".")
+	gitRun(cloneDir, "git", "commit", "-m", "task work")
+
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/partial-rollback",
+		Title:    "Partial Rollback",
+		TaskPath: inProgressPath,
+	}
+	env := envConfig{
+		tasksDir:     tasksDir,
+		targetBranch: "main",
+	}
+
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
+	setHook(t, &moveTaskFileFn, func(src, dst string) error {
+		if src == readyPath && dst == inProgressPath {
+			if err := os.Link(src, dst); err != nil {
+				return fmt.Errorf("simulate partial rollback link %s -> %s: %w", src, dst, err)
+			}
+			return fmt.Errorf("atomic move %s → %s: remove source after linking: simulated failure", src, dst)
+		}
+		return queue.AtomicMove(src, dst)
+	})
+	setHook(t, &writeBranchMarkerFn, func(path, branch string) error {
+		return fmt.Errorf("simulated write error")
+	})
+
+	err := postAgentPush(env, "agent1", claimed, cloneDir, "deadbeef")
+
+	if err == nil {
+		t.Fatal("expected error when branch marker rollback partially fails")
+	}
+	if !strings.Contains(err.Error(), "rollback failed") {
+		t.Fatalf("error should mention rollback failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "moved task to failed/") {
+		t.Fatalf("error should mention quarantine to failed/, got: %v", err)
+	}
+	if _, statErr := os.Stat(readyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("task should not remain in ready-for-review/ after quarantine: %v", statErr)
+	}
+	if _, statErr := os.Stat(inProgressPath); !os.IsNotExist(statErr) {
+		t.Fatalf("partial rollback duplicate should be removed from in-progress/: %v", statErr)
+	}
+	failedData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, taskFile))
+	if err != nil {
+		t.Fatalf("task should be quarantined to failed/: %v", err)
+	}
+	if !strings.Contains(string(failedData), "Partial Rollback") {
+		t.Fatalf("failed task should contain the original task content, got:\n%s", string(failedData))
+	}
+	if !taskfile.ContainsTerminalFailure(failedData) {
+		t.Fatal("failed task should include terminal-failure marker")
+	}
+}
+
 func TestPostReviewAction_Approved(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
