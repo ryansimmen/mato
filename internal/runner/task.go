@@ -28,6 +28,7 @@ import (
 var createCloneFn = git.CreateClone
 var removeCloneFn = git.RemoveClone
 var ensureBranchFn = git.EnsureBranch
+var prepareCloneOriginForContainerFn = prepareCloneOriginForContainer
 var writeBranchMarkerFn = queue.WriteBranchMarker
 var writeDebugMarkerFn = writeDebugMarker
 var moveTaskFileFn = queue.AtomicMove
@@ -145,7 +146,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		}
 	}
 	extraEnvs = append(extraEnvs, fmt.Sprintf("MATO_MAX_RETRIES=%d", maxRetries))
-	restoreOrigin, err := prepareCloneOriginForContainer(cloneDir)
+	restoreOrigin, err := prepareCloneOriginForContainerFn(cloneDir)
 	if err != nil {
 		return fmt.Errorf("prepare clone origin for container: %w", err)
 	}
@@ -155,13 +156,6 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		}
 		return resetSession(env.tasksDir, runtimedata.KindWork, claimed.Filename, claimed.Branch)
 	})
-	if restoreErr := restoreOrigin(); restoreErr != nil {
-		if agentErr != nil {
-			return errors.Join(agentErr, restoreErr)
-		}
-		return restoreErr
-	}
-
 	// Post-agent: if the task is still in in-progress/ and the agent made
 	// commits, push the branch and move the task to ready-for-review/.
 	var postPushErr error
@@ -173,13 +167,12 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		}
 	}
 
-	if agentErr != nil && postPushErr != nil {
-		return errors.Join(agentErr, postPushErr)
+	restoreErr := restoreOrigin()
+
+	if agentErr != nil || postPushErr != nil || restoreErr != nil {
+		return errors.Join(agentErr, postPushErr, restoreErr)
 	}
-	if postPushErr != nil {
-		return postPushErr
-	}
-	return agentErr
+	return nil
 }
 
 // postAgentPush checks whether the agent committed work on the task branch.
@@ -208,8 +201,14 @@ func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cl
 		return fmt.Errorf("ready-for-review/%s already exists: skipping push to avoid overwriting", claimed.Filename)
 	}
 
-	// Push the task branch to the host repo.
-	if _, err := git.Output(cloneDir, "push", "--force-with-lease", "origin", claimed.Branch); err != nil {
+	// Push directly to the host repo when available so work handoff does not
+	// depend on the clone's temporary in-container origin rewrite being restored
+	// first. Tests that call postAgentPush directly can still rely on origin.
+	pushTarget := "origin"
+	if repoRoot := strings.TrimSpace(env.repoRoot); repoRoot != "" {
+		pushTarget = repoRoot
+	}
+	if _, err := git.Output(cloneDir, "push", "--force-with-lease", pushTarget, claimed.Branch); err != nil {
 		return fmt.Errorf("push task branch %s: %w", claimed.Branch, err)
 	}
 	recordTaskStateUpdate(env.tasksDir, claimed.Filename, "record pushed branch taskstate", func(state *runtimedata.TaskState) {

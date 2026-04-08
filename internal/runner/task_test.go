@@ -436,6 +436,59 @@ func TestPostAgentPush_RecordsWorkSessionHead(t *testing.T) {
 	}
 }
 
+func TestPostAgentPush_UsesHostRepoWhenOriginIsRewritten(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	defer git.RemoveClone(cloneDir)
+
+	taskFile := "rewritten-origin.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("# Rewritten Origin\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/rewritten-origin",
+		Title:    "Rewritten Origin",
+		TaskPath: inProgressPath,
+	}
+	if _, err := git.Output(cloneDir, "checkout", "-b", claimed.Branch); err != nil {
+		t.Fatalf("checkout branch: %v", err)
+	}
+	startingTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse starting tip: %v", err)
+	}
+	startingTip = strings.TrimSpace(startingTip)
+	if err := os.WriteFile(filepath.Join(cloneDir, "work.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile clone change: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "add", "work.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "commit", "-m", "work update"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing-origin.git")); err != nil {
+		t.Fatalf("rewrite origin: %v", err)
+	}
+
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, targetBranch: "mato"}
+	if err := postAgentPush(env, "agent1", claimed, cloneDir, startingTip); err != nil {
+		t.Fatalf("postAgentPush: %v", err)
+	}
+
+	if _, err := git.Output(repoRoot, "rev-parse", "--verify", claimed.Branch); err != nil {
+		t.Fatalf("expected pushed branch in host repo: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, taskFile)); err != nil {
+		t.Fatalf("task should move to ready-for-review/: %v", err)
+	}
+}
+
 func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	cloneDir, err := git.CreateClone(repoRoot)
@@ -807,6 +860,90 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 	}
 	if _, statErr := os.Stat(createdClone); statErr != nil {
 		t.Fatalf("preserved clone missing: %v", statErr)
+	}
+}
+
+func TestRunOnce_RestoreOriginFailureAfterPushStillHandsOffWork(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	var createdClone string
+	setHook(t, &createCloneFn, func(repo string) (string, error) {
+		cloneDir, err := git.CreateClone(repo)
+		if err != nil {
+			return "", err
+		}
+		createdClone = cloneDir
+		return cloneDir, nil
+	})
+	setHook(t, &prepareCloneOriginForContainerFn, func(string) (func() error, error) {
+		return func() error {
+			return fmt.Errorf("simulated restore failure")
+		}, nil
+	})
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "sh", "-c", "printf 'agent work\n' > repo-change.txt && git add repo-change.txt && git commit -m 'agent work' >/dev/null 2>&1")
+		cmd.Dir = createdClone
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		return cmd
+	})
+
+	taskFile := "restore-fail.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(taskPath, []byte("---\npriority: 5\n---\n# Restore Fail\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task: %v", err)
+	}
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/restore-fail",
+		Title:    "Restore Fail",
+		TaskPath: taskPath,
+	}
+	env := envConfig{
+		repoRoot:           repoRoot,
+		tasksDir:           tasksDir,
+		workdir:            repoRoot,
+		copilotPath:        "/bin/true",
+		gitPath:            "/usr/bin/git",
+		gitUploadPackPath:  "/usr/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/bin/git-receive-pack",
+		ghPath:             "/bin/true",
+		goRoot:             "/usr",
+		homeDir:            t.TempDir(),
+		targetBranch:       "mato",
+		image:              "test-image",
+	}
+	run := runContext{
+		agentID: "agent1",
+		prompt:  "test prompt",
+		timeout: time.Second,
+	}
+
+	err := runOnce(context.Background(), env, run, claimed)
+	if err == nil {
+		t.Fatal("expected runOnce to surface restore failure")
+	}
+	if !strings.Contains(err.Error(), "simulated restore failure") {
+		t.Fatalf("error should include restore failure, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, taskFile)); err != nil {
+		t.Fatalf("task should move to ready-for-review/: %v", err)
+	}
+	if _, err := os.Stat(taskPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress after successful handoff: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "rev-parse", "--verify", claimed.Branch); err != nil {
+		t.Fatalf("expected task branch to be pushed despite restore failure: %v", err)
+	}
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to be written")
+	}
+	if state.LastOutcome != runtimedata.OutcomeWorkPushed {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeWorkPushed)
 	}
 }
 
