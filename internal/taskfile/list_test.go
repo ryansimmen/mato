@@ -91,3 +91,25 @@ func TestListTaskFiles_MissingDir(t *testing.T) {
 		t.Fatal("expected error for missing directory")
 	}
 }
+
+func TestListTaskFiles_SkipsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(target, []byte("# Secret\n"), 0o644); err != nil {
+		t.Fatalf("write symlink target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "real.md"), []byte("# Real\n"), 0o644); err != nil {
+		t.Fatalf("write real task: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "linked.md")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	got, err := ListTaskFiles(dir)
+	if err != nil {
+		t.Fatalf("ListTaskFiles() error = %v", err)
+	}
+	if len(got) != 1 || got[0] != "real.md" {
+		t.Fatalf("ListTaskFiles() = %v, want [real.md]", got)
+	}
+}

@@ -1,6 +1,7 @@
 package taskfile
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -81,6 +82,18 @@ func TestParseBranch_NonexistentFile(t *testing.T) {
 	got := ParseBranch(filepath.Join(t.TempDir(), "nonexistent.md"))
 	if got != "" {
 		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+func TestParseBranch_SymlinkReturnsEmpty(t *testing.T) {
+	target := testutil.WriteTempFile(t, "<!-- branch: task/secret -->\n")
+	link := filepath.Join(t.TempDir(), "linked.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	if got := ParseBranch(link); got != "" {
+		t.Fatalf("got %q, want empty string for symlinked task", got)
 	}
 }
 
