@@ -42,6 +42,20 @@ func setHook[T any](t *testing.T, target *T, value T) {
 	t.Cleanup(func() { *target = orig })
 }
 
+func mustWriteFile(t *testing.T, path string, data []byte, perm os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, data, perm); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", path, err)
+	}
+}
+
+func mustMkdirAll(t *testing.T, path string, perm os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(path, perm); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", path, err)
+	}
+}
+
 func captureStdoutStderr(t *testing.T, fn func()) (string, string) {
 	t.Helper()
 
@@ -124,12 +138,16 @@ func writeExecutable(t *testing.T, dir, name, content string) string {
 func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "example-task.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(example-task in-progress): %v", err)
+	}
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -163,13 +181,17 @@ func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "example-task.md"
 	// Task already moved to ready-to-merge by the agent (success case)
 	readyPath := filepath.Join(tasksDir, dirs.ReadyMerge, taskFile)
-	os.WriteFile(readyPath, []byte("# Example Task\n"), 0o644)
+	if err := os.WriteFile(readyPath, []byte("# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(example-task ready-merge): %v", err)
+	}
 
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	claimed := &queue.ClaimedTask{
@@ -197,16 +219,22 @@ func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "example-task.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(example-task in-progress collision): %v", err)
+	}
 
 	// A file with the same name already exists in backlog/
 	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
-	os.WriteFile(backlogPath, []byte("# Existing Task\n"), 0o644)
+	if err := os.WriteFile(backlogPath, []byte("# Existing Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(example-task backlog existing): %v", err)
+	}
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -537,7 +565,9 @@ func TestBuildDockerArgs_ModelAndReasoningEffort_FromRunContext(t *testing.T) {
 func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
@@ -547,7 +577,9 @@ func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 	taskFile := "my-task.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	taskContent := "---\ndepends_on:\n  - dep-a\n  - dep-b\n---\n# My Task\n"
-	os.WriteFile(taskPath, []byte(taskContent), 0o644)
+	if err := os.WriteFile(taskPath, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(my-task.md): %v", err)
+	}
 
 	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-a.md"), []byte("---\nid: dep-a\n---\n# Dep A\n"), 0o644); err != nil {
 		t.Fatalf("write completed dep-a: %v", err)
@@ -608,7 +640,9 @@ func TestWriteDependencyContextFile_WithCompletionFiles(t *testing.T) {
 func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
@@ -617,7 +651,9 @@ func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 	taskFile := "no-deps.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	taskContent := "---\npriority: 5\n---\n# No deps\n"
-	os.WriteFile(taskPath, []byte(taskContent), 0o644)
+	if err := os.WriteFile(taskPath, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(no-deps.md): %v", err)
+	}
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -635,7 +671,9 @@ func TestWriteDependencyContextFile_NoDeps(t *testing.T) {
 func TestWriteDependencyContextFile_NoCompletionFiles(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
@@ -644,7 +682,9 @@ func TestWriteDependencyContextFile_NoCompletionFiles(t *testing.T) {
 	taskFile := "has-deps.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	taskContent := "---\ndepends_on:\n  - missing-dep\n---\n# Has deps\n"
-	os.WriteFile(taskPath, []byte(taskContent), 0o644)
+	if err := os.WriteFile(taskPath, []byte(taskContent), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(has-deps.md): %v", err)
+	}
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -667,7 +707,9 @@ func TestRemoveDependencyContextFile(t *testing.T) {
 
 	filename := "my-task.md"
 	depCtxPath := filepath.Join(tasksDir, "messages", "dependency-context-"+filename+".json")
-	os.WriteFile(depCtxPath, []byte(`[{"task_id":"dep-a"}]`), 0o644)
+	if err := os.WriteFile(depCtxPath, []byte(`[{"task_id":"dep-a"}]`), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(dependency-context): %v", err)
+	}
 
 	if _, err := os.Stat(depCtxPath); err != nil {
 		t.Fatalf("file should exist before removal: %v", err)
@@ -910,7 +952,9 @@ func TestFormatDurationShort(t *testing.T) {
 
 func TestExtractFailureLines_NoFailures(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644)
+	if err := os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(no failures fixture): %v", err)
+	}
 
 	got := extractFailureLines(f)
 	if got != "" {
@@ -921,7 +965,9 @@ func TestExtractFailureLines_NoFailures(t *testing.T) {
 func TestExtractFailureLines_SingleFailure(t *testing.T) {
 	content := "---\npriority: 5\n---\n# My Task\nDo something.\n<!-- failure: agent-7 at 2026-01-01T00:03:00Z step=WORK error=tests_failed files_changed=queue.go -->\n"
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte(content), 0o644)
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(single failure fixture): %v", err)
+	}
 
 	got := extractFailureLines(f)
 	if !strings.Contains(got, "step=WORK") {
@@ -935,7 +981,9 @@ func TestExtractFailureLines_SingleFailure(t *testing.T) {
 func TestExtractFailureLines_MultipleFailures(t *testing.T) {
 	content := "---\npriority: 5\n---\n# My Task\n<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed files_changed=main.go -->\n<!-- failure: agent-2 at 2026-01-01T00:02:00Z step=COMMIT error=no_changes files_changed=none -->\n"
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte(content), 0o644)
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(multiple failures fixture): %v", err)
+	}
 
 	got := extractFailureLines(f)
 	lines := strings.Split(got, "\n")
@@ -953,7 +1001,9 @@ func TestExtractFailureLines_MultipleFailures(t *testing.T) {
 func TestExtractFailureLines_IgnoresBodyText(t *testing.T) {
 	content := "---\npriority: 5\n---\n# Retry budget\n`CountFailureLines()` counts `<!-- failure: ... -->` records.\n<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed -->\n"
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte(content), 0o644)
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(ignore body fixture): %v", err)
+	}
 
 	got := extractFailureLines(f)
 	lines := strings.Split(got, "\n")
@@ -974,7 +1024,9 @@ func TestExtractFailureLines_NonexistentFile(t *testing.T) {
 
 func TestExtractReviewRejections_NoRejections(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644)
+	if err := os.WriteFile(f, []byte("---\npriority: 5\n---\n# My Task\nDo something.\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(no rejections fixture): %v", err)
+	}
 
 	got := extractReviewRejections(f)
 	if got != "" {
@@ -985,7 +1037,9 @@ func TestExtractReviewRejections_NoRejections(t *testing.T) {
 func TestExtractReviewRejections_SingleRejection(t *testing.T) {
 	content := "---\npriority: 5\n---\n# My Task\nDo something.\n<!-- review-rejection: reviewer-1 at 2026-01-01T00:03:00Z reason=missing_tests -->\n"
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte(content), 0o644)
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(single rejection fixture): %v", err)
+	}
 
 	got := extractReviewRejections(f)
 	if !strings.Contains(got, "reason=missing_tests") {
@@ -999,7 +1053,9 @@ func TestExtractReviewRejections_SingleRejection(t *testing.T) {
 func TestExtractReviewRejections_MultipleRejections(t *testing.T) {
 	content := "---\npriority: 5\n---\n# My Task\n<!-- review-rejection: reviewer-1 at 2026-01-01T00:01:00Z reason=missing_tests -->\n<!-- review-rejection: reviewer-2 at 2026-01-01T00:02:00Z reason=style_issues -->\n"
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte(content), 0o644)
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(multiple rejections fixture): %v", err)
+	}
 
 	got := extractReviewRejections(f)
 	lines := strings.Split(got, "\n")
@@ -1017,7 +1073,9 @@ func TestExtractReviewRejections_MultipleRejections(t *testing.T) {
 func TestExtractReviewRejections_MixedRecords(t *testing.T) {
 	content := "---\npriority: 5\n---\n# My Task\n<!-- failure: agent-1 at 2026-01-01T00:01:00Z step=WORK error=build_failed files_changed=main.go -->\n<!-- review-rejection: reviewer-1 at 2026-01-01T00:02:00Z reason=missing_tests -->\n<!-- failure: agent-2 at 2026-01-01T00:03:00Z step=COMMIT error=no_changes files_changed=none -->\n"
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte(content), 0o644)
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(mixed records fixture): %v", err)
+	}
 
 	got := extractReviewRejections(f)
 	lines := strings.Split(got, "\n")
@@ -1041,10 +1099,14 @@ func TestExtractReviewRejections_NonexistentFile(t *testing.T) {
 
 func TestExtractReviewRejectionsWithVerdictFallback_MarkersPresent(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(messages): %v", err)
+	}
 	taskFile := "with-markers.md"
 	taskPath := filepath.Join(tasksDir, taskFile)
-	os.WriteFile(taskPath, []byte("# Task\n<!-- review-rejection: agent at 2026-01-01T00:00:00Z — add tests -->\n"), 0o644)
+	if err := os.WriteFile(taskPath, []byte("# Task\n<!-- review-rejection: agent at 2026-01-01T00:00:00Z — add tests -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(with-markers.md): %v", err)
+	}
 
 	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
 	if !strings.Contains(got, "add tests") {
@@ -1054,14 +1116,20 @@ func TestExtractReviewRejectionsWithVerdictFallback_MarkersPresent(t *testing.T)
 
 func TestExtractReviewRejectionsWithVerdictFallback_NoMarkersVerdictFallback(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(messages): %v", err)
+	}
 	taskFile := "no-markers.md"
 	taskPath := filepath.Join(tasksDir, taskFile)
-	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(no-markers.md): %v", err)
+	}
 
 	// Write a verdict file as fallback.
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"coverage too low"}`), 0o644)
+	if err := os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"coverage too low"}`), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(no-markers verdict): %v", err)
+	}
 
 	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
 	if !strings.Contains(got, "coverage too low") {
@@ -1071,10 +1139,14 @@ func TestExtractReviewRejectionsWithVerdictFallback_NoMarkersVerdictFallback(t *
 
 func TestExtractReviewRejectionsWithVerdictFallback_NoMarkersNoVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(messages): %v", err)
+	}
 	taskFile := "no-markers-no-verdict.md"
 	taskPath := filepath.Join(tasksDir, taskFile)
-	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(no-markers-no-verdict.md): %v", err)
+	}
 
 	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
 	if got != "" {
@@ -1084,14 +1156,20 @@ func TestExtractReviewRejectionsWithVerdictFallback_NoMarkersNoVerdict(t *testin
 
 func TestExtractReviewRejectionsWithVerdictFallback_ApproveVerdictIgnored(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(messages): %v", err)
+	}
 	taskFile := "approve-verdict.md"
 	taskPath := filepath.Join(tasksDir, taskFile)
-	os.WriteFile(taskPath, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(approve-verdict.md): %v", err)
+	}
 
 	// An approve verdict should not produce feedback.
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
+	if err := os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(approve verdict): %v", err)
+	}
 
 	got := extractReviewRejectionsWithVerdictFallback(taskPath, tasksDir, taskFile)
 	if got != "" {
@@ -1102,14 +1180,20 @@ func TestExtractReviewRejectionsWithVerdictFallback_ApproveVerdictIgnored(t *tes
 func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "readonly-task.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Read-only task\n"), 0o444)
+	if err := os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Read-only task\n"), 0o444); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", inProgressPath, err)
+	}
 	t.Cleanup(func() {
-		os.Chmod(filepath.Join(tasksDir, dirs.Backlog, taskFile), 0o644)
+		if err := os.Chmod(filepath.Join(tasksDir, dirs.Backlog, taskFile), 0o644); err != nil && !os.IsNotExist(err) {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
 	})
 
 	claimed := &queue.ClaimedTask{
@@ -1147,7 +1231,9 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 
 func TestSelectTaskForReview_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.ReadyReview), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, dirs.ReadyReview), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", dirs.ReadyReview, err)
+	}
 
 	got := selectTaskForReview(tasksDir, nil)
 	if got != nil {
@@ -1165,10 +1251,14 @@ func TestSelectTaskForReview_NonexistentDir(t *testing.T) {
 func TestSelectTaskForReview_SingleTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
-	os.MkdirAll(reviewDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
 
 	content := "<!-- claimed-by: abc12345  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: test-task\npriority: 10\n---\n# Test Task\nDo something.\n\n<!-- branch: task/test-task -->\n"
-	os.WriteFile(filepath.Join(reviewDir, "test-task.md"), []byte(content), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "test-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(test-task.md): %v", err)
+	}
 
 	got := selectTaskForReview(tasksDir, nil)
 	if got == nil {
@@ -1188,19 +1278,27 @@ func TestSelectTaskForReview_SingleTask(t *testing.T) {
 func TestSelectTaskForReview_HighestPriority(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
-	os.MkdirAll(reviewDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
 
 	// Priority 20 — lower priority (higher number)
-	os.WriteFile(filepath.Join(reviewDir, "low-pri.md"), []byte(
-		"---\npriority: 20\n---\n# Low Priority\n<!-- branch: task/low-pri -->\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "low-pri.md"), []byte(
+		"---\npriority: 20\n---\n# Low Priority\n<!-- branch: task/low-pri -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(low-pri.md): %v", err)
+	}
 
 	// Priority 5 — highest priority (lowest number)
-	os.WriteFile(filepath.Join(reviewDir, "high-pri.md"), []byte(
-		"---\npriority: 5\n---\n# High Priority\n<!-- branch: task/high-pri -->\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "high-pri.md"), []byte(
+		"---\npriority: 5\n---\n# High Priority\n<!-- branch: task/high-pri -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(high-pri.md): %v", err)
+	}
 
 	// Priority 10 — middle
-	os.WriteFile(filepath.Join(reviewDir, "mid-pri.md"), []byte(
-		"---\npriority: 10\n---\n# Mid Priority\n<!-- branch: task/mid-pri -->\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "mid-pri.md"), []byte(
+		"---\npriority: 10\n---\n# Mid Priority\n<!-- branch: task/mid-pri -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(mid-pri.md): %v", err)
+	}
 
 	got := selectTaskForReview(tasksDir, nil)
 	if got == nil {
@@ -1214,12 +1312,18 @@ func TestSelectTaskForReview_HighestPriority(t *testing.T) {
 func TestSelectTaskForReview_SamePriorityAlphabetical(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
-	os.MkdirAll(reviewDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
 
-	os.WriteFile(filepath.Join(reviewDir, "beta-task.md"), []byte(
-		"---\npriority: 10\n---\n# Beta\n<!-- branch: task/beta -->\n"), 0o644)
-	os.WriteFile(filepath.Join(reviewDir, "alpha-task.md"), []byte(
-		"---\npriority: 10\n---\n# Alpha\n<!-- branch: task/alpha -->\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "beta-task.md"), []byte(
+		"---\npriority: 10\n---\n# Beta\n<!-- branch: task/beta -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(beta-task.md): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reviewDir, "alpha-task.md"), []byte(
+		"---\npriority: 10\n---\n# Alpha\n<!-- branch: task/alpha -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(alpha-task.md): %v", err)
+	}
 
 	got := selectTaskForReview(tasksDir, nil)
 	if got == nil {
@@ -1233,12 +1337,20 @@ func TestSelectTaskForReview_SamePriorityAlphabetical(t *testing.T) {
 func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
-	os.MkdirAll(reviewDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
 
 	// Non-.md files should be ignored
-	os.WriteFile(filepath.Join(reviewDir, "notes.txt"), []byte("not a task"), 0o644)
-	os.WriteFile(filepath.Join(reviewDir, ".hidden"), []byte("hidden"), 0o644)
-	os.MkdirAll(filepath.Join(reviewDir, "subdir"), 0o755)
+	if err := os.WriteFile(filepath.Join(reviewDir, "notes.txt"), []byte("not a task"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(notes.txt): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reviewDir, ".hidden"), []byte("hidden"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(.hidden): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(reviewDir, "subdir"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(subdir): %v", err)
+	}
 
 	got := selectTaskForReview(tasksDir, nil)
 	if got != nil {
@@ -1249,11 +1361,15 @@ func TestSelectTaskForReview_IgnoresNonMdFiles(t *testing.T) {
 func TestSelectTaskForReview_RequiresBranchMarker(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
-	os.MkdirAll(reviewDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
 
 	// No branch comment — should be skipped and recorded as a review failure.
-	os.WriteFile(filepath.Join(reviewDir, "my-task.md"), []byte(
-		"---\npriority: 5\n---\n# My Task\nNo branch comment here.\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "my-task.md"), []byte(
+		"---\npriority: 5\n---\n# My Task\nNo branch comment here.\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(my-task.md): %v", err)
+	}
 
 	got := selectTaskForReview(tasksDir, nil)
 	if got != nil {
@@ -1270,7 +1386,9 @@ func TestSelectTaskForReview_RequiresBranchMarker(t *testing.T) {
 
 func TestParseBranchFromTaskFile_WithBranch(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte("---\npriority: 5\n---\n# Task\n\n<!-- branch: task/foo-bar -->\n"), 0o644)
+	if err := os.WriteFile(f, []byte("---\npriority: 5\n---\n# Task\n\n<!-- branch: task/foo-bar -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(parse branch fixture): %v", err)
+	}
 
 	got := taskfile.ParseBranch(f)
 	if got != "task/foo-bar" {
@@ -1280,7 +1398,9 @@ func TestParseBranchFromTaskFile_WithBranch(t *testing.T) {
 
 func TestParseBranchFromTaskFile_WithoutBranch(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(f, []byte("---\npriority: 5\n---\n# Task\nNo branch.\n"), 0o644)
+	if err := os.WriteFile(f, []byte("---\npriority: 5\n---\n# Task\nNo branch.\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(parse branch without branch): %v", err)
+	}
 
 	got := taskfile.ParseBranch(f)
 	if got != "" {
@@ -1369,11 +1489,17 @@ func TestFailedDirUnavailable_IsPredicateFromRunner(t *testing.T) {
 func TestSelectAndLockReview_AcquiresLock(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(.locks): %v", err)
+	}
 
-	os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
-		"---\npriority: 10\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
+		"---\npriority: 10\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-a acquire lock): %v", err)
+	}
 
 	task, cleanup := selectAndLockReview(tasksDir, nil)
 	if task == nil {
@@ -1399,19 +1525,29 @@ func TestSelectAndLockReview_SkipsLockedTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	locksDir := filepath.Join(tasksDir, ".locks")
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(locksDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(locksDir): %v", err)
+	}
 
 	// Two tasks: task-a (priority 5) and task-b (priority 10).
-	os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
-		"---\npriority: 5\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644)
-	os.WriteFile(filepath.Join(reviewDir, "task-b.md"), []byte(
-		"---\npriority: 10\n---\n# Task B\n<!-- branch: task/task-b -->\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
+		"---\npriority: 5\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-a all locked): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reviewDir, "task-b.md"), []byte(
+		"---\npriority: 10\n---\n# Task B\n<!-- branch: task/task-b -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-b skips locked): %v", err)
+	}
 
 	// Lock task-a (highest priority) — simulates another agent holding it.
 	// Use real lock identity so IsLockHolderAlive recognizes it as alive.
-	os.WriteFile(filepath.Join(locksDir, "review-task-a.md.lock"),
-		[]byte(process.LockIdentity(os.Getpid())), 0o644)
+	if err := os.WriteFile(filepath.Join(locksDir, "review-task-a.md.lock"),
+		[]byte(process.LockIdentity(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(review-task-a.md.lock skips locked): %v", err)
+	}
 
 	task, cleanup := selectAndLockReview(tasksDir, nil)
 	if task == nil {
@@ -1427,15 +1563,21 @@ func TestSelectAndLockReview_AllLocked(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	locksDir := filepath.Join(tasksDir, ".locks")
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(locksDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(locksDir): %v", err)
+	}
 
-	os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
-		"---\npriority: 5\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(reviewDir, "task-a.md"), []byte(
+		"---\npriority: 5\n---\n# Task A\n<!-- branch: task/task-a -->\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-a all locked setup): %v", err)
+	}
 
 	// Lock it — simulates another agent holding it.
 	// Use real lock identity so IsLockHolderAlive recognizes it as alive.
-	os.WriteFile(filepath.Join(locksDir, "review-task-a.md.lock"),
+	mustWriteFile(t, filepath.Join(locksDir, "review-task-a.md.lock"),
 		[]byte(process.LockIdentity(os.Getpid())), 0o644)
 
 	task, cleanup := selectAndLockReview(tasksDir, nil)
@@ -1447,7 +1589,9 @@ func TestSelectAndLockReview_AllLocked(t *testing.T) {
 
 func TestSelectAndLockReview_EmptyDir(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.ReadyReview), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, dirs.ReadyReview), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", dirs.ReadyReview, err)
+	}
 
 	task, cleanup := selectAndLockReview(tasksDir, nil)
 	if task != nil {
@@ -1459,13 +1603,15 @@ func TestSelectAndLockReview_EmptyDir(t *testing.T) {
 func TestReviewCandidates_SortedByPriority(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
-	os.MkdirAll(reviewDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
 
-	os.WriteFile(filepath.Join(reviewDir, "low.md"), []byte(
+	mustWriteFile(t, filepath.Join(reviewDir, "low.md"), []byte(
 		"<!-- branch: task/low -->\n---\npriority: 20\n---\n# Low\n"), 0o644)
-	os.WriteFile(filepath.Join(reviewDir, "high.md"), []byte(
+	mustWriteFile(t, filepath.Join(reviewDir, "high.md"), []byte(
 		"<!-- branch: task/high -->\n---\npriority: 5\n---\n# High\n"), 0o644)
-	os.WriteFile(filepath.Join(reviewDir, "mid.md"), []byte(
+	mustWriteFile(t, filepath.Join(reviewDir, "mid.md"), []byte(
 		"<!-- branch: task/mid -->\n---\npriority: 10\n---\n# Mid\n"), 0o644)
 
 	candidates := reviewCandidates(tasksDir, nil)
@@ -1487,11 +1633,15 @@ func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(failedDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(failedDir): %v", err)
+	}
 
 	// Task with 3 review-failures (default max_retries=3) — should be moved to failed/
-	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
+	mustWriteFile(t, filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 5",
 		"---",
@@ -1504,7 +1654,7 @@ func TestReviewCandidates_SkipsRetryExhausted(t *testing.T) {
 	}, "\n")), 0o644)
 
 	// Task with 1 review-failure — should still be a candidate
-	os.WriteFile(filepath.Join(reviewDir, "healthy.md"), []byte(strings.Join([]string{
+	mustWriteFile(t, filepath.Join(reviewDir, "healthy.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 10",
 		"---",
@@ -1535,10 +1685,14 @@ func TestReviewCandidates_ExhaustedHasTerminalMarker(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(failedDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(failedDir): %v", err)
+	}
 
-	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
+	mustWriteFile(t, filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 5",
 		"---",
@@ -1568,11 +1722,15 @@ func TestReviewCandidates_CustomMaxRetries(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(failedDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(failedDir): %v", err)
+	}
 
 	// Task with max_retries=1 and 1 review-failure — should be exhausted
-	os.WriteFile(filepath.Join(reviewDir, "custom.md"), []byte(strings.Join([]string{
+	mustWriteFile(t, filepath.Join(reviewDir, "custom.md"), []byte(strings.Join([]string{
 		"---",
 		"max_retries: 1",
 		"priority: 5",
@@ -1597,11 +1755,15 @@ func TestSelectTaskForReview_SkipsRetryExhausted(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(failedDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(failedDir): %v", err)
+	}
 
 	// Only task has exhausted review retries — selectTaskForReview should return nil
-	os.WriteFile(filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
+	mustWriteFile(t, filepath.Join(reviewDir, "exhausted.md"), []byte(strings.Join([]string{
 		"# Exhausted",
 		"<!-- review-failure: one -->",
 		"<!-- review-failure: two -->",
@@ -1624,11 +1786,15 @@ func TestReviewCandidates_BelowBudgetNotMoved(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(failedDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(failedDir): %v", err)
+	}
 
 	// Task with 2 review-failures but default max_retries=3 — should remain a candidate
-	os.WriteFile(filepath.Join(reviewDir, "still-ok.md"), []byte(strings.Join([]string{
+	mustWriteFile(t, filepath.Join(reviewDir, "still-ok.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 10",
 		"---",
@@ -1657,12 +1823,16 @@ func TestReviewCandidates_TaskFailuresIgnored(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(failedDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(failedDir): %v", err)
+	}
 
 	// Task with 3 task-agent failures but 0 review-failures.
 	// Task failures should NOT count toward review retry budget.
-	os.WriteFile(filepath.Join(reviewDir, "task-fails-only.md"), []byte(strings.Join([]string{
+	mustWriteFile(t, filepath.Join(reviewDir, "task-fails-only.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 10",
 		"---",
@@ -1692,13 +1862,17 @@ func TestReviewCandidates_ReviewFailuresSeparateFromTaskFailures(t *testing.T) {
 	tasksDir := t.TempDir()
 	reviewDir := filepath.Join(tasksDir, dirs.ReadyReview)
 	failedDir := filepath.Join(tasksDir, dirs.Failed)
-	os.MkdirAll(reviewDir, 0o755)
-	os.MkdirAll(failedDir, 0o755)
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(reviewDir): %v", err)
+	}
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(failedDir): %v", err)
+	}
 
 	// Task with 2 task-agent failures and 2 review-failures (max_retries=3).
 	// Only the 2 review-failures count toward review retry budget, so it should
 	// remain a candidate (2 < 3).
-	os.WriteFile(filepath.Join(reviewDir, "mixed.md"), []byte(strings.Join([]string{
+	mustWriteFile(t, filepath.Join(reviewDir, "mixed.md"), []byte(strings.Join([]string{
 		"---",
 		"priority: 10",
 		"---",
@@ -1729,7 +1903,9 @@ func TestRunOnce_TimeoutKillsCommand(t *testing.T) {
 
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	run := runContext{
@@ -1810,19 +1986,19 @@ func TestAgentWroteFailureRecord(t *testing.T) {
 	path := filepath.Join(dir, "task.md")
 
 	// No failure record: should return false.
-	os.WriteFile(path, []byte("# Task\nSome content\n"), 0o644)
+	mustWriteFile(t, path, []byte("# Task\nSome content\n"), 0o644)
 	if agentWroteFailureRecord(path, "abc12345") {
 		t.Fatal("expected false when no failure record exists")
 	}
 
 	// Failure from a different agent: should return false.
-	os.WriteFile(path, []byte("# Task\n<!-- failure: other-agent at 2026-01-01T00:00:00Z step=WORK error=test -->\n"), 0o644)
+	mustWriteFile(t, path, []byte("# Task\n<!-- failure: other-agent at 2026-01-01T00:00:00Z step=WORK error=test -->\n"), 0o644)
 	if agentWroteFailureRecord(path, "abc12345") {
 		t.Fatal("expected false for a different agent's failure record")
 	}
 
 	// Failure from the matching agent: should return true.
-	os.WriteFile(path, []byte("# Task\n<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=test -->\n"), 0o644)
+	mustWriteFile(t, path, []byte("# Task\n<!-- failure: abc12345 at 2026-01-01T00:00:00Z step=WORK error=test -->\n"), 0o644)
 	if !agentWroteFailureRecord(path, "abc12345") {
 		t.Fatal("expected true when agent's failure record exists")
 	}
@@ -1836,13 +2012,15 @@ func TestAgentWroteFailureRecord(t *testing.T) {
 func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "my-task.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	// Agent already wrote a failure record via ON_FAILURE.
-	os.WriteFile(inProgressPath, []byte(strings.Join([]string{
+	mustWriteFile(t, inProgressPath, []byte(strings.Join([]string{
 		"<!-- claimed-by: agent-x -->\n# My Task",
 		"<!-- failure: agent-x at 2026-01-01T00:00:00Z step=WORK error=tests_failed files_changed=foo.go -->",
 		"",
@@ -1877,17 +2055,19 @@ func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "example-task.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Example Task\n"), 0o644)
 
 	// Place a stale file at the ready-for-review/ destination.
 	staleContent := []byte("<!-- claimed-by: old-agent -->\n# Stale Task\n")
 	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(readyPath, staleContent, 0o644)
+	mustWriteFile(t, readyPath, staleContent, 0o644)
 
 	// Set up a minimal git repo so postAgentPush can check for commits.
 	cloneDir := t.TempDir()
@@ -1903,12 +2083,12 @@ func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 	run("git", "init", "-b", "main")
 	run("git", "config", "user.name", "test")
 	run("git", "config", "user.email", "test@test.com")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
 	run("git", "add", ".")
 	run("git", "commit", "-m", "init")
 	// Create a second commit on a task branch so there are commits above main.
 	run("git", "checkout", "-b", "task/example-task")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
 	run("git", "add", ".")
 	run("git", "commit", "-m", "task work")
 
@@ -1951,13 +2131,15 @@ func TestPostAgentPush_SkipsWhenReadyForReviewExists(t *testing.T) {
 func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "marker-fail.md"
 	taskContent := "<!-- claimed-by: agent1 -->\n# Marker Fail\n"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+	mustWriteFile(t, inProgressPath, []byte(taskContent), 0o644)
 
 	// Set up a git repo with commits on a task branch.
 	cloneDir := t.TempDir()
@@ -1975,13 +2157,13 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 	gitRun(cloneDir, "git", "init", "-b", "main")
 	gitRun(cloneDir, "git", "config", "user.name", "test")
 	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "init")
 	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
 	gitRun(cloneDir, "git", "push", "origin", "main")
 	gitRun(cloneDir, "git", "checkout", "-b", "task/marker-fail")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "task work")
 
@@ -2036,13 +2218,15 @@ func TestPostAgentPush_BranchMarkerWriteFailure(t *testing.T) {
 func TestPostAgentPush_BranchMarkerRollbackFailureQuarantinesReadyReviewCopy(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, dirs.Failed, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "stranded.md"
 	taskContent := "<!-- claimed-by: agent1 -->\n# Stranded\n"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+	mustWriteFile(t, inProgressPath, []byte(taskContent), 0o644)
 
 	// Set up git repo.
 	cloneDir := t.TempDir()
@@ -2060,13 +2244,13 @@ func TestPostAgentPush_BranchMarkerRollbackFailureQuarantinesReadyReviewCopy(t *
 	gitRun(cloneDir, "git", "init", "-b", "main")
 	gitRun(cloneDir, "git", "config", "user.name", "test")
 	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "init")
 	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
 	gitRun(cloneDir, "git", "push", "origin", "main")
 	gitRun(cloneDir, "git", "checkout", "-b", "task/stranded")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "task work")
 
@@ -2086,7 +2270,7 @@ func TestPostAgentPush_BranchMarkerRollbackFailureQuarantinesReadyReviewCopy(t *
 	setHook(t, &writeBranchMarkerFn, func(path, branch string) error {
 		// Re-create the in-progress file to simulate a race (another agent
 		// placed a file there), so rollback link will fail with EEXIST.
-		os.WriteFile(inProgressPath, []byte("<!-- claimed-by: other -->\n# Other\n"), 0o644)
+		mustWriteFile(t, inProgressPath, []byte("<!-- claimed-by: other -->\n# Other\n"), 0o644)
 		return fmt.Errorf("simulated write error")
 	})
 
@@ -2129,13 +2313,15 @@ func TestPostAgentPush_BranchMarkerRollbackFailureQuarantinesReadyReviewCopy(t *
 func TestPostAgentPush_BranchMarkerPartialRollbackFailureRemovesDuplicateInProgressCopy(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, dirs.Failed, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "partial-rollback.md"
 	taskContent := "<!-- claimed-by: agent1 -->\n# Partial Rollback\n"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+	mustWriteFile(t, inProgressPath, []byte(taskContent), 0o644)
 
 	cloneDir := t.TempDir()
 	remoteDir := t.TempDir()
@@ -2152,13 +2338,13 @@ func TestPostAgentPush_BranchMarkerPartialRollbackFailureRemovesDuplicateInProgr
 	gitRun(cloneDir, "git", "init", "-b", "main")
 	gitRun(cloneDir, "git", "config", "user.name", "test")
 	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "init")
 	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
 	gitRun(cloneDir, "git", "push", "origin", "main")
 	gitRun(cloneDir, "git", "checkout", "-b", "task/partial-rollback")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "task work")
 
@@ -2219,16 +2405,18 @@ func TestPostAgentPush_BranchMarkerPartialRollbackFailureRemovesDuplicateInProgr
 func TestPostReviewAction_Approved(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write a verdict file (the new approach).
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2260,16 +2448,16 @@ func TestPostReviewAction_Approved(t *testing.T) {
 func TestPostReviewAction_Rejected(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write a rejection verdict file.
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"missing error wrapping in postAgentPush"}`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{"verdict":"reject","reason":"missing error wrapping in postAgentPush"}`), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2300,15 +2488,15 @@ func TestPostReviewAction_Rejected(t *testing.T) {
 func TestPostReviewAction_Rejected_SanitizesReason(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"missing tests\n--> injected"}`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{"verdict":"reject","reason":"missing tests\n--> injected"}`), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2331,12 +2519,12 @@ func TestPostReviewAction_Rejected_SanitizesReason(t *testing.T) {
 func TestPostReviewAction_NoVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2363,14 +2551,14 @@ func TestPostReviewAction_NoVerdict(t *testing.T) {
 func TestPostReviewAction_ApprovalMarkerWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
 
 	setHook(t, &appendToFileFn, func(path, text string) error {
 		return fmt.Errorf("simulated approval write failure")
@@ -2401,14 +2589,14 @@ func TestPostReviewAction_ApprovalMarkerWriteFailure(t *testing.T) {
 func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"reject","reason":"missing tests"}`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{"verdict":"reject","reason":"missing tests"}`), 0o644)
 
 	setHook(t, &appendToFileFn, func(path, text string) error {
 		return fmt.Errorf("simulated rejection write failure")
@@ -2447,14 +2635,14 @@ func TestPostReviewAction_RejectionMarkerWriteFailure(t *testing.T) {
 func TestPostReviewAction_ApprovalMarkerAndReviewFailureWriteFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{"verdict":"approve"}`), 0o644)
 
 	setHook(t, &appendToFileFn, func(path, text string) error {
 		return fmt.Errorf("simulated write failure")
@@ -2478,16 +2666,16 @@ func TestPostReviewAction_ApprovalMarkerAndReviewFailureWriteFailure(t *testing.
 func TestPostReviewAction_ErrorVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	// Write an error verdict file (review agent's ON_FAILURE).
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"error","reason":"DIFF: could not fetch branch"}`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{"verdict":"error","reason":"DIFF: could not fetch branch"}`), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2518,15 +2706,15 @@ func TestPostReviewAction_ErrorVerdict(t *testing.T) {
 func TestPostReviewAction_UnknownVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{"verdict":"maybe","reason":"unsure"}`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{"verdict":"maybe","reason":"unsure"}`), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2552,15 +2740,15 @@ func TestPostReviewAction_UnknownVerdict(t *testing.T) {
 func TestPostReviewAction_MalformedJSON(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(`{bad json`), 0o644)
+	mustWriteFile(t, verdictPath, []byte(`{bad json`), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2586,15 +2774,15 @@ func TestPostReviewAction_MalformedJSON(t *testing.T) {
 func TestPostReviewAction_EmptyVerdictFile(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
+	mustWriteFile(t, reviewPath, []byte("<!-- claimed-by: task-agent -->\n# Review Task\n"), 0o644)
 
 	verdictPath := filepath.Join(tasksDir, "messages", "verdict-"+taskFile+".json")
-	os.WriteFile(verdictPath, []byte(""), 0o644)
+	mustWriteFile(t, verdictPath, []byte(""), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2617,13 +2805,13 @@ func TestPostReviewAction_EmptyVerdictFile(t *testing.T) {
 func TestPostReviewAction_PartialRejectionMarkerTreatedAsNoVerdict(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.ReadyMerge, dirs.Backlog, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "review-task.md"
 	reviewPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
 	// Partial rejection marker (no closing -->, simulating agent crash during write)
-	os.WriteFile(reviewPath, []byte(strings.Join([]string{
+	mustWriteFile(t, reviewPath, []byte(strings.Join([]string{
 		"<!-- claimed-by: task-agent -->",
 		"<!-- branch: task/review-task -->",
 		"# Review Task",
@@ -2657,7 +2845,7 @@ func TestPostReviewAction_PartialRejectionMarkerTreatedAsNoVerdict(t *testing.T)
 func TestAppendReviewFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "task.md")
-	os.WriteFile(path, []byte("# Task\n"), 0o644)
+	mustWriteFile(t, path, []byte("# Task\n"), 0o644)
 
 	appendReviewFailure(path, "review-abc", "could not fetch branch")
 
@@ -2742,12 +2930,12 @@ func TestMoveReviewedTask_Success(t *testing.T) {
 	dstDir := filepath.Join(tasksDir, dirs.ReadyMerge)
 	msgDir := filepath.Join(tasksDir, "messages", "events")
 	for _, d := range []string{srcDir, dstDir, msgDir} {
-		os.MkdirAll(d, 0o755)
+		mustMkdirAll(t, d, 0o755)
 	}
 
 	taskFile := "my-task.md"
 	srcPath := filepath.Join(srcDir, taskFile)
-	os.WriteFile(srcPath, []byte("# My Task\n"), 0o644)
+	mustWriteFile(t, srcPath, []byte("# My Task\n"), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -2786,16 +2974,16 @@ func TestMoveReviewedTask_DestinationExists(t *testing.T) {
 	dstDir := filepath.Join(tasksDir, dirs.Backlog)
 	msgDir := filepath.Join(tasksDir, "messages", "events")
 	for _, d := range []string{srcDir, dstDir, msgDir} {
-		os.MkdirAll(d, 0o755)
+		mustMkdirAll(t, d, 0o755)
 	}
 
 	taskFile := "dup-task.md"
 	srcPath := filepath.Join(srcDir, taskFile)
-	os.WriteFile(srcPath, []byte("# Dup Task\n"), 0o644)
+	mustWriteFile(t, srcPath, []byte("# Dup Task\n"), 0o644)
 
 	// Pre-create a file at the destination to simulate a race
 	dstPath := filepath.Join(dstDir, taskFile)
-	os.WriteFile(dstPath, []byte("# Existing\n"), 0o644)
+	mustWriteFile(t, dstPath, []byte("# Existing\n"), 0o644)
 
 	task := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -3028,19 +3216,23 @@ func TestDryRun_BasicValidation(t *testing.T) {
 		t.Fatalf("git init: %v (%s)", err, out)
 	}
 	cmd = exec.Command("git", "-C", repoDir, "config", "user.email", "test@test.com")
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
 	cmd = exec.Command("git", "-C", repoDir, "config", "user.name", "Test")
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	subdirs := dirs.All
 	for _, sub := range subdirs {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a valid backlog task
 	taskContent := "---\nid: task-a\npriority: 10\naffects:\n  - file-a.go\n---\n# Task A\nDo something.\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskContent), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskContent), 0o644)
 
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
@@ -3062,12 +3254,12 @@ func TestDryRun_DetectsParseErrors(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a task with invalid frontmatter
 	badContent := "---\npriority: not-a-number\n---\n# Bad Task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "bad-task.md"), []byte(badContent), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "bad-task.md"), []byte(badContent), 0o644)
 
 	// DryRun should succeed (parse errors are reported, not fatal)
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
@@ -3085,14 +3277,14 @@ func TestDryRun_DetectsOverlaps(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create two tasks with overlapping affects
 	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n---\n# Task A\n"
 	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n---\n# Task B\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
 
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
@@ -3113,9 +3305,9 @@ func TestDryRun_MissingDirectories(t *testing.T) {
 	}
 
 	tasksDir := filepath.Join(repoDir, ".mato")
-	os.MkdirAll(tasksDir, 0o755)
+	mustMkdirAll(t, tasksDir, 0o755)
 	// Only create some subdirs, leaving others missing
-	os.MkdirAll(filepath.Join(tasksDir, dirs.Backlog), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, dirs.Backlog), 0o755)
 
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err == nil {
@@ -3135,16 +3327,16 @@ func TestDryRun_ReportsPromotableDependencies(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a completed dependency
 	depContent := "---\nid: dep-task\npriority: 5\n---\n# Dep Task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-task.md"), []byte(depContent), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Completed, "dep-task.md"), []byte(depContent), 0o644)
 
 	// Create a waiting task that depends on the completed task
 	waitingContent := "---\nid: child-task\npriority: 10\ndepends_on:\n  - dep-task\n---\n# Child Task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "child-task.md"), []byte(waitingContent), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "child-task.md"), []byte(waitingContent), 0o644)
 
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
 	if err != nil {
@@ -3169,12 +3361,12 @@ func TestDryRun_NoDockerLaunched(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Add a backlog task — in normal run this would trigger Docker launch
 	taskContent := "---\nid: runnable\npriority: 1\n---\n# Runnable Task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "runnable.md"), []byte(taskContent), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "runnable.md"), []byte(taskContent), 0o644)
 
 	// DryRun should complete without attempting to claim or launch Docker
 	err := DryRun(io.Discard, repoDir, "main", testRunOptions())
@@ -3200,7 +3392,7 @@ func TestDryRun_ResolvedSettingsOutput(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	opts := RunOptions{
@@ -3242,7 +3434,7 @@ func TestDryRun_ExecutionOrder(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create backlog tasks with different priorities and overlapping affects
@@ -3250,9 +3442,9 @@ func TestDryRun_ExecutionOrder(t *testing.T) {
 	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n---\n# Task A\n"
 	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n---\n# Task B\n"
 	taskC := "---\nid: task-c\npriority: 5\naffects:\n  - other.go\n---\n# Task C\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-c.md"), []byte(taskC), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-c.md"), []byte(taskC), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3293,7 +3485,7 @@ func TestDryRun_BacklogTaskSummary(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Runnable task with affects and a satisfied dependency.
@@ -3303,10 +3495,10 @@ func TestDryRun_BacklogTaskSummary(t *testing.T) {
 	// Task with no affects or depends_on.
 	taskC := "---\nid: task-c\npriority: 5\n---\n# Task C\n"
 	depX := "---\nid: dep-x\n---\n# Dep X\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-x.md"), []byte(depX), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-c.md"), []byte(taskC), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Completed, "dep-x.md"), []byte(depX), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-c.md"), []byte(taskC), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3354,24 +3546,24 @@ func TestDryRun_DependencySummary(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// completed dependency
 	depCompleted := "---\nid: dep-completed\npriority: 5\n---\n# Completed\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-completed.md"), []byte(depCompleted), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Completed, "dep-completed.md"), []byte(depCompleted), 0o644)
 
 	// waiting dependency
 	depWaiting := "---\nid: dep-waiting\npriority: 5\ndepends_on:\n  - dep-completed\n---\n# Waiting\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "dep-waiting.md"), []byte(depWaiting), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "dep-waiting.md"), []byte(depWaiting), 0o644)
 
 	// failed dependency
 	depFailed := "---\nid: dep-failed\npriority: 5\n---\n# Failed\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "dep-failed.md"), []byte(depFailed), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Failed, "dep-failed.md"), []byte(depFailed), 0o644)
 
 	// The main waiting task that depends on completed, waiting, failed, and unknown deps.
 	mainTask := "---\nid: main-task\npriority: 10\ndepends_on:\n  - dep-completed\n  - dep-waiting\n  - dep-failed\n  - dep-nonexistent\n---\n# Main Task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "main-task.md"), []byte(mainTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "main-task.md"), []byte(mainTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3412,19 +3604,19 @@ func TestDryRun_DependencySummary_Ambiguous(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create a task ID that exists in both completed and non-completed (backlog).
 	ambigCompleted := "---\nid: ambig-dep\npriority: 5\n---\n# Ambig Completed\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "ambig-dep.md"), []byte(ambigCompleted), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Completed, "ambig-dep.md"), []byte(ambigCompleted), 0o644)
 
 	ambigBacklog := "---\nid: ambig-dep\npriority: 5\n---\n# Ambig Backlog\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "ambig-dep-v2.md"), []byte(ambigBacklog), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "ambig-dep-v2.md"), []byte(ambigBacklog), 0o644)
 
 	// Waiting task that depends on the ambiguous ID.
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - ambig-dep\n---\n# Waiter\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3449,7 +3641,7 @@ func TestDryRun_DependencySummary_ActiveAndBacklogStates(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	backlogTask := "---\nid: dep-backlog\npriority: 5\n---\n# Backlog\n"
@@ -3458,11 +3650,11 @@ func TestDryRun_DependencySummary_ActiveAndBacklogStates(t *testing.T) {
 	mergeTask := "---\nid: dep-merge\npriority: 5\n---\n# Merge\n"
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - dep-backlog\n  - dep-in-progress\n  - dep-review\n  - dep-merge\n---\n# Waiter\n"
 
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "dep-backlog.md"), []byte(backlogTask), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "dep-in-progress.md"), []byte(inProgressTask), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "dep-review.md"), []byte(reviewTask), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "dep-merge.md"), []byte(mergeTask), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "dep-backlog.md"), []byte(backlogTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.InProgress, "dep-in-progress.md"), []byte(inProgressTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyReview, "dep-review.md"), []byte(reviewTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyMerge, "dep-merge.md"), []byte(mergeTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3493,16 +3685,16 @@ func TestDryRun_DependencySummary_DuplicateWaitingIDIsAmbiguous(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	dupA := "---\nid: dup-dep\npriority: 5\n---\n# Duplicate A\n"
 	dupB := "---\nid: dup-dep\npriority: 6\n---\n# Duplicate B\n"
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - dup-dep\n---\n# Waiter\n"
 
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "dup-a.md"), []byte(dupA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "dup-b.md"), []byte(dupB), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "dup-a.md"), []byte(dupA), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "dup-b.md"), []byte(dupB), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3527,14 +3719,14 @@ func TestDryRun_DependencySummary_ParseFailedTargetUsesQueueState(t *testing.T) 
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	badBacklog := "---\npriority: not-a-number\n---\n# Broken Backlog Task\n"
 	waitingTask := "---\nid: waiter\npriority: 10\ndepends_on:\n  - parse-target\n---\n# Waiter\n"
 
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "parse-target.md"), []byte(badBacklog), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "parse-target.md"), []byte(badBacklog), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "waiter.md"), []byte(waitingTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3562,13 +3754,13 @@ func TestDryRun_AffectsConflictDetail(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskA := "---\nid: task-a\npriority: 10\naffects:\n  - shared.go\n  - unique-a.go\n---\n# Task A\n"
 	taskB := "---\nid: task-b\npriority: 20\naffects:\n  - shared.go\n  - unique-b.go\n---\n# Task B\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-a.md"), []byte(taskA), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-b.md"), []byte(taskB), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3599,13 +3791,13 @@ func TestDryRun_DependencyBlockedBacklogTask(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	blocked := "---\nid: blocked\ndepends_on:\n  - missing-dep\npriority: 10\n---\n# Blocked\n"
 	runnable := "---\nid: runnable\npriority: 20\n---\n# Runnable\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "blocked.md"), []byte(blocked), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "runnable.md"), []byte(runnable), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "blocked.md"), []byte(blocked), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "runnable.md"), []byte(runnable), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3639,16 +3831,16 @@ func TestDryRun_ParseErrorsWithValidTasks(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Valid backlog task.
 	validTask := "---\nid: valid-task\npriority: 10\naffects:\n  - file.go\n---\n# Valid Task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "valid-task.md"), []byte(validTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "valid-task.md"), []byte(validTask), 0o644)
 
 	// Invalid backlog task (parse error).
 	badTask := "---\npriority: not-a-number\n---\n# Bad Task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "bad-task.md"), []byte(badTask), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "bad-task.md"), []byte(badTask), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -3782,7 +3974,7 @@ func TestDryRun_SurfacesBuildWarnings(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskContent := "---\nid: bad-glob\npriority: 10\naffects:\n  - \"[invalid\"\n---\n# Bad Glob\n"
@@ -3811,12 +4003,12 @@ func TestGracefulShutdown_RecoversDuringSignal(t *testing.T) {
 
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "signal-test.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Signal Test\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Signal Test\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -4020,7 +4212,7 @@ func TestPollCleanup_RecoverOrphanedTask(t *testing.T) {
 	// Place an orphaned task in in-progress/ with a dead agent ID.
 	taskContent := "<!-- claimed-by: deadagent1  claimed-at: 2026-01-01T00:00:00Z -->\n---\nid: orphan-task\npriority: 10\n---\n# Orphan\n"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, "orphan-task.md")
-	os.WriteFile(inProgressPath, []byte(taskContent), 0o644)
+	mustWriteFile(t, inProgressPath, []byte(taskContent), 0o644)
 	seedWorkLaunchedTaskState(t, tasksDir, "orphan-task.md", "task/orphan-task")
 
 	// No lock file for deadagent1, so the task should be recovered.
@@ -4042,13 +4234,19 @@ func TestPollCleanup_CleansOldMessages(t *testing.T) {
 
 	// Create an old message file with a past modification time.
 	msgPath := filepath.Join(tasksDir, "messages", "events", "old-msg.json")
-	os.WriteFile(msgPath, []byte(`{"id":"old-msg"}`), 0o644)
+	if err := os.WriteFile(msgPath, []byte(`{"id":"old-msg"}`), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", msgPath, err)
+	}
 	oldTime := time.Now().Add(-48 * time.Hour)
-	os.Chtimes(msgPath, oldTime, oldTime)
+	if err := os.Chtimes(msgPath, oldTime, oldTime); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", msgPath, err)
+	}
 
 	// Create a recent message that should be kept.
 	recentPath := filepath.Join(tasksDir, "messages", "events", "new-msg.json")
-	os.WriteFile(recentPath, []byte(`{"id":"new-msg"}`), 0o644)
+	if err := os.WriteFile(recentPath, []byte(`{"id":"new-msg"}`), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", recentPath, err)
+	}
 
 	captureStdoutStderr(t, func() {
 		pollCleanup(tasksDir)
@@ -4279,12 +4477,12 @@ func TestPollReconcile_PromotesWaitingTask(t *testing.T) {
 
 	// Create a completed dependency task.
 	completedContent := "---\nid: dep-task\npriority: 10\n---\n# Dep\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep-task.md"), []byte(completedContent), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Completed, "dep-task.md"), []byte(completedContent), 0o644)
 
 	// Create a waiting task that depends on the completed one.
 	waitingContent := "---\nid: child-task\npriority: 20\ndepends_on:\n  - dep-task\n---\n# Child\n"
 	waitingPath := filepath.Join(tasksDir, dirs.Waiting, "child-task.md")
-	os.WriteFile(waitingPath, []byte(waitingContent), 0o644)
+	mustWriteFile(t, waitingPath, []byte(waitingContent), 0o644)
 
 	captureStdoutStderr(t, func() {
 		idx, hadError := pollReconcile(tasksDir)
@@ -4312,7 +4510,7 @@ func TestPollReconcile_DirReadFailureFlagsError(t *testing.T) {
 	// Replace backlog directory with a regular file to trigger ReadDir failure.
 	backlogPath := filepath.Join(tasksDir, dirs.Backlog)
 	os.RemoveAll(backlogPath)
-	os.WriteFile(backlogPath, []byte("not a directory"), 0o644)
+	mustWriteFile(t, backlogPath, []byte("not a directory"), 0o644)
 
 	_, stderr := captureStdoutStderr(t, func() {
 		_, hadError := pollReconcile(tasksDir)
@@ -4379,15 +4577,15 @@ func TestPollClaimAndRun_DeferredOverlapSkipped(t *testing.T) {
 
 	// Create a task in in-progress that claims affects on a path.
 	activeContent := "<!-- claimed-by: other-agent  claimed-at: 2026-01-01T00:00:00Z -->\n<!-- branch: task/active -->\n---\nid: active-task\npriority: 5\naffects:\n  - src/main.go\n---\n# Active\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "active-task.md"), []byte(activeContent), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.InProgress, "active-task.md"), []byte(activeContent), 0o644)
 
 	// Register a lock for other-agent so it isn't orphan-recovered.
 	lockPath := filepath.Join(tasksDir, ".locks", "other-agent.pid")
-	os.WriteFile(lockPath, []byte(fmt.Sprintf("%d:%d", os.Getpid(), time.Now().Unix())), 0o644)
+	mustWriteFile(t, lockPath, []byte(fmt.Sprintf("%d:%d", os.Getpid(), time.Now().Unix())), 0o644)
 
 	// Create a backlog task that overlaps the same affects.
 	backlogContent := "---\nid: overlap-task\npriority: 10\naffects:\n  - src/main.go\n---\n# Overlap\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "overlap-task.md"), []byte(backlogContent), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "overlap-task.md"), []byte(backlogContent), 0o644)
 
 	ctx := context.Background()
 	env := envConfig{tasksDir: tasksDir}
@@ -5378,7 +5576,9 @@ func BenchmarkResumeDetectionBuffer_LargeChunks(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			var buf resumeDetectionBufferOld
 			for j := 0; j < 100; j++ {
-				buf.Write(chunk)
+				if _, err := buf.Write(chunk); err != nil {
+					b.Fatalf("buf.Write: %v", err)
+				}
 			}
 		}
 	})
@@ -5386,7 +5586,9 @@ func BenchmarkResumeDetectionBuffer_LargeChunks(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			var buf resumeDetectionBuffer
 			for j := 0; j < 100; j++ {
-				buf.Write(chunk)
+				if _, err := buf.Write(chunk); err != nil {
+					b.Fatalf("buf.Write: %v", err)
+				}
 			}
 		}
 	})
@@ -5398,7 +5600,9 @@ func BenchmarkResumeDetectionBuffer_SmallChunks(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			var buf resumeDetectionBufferOld
 			for j := 0; j < 1000; j++ {
-				buf.Write(chunk)
+				if _, err := buf.Write(chunk); err != nil {
+					b.Fatalf("buf.Write: %v", err)
+				}
 			}
 		}
 	})
@@ -5406,7 +5610,9 @@ func BenchmarkResumeDetectionBuffer_SmallChunks(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			var buf resumeDetectionBuffer
 			for j := 0; j < 1000; j++ {
-				buf.Write(chunk)
+				if _, err := buf.Write(chunk); err != nil {
+					b.Fatalf("buf.Write: %v", err)
+				}
 			}
 		}
 	})
@@ -5604,31 +5810,57 @@ func TestCleanStaleClones_RemovesOldCloneDirectories(t *testing.T) {
 
 	// Create a stale clone with debug marker (should be removed).
 	staleDir := filepath.Join(tmpDir, "mato-stale123")
-	os.MkdirAll(staleDir, 0o755)
-	os.WriteFile(filepath.Join(staleDir, debugMarkerFile), []byte("preserved"), 0o644)
-	os.Chtimes(staleDir, staleTime, staleTime)
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", staleDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(staleDir, debugMarkerFile), []byte("preserved"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", filepath.Join(staleDir, debugMarkerFile), err)
+	}
+	if err := os.Chtimes(staleDir, staleTime, staleTime); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", staleDir, err)
+	}
 
 	// Create a fresh clone with debug marker (should NOT be removed).
 	freshDir := filepath.Join(tmpDir, "mato-fresh456")
-	os.MkdirAll(freshDir, 0o755)
-	os.WriteFile(filepath.Join(freshDir, debugMarkerFile), []byte("preserved"), 0o644)
-	os.Chtimes(freshDir, freshTime, freshTime)
+	if err := os.MkdirAll(freshDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", freshDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(freshDir, debugMarkerFile), []byte("preserved"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", filepath.Join(freshDir, debugMarkerFile), err)
+	}
+	if err := os.Chtimes(freshDir, freshTime, freshTime); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", freshDir, err)
+	}
 
 	// Create a stale clone WITHOUT debug marker (should NOT be removed).
 	noMarkerDir := filepath.Join(tmpDir, "mato-nomarker789")
-	os.MkdirAll(filepath.Join(noMarkerDir, ".git"), 0o755)
-	os.Chtimes(noMarkerDir, staleTime, staleTime)
+	if err := os.MkdirAll(filepath.Join(noMarkerDir, ".git"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", filepath.Join(noMarkerDir, ".git"), err)
+	}
+	if err := os.Chtimes(noMarkerDir, staleTime, staleTime); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", noMarkerDir, err)
+	}
 
 	// Create a stale non-mato directory with debug marker (should NOT be removed).
 	otherDir := filepath.Join(tmpDir, "other-stale")
-	os.MkdirAll(otherDir, 0o755)
-	os.WriteFile(filepath.Join(otherDir, debugMarkerFile), []byte("preserved"), 0o644)
-	os.Chtimes(otherDir, staleTime, staleTime)
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", otherDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(otherDir, debugMarkerFile), []byte("preserved"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", filepath.Join(otherDir, debugMarkerFile), err)
+	}
+	if err := os.Chtimes(otherDir, staleTime, staleTime); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", otherDir, err)
+	}
 
 	// Create a regular file with mato- prefix (should be ignored).
 	regularFile := filepath.Join(tmpDir, "mato-file.txt")
-	os.WriteFile(regularFile, []byte("data"), 0o644)
-	os.Chtimes(regularFile, staleTime, staleTime)
+	if err := os.WriteFile(regularFile, []byte("data"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", regularFile, err)
+	}
+	if err := os.Chtimes(regularFile, staleTime, staleTime); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", regularFile, err)
+	}
 
 	cleanStaleClones(tmpDir, fakeNow, 24*time.Hour)
 
@@ -5671,10 +5903,16 @@ func TestCleanStaleClones_LogsRemovedDirectories(t *testing.T) {
 	fakeNow := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 
 	staleDir := filepath.Join(tmpDir, "mato-logtest")
-	os.MkdirAll(staleDir, 0o755)
-	os.WriteFile(filepath.Join(staleDir, debugMarkerFile), []byte("preserved"), 0o644)
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", staleDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(staleDir, debugMarkerFile), []byte("preserved"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", filepath.Join(staleDir, debugMarkerFile), err)
+	}
 	staleTime := fakeNow.Add(-48 * time.Hour)
-	os.Chtimes(staleDir, staleTime, staleTime)
+	if err := os.Chtimes(staleDir, staleTime, staleTime); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", staleDir, err)
+	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
 		cleanStaleClones(tmpDir, fakeNow, 24*time.Hour)
@@ -5817,12 +6055,12 @@ func TestDryRunRenderer_WarningFormatting(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Create tasks that produce a dependency diagnostic warning.
 	task := "---\nid: warn-task\npriority: 10\ndepends_on:\n  - nonexistent\n---\n# Warn Task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "warn-task.md"), []byte(task), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Waiting, "warn-task.md"), []byte(task), 0o644)
 
 	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer
@@ -5871,11 +6109,11 @@ func TestDryRunRenderer_RenderQueueSummary(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	task := "---\nid: task-1\npriority: 10\n---\n# Task 1\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "task-1.md"), []byte(task), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task-1.md"), []byte(task), 0o644)
 
 	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer
@@ -5929,13 +6167,13 @@ func TestDryRun_WidthFromWriter(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// A task name that fits in 80 columns but would be truncated at 40.
 	longName := "this-is-a-moderately-long-task-name.md"
 	task := "---\nid: long-name\npriority: 10\n---\n# Long Name\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -5963,12 +6201,12 @@ func TestDryRun_NarrowWidthTruncatesViaCommandPath(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	longName := "this-is-a-very-very-very-long-task-filename-that-should-be-truncated.md"
 	task := "---\nid: trunc-test\npriority: 10\n---\n# Truncation Test\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
 
 	var buf bytes.Buffer
 	if err := DryRun(&buf, repoDir, "main", testRunOptions()); err != nil {
@@ -6028,12 +6266,12 @@ func TestDryRunRenderer_NarrowWidth_BacklogSummary(t *testing.T) {
 
 	tasksDir := filepath.Join(repoDir, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	longName := "extremely-long-backlog-task-name-that-will-overflow.md"
 	task := "---\nid: overflow-test\npriority: 10\n---\n# Overflow\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, longName), []byte(task), 0o644)
 
 	idx := queueview.BuildIndex(tasksDir)
 	var buf bytes.Buffer

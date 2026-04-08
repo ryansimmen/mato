@@ -501,13 +501,15 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 		}
 		state.LastOutcome = outcome
 	})
-	messaging.WriteMessage(tasksDir, messaging.Message{
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
 		From:   agentID,
 		Type:   "completion",
 		Task:   task.Filename,
 		Branch: task.Branch,
 		Body:   disp.messageBody,
-	})
+	}); err != nil {
+		ui.Warnf("warning: could not write review completion message for %s: %v\n", task.Filename, err)
+	}
 	fmt.Printf("%s: moved %s to %s/\n", disp.logPrefix, task.Filename, disp.dir)
 	return true
 }

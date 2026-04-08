@@ -244,24 +244,28 @@ func finalizePushedTask(tasksDir, targetBranch, agentID, filename, branch, curre
 	}
 
 	// Send conflict-warning with changed files.
-	messaging.WriteMessage(tasksDir, messaging.Message{
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
 		From:   agentID,
 		Type:   "conflict-warning",
 		Task:   filename,
 		Branch: branch,
 		Files:  filesChanged,
 		Body:   "About to push",
-	})
+	}); err != nil {
+		ui.Warnf("warning: could not write conflict-warning for %s: %v\n", filename, err)
+	}
 
 	// Send completion message.
-	messaging.WriteMessage(tasksDir, messaging.Message{
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
 		From:   agentID,
 		Type:   "completion",
 		Task:   filename,
 		Branch: branch,
 		Files:  filesChanged,
 		Body:   "Task complete, ready for review",
-	})
+	}); err != nil {
+		ui.Warnf("warning: could not write completion message for %s: %v\n", filename, err)
+	}
 	if logMove {
 		fmt.Printf("Pushed %s and moved %s to ready-for-review/\n", branch, filename)
 	}

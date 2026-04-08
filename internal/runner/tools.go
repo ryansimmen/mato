@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -18,6 +17,13 @@ var lookPathFn = exec.LookPath
 var statFn = os.Stat
 var mkdirAllFn = os.MkdirAll
 var userHomeDirFn = os.UserHomeDir
+var goEnvGOROOTFn = func() (string, error) {
+	out, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
 var gitExecPathFn = func() (string, error) {
 	out, err := exec.Command("git", "--exec-path").Output()
 	if err != nil {
@@ -75,6 +81,13 @@ func discoverHostTools() (hostTools, error) {
 		}
 	}
 	goplsPath, _ := lookPathFn("gopls")
+	goRoot, err := goEnvGOROOTFn()
+	if err != nil {
+		return hostTools{}, fmt.Errorf("resolve GOROOT via 'go env GOROOT': %w", err)
+	}
+	if goRoot == "" {
+		return hostTools{}, fmt.Errorf("resolve GOROOT via 'go env GOROOT': empty result")
+	}
 
 	gitTemplatesDir := "/usr/share/git-core/templates"
 	hasGitTemplates := false
@@ -122,7 +135,7 @@ func discoverHostTools() (hostTools, error) {
 		gitReceivePackPath: gitReceivePackPath,
 		ghPath:             ghPath,
 		goplsPath:          goplsPath,
-		goRoot:             runtime.GOROOT(),
+		goRoot:             goRoot,
 		gitTemplatesDir:    gitTemplatesDir,
 		hasGitTemplates:    hasGitTemplates,
 		systemCertsDir:     systemCertsDir,

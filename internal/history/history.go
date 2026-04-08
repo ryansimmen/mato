@@ -286,11 +286,6 @@ func colorEventType(padded string) string {
 		return padded
 	}
 }
-
-// minTruncWidth is the smallest budget allowed when clamping
-// width-based truncation on very narrow terminals.
-const minTruncWidth = 6
-
 func renderText(w io.Writer, events []Event) error {
 	tw := ui.NewTextWriter(w)
 	if len(events) == 0 {

@@ -148,7 +148,11 @@ func TestShowTo_WarnsAndSkipsMalformedCompletionAndUnreadableTask(t *testing.T) 
 	if err := os.Chmod(unreadablePath, 0o000); err != nil {
 		t.Fatalf("os.Chmod: %v", err)
 	}
-	defer os.Chmod(unreadablePath, 0o644)
+	defer func() {
+		if err := os.Chmod(unreadablePath, 0o644); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	}()
 
 	var warnings bytes.Buffer
 	prev := ui.SetWarningWriter(&warnings)

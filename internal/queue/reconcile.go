@@ -63,11 +63,7 @@ func resolvePromotableTasks(tasksDir string, idx *PollIndex) []promotableTask {
 func ReconcileReadyQueue(tasksDir string, idx *PollIndex) bool {
 	idx = ensureIndex(tasksDir, idx)
 
-	moved := false
-
-	if failUnparseableTasks(tasksDir, idx) {
-		moved = true
-	}
+	moved := failUnparseableTasks(tasksDir, idx)
 
 	if failInvalidGlobBacklog(tasksDir, idx) {
 		moved = true

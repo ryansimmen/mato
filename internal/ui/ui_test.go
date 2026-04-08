@@ -83,7 +83,9 @@ func TestWarnf_NilWriterUsesStderr(t *testing.T) {
 	w.Close()
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("buf.ReadFrom: %v", err)
+	}
 	r.Close()
 	if got := buf.String(); got != "warning: fallback\n" {
 		t.Errorf("Warnf via os.Stderr = %q, want %q", got, "warning: fallback\n")
