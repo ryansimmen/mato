@@ -31,8 +31,8 @@ mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato inspect [--repo <path>] [--format text|json] <task-ref>
 mato retry [--repo <path>] <task-ref> [task-ref...]
 mato cancel [--repo <path>] <task-ref> [task-ref...]
-mato pause [--repo <path>]
-mato resume [--repo <path>]
+mato pause [--repo <path>] [--format text|json]
+mato resume [--repo <path>] [--format text|json]
 mato version
 ```
 Valid `--only` check names: `git`, `tools`, `config`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
@@ -320,17 +320,23 @@ running orchestrator treats the repo as paused for safety: it skips new task
 claims and review launches, continues refreshing `.queue`, and keeps draining
 `ready-to-merge/`.
 
+Use `--format json` for machine-readable output in scripts and automation.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
+| `--format` | `text` | Output format: `text` or `json`. |
 
 ### `mato resume`
 `mato resume` removes `<repo>/.mato/.paused` and allows the orchestrator to
 resume normal claim and review polling.
 
+Use `--format json` for machine-readable output in scripts and automation.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
+| `--format` | `text` | Output format: `text` or `json`. |
 
 ### `mato version`
 `mato version` prints the build version in a script-friendly format.
