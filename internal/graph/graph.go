@@ -7,7 +7,6 @@ package graph
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -344,11 +343,6 @@ func sortGraphData(data *GraphData, stateOrder map[string]int) {
 			})
 		}
 	}
-}
-
-// Show writes the dependency graph to os.Stdout.
-func Show(repoRoot, format string, showAll bool) error {
-	return ShowTo(os.Stdout, repoRoot, format, showAll)
 }
 
 // ShowTo resolves the tasks directory, builds the dependency graph, and
