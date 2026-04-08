@@ -25,6 +25,7 @@ mato config [--repo <path>] [--format text|json]
 mato run [--repo <path>] [--branch <name>] [--dry-run | --once | --until-idle] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
 mato init [--repo <path>] [--branch <name>] [--format text|json]
 mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json] [--verbose]
+mato list [--repo <path>] [--state <state[,state...]>] [--all] [--format text|json]
 mato log [--repo <path>] [--limit <n>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
@@ -170,6 +171,37 @@ messages, and recent completions.
 
 Supported flags: `--repo`, `--watch`, `--interval`, `--format`, `--verbose`,
 and `--help`/`-h`.
+
+### `mato list`
+`mato list` provides a flat, read-only snapshot of queue tasks for scripts and
+operators who want one task per row instead of the dashboard-style `mato status`
+view.
+
+By default, it includes the active queue states only: `waiting`, `backlog`,
+`in-progress`, `ready-for-review`, and `ready-to-merge`. Use `--all` to include
+terminal states (`completed` and `failed`). Use `--state` to select an explicit
+comma-separated set of queue states; unknown values are rejected with a usage
+error instead of being ignored.
+
+Text output uses a stable tabular layout with `STATE`, `TASK`, `PRIORITY`, `ID`,
+and `TITLE` columns. JSON output is an array of objects with stable fields:
+`filename`, `id`, `title`, `priority`, `state`, and `path`. Parse-failed task
+entries also include `parse_error`.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--state <state[,state...]>` | active states only | Comma-separated queue states to include. Valid values: `waiting`, `backlog`, `in-progress`, `ready-for-review`, `ready-to-merge`, `completed`, `failed`. |
+| `--all` | `false` | Include all queue states, including `completed` and `failed`, when `--state` is not set. |
+| `--format` | `text` | Output format: `text` or `json`. |
+
+Example usage:
+```bash
+mato list
+mato list --state failed
+mato list --state backlog,waiting --format json
+mato list --all
+```
 
 ### `mato init`
 `mato init` bootstraps a repository for mato use in one explicit step. It is intended for first-time setup, CI preparation, or dry-run validation flows where users want `.mato/` and the target branch created without running the full orchestrator.

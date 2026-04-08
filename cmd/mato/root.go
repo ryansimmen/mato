@@ -158,6 +158,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newRunCmd(&repoFlag))
 	root.AddCommand(newConfigCmd(&repoFlag))
 	root.AddCommand(newStatusCmd(&repoFlag))
+	root.AddCommand(newListCmd(&repoFlag))
 	root.AddCommand(newLogCmd(&repoFlag))
 	root.AddCommand(newDoctorCmd(&repoFlag))
 	root.AddCommand(newGraphCmd(&repoFlag))
