@@ -1,6 +1,7 @@
 #!/bin/sh
-# Install mato skill to ~/.copilot/skills/mato/ and, when OpenCode is
-# available, ~/.config/opencode/skills/mato/.
+# Install mato skill to ~/.copilot/skills/mato/ and, when available,
+# ~/.claude/skills/mato/ (Claude Code) and ~/.config/opencode/skills/mato/
+# (OpenCode).
 
 set -e
 
@@ -20,6 +21,10 @@ install_skill() {
 }
 
 install_skill "$HOME/.copilot/skills/mato"
+
+if command -v claude >/dev/null 2>&1; then
+  install_skill "$HOME/.claude/skills/mato"
+fi
 
 if command -v opencode >/dev/null 2>&1; then
   install_skill "$HOME/.config/opencode/skills/mato"
