@@ -133,6 +133,54 @@ func TestMergeMissingBranch_MissingMarker(t *testing.T) {
 	}
 }
 
+// TestMergeMissingBranch_InvalidMarker verifies that a ready-to-merge task with
+// an invalid explicit <!-- branch: ... --> marker is treated as a corrupted
+// handoff and moved to failed/ when its retry budget is exhausted.
+func TestMergeMissingBranch_InvalidMarker(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	headBefore := strings.TrimSpace(mustGitOutput(t, repoRoot, "rev-parse", "mato"))
+
+	taskContent := strings.Join([]string{
+		"<!-- branch: --bad -->",
+		"---",
+		"id: invalid-marker",
+		"priority: 1",
+		"max_retries: 1",
+		"---",
+		"<!-- failure: prior-agent at 2026-01-01T00:00:00Z step=WORK error=first-attempt -->",
+		"# Invalid branch marker",
+		"This task's branch marker is invalid.",
+	}, "\n")
+	writeTask(t, tasksDir, dirs.ReadyMerge, "invalid-marker.md", taskContent)
+
+	merged := merge.ProcessQueue(repoRoot, tasksDir, "mato")
+	if merged != 0 {
+		t.Fatalf("ProcessQueue() = %d, want 0", merged)
+	}
+
+	failedPath := filepath.Join(tasksDir, dirs.Failed, "invalid-marker.md")
+	mustExist(t, failedPath)
+	mustNotExist(t, filepath.Join(tasksDir, dirs.ReadyMerge, "invalid-marker.md"))
+	mustNotExist(t, filepath.Join(tasksDir, dirs.Backlog, "invalid-marker.md"))
+
+	data := readFile(t, failedPath)
+	if !strings.Contains(data, "<!-- failure: merge-queue") {
+		t.Fatalf("failed task missing merge-queue failure record:\n%s", data)
+	}
+	if !strings.Contains(data, "invalid required") || !strings.Contains(data, "after work handoff") {
+		t.Fatalf("failed task missing invalid-marker text:\n%s", data)
+	}
+	if !strings.Contains(data, "invalid branch name") || !strings.Contains(data, "branch names must not begin with '-'") {
+		t.Fatalf("failed task missing invalid branch detail:\n%s", data)
+	}
+
+	headAfter := strings.TrimSpace(mustGitOutput(t, repoRoot, "rev-parse", "mato"))
+	if headAfter != headBefore {
+		t.Fatalf("target branch changed: %s → %s", headBefore, headAfter)
+	}
+}
+
 // TestMergeMissingBranch_RetriesRemaining verifies that when a missing-branch
 // failure occurs but retries remain, the task moves to backlog/ (not failed/).
 func TestMergeMissingBranch_RetriesRemaining(t *testing.T) {

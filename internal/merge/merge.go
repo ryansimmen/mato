@@ -36,6 +36,7 @@ type mergeQueueTask struct {
 
 var errTaskBranchNotPushed = errors.New("task branch not pushed by agent")
 var errTaskBranchMarkerMissing = errors.New("missing required <!-- branch: ... --> marker after work handoff")
+var errTaskBranchMarkerInvalid = errors.New("invalid required <!-- branch: ... --> marker after work handoff")
 var errSquashMergeConflict = errors.New("squash merge conflict")
 var errPushAfterSquashFailed = errors.New("push failed after squash merge")
 var removeTaskFileFn = os.Remove
@@ -78,8 +79,9 @@ func ProcessQueueContext(ctx context.Context, repoRoot, tasksDir, branch string)
 
 // loadMergeCandidates reads task files from dir, parses frontmatter for each
 // .md file, requires an explicit recorded branch marker, and returns a
-// priority-sorted slice of candidates. Unparseable or marker-less files are
-// routed through the normal failure/requeue path with a stderr warning.
+// priority-sorted slice of candidates. Unparseable tasks and tasks with missing
+// or invalid branch markers are routed through the normal failure/requeue path
+// with a stderr warning.
 func loadMergeCandidates(dir, tasksDir string) ([]mergeQueueTask, error) {
 	names, err := taskfile.ListTaskFiles(dir)
 	if err != nil {
@@ -98,11 +100,15 @@ func loadMergeCandidates(dir, tasksDir string) ([]mergeQueueTask, error) {
 			continue
 		}
 
-		taskBranch := strings.TrimSpace(taskfile.ParseBranch(path))
-		if taskBranch == "" {
-			ui.Warnf("warning: ready-to-merge task %s is missing a required branch marker\n", name)
-			if failureErr := failMergeTask(path, mergeFailureDestination(tasksDir, path, name), errTaskBranchMarkerMissing.Error()); failureErr != nil {
-				ui.Warnf("warning: could not requeue task %s after missing branch marker: %v\n", name, failureErr)
+		taskBranch, branchErr := loadMergeTaskBranch(path)
+		if branchErr != nil {
+			if errors.Is(branchErr, errTaskBranchMarkerMissing) {
+				ui.Warnf("warning: ready-to-merge task %s is missing a required branch marker\n", name)
+			} else {
+				ui.Warnf("warning: ready-to-merge task %s has an invalid branch marker: %v\n", name, branchErr)
+			}
+			if failureErr := failMergeTask(path, mergeFailureDestination(tasksDir, path, name), branchErr.Error()); failureErr != nil {
+				ui.Warnf("warning: could not requeue task %s after branch-marker validation failure: %v\n", name, failureErr)
 			}
 			continue
 		}
@@ -126,6 +132,26 @@ func loadMergeCandidates(dir, tasksDir string) ([]mergeQueueTask, error) {
 	})
 
 	return tasks, nil
+}
+
+func loadMergeTaskBranch(path string) (string, error) {
+	data, err := taskfile.ReadRegularTaskFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read branch marker: %w", err)
+	}
+
+	taskBranch, ok := taskfile.ParseBranchMarkerLine(data)
+	if !ok {
+		return "", errTaskBranchMarkerMissing
+	}
+	taskBranch = strings.TrimSpace(taskBranch)
+	if taskBranch == "" {
+		return "", errTaskBranchMarkerMissing
+	}
+	if err := git.ValidateBranch(taskBranch); err != nil {
+		return "", fmt.Errorf("%w: %v", errTaskBranchMarkerInvalid, err)
+	}
+	return taskBranch, nil
 }
 
 // executeMergeRound iterates sorted candidates, performing squash merges into

@@ -205,6 +205,13 @@ func TestValidateBranch(t *testing.T) {
 		}
 	})
 
+	t.Run("leading dash", func(t *testing.T) {
+		err := ValidateBranch("-bad")
+		if err == nil || !strings.Contains(err.Error(), "must not begin with '-'") {
+			t.Fatalf("err = %v, want leading-dash rejection", err)
+		}
+	})
+
 	t.Run("invalid branch", func(t *testing.T) {
 		err := ValidateBranch("foo..bar")
 		if err == nil || !strings.Contains(err.Error(), "invalid branch name") {
