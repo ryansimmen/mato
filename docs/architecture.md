@@ -159,7 +159,8 @@ Environment variables injected by the host:
 - `MATO_AGENT_ID=<generated id>`
 - `MATO_MESSAGING_ENABLED=1`
 - `MATO_MESSAGES_DIR=/workspace/.mato/messages`
-- `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, `GIT_CONFIG_VALUE_0=*`
+- host repo mounted read-only at `/mato-host-repo`, with the clone's `origin` temporarily rewritten to that path during container execution
+- `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, `GIT_CONFIG_VALUE_0=/workspace`
 - `GIT_AUTHOR_NAME` / `GIT_COMMITTER_NAME` if host Git config supplies a name
 - `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_EMAIL` if host Git config supplies an email
 - `HOME=<host home path>`
@@ -168,7 +169,7 @@ Environment variables injected by the host:
 If `gopls` is absent on the host `PATH`, the host still launches the container but emits a warning that Go LSP features will be unavailable for that agent run.
 The final command is:
 ```text
-copilot [--resume=<session-id>] -p <embedded task prompt> --autopilot --allow-all --model <run.model> --reasoning-effort <run.reasoningEffort>
+copilot [--resume=<session-id>] -p <embedded task prompt> --autopilot --allow-all-tools --model <run.model> --reasoning-effort <run.reasoningEffort>
 ```
 `buildDockerArgs(...)` always appends `--model <run.model>` and `--reasoning-effort <run.reasoningEffort>` using the fully resolved values from `RunOptions`, and appends `--resume=<session-id>` only when the host has a durable session record for that phase.
 ### Host-side task claiming

@@ -107,6 +107,9 @@ func boundedRunWorkEnv(t *testing.T) []string {
 		"if [ \"$cmd\" != run ]; then",
 		"  exit 0",
 		"fi",
+		"if [ -n \"${MATO_DOCKER_ARGS_LOG:-}\" ]; then",
+		"  printf '%s\n' \"$@\" > \"$MATO_DOCKER_ARGS_LOG\"",
+		"fi",
 		"clone=",
 		"workdir=",
 		"author_name=Test",
@@ -210,6 +213,49 @@ func TestBoundedRun_OnceClaimsAndLeavesTaskReadyForReview(t *testing.T) {
 	}
 	if strings.TrimSpace(show) != "bounded once" {
 		t.Fatalf("once.txt = %q, want %q", strings.TrimSpace(show), "bounded once")
+	}
+}
+
+func TestBoundedRun_OnceUsesRestrictedContainerMounts(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, dirs.Backlog, "once.md", "# Once\nCreate once.txt\n")
+
+	argsLog := filepath.Join(t.TempDir(), "docker-args.txt")
+	env := append(boundedRunWorkEnv(t), "MATO_DOCKER_ARGS_LOG="+argsLog)
+	out, err := runMatoCommandWithEnv(t, env, "run", "--repo", repoRoot, "--once")
+	if err != nil {
+		t.Fatalf("mato run --once: %v\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(argsLog)
+	if err != nil {
+		t.Fatalf("read docker args log: %v", err)
+	}
+	log := string(data)
+
+	for _, want := range []string{
+		repoRoot + ":/mato-host-repo:ro",
+		filepath.Join(tasksDir, dirs.InProgress) + ":/workspace/.mato/in-progress:ro",
+		filepath.Join(tasksDir, dirs.ReadyReview) + ":/workspace/.mato/ready-for-review:ro",
+		filepath.Join(tasksDir, "messages") + ":/workspace/.mato/messages",
+		"GIT_CONFIG_VALUE_0=/workspace",
+		"--allow-all-tools",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("docker args missing %q:\n%s", want, log)
+		}
+	}
+	for _, unwanted := range []string{
+		tasksDir + ":/workspace/.mato",
+		repoRoot + ":" + repoRoot,
+		"GIT_CONFIG_VALUE_0=*",
+	} {
+		if strings.Contains(log, unwanted) {
+			t.Fatalf("docker args unexpectedly contained %q:\n%s", unwanted, log)
+		}
+	}
+	if strings.Contains("\n"+log+"\n", "\n--allow-all\n") {
+		t.Fatalf("docker args unexpectedly contained %q:\n%s", "--allow-all", log)
 	}
 }
 
