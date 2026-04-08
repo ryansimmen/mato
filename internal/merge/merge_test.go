@@ -1652,7 +1652,7 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		// Ensure cleanup can remove the file.
-		if err := os.Chmod(taskFile, 0o644); err != nil {
+		if err := os.Chmod(taskFile, 0o644); err != nil && !os.IsNotExist(err) {
 			t.Errorf("os.Chmod restore task permissions: %v", err)
 		}
 		completedFile := filepath.Join(tasksDir, dirs.Completed, "readonly-task.md")
