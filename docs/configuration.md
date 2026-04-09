@@ -31,7 +31,7 @@ mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato inspect [--repo <path>] [--format text|json] <task-ref>
 mato retry [--repo <path>] <task-ref> [task-ref...]
-mato cancel [--repo <path>] <task-ref> [task-ref...]
+mato cancel [--repo <path>] [--all | <task-ref> [task-ref...]]
 mato pause [--repo <path>] [--format text|json]
 mato resume [--repo <path>] [--format text|json]
 mato version
@@ -333,9 +333,18 @@ refs queue-wide by filename, filename stem, or explicit task `id`, warns when
 the cancelled task is still being worked or merged, and reports blocked
 dependents that will remain stuck until the task is retried.
 
+`--all` is a bulk operator action: it cancels every task currently in
+`waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`,
+`ready-to-merge/`, and `failed/`, but never touches `completed/`. The command
+resolves that full task list before making any queue mutations, then processes
+it in stable filename order. In text mode, it prints the full task list before
+prompting; in JSON mode, it stays non-interactive and returns one result object
+per task.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
+| `--all` | `false` | Cancel every task in `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, and `failed/`. Mutually exclusive with explicit task refs and never includes `completed/`. |
 
 Example usage:
 ```bash
@@ -344,6 +353,9 @@ mato cancel fix-login-bug
 
 # Cancel multiple tasks at once
 mato cancel fix-login-bug add-dark-mode
+
+# Cancel every non-completed task in the queue
+mato cancel --all
 ```
 
 ### `mato pause`
