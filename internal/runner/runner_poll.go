@@ -96,10 +96,14 @@ func pollCleanup(tasksDir string) {
 // and reconciles the ready queue (promoting waiting tasks whose dependencies
 // are satisfied and quarantining exhausted ones). If reconciliation moved
 // tasks the index is rebuilt. It returns the (possibly refreshed) index and
-// whether any directory-level read failure occurred.
+// whether any queue-structural error occurred during the cycle, including
+// unreadable queue directories or parse-failed task files.
 func pollReconcile(tasksDir string) (*queueview.PollIndex, bool) {
 	idx := queueview.BuildIndex(tasksDir)
 	hadError := surfaceBuildWarnings(idx)
+	if len(idx.ParseFailures()) > 0 {
+		hadError = true
+	}
 
 	if queue.ReconcileReadyQueue(tasksDir, idx) {
 		idx = queueview.BuildIndex(tasksDir)
