@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -276,6 +277,10 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	if err := configureReceiveDeny(env.repoRoot); err != nil {
 		ui.Warnf("warning: could not set receive.denyCurrentBranch=updateInstead: %v\n", err)
 	}
+	restoreOrigin, err := prepareCloneOriginForContainer(cloneDir)
+	if err != nil {
+		return fmt.Errorf("prepare review clone origin for container: %w", err)
+	}
 
 	run.cloneDir = cloneDir
 	if env.reviewSessionResumeEnabled {
@@ -309,12 +314,19 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 		fmt.Sprintf("MATO_REVIEW_VERDICT_PATH=%s/%s/messages/verdict-%s.json", env.workdir, dirs.Root, task.Filename),
 	}
 
-	return runCopilotCommand(ctx, env, run, extraEnvs, nil, "review agent", func() string {
+	agentErr := runCopilotCommand(ctx, env, run, extraEnvs, nil, "review agent", func() string {
 		if !env.reviewSessionResumeEnabled {
 			return ""
 		}
 		return resetSession(env.tasksDir, runtimedata.KindReview, task.Filename, task.Branch)
 	})
+	if restoreErr := restoreOrigin(); restoreErr != nil {
+		if agentErr != nil {
+			return errors.Join(agentErr, restoreErr)
+		}
+		return restoreErr
+	}
+	return agentErr
 }
 
 // reviewDisposition captures the three values that differ between an approval
@@ -501,13 +513,15 @@ func moveReviewedTask(tasksDir, agentID string, task *queue.ClaimedTask, disp re
 		}
 		state.LastOutcome = outcome
 	})
-	messaging.WriteMessage(tasksDir, messaging.Message{
+	if err := messaging.WriteMessage(tasksDir, messaging.Message{
 		From:   agentID,
 		Type:   "completion",
 		Task:   task.Filename,
 		Branch: task.Branch,
 		Body:   disp.messageBody,
-	})
+	}); err != nil {
+		ui.Warnf("warning: could not write review completion message for %s: %v\n", task.Filename, err)
+	}
 	fmt.Printf("%s: moved %s to %s/\n", disp.logPrefix, task.Filename, disp.dir)
 	return true
 }

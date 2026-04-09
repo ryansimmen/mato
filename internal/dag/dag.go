@@ -8,6 +8,7 @@ package dag
 
 import (
 	"container/heap"
+	"fmt"
 	"sort"
 )
 
@@ -18,8 +19,16 @@ type stringHeap []string
 func (h stringHeap) Len() int           { return len(h) }
 func (h stringHeap) Less(i, j int) bool { return h[i] < h[j] }
 func (h stringHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *stringHeap) Push(x any)        { *h = append(*h, x.(string)) }
+func (h *stringHeap) Push(x any)        { *h = append(*h, mustString(x)) }
 func (h *stringHeap) Pop() any          { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
+
+func mustString(value any) string {
+	s, ok := value.(string)
+	if !ok {
+		panic(fmt.Sprintf("dag: expected string heap item, got %T", value))
+	}
+	return s
+}
 
 // Node represents a waiting task in the dependency graph.
 type Node struct {
@@ -123,8 +132,8 @@ func Analyze(waiting []Node, completedIDs, knownIDs, ambiguousIDs map[string]str
 // map used by Kahn's algorithm. Only edges between waiting tasks are included.
 func buildGraph(waiting []Node, waitingSet map[string]struct{}) (adj, depEdges map[string][]string, inDeg map[string]int) {
 	adj = make(map[string][]string, len(waiting))      // from -> [to] (dependency direction: "to" depends on "from")
-	inDeg = make(map[string]int, len(waiting))          // number of waiting-task dependencies
-	depEdges = make(map[string][]string, len(waiting))  // task -> waiting deps (for SCC)
+	inDeg = make(map[string]int, len(waiting))         // number of waiting-task dependencies
+	depEdges = make(map[string][]string, len(waiting)) // task -> waiting deps (for SCC)
 
 	for _, n := range waiting {
 		if _, exists := inDeg[n.ID]; !exists {
@@ -157,7 +166,7 @@ func kahnResolve(waiting []Node, adj map[string][]string, inDeg map[string]int) 
 
 	resolved := make(map[string]struct{}, len(waiting))
 	for h.Len() > 0 {
-		id := heap.Pop(h).(string)
+		id := mustString(heap.Pop(h))
 		resolved[id] = struct{}{}
 
 		neighbors := adj[id]

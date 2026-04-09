@@ -1,6 +1,7 @@
 # Explicit Run Command and Copilot Settings — Implementation Plan
 
 > **Status: Implemented** — This proposal has been fully implemented.
+> **Read-only:** This file is a historical snapshot. Update the source code and living docs instead.
 > The text below describes the implemented design; see the source code for the
 > current behavior.
 

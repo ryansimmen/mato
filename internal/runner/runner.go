@@ -76,16 +76,16 @@ func normalizeAndValidateRunOptions(opts RunOptions) (RunOptions, error) {
 	}
 
 	if opts.TaskModel == "" {
-		return opts, fmt.Errorf("task model must not be empty")
+		return opts, ui.WithHint(fmt.Errorf("task model must not be empty"), "set it with --task-model, MATO_TASK_MODEL, or task_model in .mato.yaml")
 	}
 	if opts.ReviewModel == "" {
-		return opts, fmt.Errorf("review model must not be empty")
+		return opts, ui.WithHint(fmt.Errorf("review model must not be empty"), "set it with --review-model, MATO_REVIEW_MODEL, or review_model in .mato.yaml")
 	}
 	if opts.TaskReasoningEffort == "" {
-		return opts, fmt.Errorf("task reasoning effort must not be empty")
+		return opts, ui.WithHint(fmt.Errorf("task reasoning effort must not be empty"), "set it with --task-reasoning-effort, MATO_TASK_REASONING_EFFORT, or task_reasoning_effort in .mato.yaml")
 	}
 	if opts.ReviewReasoningEffort == "" {
-		return opts, fmt.Errorf("review reasoning effort must not be empty")
+		return opts, ui.WithHint(fmt.Errorf("review reasoning effort must not be empty"), "set it with --review-reasoning-effort, MATO_REVIEW_REASONING_EFFORT, or review_reasoning_effort in .mato.yaml")
 	}
 
 	return opts, nil

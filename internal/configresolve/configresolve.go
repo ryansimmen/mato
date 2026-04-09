@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"mato/internal/config"
+	"mato/internal/ui"
 )
 
 type Source string
@@ -126,7 +127,7 @@ func ResolveBranch(load config.LoadResult, flagValue string) (Resolved[string], 
 	}
 	envValue, ok, err := resolveEnvString(envBranch, true)
 	if err != nil {
-		return Resolved[string]{}, err
+		return Resolved[string]{}, ui.WithHint(err, "set MATO_BRANCH to a valid git ref name such as mato or feature/my-change, or unset it to use the default")
 	}
 	if ok {
 		return Resolved[string]{Value: envValue, Source: SourceEnv, EnvVar: envBranch.Name}, nil
@@ -165,10 +166,10 @@ func ResolveRunConfig(flags RunFlags, load config.LoadResult) (RunConfig, error)
 	}
 	resolved.RetryCooldown = retryCooldown
 
-	if err := validateReasoningEffort(resolved.TaskReasoningEffort.Value, "task-reasoning-effort"); err != nil {
+	if err := validateResolvedReasoningEffort(resolved.TaskReasoningEffort, "task-reasoning-effort", "task_reasoning_effort"); err != nil {
 		return RunConfig{}, err
 	}
-	if err := validateReasoningEffort(resolved.ReviewReasoningEffort.Value, "review-reasoning-effort"); err != nil {
+	if err := validateResolvedReasoningEffort(resolved.ReviewReasoningEffort, "review-reasoning-effort", "review_reasoning_effort"); err != nil {
 		return RunConfig{}, err
 	}
 
@@ -302,20 +303,20 @@ func resolveDurationValue(envMeta envVarMeta, configVal *string, name string, de
 	if v := os.Getenv(envMeta.Name); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return Resolved[time.Duration]{}, fmt.Errorf("parse %s %q: %w", envMeta.Name, v, err)
+			return Resolved[time.Duration]{}, ui.WithHint(fmt.Errorf("parse %s %q: %w", envMeta.Name, v, err), durationHint(SourceEnv, envMeta.Name, name, defaultVal))
 		}
 		if d <= 0 {
-			return Resolved[time.Duration]{}, fmt.Errorf("%s must be positive, got %v", envMeta.Name, d)
+			return Resolved[time.Duration]{}, ui.WithHint(fmt.Errorf("%s must be positive, got %v", envMeta.Name, d), durationHint(SourceEnv, envMeta.Name, name, defaultVal))
 		}
 		return Resolved[time.Duration]{Value: d, Source: SourceEnv, EnvVar: envMeta.Name}, nil
 	}
 	if configVal != nil {
 		d, err := time.ParseDuration(*configVal)
 		if err != nil {
-			return Resolved[time.Duration]{}, fmt.Errorf("invalid %s %q in .mato.yaml: %w", name, *configVal, err)
+			return Resolved[time.Duration]{}, ui.WithHint(fmt.Errorf("invalid %s %q in .mato.yaml: %w", name, *configVal, err), durationHint(SourceConfig, envMeta.Name, name, defaultVal))
 		}
 		if d <= 0 {
-			return Resolved[time.Duration]{}, fmt.Errorf("%s in .mato.yaml must be positive, got %v", name, d)
+			return Resolved[time.Duration]{}, ui.WithHint(fmt.Errorf("%s in .mato.yaml must be positive, got %v", name, d), durationHint(SourceConfig, envMeta.Name, name, defaultVal))
 		}
 		return Resolved[time.Duration]{Value: d, Source: SourceConfig}, nil
 	}
@@ -350,4 +351,45 @@ func formatSource(source Source, envVar string) string {
 		return fmt.Sprintf("env: %s", envVar)
 	}
 	return string(source)
+}
+
+func validateResolvedReasoningEffort(resolved Resolved[string], flagName, settingName string) error {
+	if validReasoningEfforts[resolved.Value] {
+		return nil
+	}
+	message := fmt.Sprintf("invalid %s %q: must be one of low, medium, high, xhigh", flagName, resolved.Value)
+	switch resolved.Source {
+	case SourceEnv:
+		message = fmt.Sprintf("invalid %s %q: must be one of low, medium, high, xhigh", resolved.EnvVar, resolved.Value)
+	case SourceConfig:
+		message = fmt.Sprintf("invalid %s %q in .mato.yaml: must be one of low, medium, high, xhigh", settingName, resolved.Value)
+	case SourceDefault:
+		message = fmt.Sprintf("invalid %s %q: must be one of low, medium, high, xhigh", settingName, resolved.Value)
+	}
+	return ui.WithHint(fmt.Errorf("%s", message), reasoningEffortHint(resolved, flagName, settingName))
+}
+
+func reasoningEffortHint(resolved Resolved[string], flagName, settingName string) string {
+	switch resolved.Source {
+	case SourceFlag:
+		return fmt.Sprintf("set --%s to one of low, medium, high, or xhigh", flagName)
+	case SourceEnv:
+		return fmt.Sprintf("set %s to one of low, medium, high, or xhigh, or unset it to use the default", resolved.EnvVar)
+	case SourceConfig:
+		return fmt.Sprintf("set %s in .mato.yaml to one of low, medium, high, or xhigh", settingName)
+	default:
+		return fmt.Sprintf("set %s to one of low, medium, high, or xhigh", settingName)
+	}
+}
+
+func durationHint(source Source, envVar, settingName string, defaultVal time.Duration) string {
+	example := defaultVal.String()
+	switch source {
+	case SourceEnv:
+		return fmt.Sprintf("set %s to a positive duration like %s, or unset it to fall back to .mato.yaml or the default", envVar, example)
+	case SourceConfig:
+		return fmt.Sprintf("set %s in .mato.yaml to a positive duration like %s, or remove it to use the default", settingName, example)
+	default:
+		return fmt.Sprintf("set %s to a positive duration like %s", settingName, example)
+	}
 }

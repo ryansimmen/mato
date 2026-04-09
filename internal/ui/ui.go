@@ -169,7 +169,7 @@ func RequireTasksDir(tasksDir string) error {
 	info, err := os.Stat(tasksDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf(".mato/ directory not found - run 'mato init' first")
+			return WithHint(fmt.Errorf(".mato/ directory not found"), "run 'mato init' first")
 		}
 		return fmt.Errorf("stat %s: %w", tasksDir, err)
 	}

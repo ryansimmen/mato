@@ -50,12 +50,12 @@ func assertWorkLaunchTaskState(t *testing.T, tasksDir, taskFile, branch, targetB
 func TestMoveTaskToReviewWithMarker_Success(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "marker-task.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("# Marker Task\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("# Marker Task\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -89,7 +89,7 @@ func TestMoveTaskToReviewWithMarker_Success(t *testing.T) {
 
 func TestMoveTaskToReviewWithMarker_SourceMissing(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.ReadyReview), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, dirs.ReadyReview), 0o755)
 
 	claimed := &queue.ClaimedTask{
 		Filename: "missing.md",
@@ -105,16 +105,16 @@ func TestMoveTaskToReviewWithMarker_SourceMissing(t *testing.T) {
 func TestMoveTaskToReviewWithMarker_DestinationExists(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "dup.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("# Dup\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("# Dup\n"), 0o644)
 
 	// Pre-create at destination.
 	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(readyPath, []byte("# Existing\n"), 0o644)
+	mustWriteFile(t, readyPath, []byte("# Existing\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -135,12 +135,12 @@ func TestMoveTaskToReviewWithMarker_DestinationExists(t *testing.T) {
 func TestMoveTaskToReviewWithMarker_AppendFailsRollback(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "rollback.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("# Rollback\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("# Rollback\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -267,12 +267,12 @@ func TestRecoverStuckTask_PushedTaskRetryFailureMovesToFailed(t *testing.T) {
 func TestMoveTaskToReviewWithMarker_ReplacesDuplicateMarkers(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "duplicate-markers.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent -->\n<!-- branch: task/old -->\n<!-- branch: task/legacy -->\n# Task\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("<!-- claimed-by: agent -->\n<!-- branch: task/old -->\n<!-- branch: task/legacy -->\n# Task\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -299,7 +299,7 @@ func TestMoveTaskToReviewWithMarker_ReplacesDuplicateMarkers(t *testing.T) {
 func TestPostAgentPush_TaskAlreadyGone(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Task file does NOT exist (already moved).
@@ -323,12 +323,12 @@ func TestPostAgentPush_TaskAlreadyGone(t *testing.T) {
 func TestPostAgentPush_NoCommits(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "no-commits.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("# No Commits\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("# No Commits\n"), 0o644)
 
 	// Set up git repo with no commits above main.
 	cloneDir := t.TempDir()
@@ -344,7 +344,7 @@ func TestPostAgentPush_NoCommits(t *testing.T) {
 	gitRun("git", "init", "-b", "main")
 	gitRun("git", "config", "user.name", "test")
 	gitRun("git", "config", "user.email", "test@test.com")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
 	gitRun("git", "add", ".")
 	gitRun("git", "commit", "-m", "init")
 
@@ -433,6 +433,59 @@ func TestPostAgentPush_RecordsWorkSessionHead(t *testing.T) {
 	}
 	if session.LastHeadSHA != strings.TrimSpace(currentTip) {
 		t.Fatalf("LastHeadSHA = %q, want %q", session.LastHeadSHA, strings.TrimSpace(currentTip))
+	}
+}
+
+func TestPostAgentPush_UsesHostRepoWhenOriginIsRewritten(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	defer git.RemoveClone(cloneDir)
+
+	taskFile := "rewritten-origin.md"
+	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(inProgressPath, []byte("# Rewritten Origin\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/rewritten-origin",
+		Title:    "Rewritten Origin",
+		TaskPath: inProgressPath,
+	}
+	if _, err := git.Output(cloneDir, "checkout", "-b", claimed.Branch); err != nil {
+		t.Fatalf("checkout branch: %v", err)
+	}
+	startingTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse starting tip: %v", err)
+	}
+	startingTip = strings.TrimSpace(startingTip)
+	if err := os.WriteFile(filepath.Join(cloneDir, "work.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile clone change: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "add", "work.txt"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "commit", "-m", "work update"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing-origin.git")); err != nil {
+		t.Fatalf("rewrite origin: %v", err)
+	}
+
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, targetBranch: "mato"}
+	if err := postAgentPush(env, "agent1", claimed, cloneDir, startingTip); err != nil {
+		t.Fatalf("postAgentPush: %v", err)
+	}
+
+	if _, err := git.Output(repoRoot, "rev-parse", "--verify", claimed.Branch); err != nil {
+		t.Fatalf("expected pushed branch in host repo: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, taskFile)); err != nil {
+		t.Fatalf("task should move to ready-for-review/: %v", err)
 	}
 }
 
@@ -689,12 +742,12 @@ func TestRunOnce_StartingTipFailureLeavesRecoverableTaskState(t *testing.T) {
 func TestPostAgentPush_LogProbeFailureReturnsError(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "probe-fail.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("# Probe Fail\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("# Probe Fail\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -810,6 +863,90 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 	}
 }
 
+func TestRunOnce_RestoreOriginFailureAfterPushStillHandsOffWork(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	var createdClone string
+	setHook(t, &createCloneFn, func(repo string) (string, error) {
+		cloneDir, err := git.CreateClone(repo)
+		if err != nil {
+			return "", err
+		}
+		createdClone = cloneDir
+		return cloneDir, nil
+	})
+	setHook(t, &prepareCloneOriginForContainerFn, func(string) (func() error, error) {
+		return func() error {
+			return fmt.Errorf("simulated restore failure")
+		}, nil
+	})
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "sh", "-c", "printf 'agent work\n' > repo-change.txt && git add repo-change.txt && git commit -m 'agent work' >/dev/null 2>&1")
+		cmd.Dir = createdClone
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		return cmd
+	})
+
+	taskFile := "restore-fail.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(taskPath, []byte("---\npriority: 5\n---\n# Restore Fail\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile task: %v", err)
+	}
+	claimed := &queue.ClaimedTask{
+		Filename: taskFile,
+		Branch:   "task/restore-fail",
+		Title:    "Restore Fail",
+		TaskPath: taskPath,
+	}
+	env := envConfig{
+		repoRoot:           repoRoot,
+		tasksDir:           tasksDir,
+		workdir:            repoRoot,
+		copilotPath:        "/bin/true",
+		gitPath:            "/usr/bin/git",
+		gitUploadPackPath:  "/usr/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/bin/git-receive-pack",
+		ghPath:             "/bin/true",
+		goRoot:             "/usr",
+		homeDir:            t.TempDir(),
+		targetBranch:       "mato",
+		image:              "test-image",
+	}
+	run := runContext{
+		agentID: "agent1",
+		prompt:  "test prompt",
+		timeout: time.Second,
+	}
+
+	err := runOnce(context.Background(), env, run, claimed)
+	if err == nil {
+		t.Fatal("expected runOnce to surface restore failure")
+	}
+	if !strings.Contains(err.Error(), "simulated restore failure") {
+		t.Fatalf("error should include restore failure, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, taskFile)); err != nil {
+		t.Fatalf("task should move to ready-for-review/: %v", err)
+	}
+	if _, err := os.Stat(taskPath); !os.IsNotExist(err) {
+		t.Fatalf("task should leave in-progress after successful handoff: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "rev-parse", "--verify", claimed.Branch); err != nil {
+		t.Fatalf("expected task branch to be pushed despite restore failure: %v", err)
+	}
+	state, err := runtimedata.LoadTaskState(tasksDir, taskFile)
+	if err != nil {
+		t.Fatalf("Load taskstate: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected taskstate to be written")
+	}
+	if state.LastOutcome != runtimedata.OutcomeWorkPushed {
+		t.Fatalf("LastOutcome = %q, want %q", state.LastOutcome, runtimedata.OutcomeWorkPushed)
+	}
+}
+
 func TestAgentWroteFailureRecord_MultipleAgents(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "task.md")
@@ -817,7 +954,7 @@ func TestAgentWroteFailureRecord_MultipleAgents(t *testing.T) {
 	content := "# Task\n" +
 		"<!-- failure: agent-a at 2026-01-01T00:00:00Z step=WORK error=test1 -->\n" +
 		"<!-- failure: agent-b at 2026-01-02T00:00:00Z step=WORK error=test2 -->\n"
-	os.WriteFile(path, []byte(content), 0o644)
+	mustWriteFile(t, path, []byte(content), 0o644)
 
 	if !agentWroteFailureRecord(path, "agent-a") {
 		t.Fatal("should find agent-a's failure record")
@@ -835,7 +972,7 @@ func TestExtractFailureLines_WithFrontmatter(t *testing.T) {
 	path := filepath.Join(dir, "task.md")
 	content := "---\npriority: 10\n---\n# Task\nBody text\n" +
 		"<!-- failure: agent1 at 2026-01-01T00:00:00Z step=WORK error=tests_failed files_changed=foo.go -->\n"
-	os.WriteFile(path, []byte(content), 0o644)
+	mustWriteFile(t, path, []byte(content), 0o644)
 
 	result := extractFailureLines(path)
 	if !strings.Contains(result, "failure: agent1") {
@@ -849,7 +986,7 @@ func TestExtractFailureLines_MultipleDistinctFailures(t *testing.T) {
 	content := "# Task\n" +
 		"<!-- failure: agent1 at 2026-01-01T00:00:00Z step=WORK error=build_failed files_changed=a.go -->\n" +
 		"<!-- failure: agent2 at 2026-01-02T00:00:00Z step=COMMIT error=no_changes files_changed=none -->\n"
-	os.WriteFile(path, []byte(content), 0o644)
+	mustWriteFile(t, path, []byte(content), 0o644)
 
 	result := extractFailureLines(path)
 	lines := strings.Split(strings.TrimSpace(result), "\n")
@@ -1099,7 +1236,7 @@ func TestWriteDependencyContextFile_CompletedAliasCollisionUsesSchedulerOrder(t 
 
 func TestWriteDependencyContextFile_InvalidFrontmatter(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.InProgress), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, dirs.InProgress), 0o755)
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
 	}
@@ -1107,7 +1244,7 @@ func TestWriteDependencyContextFile_InvalidFrontmatter(t *testing.T) {
 	taskFile := "bad-frontmatter.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
 	// Invalid YAML frontmatter.
-	os.WriteFile(taskPath, []byte("---\n: invalid yaml\n---\n# Bad Frontmatter\n"), 0o644)
+	mustWriteFile(t, taskPath, []byte("---\n: invalid yaml\n---\n# Bad Frontmatter\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1124,14 +1261,14 @@ func TestWriteDependencyContextFile_InvalidFrontmatter(t *testing.T) {
 
 func TestWriteDependencyContextFile_DepsButNoCompletions(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.InProgress), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, dirs.InProgress), 0o755)
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
 	taskFile := "with-deps.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(taskPath, []byte("---\ndepends_on:\n  - nonexistent-dep\n---\n# With Deps\n"), 0o644)
+	mustWriteFile(t, taskPath, []byte("---\ndepends_on:\n  - nonexistent-dep\n---\n# With Deps\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1149,7 +1286,7 @@ func TestWriteDependencyContextFile_DepsButNoCompletions(t *testing.T) {
 func TestWriteDependencyContextFile_WithMatchingCompletion(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
@@ -1173,7 +1310,7 @@ func TestWriteDependencyContextFile_WithMatchingCompletion(t *testing.T) {
 
 	taskFile := "depends-on-dep.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(taskPath, []byte("---\ndepends_on:\n  - dep-task\n---\n# Depends On Dep\n"), 0o644)
+	mustWriteFile(t, taskPath, []byte("---\ndepends_on:\n  - dep-task\n---\n# Depends On Dep\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1199,11 +1336,11 @@ func TestWriteDependencyContextFile_WithMatchingCompletion(t *testing.T) {
 
 func TestRemoveDependencyContextFile_ExistingFile(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, "messages"), 0o755)
 
 	filename := "task.md"
 	depPath := filepath.Join(tasksDir, "messages", "dependency-context-"+filename+".json")
-	os.WriteFile(depPath, []byte("[]"), 0o644)
+	mustWriteFile(t, depPath, []byte("[]"), 0o644)
 
 	removeDependencyContextFile(tasksDir, filename)
 
@@ -1214,7 +1351,7 @@ func TestRemoveDependencyContextFile_ExistingFile(t *testing.T) {
 
 func TestRemoveDependencyContextFile_NonexistentFile(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, "messages"), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, "messages"), 0o755)
 
 	// Should not panic or error.
 	removeDependencyContextFile(tasksDir, "nonexistent.md")
@@ -1222,14 +1359,14 @@ func TestRemoveDependencyContextFile_NonexistentFile(t *testing.T) {
 
 func TestWriteDependencyContextFile_MissingCompletionSkipped(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.InProgress), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, dirs.InProgress), 0o755)
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
 	taskFile := "skip-missing.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(taskPath, []byte("---\ndepends_on:\n  - no-such-dep\n---\n# Skip Missing\n"), 0o644)
+	mustWriteFile(t, taskPath, []byte("---\ndepends_on:\n  - no-such-dep\n---\n# Skip Missing\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1248,7 +1385,7 @@ func TestWriteDependencyContextFile_MissingCompletionSkipped(t *testing.T) {
 func TestWriteDependencyContextFile_MalformedCompletionWarns(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
@@ -1260,11 +1397,11 @@ func TestWriteDependencyContextFile_MalformedCompletionWarns(t *testing.T) {
 
 	// Write a malformed (non-JSON) completion detail file.
 	completionsDir := filepath.Join(tasksDir, "messages", "completions")
-	os.WriteFile(filepath.Join(completionsDir, "bad-dep.json"), []byte("not json{{{"), 0o644)
+	mustWriteFile(t, filepath.Join(completionsDir, "bad-dep.json"), []byte("not json{{{"), 0o644)
 
 	taskFile := "bad-dep-task.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(taskPath, []byte("---\ndepends_on:\n  - bad-dep\n---\n# Bad Dep Task\n"), 0o644)
+	mustWriteFile(t, taskPath, []byte("---\ndepends_on:\n  - bad-dep\n---\n# Bad Dep Task\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1296,7 +1433,7 @@ func TestWriteDependencyContextFile_MalformedCompletionWarns(t *testing.T) {
 func TestWriteDependencyContextFile_MixedDeps(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Completed, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
@@ -1326,11 +1463,11 @@ func TestWriteDependencyContextFile_MixedDeps(t *testing.T) {
 
 	// Write a malformed completion detail for another dependency.
 	completionsDir := filepath.Join(tasksDir, "messages", "completions")
-	os.WriteFile(filepath.Join(completionsDir, "broken-dep.json"), []byte("<<<invalid>>>"), 0o644)
+	mustWriteFile(t, filepath.Join(completionsDir, "broken-dep.json"), []byte("<<<invalid>>>"), 0o644)
 
 	taskFile := "mixed-deps.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(taskPath, []byte("---\ndepends_on:\n  - good-dep\n  - broken-dep\n  - missing-dep\n---\n# Mixed Deps\n"), 0o644)
+	mustWriteFile(t, taskPath, []byte("---\ndepends_on:\n  - good-dep\n  - broken-dep\n  - missing-dep\n---\n# Mixed Deps\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1382,12 +1519,12 @@ func TestWriteDependencyContextFile_MixedDeps(t *testing.T) {
 func TestRecoverStuckTask_AppendsFailureWithTimestamp(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.Backlog, dirs.InProgress} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "timestamp-task.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("# Timestamp Task\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("# Timestamp Task\n"), 0o644)
 
 	claimed := &queue.ClaimedTask{
 		Filename: taskFile,
@@ -1423,7 +1560,7 @@ func TestRecoverStuckTask_AppendsFailureWithTimestamp(t *testing.T) {
 func TestExtractReviewRejections_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "task.md")
-	os.WriteFile(path, []byte(""), 0o644)
+	mustWriteFile(t, path, []byte(""), 0o644)
 
 	result := extractReviewRejections(path)
 	if result != "" {
@@ -1441,12 +1578,12 @@ func TestExtractReviewRejections_MissingFile(t *testing.T) {
 func TestSelectTaskForReview_ReturnsHighestPriority(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.Failed} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "low.md"),
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyReview, "low.md"),
 		[]byte("<!-- branch: task/low -->\n---\npriority: 50\nmax_retries: 3\n---\n# Low\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "high.md"),
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyReview, "high.md"),
 		[]byte("<!-- branch: task/high -->\n---\npriority: 5\nmax_retries: 3\n---\n# High\n"), 0o644)
 
 	task := selectTaskForReview(tasksDir, nil)
@@ -1460,8 +1597,8 @@ func TestSelectTaskForReview_ReturnsHighestPriority(t *testing.T) {
 
 func TestSelectTaskForReview_NilIndex(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, dirs.ReadyReview), 0o755)
-	os.MkdirAll(filepath.Join(tasksDir, dirs.Failed), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, dirs.ReadyReview), 0o755)
+	mustMkdirAll(t, filepath.Join(tasksDir, dirs.Failed), 0o755)
 
 	// No tasks.
 	task := selectTaskForReview(tasksDir, nil)
@@ -1473,14 +1610,14 @@ func TestSelectTaskForReview_NilIndex(t *testing.T) {
 func TestReviewCandidates_FilesystemFallback_SkipsParseErrors(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.Failed} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Valid task.
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "good.md"),
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyReview, "good.md"),
 		[]byte("<!-- branch: task/good -->\n---\npriority: 10\nmax_retries: 3\n---\n# Good\n"), 0o644)
 	// Invalid frontmatter task.
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "bad.md"),
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyReview, "bad.md"),
 		[]byte("---\n: invalid\n---\n# Bad\n"), 0o644)
 
 	_, stderr := captureStdoutStderr(t, func() {
@@ -1521,13 +1658,13 @@ func setupGitCloneWithCommits(t *testing.T, targetBranch, taskBranch string) str
 	gitRun(cloneDir, "git", "init", "-b", targetBranch)
 	gitRun(cloneDir, "git", "config", "user.name", "test")
 	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("initial"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("initial"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "init")
 	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
 	gitRun(cloneDir, "git", "push", "origin", targetBranch)
 	gitRun(cloneDir, "git", "checkout", "-b", taskBranch)
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "task work")
 
@@ -1561,12 +1698,12 @@ func readEventMessages(t *testing.T, tasksDir string) []messaging.Message {
 func TestPostAgentPush_HappyPath(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "happy-task.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Happy Task\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Happy Task\n"), 0o644)
 
 	cloneDir := setupGitCloneWithCommits(t, "main", "task/happy-task")
 
@@ -1653,12 +1790,12 @@ func TestPostAgentPush_HappyPath(t *testing.T) {
 func TestPostAgentPush_PushFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "push-fail.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Push Fail\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Push Fail\n"), 0o644)
 
 	// Set up a git repo with commits but NO remote, so push will fail.
 	cloneDir := t.TempDir()
@@ -1675,11 +1812,11 @@ func TestPostAgentPush_PushFailure(t *testing.T) {
 	gitRun("git", "init", "-b", "main")
 	gitRun("git", "config", "user.name", "test")
 	gitRun("git", "config", "user.email", "test@test.com")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("hello"), 0o644)
 	gitRun("git", "add", ".")
 	gitRun("git", "commit", "-m", "init")
 	gitRun("git", "checkout", "-b", "task/push-fail")
-	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "file.txt"), []byte("changed"), 0o644)
 	gitRun("git", "add", ".")
 	gitRun("git", "commit", "-m", "task work")
 
@@ -1727,12 +1864,12 @@ func TestPostAgentPush_PushFailure(t *testing.T) {
 func TestPostAgentPush_MessagesContainChangedFiles(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "files-msg.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("# Files Msg\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("# Files Msg\n"), 0o644)
 
 	// Set up repo with multiple changed files to verify file list.
 	remoteDir := t.TempDir()
@@ -1751,14 +1888,14 @@ func TestPostAgentPush_MessagesContainChangedFiles(t *testing.T) {
 	gitRun(cloneDir, "git", "init", "-b", "main")
 	gitRun(cloneDir, "git", "config", "user.name", "test")
 	gitRun(cloneDir, "git", "config", "user.email", "test@test.com")
-	os.WriteFile(filepath.Join(cloneDir, "a.go"), []byte("package a"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "a.go"), []byte("package a"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "init")
 	gitRun(cloneDir, "git", "remote", "add", "origin", remoteDir)
 	gitRun(cloneDir, "git", "push", "origin", "main")
 	gitRun(cloneDir, "git", "checkout", "-b", "task/files-msg")
-	os.WriteFile(filepath.Join(cloneDir, "a.go"), []byte("package a // changed"), 0o644)
-	os.WriteFile(filepath.Join(cloneDir, "b.go"), []byte("package b"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "a.go"), []byte("package a // changed"), 0o644)
+	mustWriteFile(t, filepath.Join(cloneDir, "b.go"), []byte("package b"), 0o644)
 	gitRun(cloneDir, "git", "add", ".")
 	gitRun(cloneDir, "git", "commit", "-m", "multi-file change")
 
@@ -1806,16 +1943,16 @@ func TestPostAgentPush_MessagesContainChangedFiles(t *testing.T) {
 func TestPostAgentPush_DestinationCollisionPreventsPush(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "collision.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("# Collision\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("# Collision\n"), 0o644)
 
 	// Pre-create the destination file to trigger the pre-check collision.
 	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
-	os.WriteFile(readyPath, []byte("# Existing Review\n"), 0o644)
+	mustWriteFile(t, readyPath, []byte("# Existing Review\n"), 0o644)
 
 	cloneDir := setupGitCloneWithCommits(t, "main", "task/collision")
 
@@ -1860,12 +1997,12 @@ func TestPostAgentPush_DestinationCollisionPreventsPush(t *testing.T) {
 func TestPostAgentPush_NoOpResumedBranchSkipsPush(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "resume-noop.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-noop -->\n# Resume Noop\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-noop -->\n# Resume Noop\n"), 0o644)
 
 	cloneDir := setupGitCloneWithCommits(t, "main", "task/resume-noop")
 	startingTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
@@ -1895,12 +2032,12 @@ func TestPostAgentPush_NoOpResumedBranchSkipsPush(t *testing.T) {
 func TestPostAgentPush_RecordsWorkTaskState(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	taskFile := "taskstate.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Taskstate\n"), 0o644)
+	mustWriteFile(t, inProgressPath, []byte("<!-- claimed-by: agent1 -->\n# Taskstate\n"), 0o644)
 
 	cloneDir := setupGitCloneWithCommits(t, "main", "task/taskstate")
 	currentTip, err := git.Output(cloneDir, "rev-parse", "HEAD")
@@ -2013,7 +2150,7 @@ func TestRunOnce_RecordedBranchResumeRequiresLocalOrRemoteSource(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "resume-guard.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-guard -->\n# Resume Guard\n"), 0o644)
+	mustWriteFile(t, taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-guard -->\n# Resume Guard\n"), 0o644)
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/resume-guard", Title: "Resume Guard", TaskPath: taskPath, HadRecordedBranchMark: true}
 
 	setHook(t, &ensureBranchFn, func(repoRoot, branch string) (git.EnsureBranchResult, error) {
@@ -2043,7 +2180,7 @@ func TestRunOnce_UsesEnsureBranchForRecordedResume(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "resume-ok.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
-	os.WriteFile(taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-ok -->\n# Resume OK\n"), 0o644)
+	mustWriteFile(t, taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-ok -->\n# Resume OK\n"), 0o644)
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/resume-ok", Title: "Resume OK", TaskPath: taskPath, HadRecordedBranchMark: true}
 
 	called := false
@@ -2079,11 +2216,11 @@ func TestRunOnce_UsesEnsureBranchForRecordedResume(t *testing.T) {
 func TestReviewCandidates_FilesystemFallback_MissingBranchMarkerRecordsFailure(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.ReadyReview, dirs.Failed} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		mustMkdirAll(t, filepath.Join(tasksDir, sub), 0o755)
 	}
 
 	// Task without a branch marker in file.
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyReview, "no-branch.md"),
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyReview, "no-branch.md"),
 		[]byte("---\npriority: 10\nmax_retries: 3\n---\n# No Branch\n"), 0o644)
 
 	stdout, _ := captureStdoutStderr(t, func() {

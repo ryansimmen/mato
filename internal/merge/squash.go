@@ -287,10 +287,10 @@ func cleanupTaskBranch(repoRoot, branchName string) {
 	}
 	// Clean up the stale task branch so the next agent can push a fresh one.
 	// Cleanup is best-effort: log warnings but never abort the merge flow.
-	if _, err := gitOutput(repoRoot, "branch", "-D", branchName); err != nil {
+	if _, err := gitOutput(repoRoot, "branch", "-D", "--", branchName); err != nil {
 		ui.Warnf("warning: could not delete local task branch %s: %v\n", branchName, err)
 	}
-	if _, err := gitOutput(repoRoot, "push", "origin", "--delete", branchName); err != nil {
+	if _, err := gitOutput(repoRoot, "push", "origin", "--delete", "--", branchName); err != nil {
 		if strings.Contains(err.Error(), "remote ref does not exist") {
 			return
 		}

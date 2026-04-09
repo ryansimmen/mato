@@ -335,18 +335,6 @@ func readPromptEventMessages(t *testing.T, tasksDir string) []promptEventMessage
 	return messages
 }
 
-func findPromptEventMessage(t *testing.T, tasksDir, msgType string) promptEventMessage {
-	t.Helper()
-
-	for _, msg := range readPromptEventMessages(t, tasksDir) {
-		if msg.Type == msgType {
-			return msg
-		}
-	}
-	t.Fatalf("message type %q not found", msgType)
-	return promptEventMessage{}
-}
-
 func countFailureRecords(content string) int {
 	return strings.Count(content, "<!-- failure:")
 }

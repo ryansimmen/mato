@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"mato/internal/git"
+	"mato/internal/testutil"
 )
 
 // withStatPathFn is a convenience wrapper around setHook for statPathFn.
@@ -292,6 +295,102 @@ func TestBuildDockerArgs_GitIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_TaskQueueMountPolicy(t *testing.T) {
+	env := envConfig{
+		homeDir:  "/home/test",
+		image:    "ubuntu:24.04",
+		workdir:  "/workspace",
+		tasksDir: "/repo/.mato",
+		repoRoot: "/repo",
+	}
+	run := runContext{cloneDir: "/tmp/mato-clone"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+
+	for _, want := range []string{
+		"/tmp/mato-clone:/workspace",
+		"/repo:" + containerOriginRepoDir + ":ro",
+		"/repo/.mato/in-progress:/workspace/.mato/in-progress:ro",
+		"/repo/.mato/ready-for-review:/workspace/.mato/ready-for-review:ro",
+		"/repo/.mato/messages:/workspace/.mato/messages",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in docker args, got: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "/repo/.mato:/workspace/.mato") {
+		t.Fatalf("did not expect blanket .mato mount, got: %s", joined)
+	}
+	if strings.Contains(joined, "/repo:/repo") {
+		t.Fatalf("did not expect host repo root mount, got: %s", joined)
+	}
+}
+
+func TestRewriteCloneOrigin_RewritesFetchPathAndRestores(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	defer git.RemoveClone(cloneDir)
+
+	targetBranch, err := git.Output(repoRoot, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	targetBranch = strings.TrimSpace(targetBranch)
+
+	mountedRepo := filepath.Join(t.TempDir(), "mounted-origin.git")
+	if _, err := git.Output("", "clone", "--quiet", "--bare", repoRoot, mountedRepo); err != nil {
+		t.Fatalf("git clone --bare: %v", err)
+	}
+
+	restoreOrigin, err := rewriteCloneOrigin(cloneDir, mountedRepo)
+	if err != nil {
+		t.Fatalf("rewriteCloneOrigin: %v", err)
+	}
+
+	gotOrigin, err := git.Output(cloneDir, "remote", "get-url", "origin")
+	if err != nil {
+		t.Fatalf("git remote get-url origin after rewrite: %v", err)
+	}
+	if strings.TrimSpace(gotOrigin) != mountedRepo {
+		t.Fatalf("origin after rewrite = %q, want %q", strings.TrimSpace(gotOrigin), mountedRepo)
+	}
+	if _, err := git.Output(cloneDir, "fetch", "--quiet", "origin", targetBranch); err != nil {
+		t.Fatalf("git fetch origin %s after rewrite: %v", targetBranch, err)
+	}
+	if err := restoreOrigin(); err != nil {
+		t.Fatalf("restore origin: %v", err)
+	}
+
+	gotOrigin, err = git.Output(cloneDir, "remote", "get-url", "origin")
+	if err != nil {
+		t.Fatalf("git remote get-url origin after restore: %v", err)
+	}
+	if strings.TrimSpace(gotOrigin) != repoRoot {
+		t.Fatalf("origin after restore = %q, want %q", strings.TrimSpace(gotOrigin), repoRoot)
+	}
+}
+
+func TestBuildDockerArgs_SafeDirectoryScopedToClone(t *testing.T) {
+	env := envConfig{
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
+	}
+	run := runContext{prompt: "test"}
+
+	joined := strings.Join(buildDockerArgs(env, run, nil, nil), " ")
+	if !strings.Contains(joined, "GIT_CONFIG_VALUE_0=/workspace") {
+		t.Fatalf("expected safe.directory to trust only the container workdir, got: %s", joined)
+	}
+	if strings.Contains(joined, "GIT_CONFIG_VALUE_0=*") {
+		t.Fatalf("did not expect wildcard safe.directory trust, got: %s", joined)
+	}
+}
+
 func TestBuildDockerArgs_EmptyGitIdentity(t *testing.T) {
 	env := envConfig{
 		homeDir:  "/home/test",
@@ -411,6 +510,26 @@ func TestBuildDockerArgs_ModelAndReasoningEffort(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--reasoning-effort high") {
 		t.Fatalf("expected reasoning effort in docker args, got: %s", joined)
+	}
+}
+
+func TestBuildDockerArgs_NarrowsCopilotPermissions(t *testing.T) {
+	env := envConfig{
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
+	}
+	run := runContext{prompt: "test", model: "claude-opus-4.6", reasoningEffort: "high"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--allow-all-tools") {
+		t.Fatalf("expected --allow-all-tools in docker args, got: %s", joined)
+	}
+	for _, arg := range args {
+		if arg == "--allow-all" {
+			t.Fatalf("did not expect --allow-all in docker args, got: %s", joined)
+		}
 	}
 }
 

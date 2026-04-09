@@ -7,7 +7,6 @@ package graph
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -224,10 +223,8 @@ func resolveEdges(data *GraphData, aliasMap map[string][]string, safeCompleted, 
 
 			targets := aliasMap[ref]
 			if len(targets) > 0 {
+				// Self-edges are still emitted so cycle rendering remains intact.
 				for _, target := range targets {
-					if target == node.Key {
-						// Self-edge handled by cycles; still create the edge.
-					}
 					data.Edges = append(data.Edges, Edge{
 						From:      target,
 						To:        node.Key,
@@ -346,11 +343,6 @@ func sortGraphData(data *GraphData, stateOrder map[string]int) {
 			})
 		}
 	}
-}
-
-// Show writes the dependency graph to os.Stdout.
-func Show(repoRoot, format string, showAll bool) error {
-	return ShowTo(os.Stdout, repoRoot, format, showAll)
 }
 
 // ShowTo resolves the tasks directory, builds the dependency graph, and

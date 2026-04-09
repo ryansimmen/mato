@@ -2,7 +2,7 @@
 
 -include .env
 
-.PHONY: all build clean fmt help install integration-test lint run test vet
+.PHONY: all build clean deadcode fmt help install integration-test lint run test vet
 
 BIN_DIR := bin
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || printf dev)
@@ -39,6 +39,10 @@ vet: ## Run go vet
 
 lint: ## Run golangci-lint
 	golangci-lint run ./...
+
+deadcode: ## Run unused-code analyzers
+	go tool staticcheck -checks U1000 ./...
+	go tool deadcode -test ./...
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'

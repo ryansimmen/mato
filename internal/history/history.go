@@ -41,11 +41,6 @@ const (
 	sourceFailed sourceStatus = "failed"
 )
 
-// Show writes durable task history to stdout.
-func Show(repo string, limit int, format string) error {
-	return ShowTo(os.Stdout, repo, limit, format)
-}
-
 // ShowTo writes durable task history to w.
 func ShowTo(w io.Writer, repo string, limit int, format string) error {
 	if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
@@ -286,11 +281,6 @@ func colorEventType(padded string) string {
 		return padded
 	}
 }
-
-// minTruncWidth is the smallest budget allowed when clamping
-// width-based truncation on very narrow terminals.
-const minTruncWidth = 6
-
 func renderText(w io.Writer, events []Event) error {
 	tw := ui.NewTextWriter(w)
 	if len(events) == 0 {

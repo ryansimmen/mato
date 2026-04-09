@@ -56,13 +56,9 @@ func checkQueueLayout(cc *checkContext) CheckReport {
 
 	// Check for expected directories.
 	var expectedDirs []string
-	for _, d := range dirs.All {
-		expectedDirs = append(expectedDirs, d)
-	}
+	expectedDirs = append(expectedDirs, dirs.All...)
 	expectedDirs = append(expectedDirs, ".locks")
-	for _, md := range messaging.MessagingDirs {
-		expectedDirs = append(expectedDirs, md)
-	}
+	expectedDirs = append(expectedDirs, messaging.MessagingDirs...)
 
 	for _, dir := range expectedDirs {
 		dirPath := filepath.Join(cc.tasksDir, dir)

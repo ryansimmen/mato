@@ -385,7 +385,8 @@ func TestShowTo_JSONFields(t *testing.T) {
 				if got["status"] != "invalid" {
 					t.Fatalf("status = %v, want invalid", got["status"])
 				}
-				if got["reason"] == nil || !strings.Contains(got["reason"].(string), "invalid affects glob syntax") {
+				reason, _ := got["reason"].(string)
+				if reason == "" || !strings.Contains(reason, "invalid affects glob syntax") {
 					t.Fatalf("reason = %v, want invalid affects glob syntax", got["reason"])
 				}
 			},
@@ -627,7 +628,7 @@ func TestShowTo_MissingMatoDir(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error for missing .mato directory, got nil")
 			}
-			want := ".mato/ directory not found - run 'mato init' first"
+			want := ".mato/ directory not found"
 			if err.Error() != want {
 				t.Errorf("error = %q, want %q", err.Error(), want)
 			}
@@ -654,7 +655,10 @@ func TestShowTo_JSONBlockingDependencies(t *testing.T) {
 				if len(deps) != 1 {
 					t.Fatalf("blocking_dependencies length = %d, want 1", len(deps))
 				}
-				dep := deps[0].(map[string]any)
+				dep, ok := deps[0].(map[string]any)
+				if !ok {
+					t.Fatalf("blocking_dependencies[0] type = %T, want map[string]any", deps[0])
+				}
 				if dep["id"] != "blocker" {
 					t.Fatalf("dependency id = %v, want blocker", dep["id"])
 				}
@@ -678,7 +682,10 @@ func TestShowTo_JSONBlockingDependencies(t *testing.T) {
 				}
 				ids := make(map[string]string)
 				for _, d := range deps {
-					dep := d.(map[string]any)
+					dep, ok := d.(map[string]any)
+					if !ok {
+						t.Fatalf("blocking dependency type = %T, want map[string]any", d)
+					}
 					id, _ := dep["id"].(string)
 					state, _ := dep["state"].(string)
 					ids[id] = state
@@ -702,7 +709,10 @@ func TestShowTo_JSONBlockingDependencies(t *testing.T) {
 				if len(deps) != 1 {
 					t.Fatalf("blocking_dependencies length = %d, want 1", len(deps))
 				}
-				dep := deps[0].(map[string]any)
+				dep, ok := deps[0].(map[string]any)
+				if !ok {
+					t.Fatalf("blocking_dependencies[0] type = %T, want map[string]any", deps[0])
+				}
 				if dep["id"] != "nonexistent" {
 					t.Fatalf("dependency id = %v, want nonexistent", dep["id"])
 				}

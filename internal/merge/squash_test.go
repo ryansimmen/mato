@@ -355,12 +355,14 @@ func TestCleanupTaskBranch_IgnoresMissingRemoteBranch(t *testing.T) {
 		os.Stderr = originalStderr
 	}()
 
+	var calls [][]string
 	gitOutput = func(dir string, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
 		switch {
-		case len(args) >= 3 && args[0] == "branch" && args[1] == "-D":
+		case len(args) >= 4 && args[0] == "branch" && args[1] == "-D" && args[2] == "--":
 			return "", nil
-		case len(args) >= 4 && args[0] == "push" && args[1] == "origin" && args[2] == "--delete":
-			return "", fmt.Errorf("git push origin --delete %s: exit status 1 (error: unable to delete '%s': remote ref does not exist)", args[3], args[3])
+		case len(args) >= 5 && args[0] == "push" && args[1] == "origin" && args[2] == "--delete" && args[3] == "--":
+			return "", fmt.Errorf("git push origin --delete -- %s: exit status 1 (error: unable to delete '%s': remote ref does not exist)", args[4], args[4])
 		default:
 			return "", fmt.Errorf("unexpected git args: %v", args)
 		}
@@ -377,6 +379,15 @@ func TestCleanupTaskBranch_IgnoresMissingRemoteBranch(t *testing.T) {
 
 	if strings.Contains(stderr.String(), "warning: could not delete remote task branch") {
 		t.Fatalf("unexpected remote-delete warning: %q", stderr.String())
+	}
+	if len(calls) != 2 {
+		t.Fatalf("git call count = %d, want 2", len(calls))
+	}
+	if got := strings.Join(calls[0], " "); got != "branch -D -- task/missing-remote" {
+		t.Fatalf("local cleanup args = %q, want %q", got, "branch -D -- task/missing-remote")
+	}
+	if got := strings.Join(calls[1], " "); got != "push origin --delete -- task/missing-remote" {
+		t.Fatalf("remote cleanup args = %q, want %q", got, "push origin --delete -- task/missing-remote")
 	}
 }
 

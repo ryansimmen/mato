@@ -76,7 +76,9 @@ func TestListTasksFromIndex_CountsViaIndex(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tasksDir := setupTasksDir(t)
 			for _, f := range tt.files {
-				os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, f), []byte("# Task\n"), 0o644)
+				if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, f), []byte("# Task\n"), 0o644); err != nil {
+					t.Fatalf("os.WriteFile(%s): %v", f, err)
+				}
 			}
 			idx := queueview.BuildIndex(tasksDir)
 			got := len(idx.TasksByState(dirs.Backlog))
@@ -287,7 +289,9 @@ func TestActiveAgents_NoLocksDir(t *testing.T) {
 func TestActiveAgents_DeadProcess(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	// PID that almost certainly doesn't exist.
-	os.WriteFile(filepath.Join(tasksDir, ".locks", "dead0001.pid"), []byte("2147483647"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".locks", "dead0001.pid"), []byte("2147483647"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(dead0001.pid): %v", err)
+	}
 
 	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
@@ -351,8 +355,12 @@ func TestActiveAgents_SortedByDisplayName(t *testing.T) {
 func TestActiveAgents_SkipsNonPIDFiles(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	// Non-.pid file and a directory should be ignored.
-	os.WriteFile(filepath.Join(tasksDir, ".locks", "notes.txt"), []byte("hello"), 0o644)
-	os.MkdirAll(filepath.Join(tasksDir, ".locks", "subdir"), 0o755)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".locks", "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(notes.txt): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks", "subdir"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(subdir): %v", err)
+	}
 
 	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
@@ -366,7 +374,9 @@ func TestActiveAgents_SkipsNonPIDFiles(t *testing.T) {
 func TestActiveAgents_InvalidPID(t *testing.T) {
 	tasksDir := setupTasksDir(t)
 	// Lock file with non-numeric content — should be skipped.
-	os.WriteFile(filepath.Join(tasksDir, ".locks", "badpid01.pid"), []byte("not-a-number"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".locks", "badpid01.pid"), []byte("not-a-number"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(badpid01.pid): %v", err)
+	}
 
 	agents, _, err := activeAgents(tasksDir)
 	if err != nil {
@@ -729,14 +739,16 @@ func TestGatherStatus_RecentMessagesLimitedTo5(t *testing.T) {
 
 	now := time.Now().UTC()
 	for i := 0; i < 10; i++ {
-		messaging.WriteMessage(tasksDir, messaging.Message{
+		if err := messaging.WriteMessage(tasksDir, messaging.Message{
 			ID:     "m" + strconv.Itoa(i),
 			From:   "agent1",
 			Type:   "progress",
 			Task:   "task.md",
 			Body:   "msg " + strconv.Itoa(i),
 			SentAt: now.Add(time.Duration(i) * time.Second),
-		})
+		}); err != nil {
+			t.Fatalf("messaging.WriteMessage(%d): %v", i, err)
+		}
 	}
 
 	data, err := gatherStatus(tasksDir)
@@ -924,7 +936,9 @@ func TestMergeLockState_NoLock(t *testing.T) {
 
 func TestMergeLockState_DeadProcess(t *testing.T) {
 	tasksDir := setupTasksDir(t)
-	os.WriteFile(filepath.Join(tasksDir, ".locks", "merge.lock"), []byte("2147483647"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".locks", "merge.lock"), []byte("2147483647"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(merge.lock): %v", err)
+	}
 	state, err := mergeLockState(tasksDir)
 	if err != nil {
 		t.Fatalf("mergeLockState: %v", err)
@@ -1102,7 +1116,11 @@ func TestGatherStatus_PresenceReadError(t *testing.T) {
 	if err := os.Chmod(presenceDir, 0o000); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(presenceDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(presenceDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
@@ -1138,7 +1156,11 @@ func TestGatherStatus_CompletionReadError(t *testing.T) {
 	if err := os.Chmod(completionsDir, 0o000); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(completionsDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(completionsDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
@@ -1174,7 +1196,11 @@ func TestGatherStatus_MessageReadError(t *testing.T) {
 	if err := os.Chmod(eventsDir, 0o000); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(eventsDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(eventsDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {
@@ -1224,7 +1250,11 @@ func TestGatherStatus_PartialMessageReadFailure(t *testing.T) {
 	if err := os.Chmod(unreadable, 0o000); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+	t.Cleanup(func() {
+		if err := os.Chmod(unreadable, 0o644); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	data, err := gatherStatus(tasksDir)
 	if err != nil {

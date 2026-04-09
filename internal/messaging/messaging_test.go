@@ -1276,19 +1276,25 @@ func TestWriteCompletionDetail_NormalIDUnchanged(t *testing.T) {
 func TestBuildAndWriteFileClaims(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	// Create in-progress task with affects
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "fix-race.md"),
-		[]byte("---\naffects:\n  - internal/queue/queue.go\n  - internal/queue/queue_test.go\n---\n# Fix Race\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "fix-race.md"),
+		[]byte("---\naffects:\n  - internal/queue/queue.go\n  - internal/queue/queue_test.go\n---\n# Fix Race\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(fix-race.md): %v", err)
+	}
 
 	// Create ready-to-merge task with affects
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "add-locks.md"),
-		[]byte("---\naffects:\n  - internal/merge/merge.go\n---\n# Add Locks\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "add-locks.md"),
+		[]byte("---\naffects:\n  - internal/merge/merge.go\n---\n# Add Locks\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(add-locks.md): %v", err)
+	}
 
 	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
@@ -1323,7 +1329,9 @@ func TestBuildAndWriteFileClaims(t *testing.T) {
 func TestBuildAndWriteFileClaims_Empty(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -1352,14 +1360,18 @@ func TestBuildAndWriteFileClaims_Empty(t *testing.T) {
 func TestBuildAndWriteFileClaims_AtomicWrite(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
-		[]byte("---\naffects:\n  - file-a.go\n---\n# Task A\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
+		[]byte("---\naffects:\n  - file-a.go\n---\n# Task A\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-a.md): %v", err)
+	}
 
 	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
@@ -1389,17 +1401,23 @@ func TestBuildAndWriteFileClaims_AtomicWrite(t *testing.T) {
 func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	// Two tasks claim the same file
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
-		[]byte("---\naffects:\n  - shared.go\n---\n# Task A\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "task-b.md"),
-		[]byte("---\naffects:\n  - shared.go\n---\n# Task B\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
+		[]byte("---\naffects:\n  - shared.go\n---\n# Task A\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-a.md): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "task-b.md"),
+		[]byte("---\naffects:\n  - shared.go\n---\n# Task B\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-b.md): %v", err)
+	}
 
 	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
@@ -1432,16 +1450,22 @@ func TestBuildAndWriteFileClaims_FirstWriterWins(t *testing.T) {
 func TestBuildAndWriteFileClaims_PreservesDirectoryPrefixes(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
-		[]byte("---\naffects:\n  - pkg/client/\n---\n# Task A\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "task-b.md"),
-		[]byte("---\naffects:\n  - pkg/server/main.go\n---\n# Task B\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
+		[]byte("---\naffects:\n  - pkg/client/\n---\n# Task A\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-a.md): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "task-b.md"),
+		[]byte("---\naffects:\n  - pkg/server/main.go\n---\n# Task B\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-b.md): %v", err)
+	}
 
 	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
@@ -1471,19 +1495,25 @@ func TestBuildAndWriteFileClaims_PreservesDirectoryPrefixes(t *testing.T) {
 func TestBuildAndWriteFileClaims_ExcludeTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	// The excluded task (simulating the just-claimed task)
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "my-task.md"),
-		[]byte("---\naffects:\n  - internal/foo.go\n  - internal/bar.go\n---\n# My Task\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "my-task.md"),
+		[]byte("---\naffects:\n  - internal/foo.go\n  - internal/bar.go\n---\n# My Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(my-task.md): %v", err)
+	}
 
 	// Another in-progress task that should remain
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "other-task.md"),
-		[]byte("---\naffects:\n  - internal/baz.go\n---\n# Other Task\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "other-task.md"),
+		[]byte("---\naffects:\n  - internal/baz.go\n---\n# Other Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(other-task.md): %v", err)
+	}
 
 	if err := BuildAndWriteFileClaims(tasksDir, "my-task.md"); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
@@ -1517,16 +1547,22 @@ func TestBuildAndWriteFileClaims_ExcludeTask(t *testing.T) {
 func TestBuildAndWriteFileClaims_EmptyExclude(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "task-x.md"),
-		[]byte("---\naffects:\n  - x.go\n---\n# Task X\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "task-y.md"),
-		[]byte("---\naffects:\n  - y.go\n---\n# Task Y\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "task-x.md"),
+		[]byte("---\naffects:\n  - x.go\n---\n# Task X\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-x.md): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "task-y.md"),
+		[]byte("---\naffects:\n  - y.go\n---\n# Task Y\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-y.md): %v", err)
+	}
 
 	// Empty excludeTask means all tasks are included (backward compat)
 	if err := BuildAndWriteFileClaims(tasksDir, ""); err != nil {
@@ -1557,19 +1593,27 @@ func TestBuildAndWriteFileClaims_EmptyExclude(t *testing.T) {
 func TestBuildAndWriteFileClaims_ExcludeOnlyMatchingTask(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	// Three tasks: one to exclude, two to keep
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "excluded.md"),
-		[]byte("---\naffects:\n  - shared.go\n  - only-excluded.go\n---\n# Excluded\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "kept-a.md"),
-		[]byte("---\naffects:\n  - shared.go\n  - a.go\n---\n# Kept A\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "kept-b.md"),
-		[]byte("---\naffects:\n  - b.go\n---\n# Kept B\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "excluded.md"),
+		[]byte("---\naffects:\n  - shared.go\n  - only-excluded.go\n---\n# Excluded\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(excluded.md): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "kept-a.md"),
+		[]byte("---\naffects:\n  - shared.go\n  - a.go\n---\n# Kept A\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(kept-a.md): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.ReadyMerge, "kept-b.md"),
+		[]byte("---\naffects:\n  - b.go\n---\n# Kept B\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(kept-b.md): %v", err)
+	}
 
 	if err := BuildAndWriteFileClaims(tasksDir, "excluded.md"); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims: %v", err)
@@ -1606,17 +1650,23 @@ func TestBuildAndWriteFileClaims_ExcludeOnlyMatchingTask(t *testing.T) {
 func TestBuildAndWriteFileClaims_MalformedTaskEmitsWarning(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyMerge} {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	// One valid task, one malformed
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "good.md"),
-		[]byte("---\naffects:\n  - good.go\n---\n# Good\n"), 0o644)
-	os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "bad.md"),
-		[]byte("---\naffects: [unterminated\n---\n# Bad\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "good.md"),
+		[]byte("---\naffects:\n  - good.go\n---\n# Good\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(good.md): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.InProgress, "bad.md"),
+		[]byte("---\naffects: [unterminated\n---\n# Bad\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(bad.md): %v", err)
+	}
 
 	// Capture stderr to verify warnings are emitted
 	origStderr := os.Stderr
@@ -1658,14 +1708,22 @@ func TestBuildAndWriteFileClaims_MalformedTaskEmitsWarning(t *testing.T) {
 func TestBuildAndWriteFileClaims_UnreadableDirEmitsWarning(t *testing.T) {
 	tasksDir := t.TempDir()
 	dir := filepath.Join(tasksDir, dirs.InProgress)
-	os.MkdirAll(dir, 0o755)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", dir, err)
+	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	// Make directory unreadable (non-ENOENT error)
-	os.Chmod(dir, 0o000)
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatalf("os.Chmod(%s): %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	origStderr := os.Stderr
 	r, w, _ := os.Pipe()
@@ -1693,19 +1751,31 @@ func TestBuildAndWriteFileClaims_UnreadableDirEmitsWarning(t *testing.T) {
 func TestBuildAndWriteFileClaims_UnreadableTaskFileEmitsWarning(t *testing.T) {
 	tasksDir := t.TempDir()
 	dir := filepath.Join(tasksDir, dirs.InProgress)
-	os.MkdirAll(dir, 0o755)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", dir, err)
+	}
 	if err := Init(tasksDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
 	// One readable task, one unreadable task file (permission denied = read failure)
-	os.WriteFile(filepath.Join(dir, "good.md"),
-		[]byte("---\naffects:\n  - good.go\n---\n# Good\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "good.md"),
+		[]byte("---\naffects:\n  - good.go\n---\n# Good\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(good.md): %v", err)
+	}
 	unreadable := filepath.Join(dir, "unreadable.md")
-	os.WriteFile(unreadable,
-		[]byte("---\naffects:\n  - secret.go\n---\n# Unreadable\n"), 0o644)
-	os.Chmod(unreadable, 0o000)
-	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+	if err := os.WriteFile(unreadable,
+		[]byte("---\naffects:\n  - secret.go\n---\n# Unreadable\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(unreadable.md): %v", err)
+	}
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("os.Chmod(%s): %v", unreadable, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(unreadable, 0o644); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	origStderr := os.Stderr
 	r, w, _ := os.Pipe()

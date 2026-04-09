@@ -45,7 +45,7 @@ func newStatusCmd(repoFlag *string) *cobra.Command {
 			}
 			if watch {
 				if interval <= 0 {
-					return newUsageError(cmd, fmt.Errorf("--interval must be a positive duration, got %s", interval))
+					return newUsageError(cmd, ui.WithHint(fmt.Errorf("--interval must be a positive duration, got %s", interval), "pass --interval a positive duration like 2s, 30s, or 1m"))
 				}
 				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 				defer stop()

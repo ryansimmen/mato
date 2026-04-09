@@ -25,14 +25,15 @@ mato config [--repo <path>] [--format text|json]
 mato run [--repo <path>] [--branch <name>] [--dry-run | --once | --until-idle] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
 mato init [--repo <path>] [--branch <name>] [--format text|json]
 mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json] [--verbose]
+mato list [--repo <path>] [--state <state[,state...]>] [--all] [--format text|json]
 mato log [--repo <path>] [--limit <n>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato inspect [--repo <path>] [--format text|json] <task-ref>
 mato retry [--repo <path>] <task-ref> [task-ref...]
 mato cancel [--repo <path>] <task-ref> [task-ref...]
-mato pause [--repo <path>]
-mato resume [--repo <path>]
+mato pause [--repo <path>] [--format text|json]
+mato resume [--repo <path>] [--format text|json]
 mato version
 ```
 Valid `--only` check names: `git`, `tools`, `config`, `docker`, `queue`, `tasks`, `locks`, `hygiene`, `deps`.
@@ -170,6 +171,37 @@ messages, and recent completions.
 
 Supported flags: `--repo`, `--watch`, `--interval`, `--format`, `--verbose`,
 and `--help`/`-h`.
+
+### `mato list`
+`mato list` provides a flat, read-only snapshot of queue tasks for scripts and
+operators who want one task per row instead of the dashboard-style `mato status`
+view.
+
+By default, it includes the active queue states only: `waiting`, `backlog`,
+`in-progress`, `ready-for-review`, and `ready-to-merge`. Use `--all` to include
+terminal states (`completed` and `failed`). Use `--state` to select an explicit
+comma-separated set of queue states; unknown values are rejected with a usage
+error instead of being ignored.
+
+Text output uses a stable tabular layout with `STATE`, `TASK`, `PRIORITY`, `ID`,
+and `TITLE` columns. JSON output is an array of objects with stable fields:
+`filename`, `id`, `title`, `priority`, `state`, and `path`. Parse-failed task
+entries also include `parse_error`.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--repo <path>` | current directory | Path to the git repository. |
+| `--state <state[,state...]>` | active states only | Comma-separated queue states to include. Valid values: `waiting`, `backlog`, `in-progress`, `ready-for-review`, `ready-to-merge`, `completed`, `failed`. |
+| `--all` | `false` | Include all queue states, including `completed` and `failed`, when `--state` is not set. |
+| `--format` | `text` | Output format: `text` or `json`. |
+
+Example usage:
+```bash
+mato list
+mato list --state failed
+mato list --state backlog,waiting --format json
+mato list --all
+```
 
 ### `mato init`
 `mato init` bootstraps a repository for mato use in one explicit step. It is intended for first-time setup, CI preparation, or dry-run validation flows where users want `.mato/` and the target branch created without running the full orchestrator.
@@ -320,17 +352,23 @@ running orchestrator treats the repo as paused for safety: it skips new task
 claims and review launches, continues refreshing `.queue`, and keeps draining
 `ready-to-merge/`.
 
+Use `--format json` for machine-readable output in scripts and automation.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
+| `--format` | `text` | Output format: `text` or `json`. |
 
 ### `mato resume`
 `mato resume` removes `<repo>/.mato/.paused` and allows the orchestrator to
 resume normal claim and review polling.
 
+Use `--format json` for machine-readable output in scripts and automation.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
+| `--format` | `text` | Output format: `text` or `json`. |
 
 ### `mato version`
 `mato version` prints the build version in a script-friendly format.
@@ -423,8 +461,10 @@ ownership.
 | Host path | Container path | Notes |
 | --- | --- | --- |
 | temporary clone of the repo | `/workspace` | The agent works in an isolated clone so multiple agents can run concurrently. |
-| `<repo>/.mato` | `/workspace/.mato` | Shares the task queue and messaging state with the host. |
-| resolved repo root | same absolute host path | Keeps the clone's `origin` local-path remote reachable for fetch/push. |
+| resolved repo root | `/mato-host-repo` (ro) | Exposes the host repository to the container as a read-only Git remote for `origin` fetches. |
+| `<repo>/.mato/in-progress` | `/workspace/.mato/in-progress` (ro) | Lets work agents read the claimed task file via `MATO_TASK_PATH`. |
+| `<repo>/.mato/ready-for-review` | `/workspace/.mato/ready-for-review` (ro) | Lets review agents read the review task file via `MATO_TASK_PATH`. |
+| `<repo>/.mato/messages` | `/workspace/.mato/messages` | Lets agents write coordination events and review verdict files. |
 | host `copilot` binary | `/usr/local/bin/copilot` (ro) | Runs Copilot CLI inside the container. |
 | host `git` binary | `/usr/local/bin/git` (ro) | Provides Git inside the container. |
 | host `git-upload-pack` | `/usr/local/bin/git-upload-pack` (ro) | Needed when Git fetches from the local-path remote. |
@@ -444,9 +484,10 @@ ownership.
 - `HOME` inside the container is set to the host home directory path.
 - `GOROOT=/usr/local/go` and `PATH` are set so mounted Go and CLI binaries are usable.
 - `GOPATH`, `GOMODCACHE`, and `GOCACHE` point at the mounted host cache paths.
-- `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=*` allow Git to trust mounted worktrees even if ownership looks unusual.
+- Before launching the container, `mato` rewrites the clone's `origin` remote to `/mato-host-repo` and restores the original host path afterwards so in-container `git fetch origin ...` still works without exposing the host repo as writable.
+- `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=/workspace` trust only the container clone path instead of every directory visible inside the container.
 - If Git user name/email are configured on the host repository or globally, `mato` forwards them as `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL`.
-- The container command is `copilot [--resume=<session-id>] -p <embedded prompt> --autopilot --allow-all --model <resolved-model> --reasoning-effort <resolved-effort>`. `mato` only appends `--resume=<session-id>` when durable session metadata exists for the current task or review phase.
+- The container command is `copilot [--resume=<session-id>] -p <embedded prompt> --autopilot --allow-all-tools --model <resolved-model> --reasoning-effort <resolved-effort>`. `mato` only appends `--resume=<session-id>` when durable session metadata exists for the current task or review phase.
 - If `gopls` is not found on the host `PATH`, `mato` warns before launching the container so missing Go LSP support is explicit instead of surfacing later as a generic Copilot LSP failure.
 When choosing a custom Docker image via `MATO_DOCKER_IMAGE` or `.mato.yaml`, use an image compatible with the mounted
 host binaries and standard Linux filesystem layout expected above.
@@ -465,8 +506,10 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | `test` | Run `go test -race ./...`. |
 | `vet` | Run `go vet ./...`. |
 | `lint` | Run `golangci-lint run ./...`. |
+| `deadcode` | Run `go tool staticcheck -checks U1000 ./...` and `go tool deadcode -test ./...`. |
 | `help` | Print the target list and descriptions. |
 Additional behavior:
 - `all` runs `fmt`, `vet`, `build`, and `test`.
+- `deadcode` complements `lint`: it checks package-local unused code with `staticcheck`'s `U1000` rule and whole-program reachability with `go tool deadcode -test`.
 - `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --match 'v*' --always --dirty`, which ignores non-release tags, falls back to the commit hash when no matching release tag is reachable, and falls back to `dev` when git metadata is unavailable.
 - `REPO` is required for `make run` and may be supplied from `.env`.

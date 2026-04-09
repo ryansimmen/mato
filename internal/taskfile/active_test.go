@@ -252,7 +252,11 @@ func TestCollectActiveAffects_UnreadableTaskFile(t *testing.T) {
 	if err := os.Chmod(unreadable, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+	t.Cleanup(func() {
+		if err := os.Chmod(unreadable, 0o644); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	active, warnings := taskfile.CollectActiveAffects(tasksDir)
 	if len(active) != 0 {
@@ -277,7 +281,11 @@ func TestCollectActiveAffects_UnreadableDirectory(t *testing.T) {
 	if err := os.Chmod(dir, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	active, warnings := taskfile.CollectActiveAffects(tasksDir)
 	if len(active) != 0 {

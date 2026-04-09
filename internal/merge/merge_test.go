@@ -1652,9 +1652,13 @@ func TestProcessQueue_MarkMergedFailsButMoveSucceeds(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		// Ensure cleanup can remove the file.
-		os.Chmod(taskFile, 0o644)
+		if err := os.Chmod(taskFile, 0o644); err != nil && !os.IsNotExist(err) {
+			t.Errorf("os.Chmod restore task permissions: %v", err)
+		}
 		completedFile := filepath.Join(tasksDir, dirs.Completed, "readonly-task.md")
-		os.Chmod(completedFile, 0o644)
+		if err := os.Chmod(completedFile, 0o644); err != nil && !os.IsNotExist(err) {
+			t.Errorf("os.Chmod restore completed task permissions: %v", err)
+		}
 	})
 
 	if got := ProcessQueue(repoRoot, tasksDir, "mato"); got != 1 {
@@ -2025,14 +2029,24 @@ func TestFailMergeTask_MovesTaskEvenWhenAppendFails(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, dirs.ReadyMerge)
 	dst := filepath.Join(dir, dirs.Backlog)
-	os.MkdirAll(src, 0o755)
-	os.MkdirAll(dst, 0o755)
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", src, err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", dst, err)
+	}
 
 	taskFile := filepath.Join(src, "broken-append.md")
-	os.WriteFile(taskFile, []byte("# Broken append task\n"), 0o444)
+	if err := os.WriteFile(taskFile, []byte("# Broken append task\n"), 0o444); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", taskFile, err)
+	}
 	t.Cleanup(func() {
-		os.Chmod(taskFile, 0o644)
-		os.Chmod(filepath.Join(dst, "broken-append.md"), 0o644)
+		if err := os.Chmod(taskFile, 0o644); err != nil && !os.IsNotExist(err) {
+			t.Errorf("os.Chmod restore source permissions: %v", err)
+		}
+		if err := os.Chmod(filepath.Join(dst, "broken-append.md"), 0o644); err != nil && !os.IsNotExist(err) {
+			t.Errorf("os.Chmod restore destination permissions: %v", err)
+		}
 	})
 
 	dstPath := filepath.Join(dst, "broken-append.md")
@@ -2063,12 +2077,18 @@ func TestFailMergeTask_MovesTaskEvenWhenAppendFails(t *testing.T) {
 func TestFailMergeTask_NoDst_ReturnsAppendError(t *testing.T) {
 	dir := t.TempDir()
 	taskFile := filepath.Join(dir, "task.md")
-	os.WriteFile(taskFile, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(taskFile, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", taskFile, err)
+	}
 
 	// Make directory read-only so temp file creation fails during atomic write.
-	os.Chmod(dir, 0o555)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("os.Chmod(%s): %v", dir, err)
+	}
 	t.Cleanup(func() {
-		os.Chmod(dir, 0o755)
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore directory permissions: %v", err)
+		}
 	})
 
 	// When dst is empty and append fails, should return the error
@@ -2081,14 +2101,20 @@ func TestFailMergeTask_NoDst_ReturnsAppendError(t *testing.T) {
 func TestFailMergeTask_MoveFailureDoesNotAppendRecord(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "tasks")
-	os.MkdirAll(subdir, 0o755)
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%s): %v", subdir, err)
+	}
 	taskFile := filepath.Join(subdir, "task.md")
-	os.WriteFile(taskFile, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(taskFile, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", taskFile, err)
+	}
 
 	// Create a regular file where the destination directory should be,
 	// so MkdirAll fails when trying to create subdirectories under it.
 	blocker := filepath.Join(dir, "blocked-dir")
-	os.WriteFile(blocker, []byte("not a directory"), 0o644)
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", blocker, err)
+	}
 
 	dstPath := filepath.Join(blocker, "sub", "task.md")
 
@@ -2299,7 +2325,11 @@ func TestAppendTaskRecord_ReadOnlyDir(t *testing.T) {
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatalf("os.Chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore directory permissions: %v", err)
+		}
+	})
 
 	err := appendTaskRecord(path, "<!-- failure: test -->")
 	if err == nil {
@@ -2378,6 +2408,53 @@ func TestLoadMergeCandidates(t *testing.T) {
 	// Unparseable task should have been requeued to backlog.
 	if _, err := os.Stat(filepath.Join(backlogDir, "broken.md")); err != nil {
 		t.Errorf("broken.md should have been requeued to backlog: %v", err)
+	}
+}
+
+func TestLoadMergeCandidates_InvalidBranchMarkerRequeues(t *testing.T) {
+	tasksDir := t.TempDir()
+	readyDir := filepath.Join(tasksDir, dirs.ReadyMerge)
+	backlogDir := filepath.Join(tasksDir, dirs.Backlog)
+	for _, sub := range []string{readyDir, backlogDir} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
+	}
+
+	invalidTask := "<!-- branch: --bad -->\n---\nid: invalid-branch\npriority: 10\n---\n# Invalid branch\n"
+	if err := os.WriteFile(filepath.Join(readyDir, "invalid.md"), []byte(invalidTask), 0o644); err != nil {
+		t.Fatalf("write invalid.md: %v", err)
+	}
+	validTask := "<!-- branch: task/good -->\n---\nid: valid-branch\npriority: 20\n---\n# Valid branch\n"
+	if err := os.WriteFile(filepath.Join(readyDir, "valid.md"), []byte(validTask), 0o644); err != nil {
+		t.Fatalf("write valid.md: %v", err)
+	}
+
+	candidates, err := loadMergeCandidates(readyDir, tasksDir)
+	if err != nil {
+		t.Fatalf("loadMergeCandidates: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("got %d candidates, want 1", len(candidates))
+	}
+	if candidates[0].name != "valid.md" {
+		t.Fatalf("candidates[0].name = %q, want %q", candidates[0].name, "valid.md")
+	}
+
+	backlogPath := filepath.Join(backlogDir, "invalid.md")
+	data, err := os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", backlogPath, err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "<!-- failure: merge-queue") {
+		t.Fatalf("invalid task missing merge failure record:\n%s", text)
+	}
+	if !strings.Contains(text, "invalid required") || !strings.Contains(text, "after work handoff") {
+		t.Fatalf("invalid task missing invalid-marker reason:\n%s", text)
+	}
+	if !strings.Contains(text, "invalid branch name") || !strings.Contains(text, "branch names must not begin with '-'") {
+		t.Fatalf("invalid task missing invalid branch detail:\n%s", text)
 	}
 }
 

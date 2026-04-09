@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"mato/internal/configresolve"
 	"mato/internal/git"
 	"mato/internal/ui"
 )
@@ -61,7 +62,34 @@ func validateRepoPath(dir string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("repo path %q is not a directory", dir)
 	}
-	return gitRevParseGitDir(dir)
+	if err := gitRevParseGitDir(dir); err != nil {
+		return ui.WithHint(err, "run this command inside a git repository or pass --repo /path/to/repo")
+	}
+	return nil
+}
+
+func validateResolvedBranch(resolved configresolve.Resolved[string]) error {
+	if err := validateBranch(resolved.Value); err != nil {
+		return ui.WithHint(err, branchHint(resolved))
+	}
+	return nil
+}
+
+func branchHint(resolved configresolve.Resolved[string]) string {
+	switch resolved.Source {
+	case configresolve.SourceFlag:
+		return "pass --branch a valid git ref name such as mato or feature/my-change"
+	case configresolve.SourceEnv:
+		envVar := resolved.EnvVar
+		if envVar == "" {
+			envVar = "MATO_BRANCH"
+		}
+		return fmt.Sprintf("set %s to a valid git ref name such as mato or feature/my-change, or unset it to use the default", envVar)
+	case configresolve.SourceConfig:
+		return "set branch in .mato.yaml to a valid git ref name such as mato or feature/my-change"
+	default:
+		return "pass --branch a valid git ref name such as mato or feature/my-change"
+	}
 }
 
 func requireTasksDir(tasksDir string) error {

@@ -165,6 +165,35 @@ func TestSelectAndClaimTask_RetryExhausted_PreservesVerdictFallback(t *testing.T
 	}
 }
 
+func TestSelectAndClaimTask_SkipsSymlinkCandidate(t *testing.T) {
+	dir := setupClaimTestDir(t)
+	target := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(target, []byte("# Secret\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, dirs.Backlog, "linked.md")); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "ok.md"), "# OK\n")
+
+	task, err := SelectAndClaimTask(dir, "agent-link", candidates("linked.md", "ok.md"), 0, nil)
+	if err != nil {
+		t.Fatalf("SelectAndClaimTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected ok.md to be claimed after symlink candidate was skipped")
+	}
+	if task.Filename != "ok.md" {
+		t.Fatalf("Filename = %q, want %q", task.Filename, "ok.md")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, dirs.Backlog, "linked.md")); err != nil {
+		t.Fatalf("linked.md symlink should remain in backlog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dirs.InProgress, "ok.md")); err != nil {
+		t.Fatalf("ok.md should be claimed into in-progress: %v", err)
+	}
+}
+
 func TestSelectAndClaimTask_SkipsExhaustedClaimsNext(t *testing.T) {
 	dir := setupClaimTestDir(t)
 	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "bad.md"), strings.Join([]string{
@@ -1080,7 +1109,11 @@ func TestSelectAndClaimTask_UnreadableFile_Skipped(t *testing.T) {
 	if err := os.Chmod(taskPath, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(taskPath, 0o644) })
+	t.Cleanup(func() {
+		if err := os.Chmod(taskPath, 0o644); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	// Also add a readable fallback task.
 	testutil.WriteFile(t, filepath.Join(dir, dirs.Backlog, "readable.md"), "# Readable\nDo stuff.\n")

@@ -361,36 +361,48 @@ func TestCountPromotableWaitingTasks(t *testing.T) {
 		{
 			name: "one promotable task",
 			setup: func(tasksDir string) {
-				os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "task.md"),
-					[]byte("---\nid: task\n---\n# Task\n"), 0o644)
+				if err := os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "task.md"),
+					[]byte("---\nid: task\n---\n# Task\n"), 0o644); err != nil {
+					panic(err)
+				}
 			},
 			wantCount: 1,
 		},
 		{
 			name: "blocked task not counted",
 			setup: func(tasksDir string) {
-				os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "blocked.md"),
-					[]byte("---\nid: blocked\ndepends_on: [missing]\n---\n# Blocked\n"), 0o644)
+				if err := os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "blocked.md"),
+					[]byte("---\nid: blocked\ndepends_on: [missing]\n---\n# Blocked\n"), 0o644); err != nil {
+					panic(err)
+				}
 			},
 			wantCount: 0,
 		},
 		{
 			name: "invalid glob not counted",
 			setup: func(tasksDir string) {
-				os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "bad.md"),
-					[]byte("---\nid: bad\naffects:\n  - \"[invalid\"\n---\n# Bad\n"), 0o644)
+				if err := os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "bad.md"),
+					[]byte("---\nid: bad\naffects:\n  - \"[invalid\"\n---\n# Bad\n"), 0o644); err != nil {
+					panic(err)
+				}
 			},
 			wantCount: 0,
 		},
 		{
 			name: "mix of promotable and blocked",
 			setup: func(tasksDir string) {
-				os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep.md"),
-					[]byte("---\nid: dep\n---\n# Dep\n"), 0o644)
-				os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "ready.md"),
-					[]byte("---\nid: ready\ndepends_on: [dep]\n---\n# Ready\n"), 0o644)
-				os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "blocked.md"),
-					[]byte("---\nid: blocked\ndepends_on: [nope]\n---\n# Blocked\n"), 0o644)
+				if err := os.WriteFile(filepath.Join(tasksDir, dirs.Completed, "dep.md"),
+					[]byte("---\nid: dep\n---\n# Dep\n"), 0o644); err != nil {
+					panic(err)
+				}
+				if err := os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "ready.md"),
+					[]byte("---\nid: ready\ndepends_on: [dep]\n---\n# Ready\n"), 0o644); err != nil {
+					panic(err)
+				}
+				if err := os.WriteFile(filepath.Join(tasksDir, dirs.Waiting, "blocked.md"),
+					[]byte("---\nid: blocked\ndepends_on: [nope]\n---\n# Blocked\n"), 0o644); err != nil {
+					panic(err)
+				}
 			},
 			wantCount: 1,
 		},

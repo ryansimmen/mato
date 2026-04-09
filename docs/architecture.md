@@ -30,7 +30,7 @@ This document describes the architecture implemented by `cmd/mato/main.go` and t
 +------------------+     ready-to-merge -> completed
 ```
 High-level flow:
-1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, uses `internal/configresolve` to resolve precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)` via `mato run`, bootstraps a repository via `setup.InitRepo(...)`, shows effective repo defaults via `mato config`, or routes to read-only subcommands such as `status.Show(...)`, `history.Show(...)`, `inspect.Show(...)`, and `graph.Show(...)`.
+1. `main.go` parses flags, loads optional repo-local `.mato.yaml`, uses `internal/configresolve` to resolve precedence across CLI flags, env vars, config file, and hardcoded defaults, then either starts `runner.Run(...)` via `mato run`, bootstraps a repository via `setup.InitRepo(...)`, shows effective repo defaults via `mato config`, or routes to read-only subcommands such as `status.ShowTo(...)`, `history.ShowTo(...)`, `inspect.ShowTo(...)`, and `graph.ShowTo(...)`.
 2. `runner.Run(...)` receives fully resolved `RunOptions`, creates/maintains the queue, writes `.queue`, and starts agent runs. `RunOptions.Mode` selects between the default daemon loop, one-iteration bounded execution (`--once`), and drain-until-idle bounded execution (`--until-idle`).
 3. The host selects and claims a task via `queue.SelectAndClaimTask(...)`, chooses a stable task branch (reusing any recorded branch marker when safe, otherwise deriving a sanitized/disambiguated branch), then launches the agent with pre-resolved task info as env vars (`MATO_TASK_FILE`, `MATO_TASK_BRANCH`, `MATO_TASK_TITLE`, `MATO_TASK_PATH`). The agent prompt in `task-instructions.md` verifies the claim, works on the preselected branch, and commits locally.
 4. After the agent exits, the host pushes the task branch, writes the authoritative `<!-- branch: ... -->` marker, and moves the task file to `ready-for-review/`.
@@ -159,7 +159,8 @@ Environment variables injected by the host:
 - `MATO_AGENT_ID=<generated id>`
 - `MATO_MESSAGING_ENABLED=1`
 - `MATO_MESSAGES_DIR=/workspace/.mato/messages`
-- `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, `GIT_CONFIG_VALUE_0=*`
+- host repo mounted read-only at `/mato-host-repo`, with the clone's `origin` temporarily rewritten to that path during container execution
+- `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, `GIT_CONFIG_VALUE_0=/workspace`
 - `GIT_AUTHOR_NAME` / `GIT_COMMITTER_NAME` if host Git config supplies a name
 - `GIT_AUTHOR_EMAIL` / `GIT_COMMITTER_EMAIL` if host Git config supplies an email
 - `HOME=<host home path>`
@@ -168,7 +169,7 @@ Environment variables injected by the host:
 If `gopls` is absent on the host `PATH`, the host still launches the container but emits a warning that Go LSP features will be unavailable for that agent run.
 The final command is:
 ```text
-copilot [--resume=<session-id>] -p <embedded task prompt> --autopilot --allow-all --model <run.model> --reasoning-effort <run.reasoningEffort>
+copilot [--resume=<session-id>] -p <embedded task prompt> --autopilot --allow-all-tools --model <run.model> --reasoning-effort <run.reasoningEffort>
 ```
 `buildDockerArgs(...)` always appends `--model <run.model>` and `--reasoning-effort <run.reasoningEffort>` using the fully resolved values from `RunOptions`, and appends `--resume=<session-id>` only when the host has a durable session record for that phase.
 ### Host-side task claiming
@@ -430,6 +431,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `internal/frontmatter/`
 - `TaskMeta` schema.
 - YAML frontmatter parsing via `gopkg.in/yaml.v3` — `ParseTaskFile` (from disk) and `ParseTaskData` (from raw bytes).
+- Task frontmatter currently preserves known-field defaults and sanitization behavior, but does not yet reject unknown top-level keys strictly.
 - Default metadata values and task-body extraction.
 - Strips comment-only HTML metadata lines from the body.
 - Branch-name sanitization — `SanitizeBranchName`, `BranchDisambiguator`.
