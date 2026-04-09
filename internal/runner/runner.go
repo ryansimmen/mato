@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/config"
 	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/identity"
@@ -61,6 +60,7 @@ type RunOptions struct {
 	ReviewReasoningEffort      string
 	AgentTimeout               time.Duration
 	RetryCooldown              time.Duration
+	Verbose                    bool
 }
 
 func normalizeAndValidateRunOptions(opts RunOptions) (RunOptions, error) {
@@ -103,6 +103,7 @@ func DryRun(w io.Writer, repoRoot, branch string, opts RunOptions) error {
 	if err != nil {
 		return fmt.Errorf("validate run options: %w", err)
 	}
+	emitRunStartupSummary("dry-run", branch, opts)
 
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
@@ -181,6 +182,7 @@ func Run(repoRoot, branch string, opts RunOptions) error {
 		return fmt.Errorf("ensure branch: %w", err)
 	}
 	reportBranchResolution(branchResult)
+	emitRunStartupSummary("run", branchResult.Branch, opts)
 
 	tasksDir := filepath.Join(repoRoot, dirs.Root)
 
@@ -293,14 +295,8 @@ func pathHasLocalChanges(repoRoot, path string) (bool, error) {
 // buildEnvAndRunContext assembles the envConfig and runContext from resolved
 // host tools, agent identity, and runtime settings.
 func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, gitEmail, repoRoot, tasksDir string, opts RunOptions) (envConfig, runContext) {
-	image := opts.DockerImage
-	if image == "" {
-		image = config.DefaultDockerImage
-	}
-	timeout := opts.AgentTimeout
-	if timeout <= 0 {
-		timeout = config.DefaultAgentTimeout
-	}
+	image := resolvedDockerImage(opts)
+	timeout := resolvedAgentTimeout(opts)
 	workdir := "/workspace"
 
 	prompt := strings.ReplaceAll(taskInstructions, "TASKS_DIR_PLACEHOLDER", workdir+"/"+dirs.Root)
@@ -335,6 +331,7 @@ func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, git
 		reviewModel:                opts.ReviewModel,
 		reviewReasoningEffort:      opts.ReviewReasoningEffort,
 		reviewSessionResumeEnabled: opts.ReviewSessionResumeEnabled,
+		verbose:                    opts.Verbose,
 		isTTY:                      isTerminal(os.Stdin),
 	}
 
