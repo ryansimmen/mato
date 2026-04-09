@@ -90,6 +90,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 
 	run.cloneDir = cloneDir
 
+	emitDockerLaunchSummary(env.verbose, "task-agent", env.image, run.model, claimed)
 	fmt.Printf("Launching agent from %s (clone: %s)\n", env.repoRoot, cloneDir)
 
 	maxRetries := 3

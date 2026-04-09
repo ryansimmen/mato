@@ -112,6 +112,7 @@ type envConfig struct {
 	targetBranch, reviewModel               string
 	reviewReasoningEffort                   string
 	reviewSessionResumeEnabled              bool
+	verbose                                 bool
 	isTTY                                   bool
 }
 

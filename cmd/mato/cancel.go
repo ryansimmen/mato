@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,6 +18,16 @@ import (
 )
 
 var cancelTaskFn = queue.CancelTask
+var cancelTaskMatchFn = queue.CancelTaskMatch
+var listCancellableTasksFn = queue.ListCancellableTasks
+
+type cancelItemResult struct {
+	Task       string   `json:"task"`
+	Cancelled  bool     `json:"cancelled"`
+	PriorState string   `json:"prior_state,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
+	Error      string   `json:"error,omitempty"`
+}
 
 // confirmCancelFn asks the user to confirm cancellation. It receives an
 // io.Reader (normally os.Stdin) and returns true if the user confirmed.
@@ -30,11 +41,28 @@ var stdinIsTerminalFn = func() bool { return term.IsTerminal(int(os.Stdin.Fd()))
 func newCancelCmd(repoFlag *string) *cobra.Command {
 	var format string
 	var yes bool
+	var cancelAll bool
 
 	cmd := &cobra.Command{
-		Use:   "cancel <task-ref> [task-ref...]",
+		Use:   "cancel [--all | <task-ref> [task-ref...]]",
 		Short: "Withdraw tasks from the queue by moving them to failed/",
-		Args:  usageMinimumNArgs(1),
+		Long: "Withdraw tasks from the queue by moving them to failed/.\n\n" +
+			"`mato cancel --all` cancels every task currently in waiting/, backlog/, " +
+			"in-progress/, ready-for-review/, ready-to-merge/, and failed/. " +
+			"It never cancels completed/ tasks.",
+		Example: "mato cancel fix-login-bug\n" +
+			"mato cancel fix-login-bug add-dark-mode\n" +
+			"mato cancel --all",
+		Args: func(cmd *cobra.Command, args []string) error {
+			switch {
+			case cancelAll && len(args) > 0:
+				return newUsageError(cmd, fmt.Errorf("--all cannot be used with explicit task refs"))
+			case !cancelAll:
+				return usageMinimumNArgs(1)(cmd, args)
+			default:
+				return nil
+			}
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ui.ValidateFormat(format, []string{"text", "json"}); err != nil {
 				return newUsageError(cmd, err)
@@ -57,6 +85,11 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 			out := cmd.OutOrStdout()
 			errOut := cmd.ErrOrStderr()
 
+			var allMatches []queue.TaskMatch
+			if cancelAll {
+				allMatches = listCancellableTasksFn(tasksDir)
+			}
+
 			// Interactive confirmation when stdin is a TTY,
 			// --yes is not set, and output is not JSON.
 			if !yes && format != "json" && stdinIsTerminalFn() {
@@ -67,20 +100,31 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 					agent string
 				}
 				var resolved []taskInfo
-				for _, ref := range args {
-					match, err := queueview.ResolveTask(idx, ref)
-					if err != nil {
-						// Silently skip unresolved refs during prompt
-						// preparation so errors are only reported once
-						// by the cancel loop after confirmation.
-						continue
+				if cancelAll {
+					resolved = make([]taskInfo, 0, len(allMatches))
+					for _, match := range allMatches {
+						resolved = append(resolved, taskInfo{
+							stem:  strings.TrimSuffix(match.Filename, ".md"),
+							state: match.State,
+							agent: cancelTaskAgent(match),
+						})
 					}
-					stem := strings.TrimSuffix(match.Filename, ".md")
-					agent := ""
-					if match.Snapshot != nil {
-						agent = match.Snapshot.ClaimedBy
+				} else {
+					for _, ref := range args {
+						match, err := queueview.ResolveTask(idx, ref)
+						if err != nil {
+							// Silently skip unresolved refs during prompt
+							// preparation so errors are only reported once
+							// by the cancel loop after confirmation.
+							continue
+						}
+						stem := strings.TrimSuffix(match.Filename, ".md")
+						resolved = append(resolved, taskInfo{
+							stem:  stem,
+							state: match.State,
+							agent: cancelTaskAgent(match),
+						})
 					}
-					resolved = append(resolved, taskInfo{stem: stem, state: match.State, agent: agent})
 				}
 
 				if len(resolved) > 0 {
@@ -110,73 +154,53 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 				}
 			}
 
-			type cancelItemResult struct {
-				Task       string   `json:"task"`
-				Cancelled  bool     `json:"cancelled"`
-				PriorState string   `json:"prior_state,omitempty"`
-				Warnings   []string `json:"warnings,omitempty"`
-				Error      string   `json:"error,omitempty"`
-			}
-
-			var items []cancelItemResult
+			items := make([]cancelItemResult, 0)
 			var firstErr error
-			for _, ref := range args {
-				result, err := cancelTaskFn(tasksDir, ref)
-				if err != nil {
-					if format == "json" {
-						items = append(items, cancelItemResult{
-							Task:  strings.TrimSuffix(ref, ".md"),
-							Error: err.Error(),
-						})
-					} else {
-						if err := writef(errOut, "mato error: %v\n", err); err != nil {
-							return err
-						}
-					}
-					if firstErr == nil {
-						firstErr = err
-					}
-					continue
-				}
-				stem := strings.TrimSuffix(result.Filename, ".md")
-				if format == "json" {
-					items = append(items, cancelItemResult{
-						Task:       stem,
-						Cancelled:  true,
-						PriorState: result.PriorState,
-						Warnings:   result.Warnings,
-					})
-				} else {
-					if err := writef(out, "cancelled: %s (was in %s/)\n", result.Filename, result.PriorState); err != nil {
-						return err
-					}
-					if result.PriorState == dirs.InProgress {
-						if err := ui.WarnTo(errOut, "warning: agent container for %s may still be running\n", stem); err != nil {
-							return err
-						}
-					}
-					if result.PriorState == dirs.ReadyReview {
-						if err := ui.WarnTo(errOut, "warning: task is in ready-for-review/ — a review agent may be running\n"); err != nil {
-							return err
-						}
-					}
-					if result.PriorState == dirs.ReadyMerge {
-						if err := ui.WarnTo(errOut, "warning: merge queue may still merge %s's branch\n", stem); err != nil {
-							return err
-						}
-					}
-					if len(result.Warnings) > 0 {
-						if err := ui.WarnTo(errOut, "warning: %d task(s) depend on %s:\n", len(result.Warnings), stem); err != nil {
-							return err
-						}
-						for _, warning := range result.Warnings {
-							if err := ui.WarnTo(errOut, "  %s\n", warning); err != nil {
+			if cancelAll {
+				for _, match := range allMatches {
+					taskName := strings.TrimSuffix(match.Filename, ".md")
+					result, err := cancelTaskMatchFn(tasksDir, match)
+					if err != nil {
+						if format == "json" {
+							items = append(items, cancelItemResult{
+								Task:  taskName,
+								Error: err.Error(),
+							})
+						} else {
+							if err := writef(errOut, "mato error: %v\n", err); err != nil {
 								return err
 							}
 						}
-						if err := ui.WarnTo(errOut, "these tasks will remain blocked until %s is retried\n", stem); err != nil {
-							return err
+						if firstErr == nil {
+							firstErr = err
 						}
+						continue
+					}
+					if err := writeCancelResult(out, errOut, format, &items, result); err != nil {
+						return err
+					}
+				}
+			} else {
+				for _, ref := range args {
+					result, err := cancelTaskFn(tasksDir, ref)
+					if err != nil {
+						if format == "json" {
+							items = append(items, cancelItemResult{
+								Task:  strings.TrimSuffix(ref, ".md"),
+								Error: err.Error(),
+							})
+						} else {
+							if err := writef(errOut, "mato error: %v\n", err); err != nil {
+								return err
+							}
+						}
+						if firstErr == nil {
+							firstErr = err
+						}
+						continue
+					}
+					if err := writeCancelResult(out, errOut, format, &items, result); err != nil {
+						return err
 					}
 				}
 			}
@@ -195,6 +219,7 @@ func newCancelCmd(repoFlag *string) *cobra.Command {
 
 	cancelDirs := []string{dirs.Waiting, dirs.Backlog, dirs.InProgress, dirs.ReadyReview, dirs.ReadyMerge, dirs.Failed}
 	cmd.ValidArgsFunction = completeTaskNames(repoFlag, cancelDirs)
+	cmd.Flags().BoolVar(&cancelAll, "all", false, "Cancel every task in waiting/, backlog/, in-progress/, ready-for-review/, ready-to-merge/, and failed/ (never completed/)")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
 
@@ -215,4 +240,59 @@ func confirmCancel(r io.Reader) bool {
 	default:
 		return false
 	}
+}
+
+func cancelTaskAgent(match queue.TaskMatch) string {
+	if match.Snapshot != nil {
+		return match.Snapshot.ClaimedBy
+	}
+	if match.ParseFailure != nil {
+		return match.ParseFailure.ClaimedBy
+	}
+	return ""
+}
+
+func writeCancelResult(out, errOut io.Writer, format string, items *[]cancelItemResult, result queue.CancelResult) error {
+	stem := strings.TrimSuffix(result.Filename, ".md")
+	if format == "json" {
+		*items = append(*items, cancelItemResult{
+			Task:       stem,
+			Cancelled:  true,
+			PriorState: result.PriorState,
+			Warnings:   result.Warnings,
+		})
+		return nil
+	}
+	if err := writef(out, "cancelled: %s (was in %s/)\n", result.Filename, result.PriorState); err != nil {
+		return err
+	}
+	if result.PriorState == dirs.InProgress {
+		if err := ui.WarnTo(errOut, "warning: agent container for %s may still be running\n", stem); err != nil {
+			return err
+		}
+	}
+	if result.PriorState == dirs.ReadyReview {
+		if err := ui.WarnTo(errOut, "warning: task is in ready-for-review/ — a review agent may be running\n"); err != nil {
+			return err
+		}
+	}
+	if result.PriorState == dirs.ReadyMerge {
+		if err := ui.WarnTo(errOut, "warning: merge queue may still merge %s's branch\n", stem); err != nil {
+			return err
+		}
+	}
+	if len(result.Warnings) > 0 {
+		if err := ui.WarnTo(errOut, "warning: %d task(s) depend on %s:\n", len(result.Warnings), stem); err != nil {
+			return err
+		}
+		for _, warning := range result.Warnings {
+			if err := ui.WarnTo(errOut, "  %s\n", warning); err != nil {
+				return err
+			}
+		}
+		if err := ui.WarnTo(errOut, "these tasks will remain blocked until %s is retried\n", stem); err != nil {
+			return err
+		}
+	}
+	return nil
 }

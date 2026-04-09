@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -107,6 +108,51 @@ func TestAppendTaskRecord(t *testing.T) {
 		err := appendTaskRecord("/nonexistent/path/task.md", "<!-- test -->")
 		if err == nil {
 			t.Error("expected error for nonexistent file")
+		}
+	})
+
+	t.Run("concurrent appends preserve all records", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "task.md")
+		if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		records := []string{
+			"<!-- failure: merge-queue at 2026-01-01T00:00:00Z — merge conflict -->",
+			"<!-- merged: merge-queue at 2026-01-01T00:00:01Z -->",
+		}
+		start := make(chan struct{})
+		errCh := make(chan error, len(records))
+		var wg sync.WaitGroup
+		for _, record := range records {
+			record := record
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errCh <- appendTaskRecord(path, "%s", record)
+			}()
+		}
+
+		close(start)
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			if err != nil {
+				t.Fatalf("appendTaskRecord: %v", err)
+			}
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		content := string(data)
+		for _, record := range records {
+			if !strings.Contains(content, record) {
+				t.Fatalf("missing appended record %q in:\n%s", record, content)
+			}
 		}
 	})
 }
@@ -232,6 +278,64 @@ func TestRemoveBranchMarker(t *testing.T) {
 	}
 	if strings.Contains(string(data), "<!-- branch:") {
 		t.Fatalf("branch marker should be removed, got:\n%s", string(data))
+	}
+}
+
+func TestRemoveBranchMarker_PreservesConcurrentAppend(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	content := strings.Join([]string{
+		"<!-- branch: task/remove-me -->",
+		"# Task",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	atHook := make(chan struct{})
+	releaseRemove := make(chan struct{})
+	origHook := removeBranchMarkerBeforeWriteHook
+	removeBranchMarkerBeforeWriteHook = func() {
+		close(atHook)
+		<-releaseRemove
+	}
+	t.Cleanup(func() {
+		removeBranchMarkerBeforeWriteHook = origHook
+	})
+
+	removeErrCh := make(chan error, 1)
+	go func() {
+		removeErrCh <- removeBranchMarker(path)
+	}()
+
+	<-atHook
+
+	appendRecord := "<!-- failure: merge-queue at 2026-01-01T00:00:00Z — merge conflict -->"
+	appendErrCh := make(chan error, 1)
+	go func() {
+		appendErrCh <- appendTaskRecord(path, "%s", appendRecord)
+	}()
+
+	close(releaseRemove)
+
+	if err := <-removeErrCh; err != nil {
+		t.Fatalf("removeBranchMarker: %v", err)
+	}
+	if err := <-appendErrCh; err != nil {
+		t.Fatalf("appendTaskRecord: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "<!-- branch:") {
+		t.Fatalf("branch marker should be removed, got:\n%s", got)
+	}
+	if !strings.Contains(got, appendRecord) {
+		t.Fatalf("concurrent append should be preserved, got:\n%s", got)
 	}
 }
 

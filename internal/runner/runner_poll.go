@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/merge"
 	"mato/internal/messaging"
 	"mato/internal/pause"
@@ -96,10 +97,15 @@ func pollCleanup(tasksDir string) {
 // and reconciles the ready queue (promoting waiting tasks whose dependencies
 // are satisfied and quarantining exhausted ones). If reconciliation moved
 // tasks the index is rebuilt. It returns the (possibly refreshed) index and
-// whether any directory-level read failure occurred.
+// whether any queue-structural error occurred during the cycle, including
+// unreadable queue directories or fresh waiting/backlog parse failures that
+// reconciliation still needs to quarantine.
 func pollReconcile(tasksDir string) (*queueview.PollIndex, bool) {
 	idx := queueview.BuildIndex(tasksDir)
 	hadError := surfaceBuildWarnings(idx)
+	if pollReconcileHadParseFailure(idx) {
+		hadError = true
+	}
 
 	if queue.ReconcileReadyQueue(tasksDir, idx) {
 		idx = queueview.BuildIndex(tasksDir)
@@ -109,6 +115,23 @@ func pollReconcile(tasksDir string) (*queueview.PollIndex, bool) {
 	}
 
 	return idx, hadError
+}
+
+func pollReconcileHadParseFailure(idx *queueview.PollIndex) bool {
+	return len(idx.WaitingParseFailures()) > 0 || len(idx.BacklogParseFailures()) > 0
+}
+
+func pollReviewHadParseFailure(idx *queueview.PollIndex) bool {
+	return len(idx.ReviewParseFailures()) > 0
+}
+
+func pollMergeHadParseFailure(idx *queueview.PollIndex) bool {
+	for _, pf := range idx.ParseFailures() {
+		if pf.State == dirs.ReadyMerge {
+			return true
+		}
+	}
+	return false
 }
 
 func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
@@ -127,19 +150,36 @@ func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, i
 // FailedDirUnavailableError is encountered. It returns whether a task was
 // claimed and whether any non-fatal error occurred.
 func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDir, agentID string, failedDirExcluded map[string]struct{}, cooldown time.Duration, idx *queueview.PollIndex, view queueview.RunnableBacklogView) (claimed bool, hadError bool) {
+	summary := pollVerboseSummaryFromContext(ctx)
 	candidates := queueview.OrderedRunnableFilenames(view, failedDirExcluded)
 	task, claimErr := queue.SelectAndClaimTask(tasksDir, agentID, candidates, cooldown, idx)
 	var fdErr *queue.FailedDirUnavailableError
 	if errors.As(claimErr, &fdErr) {
 		failedDirExcluded[fdErr.TaskFilename] = struct{}{}
+		if summary != nil {
+			summary.backlog = fmt.Sprintf("skipped %s (retry budget exhausted)", fdErr.TaskFilename)
+		}
 		ui.Warnf("warning: excluding retry-exhausted task %s from future polls (failed/ directory unavailable)\n", fdErr.TaskFilename)
 	} else if claimErr != nil {
+		if summary != nil {
+			summary.backlog = fmt.Sprintf("claim error (%v)", claimErr)
+		}
 		ui.Warnf("warning: could not claim task: %v\n", claimErr)
 		hadError = true
 	}
 
 	if task == nil {
+		if summary != nil && summary.backlog == "" {
+			if len(candidates) == 0 {
+				summary.backlog = summarizeBacklogState(view, failedDirExcluded)
+			} else {
+				summary.backlog = fmt.Sprintf("skipped %d runnable candidate(s)", len(candidates))
+			}
+		}
 		return false, hadError
+	}
+	if summary != nil {
+		summary.backlog = fmt.Sprintf("claimed %s", task.Filename)
 	}
 
 	if err := messaging.WriteMessage(tasksDir, messaging.Message{
@@ -171,17 +211,31 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 // performs post-review actions (approve or reject). It returns whether a
 // review was processed.
 func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, branch, agentID string, idx *queueview.PollIndex) bool {
+	summary := pollVerboseSummaryFromContext(ctx)
 	if ctx.Err() != nil {
+		if summary != nil {
+			summary.review = "skipped cancelled"
+		}
 		return false
 	}
 
 	reviewTask, reviewCleanup := selectAndLockReview(tasksDir, idx)
 	if reviewTask == nil {
+		if summary != nil {
+			if hasReviewCandidates(tasksDir) {
+				summary.review = "skipped locked review task"
+			} else {
+				summary.review = "no review tasks"
+			}
+		}
 		return false
 	}
 	defer reviewCleanup()
 
 	if !VerifyReviewBranch(env.repoRoot, tasksDir, reviewTask, agentID) {
+		if summary != nil {
+			summary.review = fmt.Sprintf("skipped %s (missing branch)", reviewTask.Filename)
+		}
 		return true
 	}
 
@@ -190,25 +244,52 @@ func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, br
 		ui.Warnf("warning: review agent failed: %v\n", err)
 	}
 	postReviewAction(tasksDir, agentID, reviewTask)
+	if summary != nil {
+		summary.review = summarizeReviewOutcome(tasksDir, reviewTask)
+	}
 	return true
 }
 
 // pollMerge acquires the merge lock and processes the squash-merge queue.
 // It returns the number of tasks successfully merged.
 func pollMerge(ctx context.Context, repoRoot, tasksDir, branch string) int {
+	summary := pollVerboseSummaryFromContext(ctx)
 	if ctx.Err() != nil {
+		if summary != nil {
+			summary.merge = "skipped cancelled"
+		}
 		return 0
 	}
 
+	hasReadyTasks := false
+	if summary != nil {
+		hasReadyTasks = merge.HasReadyTasks(tasksDir)
+	}
 	cleanup, ok := merge.AcquireLock(tasksDir)
 	if !ok {
+		if summary != nil {
+			if hasReadyTasks {
+				summary.merge = "skipped merge lock held"
+			} else {
+				summary.merge = "no ready tasks"
+			}
+		}
 		return 0
 	}
 	defer cleanup()
 
 	count := merge.ProcessQueueContext(ctx, repoRoot, tasksDir, branch)
 	if count > 0 {
+		if summary != nil {
+			summary.merge = fmt.Sprintf("merged %d into %s", count, branch)
+		}
 		fmt.Printf("Merged %d task(s) into %s\n", count, branch)
+	} else if summary != nil {
+		if hasReadyTasks {
+			summary.merge = "ready tasks unchanged"
+		} else {
+			summary.merge = "no ready tasks"
+		}
 	}
 	return count
 }
@@ -245,6 +326,11 @@ func pollIterate(
 	priorPausedState bool,
 ) iterationResult {
 	var result iterationResult
+	var summary *pollVerboseSummary
+	if env.verbose {
+		summary = &pollVerboseSummary{}
+		ctx = withPollVerboseSummary(ctx, summary)
+	}
 
 	pollCleanup(tasksDir)
 
@@ -265,19 +351,38 @@ func pollIterate(
 		if claimHadError {
 			result.pollHadError = true
 		}
+	} else if summary != nil {
+		summary.backlog = "skipped paused"
 	}
 
 	if ctx.Err() != nil {
 		result.pauseActive = ps1.Active
+		if summary != nil {
+			if summary.review == "" {
+				summary.review = "skipped cancelled"
+			}
+			if summary.merge == "" {
+				summary.merge = "skipped cancelled"
+			}
+			emitPollCycleSummary(tasksDir, idx, view, failedDirExcluded, result, summary)
+		}
 		return result
 	}
 
 	ps2 := readPauseState(tasksDir)
 	if !ps2.Active {
+		if pollReviewHadParseFailure(idx) {
+			result.pollHadError = true
+		}
 		result.reviewProcessed = pollReviewFn(ctx, env, run, tasksDir, branch, agentID, idx)
+	} else if summary != nil {
+		summary.review = "skipped paused"
 	}
 
 	if ctx.Err() == nil {
+		if pollMergeHadParseFailure(idx) {
+			result.pollHadError = true
+		}
 		result.mergeCount = pollMergeFn(ctx, repoRoot, tasksDir, branch)
 	}
 	result.pauseActive = ps2.Active
@@ -308,6 +413,7 @@ func pollIterate(
 
 	result.hasReviewTasks = hasReviewCandidates(tasksDir)
 	result.hasReadyMerge = merge.HasReadyTasks(tasksDir)
+	emitPollCycleSummary(tasksDir, idx, view, failedDirExcluded, result, summary)
 	return result
 }
 

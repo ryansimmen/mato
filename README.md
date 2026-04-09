@@ -91,11 +91,11 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 | `mato list` | List queue tasks as a flat table or JSON array, with state filtering. |
 | `mato graph` | Visualize task dependencies and blocked work. |
 | `mato doctor` | Validate prerequisites, queue health, task parsing, and dependency integrity. |
-| `mato inspect <task>` | Explain why a task is blocked, deferred, runnable, or finished. |
+| `mato inspect` | Explain why a task is blocked, deferred, runnable, or finished. |
 | `mato log` | Show recent durable task outcomes. |
 | `mato config` | Show effective repository defaults and where each value came from. |
-| `mato retry <task>` | Requeue failed tasks for another attempt. |
-| `mato cancel <task>` | Move queued tasks to `failed` with a cancellation marker. |
+| `mato cancel` | Move tasks to `failed` with a cancellation marker. |
+| `mato retry` | Requeue one or more failed tasks. |
 | `mato pause` | Pause new claims and review launches. Supports `--format text|json` for script-friendly output. |
 | `mato resume` | Resume normal polling after a pause. Supports `--format text|json` for script-friendly output. |
 

@@ -25,6 +25,7 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 	var dryRun bool
 	var once bool
 	var untilIdle bool
+	var verbose bool
 	var flags configresolve.RunFlags
 
 	cmd := &cobra.Command{
@@ -72,6 +73,7 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 				return err
 			}
 			opts := runOptionsFromResolvedConfig(runCfg)
+			opts.Verbose = verbose
 			switch {
 			case once:
 				opts.Mode = runner.RunModeOnce
@@ -91,6 +93,7 @@ func newRunCmd(repoFlag *string) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate queue setup without launching Docker containers")
 	cmd.Flags().BoolVar(&once, "once", false, "Run exactly one poll iteration, then exit")
 	cmd.Flags().BoolVar(&untilIdle, "until-idle", false, "Keep polling until no actionable work remains, then exit")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "Write operator diagnostics to stderr")
 	cmd.Flags().StringVar(&flags.TaskModel, "task-model", "", "Copilot model for task agents (default: "+config.DefaultTaskModel+")")
 	cmd.Flags().StringVar(&flags.ReviewModel, "review-model", "", "Copilot model for review agents (default: "+config.DefaultReviewModel+")")
 	cmd.Flags().StringVar(&flags.TaskReasoningEffort, "task-reasoning-effort", "", "Reasoning effort for task agents (default: "+config.DefaultReasoningEffort+")")
@@ -108,5 +111,6 @@ func runOptionsFromResolvedConfig(runCfg configresolve.RunConfig) runner.RunOpti
 		ReviewReasoningEffort:      runCfg.ReviewReasoningEffort.Value,
 		AgentTimeout:               runCfg.AgentTimeout.Value,
 		RetryCooldown:              runCfg.RetryCooldown.Value,
+		Verbose:                    false,
 	}
 }
