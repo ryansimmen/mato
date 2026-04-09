@@ -431,7 +431,7 @@ The codebase follows standard Go project layout: `cmd/mato/` for the CLI entrypo
 ### `internal/frontmatter/`
 - `TaskMeta` schema.
 - YAML frontmatter parsing via `gopkg.in/yaml.v3` — `ParseTaskFile` (from disk) and `ParseTaskData` (from raw bytes).
-- Task frontmatter currently preserves known-field defaults and sanitization behavior, but does not yet reject unknown top-level keys strictly.
+- Task frontmatter preserves known-field defaults and sanitization behavior while rejecting unknown top-level keys strictly.
 - Default metadata values and task-body extraction.
 - Strips comment-only HTML metadata lines from the body.
 - Branch-name sanitization — `SanitizeBranchName`, `BranchDisambiguator`.
