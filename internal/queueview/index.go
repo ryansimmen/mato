@@ -365,7 +365,7 @@ func extractAffectsSnippet(block string) (string, bool) {
 
 // LoadTaskSnapshot reads and parses one task file into a snapshot.
 func LoadTaskSnapshot(tasksDir, state, filename, path string) (*TaskSnapshot, error) {
-	data, err := os.ReadFile(path)
+	data, err := taskfile.ReadRegularTaskFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +436,7 @@ func BuildIndex(tasksDir string) *PollIndex {
 				idx.nonCompletedIDs[stem] = struct{}{}
 			}
 
-			data, err := os.ReadFile(path)
+			data, err := taskfile.ReadRegularTaskFile(path)
 			if err != nil {
 				pf := ParseFailure{
 					Filename: name, State: dir, Path: path, Err: err,

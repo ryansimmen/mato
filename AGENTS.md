@@ -13,6 +13,7 @@ make build                              # compile binary to bin/mato
 # Lint
 go vet ./...                            # built-in static analysis
 make lint                               # golangci-lint (errcheck, gosimple, govet, ineffassign, staticcheck, unused, gofmt)
+make deadcode                           # detect unreachable exported code and unused symbols
 
 # Format
 go fmt ./...                            # or: make fmt
@@ -31,7 +32,7 @@ go test -race -run TestSafeRename_MissingSource ./internal/queue/...
 go test -race -v ./internal/integration/...   # or: make integration-test
 
 # Full verification (run before every commit)
-go build ./... && go vet ./... && go test -count=1 ./...
+go build ./... && go vet ./... && make lint && make deadcode && go test -count=1 ./...
 ```
 
 ## Project Layout
@@ -167,11 +168,11 @@ import (
 1. **Research** — Read relevant source before changing anything.
 2. **Implement** — Make changes, run `go build ./...` and `go test ./...`.
    - Do not ask whether to run routine verification or formatting commands;
-     run the relevant commands proactively and report the results.
+      run the relevant commands proactively and report the results.
 3. **Update docs** — If behavior changed, update this file (`AGENTS.md`) and any affected
    docs: `README.md`, `docs/architecture.md`, `docs/task-format.md`, `docs/messaging.md`,
    `docs/configuration.md`. If task format changed, also update `.github/skills/mato/SKILL.md`.
-4. **Verify** — `go build ./... && go vet ./... && go test -count=1 ./...`
+4. **Verify** — `go build ./... && go vet ./... && make lint && make deadcode && go test -count=1 ./...`
 5. **Commit** — Conventional commit messages (`feat:`, `fix:`, `docs:`, etc.).
 
 ### Pull Request Safety

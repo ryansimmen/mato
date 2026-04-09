@@ -205,6 +205,13 @@ func TestValidateBranch(t *testing.T) {
 		}
 	})
 
+	t.Run("leading dash", func(t *testing.T) {
+		err := ValidateBranch("-bad")
+		if err == nil || !strings.Contains(err.Error(), "must not begin with '-'") {
+			t.Fatalf("err = %v, want leading-dash rejection", err)
+		}
+	})
+
 	t.Run("invalid branch", func(t *testing.T) {
 		err := ValidateBranch("foo..bar")
 		if err == nil || !strings.Contains(err.Error(), "invalid branch name") {
@@ -846,7 +853,9 @@ func TestEnsureGitignoreContains_UnreadableGitignoreReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		os.Chmod(gitignorePath, 0o644)
+		if err := os.Chmod(gitignorePath, 0o644); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
 	})
 
 	_, err := EnsureGitignoreContains(dir, "/.mato/")
@@ -965,9 +974,13 @@ func TestResolveIdentity_Defaults(t *testing.T) {
 	}
 	// Unset any inherited config by overriding with empty values.
 	cmd = exec.Command("git", "-C", repo, "config", "--unset", "user.name")
-	cmd.Run() // ignore error if not set
+	if err := cmd.Run(); err != nil {
+		t.Logf("git config --unset user.name: %v", err)
+	}
 	cmd = exec.Command("git", "-C", repo, "config", "--unset", "user.email")
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		t.Logf("git config --unset user.email: %v", err)
+	}
 
 	// Isolate from global config by setting GIT_CONFIG_NOSYSTEM and
 	// pointing HOME/XDG_CONFIG_HOME to an empty dir.

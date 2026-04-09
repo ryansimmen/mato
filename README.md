@@ -49,6 +49,9 @@ mato run
 # In a third terminal, inspect the queue health
 mato status
 
+# List active queue tasks in a flat view
+mato list
+
 # Visualize the dependency graph
 mato graph
 
@@ -85,6 +88,7 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 | `mato init` | Bootstrap `.mato`, messaging directories, and the target branch. |
 | `mato run` | Start the host loop that claims, reviews, and merges tasks. |
 | `mato status` | Show queue counts, active agents, and the next runnable tasks. |
+| `mato list` | List queue tasks as a flat table or JSON array, with state filtering. |
 | `mato graph` | Visualize task dependencies and blocked work. |
 | `mato doctor` | Validate prerequisites, queue health, task parsing, and dependency integrity. |
 | `mato inspect <task>` | Explain why a task is blocked, deferred, runnable, or finished. |
@@ -92,8 +96,8 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 | `mato config` | Show effective repository defaults and where each value came from. |
 | `mato retry <task>` | Requeue failed tasks for another attempt. |
 | `mato cancel <task>` | Move queued tasks to `failed` with a cancellation marker. |
-| `mato pause` | Pause new claims and review launches. |
-| `mato resume` | Resume normal polling after a pause. |
+| `mato pause` | Pause new claims and review launches. Supports `--format text|json` for script-friendly output. |
+| `mato resume` | Resume normal polling after a pause. Supports `--format text|json` for script-friendly output. |
 
 
 ## Documentation

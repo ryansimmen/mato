@@ -83,7 +83,9 @@ func TestWarnf_NilWriterUsesStderr(t *testing.T) {
 	w.Close()
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("buf.ReadFrom: %v", err)
+	}
 	r.Close()
 	if got := buf.String(); got != "warning: fallback\n" {
 		t.Errorf("Warnf via os.Stderr = %q, want %q", got, "warning: fallback\n")
@@ -156,6 +158,10 @@ func TestRequireTasksDir_NotExist(t *testing.T) {
 	want := ".mato/ directory not found"
 	if got := err.Error(); !contains(got, want) {
 		t.Errorf("error = %q, want to contain %q", got, want)
+	}
+	hint, ok := ErrorHint(err)
+	if !ok || hint != "run 'mato init' first" {
+		t.Fatalf("hint = %q, want init guidance", hint)
 	}
 }
 

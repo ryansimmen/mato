@@ -23,6 +23,7 @@ import (
 	"mato/internal/queueview"
 	"mato/internal/taskfile"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 )
 
 func TestShowWithPopulatedTasksDir(t *testing.T) {
@@ -568,14 +569,20 @@ func TestParseClaimedAt(t *testing.T) {
 func TestReverseDependenciesHelper(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, dir := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, dir), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, dir), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", dir, err)
+		}
 	}
 	waitingDir := filepath.Join(tasksDir, dirs.Waiting)
 
 	// Task A depends on X and Y.
-	os.WriteFile(filepath.Join(waitingDir, "task-a.md"), []byte("---\nid: task-a\ndepends_on: [dep-x, dep-y]\n---\n# A\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(waitingDir, "task-a.md"), []byte("---\nid: task-a\ndepends_on: [dep-x, dep-y]\n---\n# A\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-a.md): %v", err)
+	}
 	// Task B also depends on X.
-	os.WriteFile(filepath.Join(waitingDir, "task-b.md"), []byte("---\nid: task-b\ndepends_on: [dep-x]\n---\n# B\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(waitingDir, "task-b.md"), []byte("---\nid: task-b\ndepends_on: [dep-x]\n---\n# B\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-b.md): %v", err)
+	}
 
 	idx := queueview.BuildIndex(tasksDir)
 	result := reverseDepsFromIndex(idx)
@@ -590,7 +597,9 @@ func TestReverseDependenciesHelper(t *testing.T) {
 
 func TestMergeLockIdle(t *testing.T) {
 	tasksDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(.locks): %v", err)
+	}
 
 	// No merge lock file — should be idle.
 	state, err := mergeLockState(tasksDir)
@@ -602,7 +611,9 @@ func TestMergeLockIdle(t *testing.T) {
 	}
 
 	// Dead process lock — should be idle.
-	os.WriteFile(filepath.Join(tasksDir, ".locks", "merge.lock"), []byte("2147483647"), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, ".locks", "merge.lock"), []byte("2147483647"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(merge.lock): %v", err)
+	}
 	state, err = mergeLockState(tasksDir)
 	if err != nil {
 		t.Fatalf("mergeLockState: %v", err)
@@ -1049,16 +1060,22 @@ func TestFailedTaskRendering_CycleFailure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(.locks): %v", err)
+	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
 	// Create a cycle-failed task — has cycle-failure marker but no regular failure markers.
 	content := "---\nid: cyclic-task\nmax_retries: 3\n---\n# Cyclic task\n\n<!-- cycle-failure: mato at 2026-01-01T00:00:00Z — circular dependency -->\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "cyclic-task.md"), []byte(content), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "cyclic-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(cyclic-task.md): %v", err)
+	}
 
 	output := captureShowVerbose(t, repoRoot)
 
@@ -1075,9 +1092,13 @@ func TestFailedTaskRendering_MixedFailures(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(.locks): %v", err)
+	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
 	}
@@ -1085,7 +1106,9 @@ func TestFailedTaskRendering_MixedFailures(t *testing.T) {
 	// Create a task with both regular failure and cycle-failure markers.
 	// In practice this is unusual, but the rendering should handle it.
 	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — tests failed -->\n<!-- cycle-failure: mato at 2026-01-02T00:00:00Z — circular dependency -->\n---\nid: mixed-task\nmax_retries: 3\n---\n# Mixed task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "mixed-task.md"), []byte(content), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "mixed-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(mixed-task.md): %v", err)
+	}
 
 	output := captureShowVerbose(t, repoRoot)
 
@@ -1107,16 +1130,22 @@ func TestFailedTaskRendering_TerminalFailure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(.locks): %v", err)
+	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
 	// Create a terminal-failed task — has terminal-failure marker but no regular failure markers.
 	content := "---\nid: terminal-task\nmax_retries: 3\n---\n# Terminal task\n\n<!-- terminal-failure: mato at 2026-01-01T00:00:00Z — unparseable frontmatter -->\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "terminal-task.md"), []byte(content), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "terminal-task.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(terminal-task.md): %v", err)
+	}
 
 	output := captureShowVerbose(t, repoRoot)
 
@@ -1137,16 +1166,22 @@ func TestFailedTaskRendering_TerminalWithRetries(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
 	for _, sub := range dirs.All {
-		os.MkdirAll(filepath.Join(tasksDir, sub), 0o755)
+		if err := os.MkdirAll(filepath.Join(tasksDir, sub), 0o755); err != nil {
+			t.Fatalf("os.MkdirAll(%s): %v", sub, err)
+		}
 	}
-	os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tasksDir, ".locks"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(.locks): %v", err)
+	}
 	if err := messaging.Init(tasksDir); err != nil {
 		t.Fatalf("messaging.Init: %v", err)
 	}
 
 	// Create a task with both regular failure and terminal-failure markers.
 	content := "<!-- failure: agent-1 at 2026-01-01T00:01:00Z — build failed -->\n<!-- terminal-failure: mato at 2026-01-02T00:00:00Z — invalid glob syntax -->\n---\nid: mixed-terminal\nmax_retries: 3\n---\n# Mixed terminal task\n"
-	os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "mixed-terminal.md"), []byte(content), 0o644)
+	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Failed, "mixed-terminal.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(mixed-terminal.md): %v", err)
+	}
 
 	output := captureShowVerbose(t, repoRoot)
 
@@ -2179,8 +2214,12 @@ func TestShow_UninitializedRepo(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for uninitialized repo, got nil")
 	}
-	if !strings.Contains(err.Error(), "mato init") {
-		t.Fatalf("expected error to mention 'mato init', got: %v", err)
+	if !strings.Contains(err.Error(), ".mato/ directory not found") {
+		t.Fatalf("expected missing .mato error, got: %v", err)
+	}
+	hint, ok := ui.ErrorHint(err)
+	if !ok || hint != "run 'mato init' first" {
+		t.Fatalf("hint = %q, want init guidance", hint)
 	}
 }
 
@@ -2192,7 +2231,11 @@ func TestShowJSON_UninitializedRepo(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for uninitialized repo, got nil")
 	}
-	if !strings.Contains(err.Error(), "mato init") {
-		t.Fatalf("expected error to mention 'mato init', got: %v", err)
+	if !strings.Contains(err.Error(), ".mato/ directory not found") {
+		t.Fatalf("expected missing .mato error, got: %v", err)
+	}
+	hint, ok := ui.ErrorHint(err)
+	if !ok || hint != "run 'mato init' first" {
+		t.Fatalf("hint = %q, want init guidance", hint)
 	}
 }

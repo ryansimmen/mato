@@ -215,7 +215,9 @@ func TestConcurrentMergeLock(t *testing.T) {
 
 	// Simulate a stale lock from a dead process.
 	locksDir := filepath.Join(tasksDir, ".locks")
-	os.WriteFile(filepath.Join(locksDir, "merge.lock"), []byte("2147483647"), 0o644)
+	if err := os.WriteFile(filepath.Join(locksDir, "merge.lock"), []byte("2147483647"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(merge.lock): %v", err)
+	}
 
 	cleanup4, ok4 := merge.AcquireLock(tasksDir)
 	if !ok4 || cleanup4 == nil {
@@ -996,10 +998,12 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	mustRename(t,
 		filepath.Join(tasksDir, dirs.Backlog, "task-a.md"),
 		filepath.Join(tasksDir, dirs.InProgress, "task-a.md"))
-	os.WriteFile(
+	if err := os.WriteFile(
 		filepath.Join(tasksDir, dirs.InProgress, "task-a.md"),
 		[]byte("<!-- claimed-by: agent-1  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: 5\naffects: [src/api.go]\n---\n# Task A\n"),
-		0o644)
+		0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-a.md): %v", err)
+	}
 
 	// Build file-claims.json; verify the advisory claim for src/api.go.
 	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
@@ -1080,10 +1084,12 @@ func TestOverlapDeferralAndFileClaims(t *testing.T) {
 	mustRename(t,
 		filepath.Join(tasksDir, dirs.Backlog, "task-e.md"),
 		filepath.Join(tasksDir, dirs.InProgress, "task-e.md"))
-	os.WriteFile(
+	if err := os.WriteFile(
 		filepath.Join(tasksDir, dirs.InProgress, "task-e.md"),
 		[]byte("<!-- claimed-by: agent-3  claimed-at: 2026-01-01T00:00:00Z -->\n---\npriority: 5\naffects: [\"pkg/client/\"]\n---\n# Task E\n"),
-		0o644)
+		0o644); err != nil {
+		t.Fatalf("os.WriteFile(task-e.md): %v", err)
+	}
 
 	if err := messaging.BuildAndWriteFileClaims(tasksDir, ""); err != nil {
 		t.Fatalf("BuildAndWriteFileClaims dir prefix: %v", err)

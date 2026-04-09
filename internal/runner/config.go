@@ -135,6 +135,8 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
+const containerOriginRepoDir = "/mato-host-repo"
+
 func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVolumes []string) []string {
 	containerHome := env.homeDir
 	goModCache := filepath.Join(env.homeDir, "go", "pkg", "mod")
@@ -147,9 +149,6 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	args := []string{
 		"run", "--rm", "--init", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", fmt.Sprintf("%s:%s", run.cloneDir, env.workdir),
-		"-v", fmt.Sprintf("%s:%s/%s", env.tasksDir, env.workdir, dirs.Root),
-		"-v", fmt.Sprintf("%s:%s", env.repoRoot, env.repoRoot),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", env.gitPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", env.gitUploadPackPath),
@@ -160,6 +159,13 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"-e", "GIT_PAGER=cat",
 		"-e", "PAGER=cat",
+	}
+	args = appendDockerBindMount(args, run.cloneDir, env.workdir, false)
+	args = appendDockerBindMount(args, env.repoRoot, containerOriginRepoDir, true)
+	if tasksDir := strings.TrimSpace(env.tasksDir); tasksDir != "" {
+		args = appendDockerBindMount(args, filepath.Join(tasksDir, dirs.InProgress), env.workdir+"/"+dirs.Root+"/"+dirs.InProgress, true)
+		args = appendDockerBindMount(args, filepath.Join(tasksDir, dirs.ReadyReview), env.workdir+"/"+dirs.Root+"/"+dirs.ReadyReview, true)
+		args = appendDockerBindMount(args, filepath.Join(tasksDir, "messages"), env.workdir+"/"+dirs.Root+"/messages", false)
 	}
 	if goplsPath := strings.TrimSpace(env.goplsPath); goplsPath != "" {
 		args = append(args, "-v", fmt.Sprintf("%s:/usr/local/bin/gopls:ro", goplsPath))
@@ -177,7 +183,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	args = append(args,
 		"-e", "GIT_CONFIG_COUNT=1",
 		"-e", "GIT_CONFIG_KEY_0=safe.directory",
-		"-e", "GIT_CONFIG_VALUE_0=*",
+		"-e", "GIT_CONFIG_VALUE_0="+env.workdir,
 	)
 	if n := strings.TrimSpace(env.gitName); n != "" {
 		args = append(args, "-e", "GIT_AUTHOR_NAME="+n, "-e", "GIT_COMMITTER_NAME="+n)
@@ -216,11 +222,49 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		args = append(args, "--resume="+sessionID)
 	}
 	args = append(args,
-		"-p", run.prompt, "--autopilot", "--allow-all",
+		"-p", run.prompt, "--autopilot", "--allow-all-tools",
 		"--model", run.model,
 		"--reasoning-effort", run.reasoningEffort,
 	)
 	return args
+}
+
+func appendDockerBindMount(args []string, hostPath, containerPath string, readOnly bool) []string {
+	if strings.TrimSpace(hostPath) == "" || strings.TrimSpace(containerPath) == "" {
+		return args
+	}
+	mount := fmt.Sprintf("%s:%s", hostPath, containerPath)
+	if readOnly {
+		mount += ":ro"
+	}
+	return append(args, "-v", mount)
+}
+
+func rewriteCloneOrigin(cloneDir, newOrigin string) (func() error, error) {
+	if strings.TrimSpace(newOrigin) == "" {
+		return func() error { return nil }, nil
+	}
+	originalOrigin, err := git.Output(cloneDir, "remote", "get-url", "origin")
+	if err != nil {
+		return nil, fmt.Errorf("read clone origin: %w", err)
+	}
+	originalOrigin = strings.TrimSpace(originalOrigin)
+	if originalOrigin == newOrigin {
+		return func() error { return nil }, nil
+	}
+	if _, err := git.Output(cloneDir, "remote", "set-url", "origin", newOrigin); err != nil {
+		return nil, fmt.Errorf("set clone origin to %s: %w", newOrigin, err)
+	}
+	return func() error {
+		if _, err := git.Output(cloneDir, "remote", "set-url", "origin", originalOrigin); err != nil {
+			return fmt.Errorf("restore clone origin to %s: %w", originalOrigin, err)
+		}
+		return nil
+	}, nil
+}
+
+func prepareCloneOriginForContainer(cloneDir string) (func() error, error) {
+	return rewriteCloneOrigin(cloneDir, containerOriginRepoDir)
 }
 
 func appendCacheMount(args []string, hostPath, containerPath, label string) []string {

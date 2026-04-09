@@ -39,7 +39,7 @@ const pushedTaskRecoveryFailurePrefix = "pushed work exists but automatic handof
 
 // ParseClaimedBy extracts the agent ID from a task file's claimed-by metadata.
 func ParseClaimedBy(path string) string {
-	data, err := os.ReadFile(path)
+	data, err := taskfile.ReadRegularTaskFile(path)
 	if err != nil {
 		return ""
 	}
@@ -436,6 +436,9 @@ var writeFileFn = func(f *os.File, data []byte) error {
 // O_CREATE|O_EXCL + copy + remove, which is still TOCTOU-safe at the
 // destination.
 func AtomicMove(src, dst string) error {
+	if err := taskfile.CheckRegularTaskFile(src); err != nil {
+		return fmt.Errorf("atomic move %s → %s: verify source: %w", src, dst, err)
+	}
 	if err := linkFn(src, dst); err != nil {
 		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
 			return fmt.Errorf("atomic move %s → %s: %w", src, dst, ErrDestinationExists)

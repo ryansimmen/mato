@@ -361,11 +361,6 @@ func WatchTo(ctx context.Context, w io.Writer, repoRoot string, interval time.Du
 	return watchToMode(ctx, w, repoRoot, interval, textViewCompact)
 }
 
-// WatchVerboseTo calls ShowVerboseTo in a loop, redrawing the given writer.
-func WatchVerboseTo(ctx context.Context, w io.Writer, repoRoot string, interval time.Duration) error {
-	return watchToMode(ctx, w, repoRoot, interval, textViewVerbose)
-}
-
 func watchToMode(ctx context.Context, w io.Writer, repoRoot string, interval time.Duration, mode textViewMode) error {
 	dim := color.New(color.Faint).SprintFunc()
 	ticker := time.NewTicker(interval)

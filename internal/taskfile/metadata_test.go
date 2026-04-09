@@ -629,7 +629,9 @@ func TestAppendReviewFailure_NonexistentFile(t *testing.T) {
 
 func TestAppendCycleFailureRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(path, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", path, err)
+	}
 
 	if err := AppendCycleFailureRecord(path); err != nil {
 		t.Fatalf("AppendCycleFailureRecord: %v", err)
@@ -652,7 +654,9 @@ func TestAppendCycleFailureRecord_NonexistentFile(t *testing.T) {
 
 func TestAppendCancelledRecord_Format(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(path, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", path, err)
+	}
 
 	if err := AppendCancelledRecord(path); err != nil {
 		t.Fatalf("AppendCancelledRecord: %v", err)
@@ -753,7 +757,9 @@ func TestCountFailureMarkers_ExcludesCycleFailure(t *testing.T) {
 
 func TestAppendTerminalFailureRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(path, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", path, err)
+	}
 
 	if err := AppendTerminalFailureRecord(path, "unparseable frontmatter"); err != nil {
 		t.Fatalf("AppendTerminalFailureRecord: %v", err)
@@ -776,7 +782,9 @@ func TestAppendTerminalFailureRecord_NonexistentFile(t *testing.T) {
 
 func TestAppendTerminalFailureRecord_SanitizesReason(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task.md")
-	os.WriteFile(path, []byte("# Task\n"), 0o644)
+	if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%s): %v", path, err)
+	}
 
 	if err := AppendTerminalFailureRecord(path, "bad\nreason -->"); err != nil {
 		t.Fatalf("AppendTerminalFailureRecord: %v", err)

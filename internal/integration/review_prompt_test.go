@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"mato/internal/dirs"
+	"mato/internal/git"
 	"mato/internal/testutil"
 )
 
@@ -270,6 +271,71 @@ func TestReviewEmptyDiffRejects(t *testing.T) {
 
 	// Task file must remain in ready-for-review/ — agent never moves files.
 	mustExist(t, filepath.Join(tasksDir, dirs.ReadyReview, "empty-diff.md"))
+}
+
+func TestReviewDiff_FetchesFromRewrittenOriginPath(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	targetBranch, err := git.Output(repoRoot, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	targetBranch = strings.TrimSpace(targetBranch)
+
+	taskFile := "review-fetch.md"
+	writeTask(t, tasksDir, dirs.ReadyReview, taskFile, strings.Join([]string{
+		"<!-- branch: task/review-fetch -->",
+		"# Review Fetch",
+		"",
+	}, "\n"))
+
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/review-fetch"); err != nil {
+		t.Fatalf("git checkout -b task/review-fetch: %v", err)
+	}
+	testutil.WriteFile(t, filepath.Join(repoRoot, "fetch.txt"), "fetched through rewritten origin\n")
+	if _, err := git.Output(repoRoot, "add", "--", "fetch.txt"); err != nil {
+		t.Fatalf("git add fetch.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "commit", "-m", "add fetch file"); err != nil {
+		t.Fatalf("git commit fetch.txt: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", targetBranch); err != nil {
+		t.Fatalf("git checkout %s: %v", targetBranch, err)
+	}
+
+	mountedRepo := filepath.Join(t.TempDir(), "mounted-origin.git")
+	if _, err := git.Output("", "clone", "--quiet", "--bare", repoRoot, mountedRepo); err != nil {
+		t.Fatalf("git clone --bare: %v", err)
+	}
+
+	cloneDir := createPromptClone(t, repoRoot, tasksDir)
+	cloneTasksDir := filepath.Join(cloneDir, dirs.Root)
+	if _, err := git.Output(cloneDir, "remote", "set-url", "origin", mountedRepo); err != nil {
+		t.Fatalf("git remote set-url origin: %v", err)
+	}
+
+	verdictPath := filepath.Join(cloneTasksDir, "messages", "verdict-review-fetch.md.json")
+	script := strings.Join([]string{
+		reviewPreamble(t),
+		reviewStateBlock(t, "VERIFY_REVIEW"),
+		reviewStateBlock(t, "DIFF"),
+	}, "\n\n")
+	script = substitutePromptPlaceholders(script, cloneTasksDir, targetBranch)
+
+	env := []string{
+		"MATO_AGENT_ID=test-reviewer-fetch",
+		"MATO_TASK_FILE=" + taskFile,
+		"MATO_TASK_BRANCH=task/review-fetch",
+		"MATO_TASK_TITLE=Review Fetch",
+		"MATO_TASK_PATH=" + filepath.Join(cloneTasksDir, dirs.ReadyReview, taskFile),
+		"MATO_REVIEW_VERDICT_PATH=" + verdictPath,
+	}
+	out, err := runBash(t, cloneDir, env, script)
+	if err != nil {
+		t.Fatalf("runBash rewritten origin diff: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "fetch.txt") {
+		t.Fatalf("expected rewritten-origin diff output to include fetch.txt, got:\n%s", out)
+	}
 }
 
 // TestReviewFetchFailureWritesErrorVerdict verifies that when git fetch fails

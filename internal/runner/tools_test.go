@@ -57,6 +57,8 @@ func (f fakeFileInfo) Sys() any           { return nil }
 func setTestSeams(t *testing.T, lp func(string) (string, error), st func(string) (os.FileInfo, error), home func() (string, error), gep func() (string, error)) {
 	t.Helper()
 	setHook(t, &mkdirAllFn, func(string, os.FileMode) error { return nil })
+	setHook(t, &goEnvGOROOTFn, func() (string, error) { return "/usr/local/go", nil })
+	setHook(t, &runtimeGOROOTFn, func() string { return "/runtime/go" })
 	if lp != nil {
 		setHook(t, &lookPathFn, lp)
 	}
@@ -344,6 +346,75 @@ func TestDiscoverHostTools_GoplsOptionalWhenMissing(t *testing.T) {
 	}
 	if found.goplsPath != "" {
 		t.Fatalf("goplsPath = %q, want empty when gopls is missing", found.goplsPath)
+	}
+}
+
+func TestDiscoverHostTools_GOROOTFallsBackToRuntimeWhenGoEnvFails(t *testing.T) {
+	home := "/fake/home"
+	setTestSeams(t,
+		makeLookPathFn(allRequiredTools()),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	setHook(t, &goEnvGOROOTFn, func() (string, error) { return "", exec.ErrNotFound })
+	setHook(t, &runtimeGOROOTFn, func() string { return "/runtime/go" })
+
+	tools, err := discoverHostTools()
+	if err != nil {
+		t.Fatalf("discoverHostTools() error: %v", err)
+	}
+	if tools.goRoot != "/runtime/go" {
+		t.Fatalf("goRoot = %q, want %q", tools.goRoot, "/runtime/go")
+	}
+}
+
+func TestDiscoverHostTools_GOROOTFallsBackToRuntimeWhenGoEnvEmpty(t *testing.T) {
+	home := "/fake/home"
+	setTestSeams(t,
+		makeLookPathFn(allRequiredTools()),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	setHook(t, &goEnvGOROOTFn, func() (string, error) { return "   ", nil })
+	setHook(t, &runtimeGOROOTFn, func() string { return "/runtime/go" })
+
+	tools, err := discoverHostTools()
+	if err != nil {
+		t.Fatalf("discoverHostTools() error: %v", err)
+	}
+	if tools.goRoot != "/runtime/go" {
+		t.Fatalf("goRoot = %q, want %q", tools.goRoot, "/runtime/go")
+	}
+}
+
+func TestDiscoverHostTools_GOROOTFailsWhenNoSourceReturnsValue(t *testing.T) {
+	home := "/fake/home"
+	setTestSeams(t,
+		makeLookPathFn(allRequiredTools()),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	setHook(t, &goEnvGOROOTFn, func() (string, error) { return "", exec.ErrNotFound })
+	setHook(t, &runtimeGOROOTFn, func() string { return "" })
+
+	_, err := discoverHostTools()
+	if err == nil {
+		t.Fatal("discoverHostTools should fail when neither go env nor runtime GOROOT returns a value")
+	}
+	if !strings.Contains(err.Error(), "neither 'go env GOROOT' nor runtime.GOROOT() returned a value") {
+		t.Fatalf("error = %v, want missing GOROOT message", err)
 	}
 }
 

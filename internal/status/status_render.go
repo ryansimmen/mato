@@ -27,13 +27,6 @@ type renderWriter struct {
 	err error
 }
 
-func (rw *renderWriter) print(args ...any) {
-	if rw.err != nil {
-		return
-	}
-	_, rw.err = fmt.Fprint(rw.w, args...)
-}
-
 func (rw *renderWriter) printf(format string, args ...any) {
 	if rw.err != nil {
 		return

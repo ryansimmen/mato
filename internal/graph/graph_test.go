@@ -592,7 +592,11 @@ func TestBuild_ShowTo_DirReadError(t *testing.T) {
 	if err := os.Chmod(waitingDir, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(waitingDir, 0o755) })
+	t.Cleanup(func() {
+		if err := os.Chmod(waitingDir, 0o755); err != nil {
+			t.Errorf("os.Chmod restore permissions: %v", err)
+		}
+	})
 
 	var buf bytes.Buffer
 	err := ShowTo(&buf, repoDir, "json", false)
@@ -959,7 +963,7 @@ func TestShowTo_MissingMatoDir(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error for missing .mato directory, got nil")
 			}
-			want := ".mato/ directory not found - run 'mato init' first"
+			want := ".mato/ directory not found"
 			if err.Error() != want {
 				t.Errorf("error = %q, want %q", err.Error(), want)
 			}

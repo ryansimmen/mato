@@ -22,6 +22,7 @@ import (
 	"mato/internal/runner"
 	"mato/internal/setup"
 	"mato/internal/testutil"
+	"mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -561,6 +562,43 @@ func TestWriteCommandError_RuntimeErrorOmitsUsage(t *testing.T) {
 	if !strings.Contains(out, "not a git repository") {
 		t.Fatalf("expected git repo error, got:\n%s", out)
 	}
+	if !strings.Contains(out, "  hint: run this command inside a git repository or pass --repo /path/to/repo") {
+		t.Fatalf("expected repo hint, got:\n%s", out)
+	}
+}
+
+func TestWriteCommandError_UsageErrorIncludesHint(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"status", "--watch", "--interval=bad"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	out, code := renderCommandError(t, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "invalid duration") {
+		t.Fatalf("expected duration parse error, got:\n%s", out)
+	}
+	if !strings.Contains(out, "  hint: use a duration like 2s, 30s, or 1m") {
+		t.Fatalf("expected duration hint, got:\n%s", out)
+	}
+}
+
+func TestWriteCommandError_DirectHintedError(t *testing.T) {
+	out, code := renderCommandError(t, ui.WithHint(fmt.Errorf("task model must not be empty"), "set it with --task-model, MATO_TASK_MODEL, or task_model in .mato.yaml"))
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "mato error: task model must not be empty") {
+		t.Fatalf("unexpected output: %q", out)
+	}
+	if !strings.Contains(out, "  hint: set it with --task-model, MATO_TASK_MODEL, or task_model in .mato.yaml") {
+		t.Fatalf("unexpected output: %q", out)
+	}
 }
 
 func TestWriteCommandError_SilentErrorSuppressesOutput(t *testing.T) {
@@ -898,6 +936,188 @@ func TestStatusCmd_PersistentRepoFlagBothPositions(t *testing.T) {
 				t.Fatalf("Execute: %v", err)
 			}
 		})
+	}
+}
+
+func TestListCmd_SubcommandRegistered(t *testing.T) {
+	cmd := newRootCmd()
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "list" {
+			return
+		}
+	}
+	t.Fatal("list subcommand not registered")
+}
+
+func TestListCmd_InvalidFormatRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"list", "--format=yaml"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --format yaml, got nil")
+	}
+	want := "--format must be text or json, got yaml"
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestListCmd_InvalidStateRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"list", "--state", "bogus"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid --state, got nil")
+	}
+	want := `--state contains unknown queue state "bogus"`
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestListCmd_DefaultTextOutput(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"waiting/blocked.md":            "---\nid: blocked\npriority: 20\n---\n# Blocked task\n",
+		"backlog/backlog-low.md":        "---\nid: backlog-low\npriority: 30\n---\n# Backlog low\n",
+		"backlog/backlog-high.md":       "---\nid: backlog-high\npriority: 10\n---\n# Backlog high\n",
+		"in-progress/active.md":         "---\nid: active\npriority: 40\n---\n# Active task\n",
+		"ready-for-review/reviewing.md": "---\nid: reviewing\npriority: 50\n---\n# Review task\n",
+		"ready-to-merge/merging.md":     "---\nid: merging\npriority: 60\n---\n# Merge task\n",
+		"failed/failed-task.md":         "---\nid: failed-task\npriority: 70\n---\n# Failed task\n",
+		"completed/completed-task.md":   "---\nid: completed-task\npriority: 80\n---\n# Completed task\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"list", "--repo", repoRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	gotLines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	wantColumns := [][]string{
+		{"STATE", "TASK", "PRIORITY", "ID", "TITLE"},
+		{"waiting", "blocked.md", "20", "blocked", "Blocked task"},
+		{"backlog", "backlog-high.md", "10", "backlog-high", "Backlog high"},
+		{"backlog", "backlog-low.md", "30", "backlog-low", "Backlog low"},
+		{"in-progress", "active.md", "40", "active", "Active task"},
+		{"ready-for-review", "reviewing.md", "50", "reviewing", "Review task"},
+		{"ready-to-merge", "merging.md", "60", "merging", "Merge task"},
+	}
+	if len(gotLines) != len(wantColumns) {
+		t.Fatalf("lines = %q, want %q", gotLines, wantColumns)
+	}
+	for i := range wantColumns {
+		for _, want := range wantColumns[i] {
+			if !strings.Contains(gotLines[i], want) {
+				t.Fatalf("line %d = %q, missing %q\nfull output:\n%s", i, gotLines[i], want, out.String())
+			}
+		}
+	}
+	if strings.Contains(out.String(), "failed-task") {
+		t.Fatalf("default list output should exclude failed tasks:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "completed-task") {
+		t.Fatalf("default list output should exclude completed tasks:\n%s", out.String())
+	}
+}
+
+func TestListCmd_StateFilteringAndJSONShape(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"waiting/blocked.md": "---\nid: blocked\npriority: 25\n---\n# Blocked task\n",
+		"backlog/backlog.md": "---\nid: backlog\npriority: 15\n---\n# Backlog task\n",
+		"failed/failed.md":   "---\nid: failed\npriority: 35\n---\n# Failed task\n",
+		"completed/done.md":  "---\nid: done\npriority: 45\n---\n# Done task\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"list", "--repo", repoRoot, "--state", "failed,backlog", "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var got []listTask
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal: %v\n%s", err, out.String())
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].State != "failed" || got[0].Filename != "failed.md" || got[0].ID != "failed" || got[0].Title != "Failed task" || got[0].Priority != 35 || got[0].Path != filepath.Join(tasksDir, "failed", "failed.md") {
+		t.Fatalf("got[0] = %+v", got[0])
+	}
+	if got[1].State != "backlog" || got[1].Filename != "backlog.md" || got[1].ID != "backlog" || got[1].Title != "Backlog task" || got[1].Priority != 15 || got[1].Path != filepath.Join(tasksDir, "backlog", "backlog.md") {
+		t.Fatalf("got[1] = %+v", got[1])
+	}
+}
+
+func TestListCmd_AllIncludesCompleted(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+
+	tasks := map[string]string{
+		"backlog/backlog.md": "---\nid: backlog\n---\n# Backlog task\n",
+		"completed/done.md":  "---\nid: done\n---\n# Done task\n",
+		"failed/failed.md":   "---\nid: failed\n---\n# Failed task\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"list", "--repo", repoRoot, "--all", "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var got []listTask
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal: %v\n%s", err, out.String())
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3: %+v", len(got), got)
+	}
+
+	states := []string{got[0].State, got[1].State, got[2].State}
+	wantStates := []string{"backlog", "completed", "failed"}
+	if strings.Join(states, ",") != strings.Join(wantStates, ",") {
+		t.Fatalf("states = %v, want %v", states, wantStates)
+	}
+}
+
+func TestCompleteListStates_CommaSeparated(t *testing.T) {
+	completions, directive := completeListStates(nil, nil, "backlog,rea")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("directive = %v, want %v", directive, cobra.ShellCompDirectiveNoFileComp)
+	}
+	if len(completions) != 2 {
+		t.Fatalf("len(completions) = %d, want 2: %v", len(completions), completions)
+	}
+	if completions[0] != "ready-for-review" || completions[1] != "ready-to-merge" {
+		t.Fatalf("completions = %v, want [ready-for-review ready-to-merge]", completions)
 	}
 }
 
@@ -1666,7 +1886,7 @@ func TestGraphCmd_MissingMatoDir(t *testing.T) {
 		t.Fatal("expected error for missing .mato directory, got nil")
 	}
 	want := ".mato/ directory not found - run 'mato init' first"
-	if !strings.Contains(err.Error(), want) {
+	if !strings.Contains(err.Error(), ".mato/ directory not found") {
 		t.Fatalf("error = %q, want containing %q", err.Error(), want)
 	}
 }
@@ -1681,7 +1901,7 @@ func TestInspectCmd_MissingMatoDir(t *testing.T) {
 		t.Fatal("expected error for missing .mato directory, got nil")
 	}
 	want := ".mato/ directory not found - run 'mato init' first"
-	if !strings.Contains(err.Error(), want) {
+	if !strings.Contains(err.Error(), ".mato/ directory not found") {
 		t.Fatalf("error = %q, want containing %q", err.Error(), want)
 	}
 }
@@ -1994,6 +2214,14 @@ func TestRootCmd_InvalidBranchRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid branch name") {
 		t.Errorf("error = %q, want error containing 'invalid branch name'", err.Error())
 	}
+
+	out, code := renderCommandError(t, err)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "  hint: pass --branch a valid git ref name such as mato or feature/my-change") {
+		t.Fatalf("unexpected output: %q", out)
+	}
 }
 
 func TestRootCmd_NonRepoPathRejected(t *testing.T) {
@@ -2122,7 +2350,7 @@ func TestRetryCmd_MissingMatoDir(t *testing.T) {
 	if execErr == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(execErr.Error(), ".mato/ directory not found - run 'mato init' first") {
+	if !strings.Contains(execErr.Error(), ".mato/ directory not found") {
 		t.Fatalf("unexpected error: %v", execErr)
 	}
 	var silentErr *SilentError
@@ -2266,7 +2494,10 @@ func TestPauseResumeCmd_MissingTasksDir(t *testing.T) {
 			if code == 0 {
 				t.Fatal("expected non-zero exit code")
 			}
-			if !strings.Contains(out, ".mato/ directory not found - run 'mato init' first") {
+			if !strings.Contains(out, "mato error: .mato/ directory not found") {
+				t.Fatalf("unexpected output: %q", out)
+			}
+			if !strings.Contains(out, "  hint: run 'mato init' first") {
 				t.Fatalf("unexpected output: %q", out)
 			}
 		})
@@ -2527,7 +2758,7 @@ func TestCancelCmd_MissingMatoDir(t *testing.T) {
 	if execErr == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(execErr.Error(), ".mato/ directory not found - run 'mato init' first") {
+	if !strings.Contains(execErr.Error(), ".mato/ directory not found") {
 		t.Fatalf("unexpected error: %v", execErr)
 	}
 }
