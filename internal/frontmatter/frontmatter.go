@@ -4,6 +4,7 @@ package frontmatter
 import (
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -91,7 +92,7 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 		block := strings.Join(lines[startLine+1:end], "\n")
 		blockFields := map[string]topLevelFieldState{}
 		if strings.TrimSpace(block) != "" {
-			if err := yaml.Unmarshal([]byte(block), &meta); err != nil {
+			if err := decodeTaskMeta(block, &meta); err != nil {
 				return TaskMeta{}, "", fmt.Errorf("parse frontmatter in %s: %w", path, err)
 			}
 			blockFields = topLevelFieldStates(block)
@@ -121,6 +122,18 @@ func ParseTaskData(data []byte, path string) (TaskMeta, string, error) {
 	}
 
 	return meta, stripHTMLCommentLines(body), nil
+}
+
+func decodeTaskMeta(block string, meta *TaskMeta) error {
+	dec := yaml.NewDecoder(strings.NewReader(block))
+	dec.KnownFields(true)
+	if err := dec.Decode(meta); err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 type topLevelFieldState struct {

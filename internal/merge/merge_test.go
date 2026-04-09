@@ -2264,7 +2264,7 @@ func TestParseAgentCommitLog_MultiCommit(t *testing.T) {
 	}
 }
 
-func TestAppendTaskRecord_AtomicWrite(t *testing.T) {
+func TestAppendTaskRecord_AppendsWithoutTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "task.md")
 	original := "# Test task\nSome content\n"
@@ -2289,7 +2289,7 @@ func TestAppendTaskRecord_AtomicWrite(t *testing.T) {
 		t.Fatalf("appended record not found in content: %q", content)
 	}
 
-	// Verify no temp files remain after successful write.
+	// Verify append-only writes do not leave temp files behind.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("os.ReadDir: %v", err)
@@ -2309,34 +2309,20 @@ func TestAppendTaskRecord_NonexistentFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent file, got nil")
 	}
-	if !strings.Contains(err.Error(), "read task file") {
-		t.Fatalf("error should mention reading task file, got: %v", err)
+	if !strings.Contains(err.Error(), "open task file for merge record append") {
+		t.Fatalf("error should mention opening the task file, got: %v", err)
 	}
 }
 
-func TestAppendTaskRecord_ReadOnlyDir(t *testing.T) {
+func TestAppendTaskRecord_DirectoryPath(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "task.md")
-	if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
-		t.Fatalf("os.WriteFile: %v", err)
-	}
 
-	// Make the directory read-only so temp file creation fails.
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatalf("os.Chmod: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chmod(dir, 0o755); err != nil {
-			t.Errorf("os.Chmod restore directory permissions: %v", err)
-		}
-	})
-
-	err := appendTaskRecord(path, "<!-- failure: test -->")
+	err := appendTaskRecord(dir, "<!-- failure: test -->")
 	if err == nil {
-		t.Fatal("expected error when directory is read-only, got nil")
+		t.Fatal("expected error when appending to a directory, got nil")
 	}
-	if !strings.Contains(err.Error(), "create temp") {
-		t.Fatalf("error should mention temp file creation, got: %v", err)
+	if !strings.Contains(err.Error(), "open task file for merge record append") {
+		t.Fatalf("error should mention opening the task file, got: %v", err)
 	}
 }
 

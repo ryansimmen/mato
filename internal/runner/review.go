@@ -303,6 +303,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 		})
 	}
 
+	emitDockerLaunchSummary(env.verbose, "review-agent", env.image, run.model, task)
 	fmt.Printf("Launching review agent from %s (clone: %s)\n", env.repoRoot, cloneDir)
 
 	extraEnvs := []string{

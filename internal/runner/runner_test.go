@@ -3425,6 +3425,42 @@ func TestDryRun_ResolvedSettingsOutput(t *testing.T) {
 	}
 }
 
+func TestDryRun_VerboseWritesStartupSummaryToStderr(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	for _, sub := range dirs.All {
+		mustMkdirAll(t, filepath.Join(repoRoot, dirs.Root, sub), 0o755)
+	}
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		err := DryRun(io.Discard, repoRoot, "mato", RunOptions{
+			TaskModel:                  config.DefaultTaskModel,
+			ReviewModel:                config.DefaultReviewModel,
+			ReviewSessionResumeEnabled: true,
+			TaskReasoningEffort:        config.DefaultReasoningEffort,
+			ReviewReasoningEffort:      config.DefaultReasoningEffort,
+			Verbose:                    true,
+		})
+		if err != nil {
+			t.Fatalf("DryRun: %v", err)
+		}
+	})
+
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty when writing to io.Discard", stdout)
+	}
+	for _, want := range []string{
+		"[mato] verbose: dry-run startup:",
+		"branch=mato",
+		"image=" + config.DefaultDockerImage,
+		"task_model=" + config.DefaultTaskModel,
+		"review_model=" + config.DefaultReviewModel,
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+}
+
 func TestDryRun_ExecutionOrder(t *testing.T) {
 	repoDir := t.TempDir()
 	cmd := exec.Command("git", "init", repoDir)
@@ -4524,6 +4560,42 @@ func TestPollReconcile_DirReadFailureFlagsError(t *testing.T) {
 	}
 }
 
+func TestPollReconcile_BacklogParseFailureFlagsError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "broken.md"), []byte("---\npriority: nope\n---\n# Broken\n"), 0o644)
+
+	_, stderr := captureStdoutStderr(t, func() {
+		_, hadError := pollReconcile(tasksDir)
+		if !hadError {
+			t.Error("expected hadError=true when reconciliation encounters parse failures")
+		}
+	})
+
+	if !strings.Contains(stderr, "moving unparseable backlog task broken.md to failed/") {
+		t.Errorf("expected warning about unparseable backlog task, got: %s", stderr)
+	}
+}
+
+func TestPollReconcile_FailedParseFailureDoesNotFlagError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	malformedPath := filepath.Join(tasksDir, dirs.Failed, "stale-broken.md")
+	mustWriteFile(t, malformedPath, []byte("---\npriority: nope\n---\n# Broken\n"), 0o644)
+
+	_, stderr := captureStdoutStderr(t, func() {
+		_, hadError := pollReconcile(tasksDir)
+		if hadError {
+			t.Error("expected hadError=false for malformed task already quarantined in failed/")
+		}
+	})
+
+	if strings.Contains(stderr, "moving unparseable") {
+		t.Errorf("unexpected reconciliation warning for failed/ parse failure, got: %s", stderr)
+	}
+	if _, err := os.Stat(malformedPath); err != nil {
+		t.Fatalf("malformed failed task should remain in failed/: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // pollClaimAndRun tests
 // ---------------------------------------------------------------------------
@@ -4548,6 +4620,26 @@ func TestPollClaimAndRun_NoTasksAvailable(t *testing.T) {
 	}
 	if hadError {
 		t.Error("expected hadError=false when backlog is empty")
+	}
+}
+
+func TestPollClaimAndRun_VerboseSummarizesEmptyBacklog(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	summary := &pollVerboseSummary{}
+	ctx := withPollVerboseSummary(context.Background(), summary)
+	env := envConfig{tasksDir: tasksDir, verbose: true}
+	run := runContext{agentID: "test-agent"}
+	failedDirExcluded := make(map[string]struct{})
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
+
+	captureStdoutStderr(t, func() {
+		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx, view)
+	})
+
+	if summary.backlog != "none" {
+		t.Fatalf("summary.backlog = %q, want %q", summary.backlog, "none")
 	}
 }
 
@@ -4689,6 +4781,40 @@ func TestPollIterate_PausedSkipsClaimAndReviewButMerges(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "[mato] paused - run 'mato resume' to continue") {
 		t.Fatalf("expected paused message, got %q", stdout)
+	}
+}
+
+func TestPollIterate_VerboseWritesSingleCycleSummary(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
+	})
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
+		return false, false
+	})
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
+		return false
+	})
+	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
+
+	hb := newIdleHeartbeat(time.Now().UTC())
+	_, stderr := captureStdoutStderr(t, func() {
+		pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir(), verbose: true}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &hb, map[string]struct{}{}, false)
+	})
+
+	if count := strings.Count(stderr, "[mato] verbose: poll actionable="); count != 1 {
+		t.Fatalf("expected exactly one verbose poll summary, got %d in:\n%s", count, stderr)
+	}
+	for _, want := range []string{
+		"waiting=none",
+		"backlog=none",
+		"review=no review tasks",
+		"merge=no ready tasks",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
 	}
 }
 
@@ -4987,6 +5113,69 @@ func TestPollIterate_IdleReviewProbeDoesNotQuarantineMalformedTasks(t *testing.T
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "malformed.md")); !os.IsNotExist(err) {
 		t.Fatalf("malformed review task should not be moved to failed/, got err: %v", err)
+	}
+}
+
+func TestPollIterate_ReviewParseFailureFlagsError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	malformedPath := filepath.Join(tasksDir, dirs.ReadyReview, "malformed.md")
+	if err := os.WriteFile(malformedPath, []byte("---\npriority: [\n# broken\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile malformed review task: %v", err)
+	}
+
+	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
+	})
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
+		return false, false
+	})
+	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
+
+	var result iterationResult
+	captureStdoutStderr(t, func() {
+		result = pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	})
+
+	if !result.pollHadError {
+		t.Fatal("pollHadError = false, want true for malformed ready-for-review task")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "malformed.md")); err != nil {
+		t.Fatalf("malformed review task should be quarantined to failed/: %v", err)
+	}
+}
+
+func TestPollIterate_ReadyMergeParseFailureFlagsError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	malformedPath := filepath.Join(tasksDir, dirs.ReadyMerge, "malformed.md")
+	if err := os.WriteFile(malformedPath, []byte("<!-- branch: task/malformed -->\n---\npriority: nope\n---\n# Broken\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile malformed merge task: %v", err)
+	}
+
+	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
+	})
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
+		return false, false
+	})
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
+		return false
+	})
+
+	var result iterationResult
+	captureStdoutStderr(t, func() {
+		result = pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	})
+
+	if !result.pollHadError {
+		t.Fatal("pollHadError = false, want true for malformed ready-to-merge task")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "malformed.md")); err != nil {
+		t.Fatalf("malformed merge task should be moved to backlog/: %v", err)
+	}
+	if _, err := os.Stat(malformedPath); !os.IsNotExist(err) {
+		t.Fatalf("malformed merge task should not remain in ready-to-merge, stat err = %v", err)
 	}
 }
 
@@ -5467,7 +5656,7 @@ func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 
 func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", ReviewSessionResumeEnabled: false, TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour})
+	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", ReviewSessionResumeEnabled: false, TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour, Verbose: true})
 
 	if run.model != "claude-sonnet-4" {
 		t.Fatalf("run.model = %q, want %q", run.model, "claude-sonnet-4")
@@ -5483,6 +5672,9 @@ func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	}
 	if env.reviewSessionResumeEnabled {
 		t.Fatal("expected review session resume to reflect RunOptions")
+	}
+	if !env.verbose {
+		t.Fatal("expected verbose flag to be threaded into envConfig")
 	}
 }
 
@@ -5560,6 +5752,157 @@ func TestResumeDetectionBuffer_MatchesAcrossLargeOutput(t *testing.T) {
 	}
 	if !buf.Matched() {
 		t.Fatal("buffer should detect resume rejection after large output")
+	}
+}
+
+func TestResumeDetectionBuffer_MatchedStateAcrossChunkBoundary(t *testing.T) {
+	var buf resumeDetectionBuffer
+	if buf.Matched() {
+		t.Fatal("empty buffer should not match")
+	}
+
+	if _, err := buf.Write([]byte("error: invalid value for '--re")); err != nil {
+		t.Fatalf("Write partial chunk: %v", err)
+	}
+	if buf.Matched() {
+		t.Fatal("partial trailing fragment should not match before the rest of the line arrives")
+	}
+
+	if _, err := buf.Write([]byte("sume': session not found")); err != nil {
+		t.Fatalf("Write completion chunk: %v", err)
+	}
+	if !buf.Matched() {
+		t.Fatal("buffer should match once the split resume-rejection line is complete")
+	}
+
+	if _, err := buf.Write([]byte("\nnormal output after retry\n")); err != nil {
+		t.Fatalf("Write later output: %v", err)
+	}
+	if !buf.Matched() {
+		t.Fatal("buffer should remain matched after later writes")
+	}
+}
+
+func TestResumeDetectionBuffer_IgnoresNonMatchingOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		writes []string
+	}{
+		{
+			name:   "partial marker only",
+			writes: []string{"error: failed to re"},
+		},
+		{
+			name:   "resume mentioned without error",
+			writes: []string{"resume requested by user\n"},
+		},
+		{
+			name:   "session mentioned without stale marker",
+			writes: []string{"session started successfully\n"},
+		},
+		{
+			name:   "split unrelated fragment",
+			writes: []string{"the re", "sume button is visible\n"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf resumeDetectionBuffer
+			for _, chunk := range tt.writes {
+				if _, err := buf.Write([]byte(chunk)); err != nil {
+					t.Fatalf("Write(%q): %v", chunk, err)
+				}
+				if buf.Matched() {
+					t.Fatalf("buffer matched after non-rejecting chunk %q", chunk)
+				}
+			}
+		})
+	}
+}
+
+func TestResumeRejectedBytes(t *testing.T) {
+	tests := []struct {
+		name   string
+		output []byte
+		want   bool
+	}{
+		{name: "empty input", output: nil, want: false},
+		{
+			name:   "multiline input",
+			output: []byte("normal output\nerror: invalid value for '--resume': session not found\nfollow-up output"),
+			want:   true,
+		},
+		{
+			name:   "line fragment without trailing newline matches",
+			output: []byte("failed to resume session 123"),
+			want:   true,
+		},
+		{
+			name:   "partial line fragment without trailing newline stays false",
+			output: []byte("error: failed to re"),
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resumeRejectedBytes(tt.output); got != tt.want {
+				t.Fatalf("resumeRejectedBytes(%q) = %v, want %v", tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResumeRejectedLine(t *testing.T) {
+	tests := []struct {
+		name string
+		line []byte
+		want bool
+	}{
+		{
+			name: "copilot invalid resume value",
+			line: []byte("error: invalid value for '--resume': session not found"),
+			want: true,
+		},
+		{
+			name: "failed to resume session",
+			line: []byte("failed to resume session 123"),
+			want: true,
+		},
+		{
+			name: "unknown option resume flag",
+			line: []byte("Error: unknown option '--resume'"),
+			want: true,
+		},
+		{
+			name: "session expired",
+			line: []byte("session expired, please retry"),
+			want: true,
+		},
+		{
+			name: "normal session output",
+			line: []byte("session started successfully"),
+			want: false,
+		},
+		{
+			name: "binary looking input",
+			line: []byte{0xff, 0xfe, 0x00, 'r', 'e', 's', 'u', 'm', 'e'},
+			want: false,
+		},
+		{
+			name: "malformed mixed bytes",
+			line: []byte("error:\x00session ready"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resumeRejectedLine(tt.line); got != tt.want {
+				t.Fatalf("resumeRejectedLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
 	}
 }
 

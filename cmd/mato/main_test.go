@@ -394,6 +394,7 @@ func TestRunCmd_HelpDocumentsResolvedDefaults(t *testing.T) {
 	help := out.String()
 	for _, want := range []string{
 		"Target branch for merging (default: mato)",
+		"Write operator diagnostics to stderr",
 		"Copilot model for task agents (default: " + config.DefaultTaskModel + ")",
 		"Copilot model for review agents (default: " + config.DefaultReviewModel + ")",
 		"Reasoning effort for task agents (default: " + config.DefaultReasoningEffort + ")",
@@ -2279,6 +2280,18 @@ func TestRetryCmd_NoArgs(t *testing.T) {
 	}
 }
 
+func TestRetryCmd_AllWithArgsRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--all", "fix-bug"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --all and args are combined")
+	}
+	if !strings.Contains(err.Error(), "--all cannot be used with explicit task refs") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRetryCmd_SuccessfulRetry(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	failedDir := filepath.Join(repoRoot, ".mato", "failed")
@@ -2303,6 +2316,48 @@ func TestRetryCmd_SuccessfulRetry(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(backlogDir, "fix-bug.md")); err != nil {
 		t.Fatal("task should be in backlog after retry")
+	}
+}
+
+func TestRetryCmd_AllSuccessfulRetry(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# Task\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "zeta.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(failedDir, "alpha.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--all"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("retry --all failed: %v", err)
+		}
+	})
+
+	alphaIdx := strings.Index(output, "Requeued alpha to backlog")
+	zetaIdx := strings.Index(output, "Requeued zeta to backlog")
+	if alphaIdx == -1 || zetaIdx == -1 {
+		t.Fatalf("output = %q, want both retry lines", output)
+	}
+	if alphaIdx > zetaIdx {
+		t.Fatalf("output = %q, want stable filename order", output)
+	}
+	for _, name := range []string{"alpha.md", "zeta.md"} {
+		if _, err := os.Stat(filepath.Join(backlogDir, name)); err != nil {
+			t.Fatalf("%s should be in backlog after retry --all: %v", name, err)
+		}
 	}
 }
 
@@ -3481,6 +3536,56 @@ func TestRunCmd_OnceSetsRunMode(t *testing.T) {
 	}
 }
 
+func TestRunCmd_VerboseSetsRunOptions(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
+		if !opts.Verbose {
+			t.Fatal("Verbose = false, want true")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--verbose"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestRunCmd_DryRunVerboseAllowed(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+	origDryRunFn := dryRunFn
+	defer func() { dryRunFn = origDryRunFn }()
+
+	runCalled := false
+	runFn = func(_ string, _ string, _ runner.RunOptions) error {
+		runCalled = true
+		return nil
+	}
+	dryRunFn = func(_ io.Writer, _ string, _ string, opts runner.RunOptions) error {
+		if !opts.Verbose {
+			t.Fatal("Verbose = false, want true")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--dry-run", "--verbose"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runCalled {
+		t.Fatal("runFn should not be called for --dry-run --verbose")
+	}
+}
+
 func TestRunCmd_UntilIdleSetsRunMode(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 
@@ -3629,6 +3734,7 @@ func defaultResolvedRunOptions() runner.RunOptions {
 		ReviewReasoningEffort:      config.DefaultReasoningEffort,
 		AgentTimeout:               config.DefaultAgentTimeout,
 		RetryCooldown:              config.DefaultRetryCooldown,
+		Verbose:                    false,
 	}
 }
 
@@ -3658,6 +3764,7 @@ func TestRunOptionsFromResolvedConfig(t *testing.T) {
 		ReviewReasoningEffort:      "xhigh",
 		AgentTimeout:               45 * time.Minute,
 		RetryCooldown:              90 * time.Second,
+		Verbose:                    false,
 	}
 	if got != want {
 		t.Fatalf("runOptionsFromResolvedConfig() = %+v, want %+v", got, want)
@@ -3907,6 +4014,84 @@ func TestRetryCmd_FormatJSON_PartialFailure(t *testing.T) {
 	}
 }
 
+func TestRetryCmd_AllFormatJSON_Empty(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--all", "--format=json"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("retry --all --format=json failed: %v", err)
+		}
+	})
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %v, want empty result set", items)
+	}
+}
+
+func TestRetryCmd_AllFormatJSON_PartialFailureStableOrder(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# Task\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "zeta.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(failedDir, "alpha.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backlogDir, "alpha.md"), []byte("# Existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--all", "--format=json"})
+	var execErr error
+	output := captureStdout(t, func() {
+		execErr = cmd.Execute()
+	})
+	if execErr == nil {
+		t.Fatal("expected partial failure from retry --all")
+	}
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0]["task"] != "alpha" || items[0]["error"] == nil || items[0]["error"] == "" {
+		t.Fatalf("first item = %v, want alpha error", items[0])
+	}
+	if items[1]["task"] != "zeta" || items[1]["requeued"] != true {
+		t.Fatalf("second item = %v, want zeta success", items[1])
+	}
+	if _, err := os.Stat(filepath.Join(backlogDir, "zeta.md")); err != nil {
+		t.Fatalf("zeta.md should still be requeued after partial failure: %v", err)
+	}
+}
+
 func TestRetryCmd_InvalidFormatRejected(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"retry", "--format=yaml", "foo"})
@@ -4026,6 +4211,45 @@ func TestCancelCmd_InvalidFormatRejected(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_HelpDocumentsAllStates(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"cancel", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	help := out.String()
+	for _, want := range []string{
+		"--all",
+		"waiting/",
+		"backlog/",
+		"in-progress/",
+		"ready-for-review/",
+		"ready-to-merge/",
+		"failed/",
+		"completed/",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("expected cancel help to contain %q, got:\n%s", want, help)
+		}
+	}
+}
+
+func TestCancelCmd_AllMutuallyExclusiveWithArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--all", "foo"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --all with explicit refs")
+	}
+	if err.Error() != "--all cannot be used with explicit task refs" {
+		t.Fatalf("error = %q", err.Error())
+	}
+}
+
 func TestCancelCmd_YesSkipsPrompt(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
@@ -4142,6 +4366,67 @@ func TestCancelCmd_YesShortFlag(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_AllCancelsIncludedStatesWithoutReprocessingMovedTasks(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	tasks := map[string]string{
+		"waiting/waiting.md":               "---\nid: waiting\n---\n# Waiting\n",
+		"backlog/backlog.md":               "---\nid: backlog\n---\n# Backlog\n",
+		"in-progress/in-progress.md":       "---\nid: in-progress\n---\n# In Progress\n",
+		"ready-for-review/ready-review.md": "---\nid: ready-review\n---\n# Ready Review\n",
+		"ready-to-merge/ready-merge.md":    "---\nid: ready-merge\n---\n# Ready Merge\n",
+		"failed/already-failed.md":         "---\nid: already-failed\n---\n# Already Failed\n",
+		"completed/completed.md":           "---\nid: completed\n---\n# Completed\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--all", "--yes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel --all failed: %v", err)
+	}
+
+	for _, task := range []struct {
+		state string
+		name  string
+	}{
+		{state: dirs.Waiting, name: "waiting.md"},
+		{state: dirs.Backlog, name: "backlog.md"},
+		{state: dirs.InProgress, name: "in-progress.md"},
+		{state: dirs.ReadyReview, name: "ready-review.md"},
+		{state: dirs.ReadyMerge, name: "ready-merge.md"},
+	} {
+		if _, err := os.Stat(filepath.Join(tasksDir, task.state, task.name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should be removed from %s after cancel --all: %v", task.name, task.state, err)
+		}
+		if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, task.name)); err != nil {
+			t.Fatalf("%s should exist in failed after cancel --all: %v", task.name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "completed.md")); err != nil {
+		t.Fatalf("completed task should remain untouched: %v", err)
+	}
+
+	backlogData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "backlog.md"))
+	if err != nil {
+		t.Fatalf("read moved backlog task: %v", err)
+	}
+	if strings.Count(string(backlogData), "<!-- cancelled:") != 1 {
+		t.Fatalf("moved backlog task should have exactly one cancelled marker, got:\n%s", backlogData)
+	}
+
+	failedData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "already-failed.md"))
+	if err != nil {
+		t.Fatalf("read existing failed task: %v", err)
+	}
+	if strings.Count(string(failedData), "<!-- cancelled:") != 1 {
+		t.Fatalf("existing failed task should be re-marked exactly once, got:\n%s", failedData)
+	}
+}
+
 func TestCancelCmd_InteractiveMixedRefs(t *testing.T) {
 	// Simulate interactive TTY mode with mixed valid and invalid refs.
 	// The valid task should still be cancelled (partial-failure semantics)
@@ -4221,6 +4506,132 @@ func TestCancelCmd_InteractiveRejectMixedRefs(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_AllInteractivePromptListsStableTasks(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	tasks := map[string]string{
+		"ready-for-review/zeta.md": "---\nid: zeta\n---\n# Zeta\n",
+		"failed/mid.md":            "---\nid: mid\n---\n# Mid\n",
+		"backlog/alpha.md":         "---\nid: alpha\n---\n# Alpha\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	origTermFn := stdinIsTerminalFn
+	stdinIsTerminalFn = func() bool { return true }
+	defer func() { stdinIsTerminalFn = origTermFn }()
+
+	origConfirmFn := confirmCancelFn
+	confirmCancelFn = func(_ io.Reader) bool { return false }
+	defer func() { confirmCancelFn = origConfirmFn }()
+
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--all"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel --all prompt failed: %v", err)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"The following tasks will be cancelled:",
+		"alpha (backlog)",
+		"mid (failed)",
+		"zeta (ready-for-review)",
+		"Cancel 3 task(s)? [y/N]: ",
+		"Cancelled. No tasks were modified.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("prompt output missing %q:\n%s", want, output)
+		}
+	}
+	alphaIndex := strings.Index(output, "alpha (backlog)")
+	midIndex := strings.Index(output, "mid (failed)")
+	zetaIndex := strings.Index(output, "zeta (ready-for-review)")
+	if !(alphaIndex < midIndex && midIndex < zetaIndex) {
+		t.Fatalf("prompt output not in stable filename order:\n%s", output)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "alpha.md")); err != nil {
+		t.Fatalf("alpha should remain in backlog after rejected prompt: %v", err)
+	}
+}
+
+func TestCancelCmd_AllFormatJSONNoopEmitsEmptyArray(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--all", "--format=json"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel --all --format=json failed: %v", err)
+		}
+	})
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected empty JSON array, got %v", items)
+	}
+}
+
+func TestCancelCmd_AllPartialFailureReturnsExitOne(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	tasks := map[string]string{
+		"backlog/dup.md": "---\nid: dup/source\n---\n# Dup Source\n",
+		"failed/dup.md":  "---\nid: dup/existing\n---\n# Dup Existing\n",
+		"backlog/ok.md":  "---\nid: ok\n---\n# Ok\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--all", "--format=json"})
+	var execErr error
+	output := captureStdout(t, func() {
+		execErr = cmd.Execute()
+	})
+
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 results, got %d: %v", len(items), items)
+	}
+
+	var errorCount, cancelledCount int
+	for _, item := range items {
+		if item["error"] != nil {
+			errorCount++
+			continue
+		}
+		if item["cancelled"] == true {
+			cancelledCount++
+		}
+	}
+	if errorCount != 1 || cancelledCount != 2 {
+		t.Fatalf("results = %v, want 1 error and 2 cancellations", items)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "ok.md")); err != nil {
+		t.Fatalf("ok task should still be cancelled after partial failure: %v", err)
+	}
+}
+
 func TestRetryCmd_FormatJSON_DependencyBlockedWarnings(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	content := "---\nid: blocked\ndepends_on: [missing-dep]\n---\n# Blocked\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
@@ -4262,6 +4673,27 @@ func TestRetryCmd_FormatJSON_DependencyBlockedWarnings(t *testing.T) {
 		w, _ := warnings[0].(string)
 		if !strings.Contains(w, "dependency-blocked") {
 			t.Errorf("warning = %q, want substring 'dependency-blocked'", w)
+		}
+	}
+}
+
+func TestRetryCmd_AllIncludesFailedParseFailures(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, "failed", "broken.md"), []byte("---\nid: [\n---\n# Broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "failed", "ok.md"), []byte("# OK\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--all"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry --all failed: %v", err)
+	}
+	for _, name := range []string{"broken.md", "ok.md"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, "backlog", name)); err != nil {
+			t.Fatalf("%s should be retried from failed/: %v", name, err)
 		}
 	}
 }

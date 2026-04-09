@@ -119,6 +119,35 @@ func TestCancelTask_CompletedRefused(t *testing.T) {
 	}
 }
 
+func TestListCancellableTasks_StableFilenameOrderExcludesCompleted(t *testing.T) {
+	tasksDir := setupIndexDirs(t)
+	writeTask(t, tasksDir, dirs.ReadyMerge, "bravo.md", "---\nid: bravo\n---\n# Bravo\n")
+	writeTask(t, tasksDir, dirs.Backlog, "alpha.md", "---\nid: alpha\n---\n# Alpha\n")
+	writeTask(t, tasksDir, dirs.Waiting, "broken.md", "---\npriority: nope\n---\n")
+	writeTask(t, tasksDir, dirs.Failed, "charlie.md", "---\nid: charlie\n---\n# Charlie\n")
+	writeTask(t, tasksDir, dirs.Completed, "done.md", "---\nid: done\n---\n# Done\n")
+
+	matches := ListCancellableTasks(tasksDir)
+	got := make([]string, 0, len(matches))
+	for _, match := range matches {
+		got = append(got, match.State+"/"+match.Filename)
+	}
+	want := []string{
+		dirs.Backlog + "/alpha.md",
+		dirs.ReadyMerge + "/bravo.md",
+		dirs.Waiting + "/broken.md",
+		dirs.Failed + "/charlie.md",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListCancellableTasks() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ListCancellableTasks()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestCancelTask_DestinationCollision(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	writeTask(t, tasksDir, dirs.Backlog, "task.md", "---\nid: unique/source\n---\n# Source\n")

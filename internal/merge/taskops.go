@@ -11,6 +11,7 @@ import (
 	"mato/internal/atomicwrite"
 	"mato/internal/dirs"
 	"mato/internal/frontmatter"
+	"mato/internal/lockfile"
 	"mato/internal/queue"
 	"mato/internal/runtimedata"
 	"mato/internal/taskfile"
@@ -20,6 +21,13 @@ import (
 var removeBranchMarkerFn = removeBranchMarker
 var cleanupTaskBranchFn = cleanupTaskBranch
 var atomicMoveFn = queue.AtomicMove
+var taskRecordLockSleepFn = time.Sleep
+var removeBranchMarkerBeforeWriteHook = func() {}
+
+const (
+	taskRecordLockRetryDelay = 5 * time.Millisecond
+	taskRecordLockWaitLimit  = 5 * time.Second
+)
 
 func handleMergeFailure(repoRoot, tasksDir string, task mergeQueueTask, mergeErr error) error {
 	dst := mergeFailureDestination(tasksDir, task.path, task.name)
@@ -101,7 +109,17 @@ func markTaskMerged(path string) error {
 }
 
 func markTaskMergedAt(path string, mergedAt time.Time) error {
-	if taskHasMergeSuccessRecord(path) {
+	cleanup, err := acquireTaskRecordLock(path)
+	if err != nil {
+		return fmt.Errorf("acquire task record lock: %w", err)
+	}
+	defer cleanup()
+
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read task file for merged record: %w", err)
+	}
+	if taskfile.HasMergedMarker(existing) {
 		return nil
 	}
 	if mergedAt.IsZero() {
@@ -109,7 +127,7 @@ func markTaskMergedAt(path string, mergedAt time.Time) error {
 	} else {
 		mergedAt = mergedAt.UTC()
 	}
-	if err := appendTaskRecord(path, "%s%s -->", mergedTaskRecordPrefix, mergedAt.Format(time.RFC3339)); err != nil {
+	if err := appendTaskRecordLocked(path, "%s%s -->", mergedTaskRecordPrefix, mergedAt.Format(time.RFC3339)); err != nil {
 		return fmt.Errorf("append merged record: %w", err)
 	}
 	return nil
@@ -124,21 +142,39 @@ func taskHasMergeSuccessRecord(path string) bool {
 }
 
 func appendTaskRecord(path, format string, args ...any) error {
-	existing, err := os.ReadFile(path)
+	cleanup, err := acquireTaskRecordLock(path)
 	if err != nil {
-		return fmt.Errorf("read task file for merge record: %w", err)
+		return fmt.Errorf("acquire task record lock: %w", err)
+	}
+	defer cleanup()
+
+	return appendTaskRecordLocked(path, format, args...)
+}
+
+func appendTaskRecordLocked(path, format string, args ...any) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return fmt.Errorf("open task file for merge record append: %w", err)
 	}
 
 	record := fmt.Sprintf(format, args...)
-	updated := string(existing) + "\n" + record + "\n"
-
-	if err := atomicwrite.WriteFile(path, []byte(updated)); err != nil {
-		return fmt.Errorf("write merge record: %w", err)
+	if _, err := file.WriteString("\n" + record + "\n"); err != nil {
+		file.Close()
+		return fmt.Errorf("append merge record: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close task file after merge record append: %w", err)
 	}
 	return nil
 }
 
 func removeBranchMarker(path string) error {
+	cleanup, err := acquireTaskRecordLock(path)
+	if err != nil {
+		return fmt.Errorf("acquire task record lock: %w", err)
+	}
+	defer cleanup()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read task file for branch marker removal: %w", err)
@@ -147,10 +183,46 @@ func removeBranchMarker(path string) error {
 	if !removed {
 		return nil
 	}
+	removeBranchMarkerBeforeWriteHook()
 	if err := atomicwrite.WriteFile(path, updated); err != nil {
 		return fmt.Errorf("write task file without branch marker: %w", err)
 	}
 	return nil
+}
+
+func acquireTaskRecordLock(path string) (func(), error) {
+	locksDir := filepath.Join(filepath.Dir(path), dirs.Locks)
+	lockName := "merge-task-record-" + filepath.Base(path)
+	lockPath := filepath.Join(locksDir, lockName+".lock")
+	deadline := time.Now().Add(taskRecordLockWaitLimit)
+
+	for {
+		if cleanup, ok := lockfile.Acquire(locksDir, lockName); ok {
+			return cleanup, nil
+		}
+
+		held, err := lockfile.CheckHeld(lockPath)
+		if err != nil {
+			return nil, fmt.Errorf("check task record lock: %w", err)
+		}
+		if !held {
+			if cleanup, ok := lockfile.Acquire(locksDir, lockName); ok {
+				return cleanup, nil
+			}
+			held, err = lockfile.CheckHeld(lockPath)
+			if err != nil {
+				return nil, fmt.Errorf("check task record lock after retry: %w", err)
+			}
+			if !held {
+				return nil, fmt.Errorf("task record lock unavailable")
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for task record lock")
+		}
+		taskRecordLockSleepFn(taskRecordLockRetryDelay)
+	}
 }
 
 // isPermanentMoveError reports whether err is clearly not transient and

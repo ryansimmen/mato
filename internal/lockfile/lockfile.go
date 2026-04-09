@@ -5,18 +5,28 @@ package lockfile
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"mato/internal/process"
 )
 
 // Test hooks for injecting I/O failures in Acquire.
 var (
-	osReadFile = os.ReadFile
-	osRemove   = os.Remove
+	osLink               = os.Link
+	osReadFile           = os.ReadFile
+	osRemove             = os.Remove
+	acquireRetrySleepFn  = time.Sleep
+	acquireRetryJitterFn = func(limit time.Duration) time.Duration {
+		if limit <= 0 {
+			return 0
+		}
+		return time.Duration(rand.Int64N(int64(limit)))
+	}
 )
 
 // Status describes the current state of a lock file's holder.
@@ -31,6 +41,12 @@ const (
 	// StatusUnknown means the lock file could not be read, so its state could
 	// not be determined.
 	StatusUnknown
+)
+
+const (
+	acquireMaxAttempts    = 5
+	acquireRetryBaseDelay = 1 * time.Millisecond
+	acquireRetryJitterMax = 4 * time.Millisecond
 )
 
 // Metadata captures the parsed state of a lock file.
@@ -130,7 +146,7 @@ func Acquire(locksDir, name string) (func(), bool) {
 	lockFile := filepath.Join(locksDir, name+".lock")
 	identity := process.LockIdentity(os.Getpid())
 
-	for attempts := 0; attempts < 2; attempts++ {
+	for attempt := 0; attempt < acquireMaxAttempts; attempt++ {
 		// Write identity to a temporary file, then hard-link it to the
 		// lock path. os.Link fails atomically with EEXIST when the lock
 		// file already exists, and unlike open-then-write the lock file
@@ -148,7 +164,7 @@ func Acquire(locksDir, name string) (func(), bool) {
 			fmt.Fprintf(os.Stderr, "warning: write %s lock tmp: write=%v close=%v\n", name, writeErr, closeErr)
 			return nil, false
 		}
-		linkErr := os.Link(tmpPath, lockFile)
+		linkErr := osLink(tmpPath, lockFile)
 		os.Remove(tmpPath)
 		if linkErr == nil {
 			return func() { os.Remove(lockFile) }, true
@@ -161,6 +177,7 @@ func Acquire(locksDir, name string) (func(), bool) {
 		data, readErr := osReadFile(lockFile)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
+				sleepBeforeRetry(attempt)
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "warning: read %s lock: %v\n", name, readErr)
@@ -175,7 +192,15 @@ func Acquire(locksDir, name string) (func(), bool) {
 			fmt.Fprintf(os.Stderr, "warning: remove stale %s lock: %v\n", name, removeErr)
 			return nil, false
 		}
+		sleepBeforeRetry(attempt)
 	}
 
 	return nil, false
+}
+
+func sleepBeforeRetry(attempt int) {
+	if attempt+1 >= acquireMaxAttempts {
+		return
+	}
+	acquireRetrySleepFn(acquireRetryBaseDelay + acquireRetryJitterFn(acquireRetryJitterMax))
 }

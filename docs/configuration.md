@@ -22,7 +22,7 @@ task and review containers still launch but Go LSP features are unavailable and
 ```text
 mato [--version] [--repo <path>]
 mato config [--repo <path>] [--format text|json]
-mato run [--repo <path>] [--branch <name>] [--dry-run | --once | --until-idle] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
+mato run [--repo <path>] [--branch <name>] [--dry-run | --once | --until-idle] [--verbose] [--task-model <model>] [--review-model <model>] [--task-reasoning-effort <level>] [--review-reasoning-effort <level>]
 mato init [--repo <path>] [--branch <name>] [--format text|json]
 mato status [--repo <path>] [--watch] [--interval <duration>] [--format text|json] [--verbose]
 mato list [--repo <path>] [--state <state[,state...]>] [--all] [--format text|json]
@@ -30,8 +30,8 @@ mato log [--repo <path>] [--limit <n>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato inspect [--repo <path>] [--format text|json] <task-ref>
-mato retry [--repo <path>] <task-ref> [task-ref...]
-mato cancel [--repo <path>] <task-ref> [task-ref...]
+mato retry [--repo <path>] [--format text|json] [--all | <task-ref> [task-ref...]]
+mato cancel [--repo <path>] [--all | <task-ref> [task-ref...]]
 mato pause [--repo <path>] [--format text|json]
 mato resume [--repo <path>] [--format text|json]
 mato version
@@ -53,6 +53,10 @@ contract. `--once` runs one full host poll iteration and exits even if more work
 `--until-idle` keeps polling until there is no immediately claimable backlog work, no
 pending review work, and no tasks in `ready-to-merge/`. `--dry-run`, `--once`, and
 `--until-idle` are mutually exclusive.
+`mato run --verbose` adds operator-oriented diagnostics on stderr, including a startup
+summary and one concise summary per poll cycle. `mato run --dry-run --verbose` is
+allowed and limits those diagnostics to dry-run-relevant startup information; it does
+not enter the live poll loop.
 Status mode prints queue counts, active agents, waiting-task dependency summaries, and
 recent messages. `mato status` rejects both extra positional arguments and
 unrecognized flags such as `--branch`.
@@ -114,6 +118,7 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 | --- | --- | --- | --- | --- |
 | repo | `--repo` | — | — | current directory |
 | branch | `mato run --branch`, `mato init --branch` | `MATO_BRANCH` | `branch` | `mato` |
+| run verbose diagnostics | `mato run --verbose` | — | — | `false` |
 | docker image | — | `MATO_DOCKER_IMAGE` | `docker_image` | `ubuntu:24.04` |
 | task model | `mato run --task-model` | `MATO_TASK_MODEL` | `task_model` | `claude-opus-4.6` |
 | review model | `mato run --review-model` | `MATO_REVIEW_MODEL` | `review_model` | `gpt-5.4` |
@@ -143,6 +148,7 @@ Long flags support both `--flag value` and `--flag=value` forms.
 | `--dry-run` | `mato run` | `false` | Validate queue setup without launching Docker containers. Parses task files, reports ready dependency promotions, diagnoses dependency-blocked backlog tasks, detects `affects` conflicts, and prints a summary of the effective runnable backlog and queue state. Exits after one pass. |
 | `--once` | `mato run` | `false` | Run exactly one host poll iteration, then exit. This can claim a task, process one existing review from the iteration snapshot, and merge ready tasks, but it does not keep polling to drain follow-on review or merge work. |
 | `--until-idle` | `mato run` | `false` | Keep polling until no immediately claimable backlog tasks remain, no review candidates remain, and no tasks remain in `ready-to-merge/`, then exit. A paused but otherwise empty queue is considered idle. |
+| `--verbose` | `mato run` | `false` | Write operator-oriented diagnostics to stderr. Live runs print one startup summary plus one concise poll summary per cycle; `--dry-run --verbose` only emits dry-run startup diagnostics. |
 | `--task-model <model>` | `mato run` | `claude-opus-4.6` | Copilot model used for task agents. |
 | `--review-model <model>` | `mato run` | `gpt-5.4` | Copilot model used for review agents. |
 | `--task-reasoning-effort <level>` | `mato run` | `high` | Reasoning effort for task agents. Valid values: `low`, `medium`, `high`, `xhigh`. |
@@ -304,9 +310,17 @@ task still has unmet `depends_on`, the next reconcile pass moves it back to
 `waiting/`. Task refs can be a filename, filename stem, or explicit task `id`
 for tasks already in `failed/`.
 
+With `--all`, `mato retry` resolves every file currently in `failed/` before it
+starts mutating queue contents, then retries them in stable filename order. This
+keeps text and JSON output deterministic and returns the same per-task result
+shape used for explicit task refs. In JSON mode, an empty `failed/` directory
+returns `[]`.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
+| `--format` | `text` | Output format: `text` or `json`. |
+| `--all` | `false` | Retry every task currently in `failed/`. Cannot be combined with explicit task refs. |
 
 Example usage:
 ```bash
@@ -315,6 +329,12 @@ mato retry fix-login-bug
 
 # Retry multiple tasks at once
 mato retry fix-login-bug add-dark-mode
+
+# Retry every failed task
+mato retry --all
+
+# Script-friendly bulk retry
+mato retry --all --format=json
 ```
 
 ### `mato inspect`
@@ -333,9 +353,18 @@ refs queue-wide by filename, filename stem, or explicit task `id`, warns when
 the cancelled task is still being worked or merged, and reports blocked
 dependents that will remain stuck until the task is retried.
 
+`--all` is a bulk operator action: it cancels every task currently in
+`waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`,
+`ready-to-merge/`, and `failed/`, but never touches `completed/`. The command
+resolves that full task list before making any queue mutations, then processes
+it in stable filename order. In text mode, it prints the full task list before
+prompting; in JSON mode, it stays non-interactive and returns one result object
+per task.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
+| `--all` | `false` | Cancel every task in `waiting/`, `backlog/`, `in-progress/`, `ready-for-review/`, `ready-to-merge/`, and `failed/`. Mutually exclusive with explicit task refs and never includes `completed/`. |
 
 Example usage:
 ```bash
@@ -344,6 +373,9 @@ mato cancel fix-login-bug
 
 # Cancel multiple tasks at once
 mato cancel fix-login-bug add-dark-mode
+
+# Cancel every non-completed task in the queue
+mato cancel --all
 ```
 
 ### `mato pause`

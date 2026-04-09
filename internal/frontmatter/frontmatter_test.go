@@ -487,35 +487,28 @@ priority: -10
 	}
 }
 
-func TestParseTaskFile_UnknownFieldsIgnored(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "unknown-fields.md")
+func TestParseTaskData_UnknownFieldsRejected(t *testing.T) {
 	content := `---
 id: known-id
 priority: 5
 unknown_field: xyz
-another: 123
 ---
 Body
 `
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("os.WriteFile: %v", err)
-	}
 
-	meta, body, err := ParseTaskFile(path)
-	if err != nil {
-		t.Fatalf("ParseTaskFile: %v", err)
+	_, _, err := ParseTaskData([]byte(content), "unknown-fields.md")
+	if err == nil {
+		t.Fatal("expected error for unknown frontmatter field, got nil")
 	}
-
-	want := TaskMeta{ID: "known-id", Priority: 5, MaxRetries: 3}
-	if !reflect.DeepEqual(meta, want) {
-		t.Fatalf("meta = %#v, want %#v", meta, want)
+	if !strings.Contains(err.Error(), "parse frontmatter in unknown-fields.md") {
+		t.Fatalf("err = %q, want parse context for path", err)
 	}
-	if body != "Body\n" {
-		t.Fatalf("body = %q, want %q", body, "Body\n")
+	if !strings.Contains(err.Error(), "field unknown_field not found") {
+		t.Fatalf("err = %q, want unknown field details", err)
 	}
 }
 
-func TestParseTaskFile_LegacyRemovedFieldsIgnored(t *testing.T) {
+func TestParseTaskFile_LegacyRemovedFieldsRejected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-removed-fields.md")
 	content := `---
 id: legacy-fields
@@ -530,17 +523,15 @@ Body
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	meta, body, err := ParseTaskFile(path)
-	if err != nil {
-		t.Fatalf("ParseTaskFile: %v", err)
+	_, _, err := ParseTaskFile(path)
+	if err == nil {
+		t.Fatal("expected error for legacy removed fields, got nil")
 	}
-
-	want := TaskMeta{ID: "legacy-fields", Priority: 4, MaxRetries: 2}
-	if !reflect.DeepEqual(meta, want) {
-		t.Fatalf("meta = %#v, want %#v", meta, want)
+	if !strings.Contains(err.Error(), "parse frontmatter in "+path) {
+		t.Fatalf("err = %q, want parse context for path", err)
 	}
-	if body != "Body\n" {
-		t.Fatalf("body = %q, want %q", body, "Body\n")
+	if !strings.Contains(err.Error(), "field tags not found") {
+		t.Fatalf("err = %q, want first unknown field details", err)
 	}
 }
 
@@ -865,7 +856,7 @@ priority: high
 	}
 }
 
-func TestParseTaskFile_DefaultsNotSuppressedBySimilarKeys(t *testing.T) {
+func TestParseTaskFile_SimilarUnknownKeysRejected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "similar-keys.md")
 	content := `---
 not_priority: 7
@@ -877,18 +868,12 @@ Body
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 
-	meta, body, err := ParseTaskFile(path)
-	if err != nil {
-		t.Fatalf("ParseTaskFile: %v", err)
+	_, _, err := ParseTaskFile(path)
+	if err == nil {
+		t.Fatal("expected error for similar unknown keys, got nil")
 	}
-	if meta.Priority != 50 {
-		t.Fatalf("meta.Priority = %d, want 50", meta.Priority)
-	}
-	if meta.MaxRetries != 3 {
-		t.Fatalf("meta.MaxRetries = %d, want 3", meta.MaxRetries)
-	}
-	if body != "Body\n" {
-		t.Fatalf("body = %q, want %q", body, "Body\n")
+	if !strings.Contains(err.Error(), "field not_priority not found") {
+		t.Fatalf("err = %q, want unknown field details", err)
 	}
 }
 
