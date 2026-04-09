@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -718,6 +719,80 @@ func TestAcquire_RetryRace_StaleVanishes(t *testing.T) {
 	}
 }
 
+func TestAcquire_RetriesWithJitterBeforeEventuallySucceeding(t *testing.T) {
+	origLink := osLink
+	origReadFile := osReadFile
+	origSleep := acquireRetrySleepFn
+	origJitter := acquireRetryJitterFn
+	defer func() {
+		osLink = origLink
+		osReadFile = origReadFile
+		acquireRetrySleepFn = origSleep
+		acquireRetryJitterFn = origJitter
+	}()
+
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "retry.lock")
+
+	linkCalls := 0
+	osLink = func(oldname, newname string) error {
+		linkCalls++
+		if linkCalls < 3 {
+			return os.ErrExist
+		}
+		return origLink(oldname, newname)
+	}
+	osReadFile = func(string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+
+	var slept []time.Duration
+	acquireRetrySleepFn = func(delay time.Duration) {
+		slept = append(slept, delay)
+	}
+
+	const jitter = 3 * time.Millisecond
+	jitterCalls := 0
+	acquireRetryJitterFn = func(limit time.Duration) time.Duration {
+		jitterCalls++
+		if limit != acquireRetryJitterMax {
+			t.Fatalf("jitter limit = %v, want %v", limit, acquireRetryJitterMax)
+		}
+		return jitter
+	}
+
+	release, ok := Acquire(dir, "retry")
+	if !ok {
+		t.Fatal("Acquire should keep retrying after transient contention races")
+	}
+	defer release()
+
+	if linkCalls != 3 {
+		t.Fatalf("osLink calls = %d, want 3", linkCalls)
+	}
+	if jitterCalls != 2 {
+		t.Fatalf("acquireRetryJitterFn calls = %d, want 2", jitterCalls)
+	}
+	if len(slept) != 2 {
+		t.Fatalf("sleep calls = %d, want 2", len(slept))
+	}
+	for i, delay := range slept {
+		want := acquireRetryBaseDelay + jitter
+		if delay != want {
+			t.Fatalf("sleep %d = %v, want %v", i, delay, want)
+		}
+	}
+
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("reading lock file: %v", err)
+	}
+	expected := process.LockIdentity(os.Getpid())
+	if string(data) != expected {
+		t.Fatalf("lock identity = %q, want %q", string(data), expected)
+	}
+}
+
 func TestAcquire_LiveLockNotReclaimed(t *testing.T) {
 	// Create a lock file with the current process's real identity.
 	// Acquire must detect the live holder and return (nil, false)
@@ -742,6 +817,59 @@ func TestAcquire_LiveLockNotReclaimed(t *testing.T) {
 	}
 	if string(data) != liveIdentity {
 		t.Errorf("lock file was modified: got %q, want %q", string(data), liveIdentity)
+	}
+}
+
+func TestAcquire_ContenderSucceedsAfterPeerRemovesStaleLock(t *testing.T) {
+	origSleep := acquireRetrySleepFn
+	origJitter := acquireRetryJitterFn
+	defer func() {
+		acquireRetrySleepFn = origSleep
+		acquireRetryJitterFn = origJitter
+	}()
+
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "dual.lock")
+	if err := os.WriteFile(lockPath, []byte("4194300:99999999"), 0o644); err != nil {
+		t.Fatalf("writing stale lock: %v", err)
+	}
+
+	pausedRetry := make(chan struct{})
+	releaseRetry := make(chan struct{})
+	var sleepCalls atomic.Int32
+	acquireRetryJitterFn = func(time.Duration) time.Duration { return 0 }
+	acquireRetrySleepFn = func(time.Duration) {
+		if sleepCalls.Add(1) != 1 {
+			return
+		}
+		close(pausedRetry)
+		<-releaseRetry
+	}
+
+	type result struct {
+		release func()
+		ok      bool
+	}
+	firstResult := make(chan result, 1)
+	go func() {
+		release, ok := Acquire(dir, "dual")
+		firstResult <- result{release: release, ok: ok}
+	}()
+
+	<-pausedRetry
+
+	secondRelease, secondOK := Acquire(dir, "dual")
+	if !secondOK {
+		t.Fatal("second Acquire should succeed after another caller removes the stale lock")
+	}
+	defer secondRelease()
+
+	close(releaseRetry)
+
+	first := <-firstResult
+	if first.ok {
+		first.release()
+		t.Fatal("first Acquire should not take over once another caller holds the live lock")
 	}
 }
 
