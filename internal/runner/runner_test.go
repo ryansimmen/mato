@@ -5116,6 +5116,69 @@ func TestPollIterate_IdleReviewProbeDoesNotQuarantineMalformedTasks(t *testing.T
 	}
 }
 
+func TestPollIterate_ReviewParseFailureFlagsError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	malformedPath := filepath.Join(tasksDir, dirs.ReadyReview, "malformed.md")
+	if err := os.WriteFile(malformedPath, []byte("---\npriority: [\n# broken\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile malformed review task: %v", err)
+	}
+
+	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
+	})
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
+		return false, false
+	})
+	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
+
+	var result iterationResult
+	captureStdoutStderr(t, func() {
+		result = pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	})
+
+	if !result.pollHadError {
+		t.Fatal("pollHadError = false, want true for malformed ready-for-review task")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "malformed.md")); err != nil {
+		t.Fatalf("malformed review task should be quarantined to failed/: %v", err)
+	}
+}
+
+func TestPollIterate_ReadyMergeParseFailureFlagsError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	malformedPath := filepath.Join(tasksDir, dirs.ReadyMerge, "malformed.md")
+	if err := os.WriteFile(malformedPath, []byte("<!-- branch: task/malformed -->\n---\npriority: nope\n---\n# Broken\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile malformed merge task: %v", err)
+	}
+
+	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
+	})
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
+		return false, false
+	})
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
+		return false
+	})
+
+	var result iterationResult
+	captureStdoutStderr(t, func() {
+		result = pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir()}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &idleHeartbeat{}, map[string]struct{}{}, false)
+	})
+
+	if !result.pollHadError {
+		t.Fatal("pollHadError = false, want true for malformed ready-to-merge task")
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "malformed.md")); err != nil {
+		t.Fatalf("malformed merge task should be moved to backlog/: %v", err)
+	}
+	if _, err := os.Stat(malformedPath); !os.IsNotExist(err) {
+		t.Fatalf("malformed merge task should not remain in ready-to-merge, stat err = %v", err)
+	}
+}
+
 func TestPollIterate_IdleReviewProbeDoesNotMoveExhaustedTasks(t *testing.T) {
 
 	tasksDir := setupFullTasksDir(t)
