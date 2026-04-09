@@ -30,7 +30,7 @@ mato log [--repo <path>] [--limit <n>] [--format text|json]
 mato doctor [--repo <path>] [--fix] [--format text|json] [--only <check>]
 mato graph [--repo <path>] [--format text|dot|json] [--all]
 mato inspect [--repo <path>] [--format text|json] <task-ref>
-mato retry [--repo <path>] <task-ref> [task-ref...]
+mato retry [--repo <path>] [--format text|json] [--all | <task-ref> [task-ref...]]
 mato cancel [--repo <path>] [--all | <task-ref> [task-ref...]]
 mato pause [--repo <path>] [--format text|json]
 mato resume [--repo <path>] [--format text|json]
@@ -304,9 +304,17 @@ task still has unmet `depends_on`, the next reconcile pass moves it back to
 `waiting/`. Task refs can be a filename, filename stem, or explicit task `id`
 for tasks already in `failed/`.
 
+With `--all`, `mato retry` resolves every file currently in `failed/` before it
+starts mutating queue contents, then retries them in stable filename order. This
+keeps text and JSON output deterministic and returns the same per-task result
+shape used for explicit task refs. In JSON mode, an empty `failed/` directory
+returns `[]`.
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--repo <path>` | current directory | Path to the git repository. |
+| `--format` | `text` | Output format: `text` or `json`. |
+| `--all` | `false` | Retry every task currently in `failed/`. Cannot be combined with explicit task refs. |
 
 Example usage:
 ```bash
@@ -315,6 +323,12 @@ mato retry fix-login-bug
 
 # Retry multiple tasks at once
 mato retry fix-login-bug add-dark-mode
+
+# Retry every failed task
+mato retry --all
+
+# Script-friendly bulk retry
+mato retry --all --format=json
 ```
 
 ### `mato inspect`
