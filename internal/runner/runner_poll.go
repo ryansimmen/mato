@@ -97,11 +97,12 @@ func pollCleanup(tasksDir string) {
 // are satisfied and quarantining exhausted ones). If reconciliation moved
 // tasks the index is rebuilt. It returns the (possibly refreshed) index and
 // whether any queue-structural error occurred during the cycle, including
-// unreadable queue directories or parse-failed task files.
+// unreadable queue directories or fresh waiting/backlog parse failures that
+// reconciliation still needs to quarantine.
 func pollReconcile(tasksDir string) (*queueview.PollIndex, bool) {
 	idx := queueview.BuildIndex(tasksDir)
 	hadError := surfaceBuildWarnings(idx)
-	if len(idx.ParseFailures()) > 0 {
+	if pollReconcileHadParseFailure(idx) {
 		hadError = true
 	}
 
@@ -113,6 +114,10 @@ func pollReconcile(tasksDir string) (*queueview.PollIndex, bool) {
 	}
 
 	return idx, hadError
+}
+
+func pollReconcileHadParseFailure(idx *queueview.PollIndex) bool {
+	return len(idx.WaitingParseFailures()) > 0 || len(idx.BacklogParseFailures()) > 0
 }
 
 func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
