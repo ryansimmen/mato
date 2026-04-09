@@ -3425,6 +3425,42 @@ func TestDryRun_ResolvedSettingsOutput(t *testing.T) {
 	}
 }
 
+func TestDryRun_VerboseWritesStartupSummaryToStderr(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	for _, sub := range dirs.All {
+		mustMkdirAll(t, filepath.Join(repoRoot, dirs.Root, sub), 0o755)
+	}
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		err := DryRun(io.Discard, repoRoot, "mato", RunOptions{
+			TaskModel:                  config.DefaultTaskModel,
+			ReviewModel:                config.DefaultReviewModel,
+			ReviewSessionResumeEnabled: true,
+			TaskReasoningEffort:        config.DefaultReasoningEffort,
+			ReviewReasoningEffort:      config.DefaultReasoningEffort,
+			Verbose:                    true,
+		})
+		if err != nil {
+			t.Fatalf("DryRun: %v", err)
+		}
+	})
+
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty when writing to io.Discard", stdout)
+	}
+	for _, want := range []string{
+		"[mato] verbose: dry-run startup:",
+		"branch=mato",
+		"image=" + config.DefaultDockerImage,
+		"task_model=" + config.DefaultTaskModel,
+		"review_model=" + config.DefaultReviewModel,
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+}
+
 func TestDryRun_ExecutionOrder(t *testing.T) {
 	repoDir := t.TempDir()
 	cmd := exec.Command("git", "init", repoDir)
@@ -4567,6 +4603,26 @@ func TestPollClaimAndRun_NoTasksAvailable(t *testing.T) {
 	}
 }
 
+func TestPollClaimAndRun_VerboseSummarizesEmptyBacklog(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+
+	summary := &pollVerboseSummary{}
+	ctx := withPollVerboseSummary(context.Background(), summary)
+	env := envConfig{tasksDir: tasksDir, verbose: true}
+	run := runContext{agentID: "test-agent"}
+	failedDirExcluded := make(map[string]struct{})
+	idx := queueview.BuildIndex(tasksDir)
+	view := queueview.ComputeRunnableBacklogView(tasksDir, idx)
+
+	captureStdoutStderr(t, func() {
+		pollClaimAndRun(ctx, env, run, tasksDir, "test-agent", failedDirExcluded, 0, idx, view)
+	})
+
+	if summary.backlog != "none" {
+		t.Fatalf("summary.backlog = %q, want %q", summary.backlog, "none")
+	}
+}
+
 func TestPollClaimAndRun_FailedDirUnavailableExclusion(t *testing.T) {
 	tasksDir := setupFullTasksDir(t)
 
@@ -4705,6 +4761,40 @@ func TestPollIterate_PausedSkipsClaimAndReviewButMerges(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "[mato] paused - run 'mato resume' to continue") {
 		t.Fatalf("expected paused message, got %q", stdout)
+	}
+}
+
+func TestPollIterate_VerboseWritesSingleCycleSummary(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	setHook(t, &pauseReadFn, func(string) (pause.State, error) { return pause.State{}, nil })
+	setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+		return queueview.RunnableBacklogView{}, false
+	})
+	setHook(t, &pollClaimAndRunFn, func(context.Context, envConfig, runContext, string, string, map[string]struct{}, time.Duration, *queueview.PollIndex, queueview.RunnableBacklogView) (bool, bool) {
+		return false, false
+	})
+	setHook(t, &pollReviewFn, func(context.Context, envConfig, runContext, string, string, string, *queueview.PollIndex) bool {
+		return false
+	})
+	setHook(t, &pollMergeFn, func(context.Context, string, string, string) int { return 0 })
+
+	hb := newIdleHeartbeat(time.Now().UTC())
+	_, stderr := captureStdoutStderr(t, func() {
+		pollIterate(context.Background(), envConfig{tasksDir: tasksDir, repoRoot: t.TempDir(), verbose: true}, runContext{agentID: "a1"}, t.TempDir(), tasksDir, "mato", "a1", 0, &hb, map[string]struct{}{}, false)
+	})
+
+	if count := strings.Count(stderr, "[mato] verbose: poll actionable="); count != 1 {
+		t.Fatalf("expected exactly one verbose poll summary, got %d in:\n%s", count, stderr)
+	}
+	for _, want := range []string{
+		"waiting=none",
+		"backlog=none",
+		"review=no review tasks",
+		"merge=no ready tasks",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
 	}
 }
 
@@ -5483,7 +5573,7 @@ func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 
 func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
-	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", ReviewSessionResumeEnabled: false, TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour})
+	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", ReviewSessionResumeEnabled: false, TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour, Verbose: true})
 
 	if run.model != "claude-sonnet-4" {
 		t.Fatalf("run.model = %q, want %q", run.model, "claude-sonnet-4")
@@ -5499,6 +5589,9 @@ func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	}
 	if env.reviewSessionResumeEnabled {
 		t.Fatal("expected review session resume to reflect RunOptions")
+	}
+	if !env.verbose {
+		t.Fatal("expected verbose flag to be threaded into envConfig")
 	}
 }
 

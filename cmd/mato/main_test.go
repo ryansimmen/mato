@@ -394,6 +394,7 @@ func TestRunCmd_HelpDocumentsResolvedDefaults(t *testing.T) {
 	help := out.String()
 	for _, want := range []string{
 		"Target branch for merging (default: mato)",
+		"Write operator diagnostics to stderr",
 		"Copilot model for task agents (default: " + config.DefaultTaskModel + ")",
 		"Copilot model for review agents (default: " + config.DefaultReviewModel + ")",
 		"Reasoning effort for task agents (default: " + config.DefaultReasoningEffort + ")",
@@ -3535,6 +3536,56 @@ func TestRunCmd_OnceSetsRunMode(t *testing.T) {
 	}
 }
 
+func TestRunCmd_VerboseSetsRunOptions(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+
+	runFn = func(_ string, _ string, opts runner.RunOptions) error {
+		if !opts.Verbose {
+			t.Fatal("Verbose = false, want true")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--verbose"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestRunCmd_DryRunVerboseAllowed(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+
+	origRunFn := runFn
+	defer func() { runFn = origRunFn }()
+	origDryRunFn := dryRunFn
+	defer func() { dryRunFn = origDryRunFn }()
+
+	runCalled := false
+	runFn = func(_ string, _ string, _ runner.RunOptions) error {
+		runCalled = true
+		return nil
+	}
+	dryRunFn = func(_ io.Writer, _ string, _ string, opts runner.RunOptions) error {
+		if !opts.Verbose {
+			t.Fatal("Verbose = false, want true")
+		}
+		return nil
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--dry-run", "--verbose"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runCalled {
+		t.Fatal("runFn should not be called for --dry-run --verbose")
+	}
+}
+
 func TestRunCmd_UntilIdleSetsRunMode(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 
@@ -3683,6 +3734,7 @@ func defaultResolvedRunOptions() runner.RunOptions {
 		ReviewReasoningEffort:      config.DefaultReasoningEffort,
 		AgentTimeout:               config.DefaultAgentTimeout,
 		RetryCooldown:              config.DefaultRetryCooldown,
+		Verbose:                    false,
 	}
 }
 
@@ -3712,6 +3764,7 @@ func TestRunOptionsFromResolvedConfig(t *testing.T) {
 		ReviewReasoningEffort:      "xhigh",
 		AgentTimeout:               45 * time.Minute,
 		RetryCooldown:              90 * time.Second,
+		Verbose:                    false,
 	}
 	if got != want {
 		t.Fatalf("runOptionsFromResolvedConfig() = %+v, want %+v", got, want)
