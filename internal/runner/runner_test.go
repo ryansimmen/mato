@@ -4560,7 +4560,7 @@ func TestPollReconcile_DirReadFailureFlagsError(t *testing.T) {
 	}
 }
 
-func TestPollReconcile_ParseFailureFlagsError(t *testing.T) {
+func TestPollReconcile_BacklogParseFailureFlagsError(t *testing.T) {
 	tasksDir := setupFullTasksDir(t)
 	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "broken.md"), []byte("---\npriority: nope\n---\n# Broken\n"), 0o644)
 
@@ -4573,6 +4573,26 @@ func TestPollReconcile_ParseFailureFlagsError(t *testing.T) {
 
 	if !strings.Contains(stderr, "moving unparseable backlog task broken.md to failed/") {
 		t.Errorf("expected warning about unparseable backlog task, got: %s", stderr)
+	}
+}
+
+func TestPollReconcile_FailedParseFailureDoesNotFlagError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	malformedPath := filepath.Join(tasksDir, dirs.Failed, "stale-broken.md")
+	mustWriteFile(t, malformedPath, []byte("---\npriority: nope\n---\n# Broken\n"), 0o644)
+
+	_, stderr := captureStdoutStderr(t, func() {
+		_, hadError := pollReconcile(tasksDir)
+		if hadError {
+			t.Error("expected hadError=false for malformed task already quarantined in failed/")
+		}
+	})
+
+	if strings.Contains(stderr, "moving unparseable") {
+		t.Errorf("unexpected reconciliation warning for failed/ parse failure, got: %s", stderr)
+	}
+	if _, err := os.Stat(malformedPath); err != nil {
+		t.Fatalf("malformed failed task should remain in failed/: %v", err)
 	}
 }
 

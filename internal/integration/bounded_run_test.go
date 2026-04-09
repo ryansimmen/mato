@@ -287,6 +287,7 @@ func TestBoundedRun_UntilIdleExitsWhenPausedAndQueueIsEmpty(t *testing.T) {
 
 func TestBoundedRun_OnceExitsNonZeroOnParseFailure(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, dirs.Failed, "stale-broken.md", "---\npriority: nope\n---\n# Broken failed\n")
 	writeTask(t, tasksDir, dirs.Backlog, "broken.md", "---\npriority: nope\n---\n# Broken\n")
 
 	out, err := runMatoCommandWithEnv(t, boundedRunTestEnv(t), "run", "--repo", repoRoot, "--once")
@@ -300,6 +301,21 @@ func TestBoundedRun_OnceExitsNonZeroOnParseFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "broken.md")); !os.IsNotExist(err) {
 		t.Fatalf("parse-failed task should leave backlog, stat err = %v\n%s", err, out)
+	}
+}
+
+func TestBoundedRun_OnceIgnoresMalformedFailedTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, dirs.Failed, "stale-broken.md", "---\npriority: nope\n---\n# Broken failed\n")
+
+	out, err := runMatoCommandWithEnv(t, boundedRunTestEnv(t), "run", "--repo", repoRoot, "--once")
+	assertExitCode(t, err, 0)
+
+	if strings.Contains(out, "bounded run encountered") {
+		t.Fatalf("output = %q, want malformed failed/ task to be ignored", out)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "stale-broken.md")); err != nil {
+		t.Fatalf("malformed failed task should remain in failed/: %v\n%s", err, out)
 	}
 }
 
