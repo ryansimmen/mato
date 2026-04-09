@@ -5563,6 +5563,157 @@ func TestResumeDetectionBuffer_MatchesAcrossLargeOutput(t *testing.T) {
 	}
 }
 
+func TestResumeDetectionBuffer_MatchedStateAcrossChunkBoundary(t *testing.T) {
+	var buf resumeDetectionBuffer
+	if buf.Matched() {
+		t.Fatal("empty buffer should not match")
+	}
+
+	if _, err := buf.Write([]byte("error: invalid value for '--re")); err != nil {
+		t.Fatalf("Write partial chunk: %v", err)
+	}
+	if buf.Matched() {
+		t.Fatal("partial trailing fragment should not match before the rest of the line arrives")
+	}
+
+	if _, err := buf.Write([]byte("sume': session not found")); err != nil {
+		t.Fatalf("Write completion chunk: %v", err)
+	}
+	if !buf.Matched() {
+		t.Fatal("buffer should match once the split resume-rejection line is complete")
+	}
+
+	if _, err := buf.Write([]byte("\nnormal output after retry\n")); err != nil {
+		t.Fatalf("Write later output: %v", err)
+	}
+	if !buf.Matched() {
+		t.Fatal("buffer should remain matched after later writes")
+	}
+}
+
+func TestResumeDetectionBuffer_IgnoresNonMatchingOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		writes []string
+	}{
+		{
+			name:   "partial marker only",
+			writes: []string{"error: failed to re"},
+		},
+		{
+			name:   "resume mentioned without error",
+			writes: []string{"resume requested by user\n"},
+		},
+		{
+			name:   "session mentioned without stale marker",
+			writes: []string{"session started successfully\n"},
+		},
+		{
+			name:   "split unrelated fragment",
+			writes: []string{"the re", "sume button is visible\n"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf resumeDetectionBuffer
+			for _, chunk := range tt.writes {
+				if _, err := buf.Write([]byte(chunk)); err != nil {
+					t.Fatalf("Write(%q): %v", chunk, err)
+				}
+				if buf.Matched() {
+					t.Fatalf("buffer matched after non-rejecting chunk %q", chunk)
+				}
+			}
+		})
+	}
+}
+
+func TestResumeRejectedBytes(t *testing.T) {
+	tests := []struct {
+		name   string
+		output []byte
+		want   bool
+	}{
+		{name: "empty input", output: nil, want: false},
+		{
+			name:   "multiline input",
+			output: []byte("normal output\nerror: invalid value for '--resume': session not found\nfollow-up output"),
+			want:   true,
+		},
+		{
+			name:   "line fragment without trailing newline matches",
+			output: []byte("failed to resume session 123"),
+			want:   true,
+		},
+		{
+			name:   "partial line fragment without trailing newline stays false",
+			output: []byte("error: failed to re"),
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resumeRejectedBytes(tt.output); got != tt.want {
+				t.Fatalf("resumeRejectedBytes(%q) = %v, want %v", tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResumeRejectedLine(t *testing.T) {
+	tests := []struct {
+		name string
+		line []byte
+		want bool
+	}{
+		{
+			name: "copilot invalid resume value",
+			line: []byte("error: invalid value for '--resume': session not found"),
+			want: true,
+		},
+		{
+			name: "failed to resume session",
+			line: []byte("failed to resume session 123"),
+			want: true,
+		},
+		{
+			name: "unknown option resume flag",
+			line: []byte("Error: unknown option '--resume'"),
+			want: true,
+		},
+		{
+			name: "session expired",
+			line: []byte("session expired, please retry"),
+			want: true,
+		},
+		{
+			name: "normal session output",
+			line: []byte("session started successfully"),
+			want: false,
+		},
+		{
+			name: "binary looking input",
+			line: []byte{0xff, 0xfe, 0x00, 'r', 'e', 's', 'u', 'm', 'e'},
+			want: false,
+		},
+		{
+			name: "malformed mixed bytes",
+			line: []byte("error:\x00session ready"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resumeRejectedLine(tt.line); got != tt.want {
+				t.Fatalf("resumeRejectedLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 // resumeDetectionBufferOld is the previous string-concatenation implementation,
 // preserved here for benchmark comparison against the current bytes.Buffer version.
 type resumeDetectionBufferOld struct {
