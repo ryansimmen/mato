@@ -4524,6 +4524,22 @@ func TestPollReconcile_DirReadFailureFlagsError(t *testing.T) {
 	}
 }
 
+func TestPollReconcile_ParseFailureFlagsError(t *testing.T) {
+	tasksDir := setupFullTasksDir(t)
+	mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "broken.md"), []byte("---\npriority: nope\n---\n# Broken\n"), 0o644)
+
+	_, stderr := captureStdoutStderr(t, func() {
+		_, hadError := pollReconcile(tasksDir)
+		if !hadError {
+			t.Error("expected hadError=true when reconciliation encounters parse failures")
+		}
+	})
+
+	if !strings.Contains(stderr, "moving unparseable backlog task broken.md to failed/") {
+		t.Errorf("expected warning about unparseable backlog task, got: %s", stderr)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // pollClaimAndRun tests
 // ---------------------------------------------------------------------------
