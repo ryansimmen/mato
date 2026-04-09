@@ -94,7 +94,7 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 | `mato inspect <task>` | Explain why a task is blocked, deferred, runnable, or finished. |
 | `mato log` | Show recent durable task outcomes. |
 | `mato config` | Show effective repository defaults and where each value came from. |
-| `mato retry <task>` | Requeue failed tasks for another attempt. |
+| `mato retry [--all \| <task>]` | Requeue failed tasks for another attempt. |
 | `mato cancel <task>` | Move queued tasks to `failed` with a cancellation marker. |
 | `mato pause` | Pause new claims and review launches. Supports `--format text|json` for script-friendly output. |
 | `mato resume` | Resume normal polling after a pause. Supports `--format text|json` for script-friendly output. |

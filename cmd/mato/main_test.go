@@ -2279,6 +2279,18 @@ func TestRetryCmd_NoArgs(t *testing.T) {
 	}
 }
 
+func TestRetryCmd_AllWithArgsRejected(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--all", "fix-bug"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --all and args are combined")
+	}
+	if !strings.Contains(err.Error(), "--all cannot be used with explicit task refs") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRetryCmd_SuccessfulRetry(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	failedDir := filepath.Join(repoRoot, ".mato", "failed")
@@ -2303,6 +2315,48 @@ func TestRetryCmd_SuccessfulRetry(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(backlogDir, "fix-bug.md")); err != nil {
 		t.Fatal("task should be in backlog after retry")
+	}
+}
+
+func TestRetryCmd_AllSuccessfulRetry(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# Task\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "zeta.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(failedDir, "alpha.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--all"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("retry --all failed: %v", err)
+		}
+	})
+
+	alphaIdx := strings.Index(output, "Requeued alpha to backlog")
+	zetaIdx := strings.Index(output, "Requeued zeta to backlog")
+	if alphaIdx == -1 || zetaIdx == -1 {
+		t.Fatalf("output = %q, want both retry lines", output)
+	}
+	if alphaIdx > zetaIdx {
+		t.Fatalf("output = %q, want stable filename order", output)
+	}
+	for _, name := range []string{"alpha.md", "zeta.md"} {
+		if _, err := os.Stat(filepath.Join(backlogDir, name)); err != nil {
+			t.Fatalf("%s should be in backlog after retry --all: %v", name, err)
+		}
 	}
 }
 
@@ -3907,6 +3961,84 @@ func TestRetryCmd_FormatJSON_PartialFailure(t *testing.T) {
 	}
 }
 
+func TestRetryCmd_AllFormatJSON_Empty(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--all", "--format=json"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("retry --all --format=json failed: %v", err)
+		}
+	})
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %v, want empty result set", items)
+	}
+}
+
+func TestRetryCmd_AllFormatJSON_PartialFailureStableOrder(t *testing.T) {
+	repoRoot := testutil.SetupRepo(t)
+	failedDir := filepath.Join(repoRoot, ".mato", "failed")
+	backlogDir := filepath.Join(repoRoot, ".mato", "backlog")
+	if err := os.MkdirAll(failedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backlogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# Task\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"
+	if err := os.WriteFile(filepath.Join(failedDir, "zeta.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(failedDir, "alpha.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backlogDir, "alpha.md"), []byte("# Existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--all", "--format=json"})
+	var execErr error
+	output := captureStdout(t, func() {
+		execErr = cmd.Execute()
+	})
+	if execErr == nil {
+		t.Fatal("expected partial failure from retry --all")
+	}
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0]["task"] != "alpha" || items[0]["error"] == nil || items[0]["error"] == "" {
+		t.Fatalf("first item = %v, want alpha error", items[0])
+	}
+	if items[1]["task"] != "zeta" || items[1]["requeued"] != true {
+		t.Fatalf("second item = %v, want zeta success", items[1])
+	}
+	if _, err := os.Stat(filepath.Join(backlogDir, "zeta.md")); err != nil {
+		t.Fatalf("zeta.md should still be requeued after partial failure: %v", err)
+	}
+}
+
 func TestRetryCmd_InvalidFormatRejected(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"retry", "--format=yaml", "foo"})
@@ -4488,6 +4620,27 @@ func TestRetryCmd_FormatJSON_DependencyBlockedWarnings(t *testing.T) {
 		w, _ := warnings[0].(string)
 		if !strings.Contains(w, "dependency-blocked") {
 			t.Errorf("warning = %q, want substring 'dependency-blocked'", w)
+		}
+	}
+}
+
+func TestRetryCmd_AllIncludesFailedParseFailures(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	if err := os.WriteFile(filepath.Join(tasksDir, "failed", "broken.md"), []byte("---\nid: [\n---\n# Broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tasksDir, "failed", "ok.md"), []byte("# OK\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=oops -->\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"retry", "--repo", repoRoot, "--all"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("retry --all failed: %v", err)
+	}
+	for _, name := range []string{"broken.md", "ok.md"} {
+		if _, err := os.Stat(filepath.Join(tasksDir, "backlog", name)); err != nil {
+			t.Fatalf("%s should be retried from failed/: %v", name, err)
 		}
 	}
 }
