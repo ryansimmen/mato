@@ -319,6 +319,42 @@ func TestBoundedRun_OnceIgnoresMalformedFailedTask(t *testing.T) {
 	}
 }
 
+func TestBoundedRun_OnceExitsNonZeroOnMalformedReviewTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, dirs.ReadyReview, "broken-review.md", "---\npriority: [\n# Broken review\n")
+
+	out, err := runMatoCommandWithEnv(t, boundedRunTestEnv(t), "run", "--repo", repoRoot, "--once")
+	assertExitCode(t, err, 1)
+
+	if !strings.Contains(out, "bounded run encountered 1 poll cycle error") {
+		t.Fatalf("output = %q, want bounded-run error summary", out)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "broken-review.md")); err != nil {
+		t.Fatalf("malformed review task should be quarantined to failed/: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyReview, "broken-review.md")); !os.IsNotExist(err) {
+		t.Fatalf("malformed review task should leave ready-for-review, stat err = %v\n%s", err, out)
+	}
+}
+
+func TestBoundedRun_OnceExitsNonZeroOnMalformedReadyMergeTask(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	writeTask(t, tasksDir, dirs.ReadyMerge, "broken-merge.md", "<!-- branch: task/broken-merge -->\n---\npriority: nope\n---\n# Broken merge\n")
+
+	out, err := runMatoCommandWithEnv(t, boundedRunTestEnv(t), "run", "--repo", repoRoot, "--once")
+	assertExitCode(t, err, 1)
+
+	if !strings.Contains(out, "bounded run encountered 1 poll cycle error") {
+		t.Fatalf("output = %q, want bounded-run error summary", out)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "broken-merge.md")); err != nil {
+		t.Fatalf("malformed ready-to-merge task should be requeued to backlog: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.ReadyMerge, "broken-merge.md")); !os.IsNotExist(err) {
+		t.Fatalf("malformed ready-to-merge task should leave ready-to-merge, stat err = %v\n%s", err, out)
+	}
+}
+
 func TestBoundedRun_OnceProcessesReviewOnlyQueueAndExitsSuccess(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	mustGitOutput(t, repoRoot, "checkout", "-b", "task/review-only", "mato")

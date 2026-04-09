@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/merge"
 	"mato/internal/messaging"
 	"mato/internal/pause"
@@ -118,6 +119,19 @@ func pollReconcile(tasksDir string) (*queueview.PollIndex, bool) {
 
 func pollReconcileHadParseFailure(idx *queueview.PollIndex) bool {
 	return len(idx.WaitingParseFailures()) > 0 || len(idx.BacklogParseFailures()) > 0
+}
+
+func pollReviewHadParseFailure(idx *queueview.PollIndex) bool {
+	return len(idx.ReviewParseFailures()) > 0
+}
+
+func pollMergeHadParseFailure(idx *queueview.PollIndex) bool {
+	for _, pf := range idx.ParseFailures() {
+		if pf.State == dirs.ReadyMerge {
+			return true
+		}
+	}
+	return false
 }
 
 func pollWriteManifest(tasksDir string, failedDirExcluded map[string]struct{}, idx *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
@@ -357,12 +371,18 @@ func pollIterate(
 
 	ps2 := readPauseState(tasksDir)
 	if !ps2.Active {
+		if pollReviewHadParseFailure(idx) {
+			result.pollHadError = true
+		}
 		result.reviewProcessed = pollReviewFn(ctx, env, run, tasksDir, branch, agentID, idx)
 	} else if summary != nil {
 		summary.review = "skipped paused"
 	}
 
 	if ctx.Err() == nil {
+		if pollMergeHadParseFailure(idx) {
+			result.pollHadError = true
+		}
 		result.mergeCount = pollMergeFn(ctx, repoRoot, tasksDir, branch)
 	}
 	result.pauseActive = ps2.Active
