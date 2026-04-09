@@ -4026,6 +4026,45 @@ func TestCancelCmd_InvalidFormatRejected(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_HelpDocumentsAllStates(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"cancel", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	help := out.String()
+	for _, want := range []string{
+		"--all",
+		"waiting/",
+		"backlog/",
+		"in-progress/",
+		"ready-for-review/",
+		"ready-to-merge/",
+		"failed/",
+		"completed/",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("expected cancel help to contain %q, got:\n%s", want, help)
+		}
+	}
+}
+
+func TestCancelCmd_AllMutuallyExclusiveWithArgs(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--all", "foo"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --all with explicit refs")
+	}
+	if err.Error() != "--all cannot be used with explicit task refs" {
+		t.Fatalf("error = %q", err.Error())
+	}
+}
+
 func TestCancelCmd_YesSkipsPrompt(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	if err := os.WriteFile(filepath.Join(tasksDir, dirs.Backlog, "fix-bug.md"), []byte("---\nid: fix-bug\n---\n# Fix bug\n"), 0o644); err != nil {
@@ -4142,6 +4181,67 @@ func TestCancelCmd_YesShortFlag(t *testing.T) {
 	}
 }
 
+func TestCancelCmd_AllCancelsIncludedStatesWithoutReprocessingMovedTasks(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	tasks := map[string]string{
+		"waiting/waiting.md":               "---\nid: waiting\n---\n# Waiting\n",
+		"backlog/backlog.md":               "---\nid: backlog\n---\n# Backlog\n",
+		"in-progress/in-progress.md":       "---\nid: in-progress\n---\n# In Progress\n",
+		"ready-for-review/ready-review.md": "---\nid: ready-review\n---\n# Ready Review\n",
+		"ready-to-merge/ready-merge.md":    "---\nid: ready-merge\n---\n# Ready Merge\n",
+		"failed/already-failed.md":         "---\nid: already-failed\n---\n# Already Failed\n",
+		"completed/completed.md":           "---\nid: completed\n---\n# Completed\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--all", "--yes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel --all failed: %v", err)
+	}
+
+	for _, task := range []struct {
+		state string
+		name  string
+	}{
+		{state: dirs.Waiting, name: "waiting.md"},
+		{state: dirs.Backlog, name: "backlog.md"},
+		{state: dirs.InProgress, name: "in-progress.md"},
+		{state: dirs.ReadyReview, name: "ready-review.md"},
+		{state: dirs.ReadyMerge, name: "ready-merge.md"},
+	} {
+		if _, err := os.Stat(filepath.Join(tasksDir, task.state, task.name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should be removed from %s after cancel --all: %v", task.name, task.state, err)
+		}
+		if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, task.name)); err != nil {
+			t.Fatalf("%s should exist in failed after cancel --all: %v", task.name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Completed, "completed.md")); err != nil {
+		t.Fatalf("completed task should remain untouched: %v", err)
+	}
+
+	backlogData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "backlog.md"))
+	if err != nil {
+		t.Fatalf("read moved backlog task: %v", err)
+	}
+	if strings.Count(string(backlogData), "<!-- cancelled:") != 1 {
+		t.Fatalf("moved backlog task should have exactly one cancelled marker, got:\n%s", backlogData)
+	}
+
+	failedData, err := os.ReadFile(filepath.Join(tasksDir, dirs.Failed, "already-failed.md"))
+	if err != nil {
+		t.Fatalf("read existing failed task: %v", err)
+	}
+	if strings.Count(string(failedData), "<!-- cancelled:") != 1 {
+		t.Fatalf("existing failed task should be re-marked exactly once, got:\n%s", failedData)
+	}
+}
+
 func TestCancelCmd_InteractiveMixedRefs(t *testing.T) {
 	// Simulate interactive TTY mode with mixed valid and invalid refs.
 	// The valid task should still be cancelled (partial-failure semantics)
@@ -4218,6 +4318,132 @@ func TestCancelCmd_InteractiveRejectMixedRefs(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "good.md")); err != nil {
 		t.Fatalf("task should remain in backlog after rejected prompt: %v", err)
+	}
+}
+
+func TestCancelCmd_AllInteractivePromptListsStableTasks(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	tasks := map[string]string{
+		"ready-for-review/zeta.md": "---\nid: zeta\n---\n# Zeta\n",
+		"failed/mid.md":            "---\nid: mid\n---\n# Mid\n",
+		"backlog/alpha.md":         "---\nid: alpha\n---\n# Alpha\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	origTermFn := stdinIsTerminalFn
+	stdinIsTerminalFn = func() bool { return true }
+	defer func() { stdinIsTerminalFn = origTermFn }()
+
+	origConfirmFn := confirmCancelFn
+	confirmCancelFn = func(_ io.Reader) bool { return false }
+	defer func() { confirmCancelFn = origConfirmFn }()
+
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--all"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cancel --all prompt failed: %v", err)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"The following tasks will be cancelled:",
+		"alpha (backlog)",
+		"mid (failed)",
+		"zeta (ready-for-review)",
+		"Cancel 3 task(s)? [y/N]: ",
+		"Cancelled. No tasks were modified.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("prompt output missing %q:\n%s", want, output)
+		}
+	}
+	alphaIndex := strings.Index(output, "alpha (backlog)")
+	midIndex := strings.Index(output, "mid (failed)")
+	zetaIndex := strings.Index(output, "zeta (ready-for-review)")
+	if !(alphaIndex < midIndex && midIndex < zetaIndex) {
+		t.Fatalf("prompt output not in stable filename order:\n%s", output)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "alpha.md")); err != nil {
+		t.Fatalf("alpha should remain in backlog after rejected prompt: %v", err)
+	}
+}
+
+func TestCancelCmd_AllFormatJSONNoopEmitsEmptyArray(t *testing.T) {
+	repoRoot, _ := testutil.SetupRepoWithTasks(t)
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--all", "--format=json"})
+	output := captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cancel --all --format=json failed: %v", err)
+		}
+	})
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected empty JSON array, got %v", items)
+	}
+}
+
+func TestCancelCmd_AllPartialFailureReturnsExitOne(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	tasks := map[string]string{
+		"backlog/dup.md": "---\nid: dup/source\n---\n# Dup Source\n",
+		"failed/dup.md":  "---\nid: dup/existing\n---\n# Dup Existing\n",
+		"backlog/ok.md":  "---\nid: ok\n---\n# Ok\n",
+	}
+	for relPath, content := range tasks {
+		if err := os.WriteFile(filepath.Join(tasksDir, relPath), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"cancel", "--repo", repoRoot, "--all", "--format=json"})
+	var execErr error
+	output := captureStdout(t, func() {
+		execErr = cmd.Execute()
+	})
+
+	var silentErr *SilentError
+	if !errors.As(execErr, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", execErr, execErr)
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &items); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, output)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 results, got %d: %v", len(items), items)
+	}
+
+	var errorCount, cancelledCount int
+	for _, item := range items {
+		if item["error"] != nil {
+			errorCount++
+			continue
+		}
+		if item["cancelled"] == true {
+			cancelledCount++
+		}
+	}
+	if errorCount != 1 || cancelledCount != 2 {
+		t.Fatalf("results = %v, want 1 error and 2 cancellations", items)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Failed, "ok.md")); err != nil {
+		t.Fatalf("ok task should still be cancelled after partial failure: %v", err)
 	}
 }
 

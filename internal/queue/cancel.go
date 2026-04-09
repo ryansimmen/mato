@@ -19,6 +19,15 @@ import (
 // Tests replace it to inject failure deterministically.
 var appendCancelledRecordFn = taskfile.AppendCancelledRecord
 
+var cancelAllStates = []string{
+	dirs.Waiting,
+	dirs.Backlog,
+	dirs.InProgress,
+	dirs.ReadyReview,
+	dirs.ReadyMerge,
+	dirs.Failed,
+}
+
 // CancelResult carries the outcome of a single CancelTask call.
 type CancelResult struct {
 	Filename   string   `json:"filename"`
@@ -39,6 +48,54 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 		return CancelResult{}, err
 	}
 
+	return cancelResolvedTask(tasksDir, idx, match)
+}
+
+// ListCancellableTasks returns every task eligible for --all cancellation,
+// sorted by filename and then queue-state order. completed/ is always excluded.
+func ListCancellableTasks(tasksDir string) []TaskMatch {
+	idx := queueview.BuildIndex(tasksDir)
+	matches := make([]TaskMatch, 0)
+	stateSet := make(map[string]struct{}, len(cancelAllStates))
+	for _, state := range cancelAllStates {
+		stateSet[state] = struct{}{}
+		for _, snap := range idx.TasksByState(state) {
+			matches = append(matches, TaskMatch{
+				Filename: snap.Filename,
+				State:    snap.State,
+				Path:     snap.Path,
+				Snapshot: snap,
+			})
+		}
+	}
+	for _, pf := range idx.ParseFailures() {
+		if _, ok := stateSet[pf.State]; !ok {
+			continue
+		}
+		pf := pf
+		matches = append(matches, TaskMatch{
+			Filename:     pf.Filename,
+			State:        pf.State,
+			Path:         pf.Path,
+			ParseFailure: &pf,
+		})
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].Filename != matches[j].Filename {
+			return matches[i].Filename < matches[j].Filename
+		}
+		return cancelStateOrder(matches[i].State) < cancelStateOrder(matches[j].State)
+	})
+	return matches
+}
+
+// CancelTaskMatch cancels a previously resolved task match.
+func CancelTaskMatch(tasksDir string, match TaskMatch) (CancelResult, error) {
+	idx := queueview.BuildIndex(tasksDir)
+	return cancelResolvedTask(tasksDir, idx, match)
+}
+
+func cancelResolvedTask(tasksDir string, idx *PollIndex, match TaskMatch) (CancelResult, error) {
 	stem := frontmatter.TaskFileStem(match.Filename)
 	if match.State == dirs.Completed {
 		return CancelResult{}, fmt.Errorf("cannot cancel %s: task has already been merged", stem)
@@ -77,6 +134,7 @@ func CancelTask(tasksDir, taskRef string) (CancelResult, error) {
 
 	return result, nil
 }
+
 func downstreamWarnings(tasksDir string, idx *PollIndex, match TaskMatch) []string {
 	stem := frontmatter.TaskFileStem(match.Filename)
 	taskID := stem
@@ -116,4 +174,13 @@ func dependsOnCancelledTask(dependsOn []string, stem, taskID string) bool {
 		}
 	}
 	return false
+}
+
+func cancelStateOrder(state string) int {
+	for i, candidate := range cancelAllStates {
+		if candidate == state {
+			return i
+		}
+	}
+	return len(cancelAllStates)
 }
