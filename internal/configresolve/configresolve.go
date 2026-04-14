@@ -253,13 +253,6 @@ func RenderJSON(w io.Writer, repoDefaults *RepoDefaults) error {
 	return enc.Encode(repoDefaults)
 }
 
-func validateReasoningEffort(value, flagName string) error {
-	if !validReasoningEfforts[value] {
-		return fmt.Errorf("invalid %s %q: must be one of low, medium, high, xhigh", flagName, value)
-	}
-	return nil
-}
-
 func resolveStringValue(flagValue string, envMeta envVarMeta, configVal *string, defaultVal string) Resolved[string] {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return Resolved[string]{Value: v, Source: SourceFlag}

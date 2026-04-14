@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/testutil"
 )
@@ -107,6 +108,29 @@ func TestBuildDockerArgs_AllOptionalMounts(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected %q in docker args when all optional mounts are enabled", want)
 		}
+	}
+}
+
+func TestBuildDockerArgs_CopilotRuntimeMount(t *testing.T) {
+	env := envConfig{
+		homeDir:            "/home/test",
+		image:              "ubuntu:24.04",
+		workdir:            "/workspace",
+		copilotRuntimeRoot: "/usr/local/share/nvm/versions/node/v24.11.1",
+		copilotBinDir:      "/usr/local/share/nvm/versions/node/v24.11.1/bin",
+	}
+	run := runContext{prompt: "test"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "/usr/local/share/nvm/versions/node/v24.11.1:/usr/local/share/nvm/versions/node/v24.11.1:ro") {
+		t.Fatal("copilot runtime root should be bind-mounted read-only at its original path")
+	}
+	if strings.Contains(joined, ":/usr/local/bin/copilot:ro") {
+		t.Fatal("standalone copilot runtime should not relocate the copilot entrypoint to /usr/local/bin/copilot")
+	}
+	if !strings.Contains(joined, "PATH=/usr/local/share/nvm/versions/node/v24.11.1/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin") {
+		t.Fatal("copilot runtime bin directory should be prepended to PATH")
 	}
 }
 
@@ -492,6 +516,57 @@ func TestBuildDockerArgs_DisablesGitPagers(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected %q in docker args", want)
 		}
+	}
+}
+
+func TestPrepareCloneQueueMounts_CreatesExpectedDirs(t *testing.T) {
+	cloneDir := t.TempDir()
+
+	if err := prepareCloneQueueMounts(cloneDir); err != nil {
+		t.Fatalf("prepareCloneQueueMounts: %v", err)
+	}
+
+	for _, rel := range []string{
+		dirs.Root,
+		filepath.Join(dirs.Root, dirs.InProgress),
+		filepath.Join(dirs.Root, dirs.ReadyReview),
+		filepath.Join(dirs.Root, "messages"),
+	} {
+		if info, err := os.Stat(filepath.Join(cloneDir, rel)); err != nil {
+			t.Fatalf("Stat(%s): %v", rel, err)
+		} else if !info.IsDir() {
+			t.Fatalf("%s should be a directory", rel)
+		}
+	}
+}
+
+func TestValidateQueueMountAccess_ReportsUnwritableMessagesDir(t *testing.T) {
+	tasksDir := t.TempDir()
+	for _, rel := range []string{dirs.ReadyReview, "messages"} {
+		if err := os.MkdirAll(filepath.Join(tasksDir, rel), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", rel, err)
+		}
+	}
+	messagesDir := filepath.Join(tasksDir, "messages")
+	if err := os.Chmod(messagesDir, 0o555); err != nil {
+		t.Fatalf("Chmod(messages): %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(messagesDir, 0o755)
+	})
+
+	err := validateQueueMountAccess(reviewQueueMountChecks(tasksDir, "/workspace"))
+	if err == nil {
+		t.Fatal("expected validateQueueMountAccess error")
+	}
+	if !strings.Contains(err.Error(), messagesDir) {
+		t.Fatalf("error should mention host messages dir, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/workspace/.mato/messages") {
+		t.Fatalf("error should mention container messages path, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "create temp file") {
+		t.Fatalf("error should mention write probe failure, got: %v", err)
 	}
 }
 
