@@ -70,12 +70,38 @@ func recordWorkLaunchState(tasksDir, targetBranch string, claimed *queue.Claimed
 	})
 }
 
+func prelaunchFailureAgentID(agentID string) string {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return "mato"
+	}
+	return agentID
+}
+
+func recordTaskPrelaunchFailure(claimed *queue.ClaimedTask, agentID string, err error) error {
+	if claimed == nil || err == nil {
+		return err
+	}
+	if appendErr := taskfile.AppendFailureRecord(claimed.TaskPath, prelaunchFailureAgentID(agentID), "WORK", err.Error()); appendErr != nil {
+		ui.Warnf("warning: could not record prelaunch failure for %s: %v\n", claimed.Filename, appendErr)
+	}
+	return err
+}
+
 func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.ClaimedTask) error {
 	recordWorkLaunchState(env.tasksDir, env.targetBranch, claimed, "")
 
 	cloneDir, err := createCloneFn(env.repoRoot)
 	if err != nil {
-		return fmt.Errorf("create clone: %w", err)
+		return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("create clone: %w", err))
+	}
+	if err := prepareCloneQueueMounts(cloneDir); err != nil {
+		removeCloneFn(cloneDir)
+		return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("prepare clone queue mounts: %w", err))
+	}
+	if err := validateQueueMountAccess(taskQueueMountChecks(env.tasksDir, env.workdir)); err != nil {
+		removeCloneFn(cloneDir)
+		return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("validate task queue mounts: %w", err))
 	}
 	cleanupClone := true
 	defer func() {
@@ -104,15 +130,15 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		hasRecordedBranch := claimed.HadRecordedBranchMark
 		branchResult, err := ensureBranchFn(cloneDir, claimed.Branch)
 		if err != nil {
-			return fmt.Errorf("ensure task branch %s: %w", claimed.Branch, err)
+			return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("ensure task branch %s: %w", claimed.Branch, err))
 		}
 		if hasRecordedBranch && !allowRecordedBranchResume(branchResult.Source) {
-			return fmt.Errorf("resume recorded task branch %s: unsupported branch source %s", claimed.Branch, branchResult.SourceDescription())
+			return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("resume recorded task branch %s: unsupported branch source %s", claimed.Branch, branchResult.SourceDescription()))
 		}
 
 		startingTip, err = git.Output(cloneDir, "rev-parse", "HEAD")
 		if err != nil {
-			return fmt.Errorf("capture starting tip for %s: %w", claimed.Branch, err)
+			return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("capture starting tip for %s: %w", claimed.Branch, err))
 		}
 		startingTip = strings.TrimSpace(startingTip)
 		recordWorkLaunchState(env.tasksDir, env.targetBranch, claimed, startingTip)
@@ -149,7 +175,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 	extraEnvs = append(extraEnvs, fmt.Sprintf("MATO_MAX_RETRIES=%d", maxRetries))
 	restoreOrigin, err := prepareCloneOriginForContainerFn(cloneDir)
 	if err != nil {
-		return fmt.Errorf("prepare clone origin for container: %w", err)
+		return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("prepare clone origin for container: %w", err))
 	}
 	agentErr := runCopilotCommand(ctx, env, run, extraEnvs, nil, "agent", func() string {
 		if claimed == nil {

@@ -4553,7 +4553,7 @@ func TestCancelCmd_AllInteractivePromptListsStableTasks(t *testing.T) {
 	alphaIndex := strings.Index(output, "alpha (backlog)")
 	midIndex := strings.Index(output, "mid (failed)")
 	zetaIndex := strings.Index(output, "zeta (ready-for-review)")
-	if !(alphaIndex < midIndex && midIndex < zetaIndex) {
+	if alphaIndex >= midIndex || midIndex >= zetaIndex {
 		t.Fatalf("prompt output not in stable filename order:\n%s", output)
 	}
 	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, "alpha.md")); err != nil {

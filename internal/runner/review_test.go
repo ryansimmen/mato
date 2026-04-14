@@ -2002,6 +2002,143 @@ func TestRunReview_CloneFailureDoesNotCreateReviewSessionOrLaunchState(t *testin
 	}
 }
 
+func TestRunReview_UnwritableMessagesDirFailsBeforeDockerLaunch(t *testing.T) {
+	origExecCommandContext := execCommandContext
+	defer func() { execCommandContext = origExecCommandContext }()
+
+	launched := false
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		launched = true
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		return cmd
+	}
+
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	messagesDir := filepath.Join(tasksDir, "messages")
+	if err := os.Chmod(messagesDir, 0o555); err != nil {
+		t.Fatalf("Chmod(messages): %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(messagesDir, 0o755)
+	})
+
+	taskPath := filepath.Join(tasksDir, dirs.ReadyReview, "task.md")
+	if err := os.WriteFile(taskPath, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/task"); err != nil {
+		t.Fatalf("create review branch: %v", err)
+	}
+
+	env := envConfig{
+		workdir:                    "/workspace",
+		repoRoot:                   repoRoot,
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: true,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
+	}
+	run := runContext{agentID: "host-agent", timeout: time.Second}
+	task := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
+
+	err := runReview(context.Background(), env, run, task, "main")
+	if err == nil {
+		t.Fatal("expected runReview error")
+	}
+	if !strings.Contains(err.Error(), "validate review queue mounts") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/workspace/.mato/messages") {
+		t.Fatalf("error should mention container messages path, got: %v", err)
+	}
+	if launched {
+		t.Fatal("review container should not launch when messages mount is not writable")
+	}
+	data, readErr := os.ReadFile(taskPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile task: %v", readErr)
+	}
+	content := string(data)
+	if !strings.Contains(content, "<!-- review-failure: host-agent at") {
+		t.Fatalf("expected review-failure marker to be recorded, got:\n%s", content)
+	}
+	if !strings.Contains(content, "validate review queue mounts") {
+		t.Fatalf("expected specific mount failure in review marker, got:\n%s", content)
+	}
+	state, loadErr := runtimedata.LoadTaskState(tasksDir, "task.md")
+	if loadErr != nil {
+		t.Fatalf("Load taskstate: %v", loadErr)
+	}
+	if state != nil {
+		t.Fatalf("taskstate should not be created on mount validation failure, got %+v", state)
+	}
+	session, loadErr := runtimedata.LoadSession(tasksDir, runtimedata.KindReview, "task.md")
+	if loadErr != nil {
+		t.Fatalf("Load review session: %v", loadErr)
+	}
+	if session != nil {
+		t.Fatalf("review session should not be created on mount validation failure, got %+v", session)
+	}
+}
+
+func TestPollReview_PrelaunchFailureDoesNotFallThroughToMissingVerdict(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	messagesDir := filepath.Join(tasksDir, "messages")
+	if err := os.Chmod(messagesDir, 0o555); err != nil {
+		t.Fatalf("Chmod(messages): %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(messagesDir, 0o755)
+	})
+
+	taskFile := "poll-review-mount-failure.md"
+	taskPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
+	if err := os.WriteFile(taskPath, []byte("<!-- branch: task/poll-review-mount-failure -->\n# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+	if _, err := git.Output(repoRoot, "checkout", "-b", "task/poll-review-mount-failure"); err != nil {
+		t.Fatalf("create review branch: %v", err)
+	}
+
+	env := envConfig{
+		workdir:                    "/workspace",
+		repoRoot:                   repoRoot,
+		tasksDir:                   tasksDir,
+		reviewModel:                "gpt-5.4",
+		reviewReasoningEffort:      "high",
+		reviewSessionResumeEnabled: true,
+		homeDir:                    "/home/test",
+		image:                      "ubuntu:24.04",
+	}
+	run := runContext{agentID: "host-agent", timeout: time.Second}
+	idx := queueview.BuildIndex(tasksDir)
+
+	processed := pollReview(context.Background(), env, run, tasksDir, "mato", "host-agent", idx)
+	if !processed {
+		t.Fatal("pollReview should report the task as processed")
+	}
+
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("ReadFile task: %v", err)
+	}
+	content := string(data)
+	if got := strings.Count(content, "<!-- review-failure:"); got != 1 {
+		t.Fatalf("expected exactly 1 review-failure marker, got %d:\n%s", got, content)
+	}
+	if !strings.Contains(content, "validate review queue mounts") {
+		t.Fatalf("expected specific prelaunch failure reason, got:\n%s", content)
+	}
+	if strings.Contains(content, "review agent exited without rendering a verdict") {
+		t.Fatalf("generic missing-verdict marker should not be appended after prelaunch failure:\n%s", content)
+	}
+}
+
 func TestLoadTaskStateForReview_CorruptFallsBackToNil(t *testing.T) {
 	tasksDir := t.TempDir()
 	path := filepath.Join(tasksDir, "runtime", "taskstate", "task.md.json")
