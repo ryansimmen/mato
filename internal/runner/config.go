@@ -100,7 +100,7 @@ type envConfig struct {
 	copilotPath, gitPath, gitUploadPackPath string
 	gitReceivePackPath, ghPath, goplsPath   string
 	goRoot                                  string
-	vscodeNodePath                          string
+	copilotRuntimeRoot, copilotBinDir       string
 	copilotConfigDir, copilotCacheDir       string
 	gitName, gitEmail, homeDir, ghConfigDir string
 	hasGhConfig                             bool
@@ -143,6 +143,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	containerHome := env.homeDir
 	goModCache := filepath.Join(env.homeDir, "go", "pkg", "mod")
 	goBuildCache := filepath.Join(env.homeDir, ".cache", "go-build")
+	containerPath := "/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 	runFlags := "-i"
 	if env.isTTY {
@@ -151,10 +152,14 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	args := []string{
 		"run", "--rm", "--init", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath),
 	}
-	if p := strings.TrimSpace(env.vscodeNodePath); p != "" {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", p, p))
+	if runtimeRoot := strings.TrimSpace(env.copilotRuntimeRoot); runtimeRoot != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", runtimeRoot, runtimeRoot))
+		if binDir := strings.TrimSpace(env.copilotBinDir); binDir != "" {
+			containerPath = binDir + ":" + containerPath
+		}
+	} else {
+		args = append(args, "-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath))
 	}
 	args = append(args,
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", env.gitPath),
@@ -163,7 +168,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", env.ghPath),
 		"-v", fmt.Sprintf("%s:/usr/local/go:ro", env.goRoot),
 		"-e", "GOROOT=/usr/local/go",
-		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"-e", "PATH="+containerPath,
 		"-e", "GIT_PAGER=cat",
 		"-e", "PAGER=cat",
 	)

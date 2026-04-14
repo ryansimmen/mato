@@ -59,6 +59,7 @@ func setTestSeams(t *testing.T, lp func(string) (string, error), st func(string)
 	setHook(t, &mkdirAllFn, func(string, os.FileMode) error { return nil })
 	setHook(t, &goEnvGOROOTFn, func() (string, error) { return "/usr/local/go", nil })
 	setHook(t, &runtimeGOROOTFn, func() string { return "/runtime/go" })
+	setHook(t, &evalSymlinksFn, func(path string) (string, error) { return path, nil })
 	if lp != nil {
 		setHook(t, &lookPathFn, lp)
 	}
@@ -720,137 +721,113 @@ func TestInspectHostTools_GhFallsBackToPATH(t *testing.T) {
 	t.Fatal("expected a gh finding in report")
 }
 
-func TestResolveVscodeNodePath_Found(t *testing.T) {
-	script := `#!/bin/sh
-unset NODE_OPTIONS
-ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/some/copilot.js"
-`
-	setHook(t, &readFileFn, func(path string) ([]byte, error) {
-		return []byte(script), nil
-	})
+
+func TestResolveCopilotRuntimeMount_Found(t *testing.T) {
 	setHook(t, &statFn, makeStatFn(map[string]fakeFileInfo{
-		"/vscode/bin/linux-x64/abc123/node": {name: "node"},
+		"/home/test/nvm/current/bin/node":                          {name: "node"},
+		"/home/test/nvm/current/lib/node_modules/@github/copilot": {name: "copilot", isDir: true},
 	}))
 
-	nodePath, ok := resolveVscodeNodePath("/usr/local/bin/copilot")
+	runtimeRoot, binDir, ok := resolveCopilotRuntimeMount("/home/test/nvm/current/bin/copilot")
 	if !ok {
-		t.Fatal("expected resolveVscodeNodePath to find the node binary")
+		t.Fatal("expected standalone copilot runtime to be detected")
 	}
-	if nodePath != "/vscode/bin/linux-x64/abc123/node" {
-		t.Fatalf("nodePath = %q, want /vscode/bin/linux-x64/abc123/node", nodePath)
+	if runtimeRoot != "/home/test/nvm/current" {
+		t.Fatalf("runtimeRoot = %q, want /home/test/nvm/current", runtimeRoot)
 	}
-}
-
-func TestResolveVscodeNodePath_NotScript(t *testing.T) {
-	setHook(t, &readFileFn, func(path string) ([]byte, error) {
-		return nil, os.ErrNotExist
-	})
-
-	_, ok := resolveVscodeNodePath("/usr/local/bin/copilot")
-	if ok {
-		t.Fatal("expected resolveVscodeNodePath to return false for unreadable file")
+	if binDir != "/home/test/nvm/current/bin" {
+		t.Fatalf("binDir = %q, want /home/test/nvm/current/bin", binDir)
 	}
 }
 
-func TestResolveVscodeNodePath_NodeBinaryMissing(t *testing.T) {
-	script := `#!/bin/sh
-ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/some/copilot.js"
-`
-	setHook(t, &readFileFn, func(path string) ([]byte, error) {
-		return []byte(script), nil
+func TestResolveCopilotRuntimeMount_UsesSymlinkTarget(t *testing.T) {
+	setHook(t, &statFn, makeStatFn(map[string]fakeFileInfo{
+		"/home/test/nvm/current/bin/node": {name: "node"},
+	}))
+	setHook(t, &evalSymlinksFn, func(path string) (string, error) {
+		return "/home/test/nvm/current/lib/node_modules/@github/copilot/npm-loader.js", nil
 	})
+
+	runtimeRoot, binDir, ok := resolveCopilotRuntimeMount("/home/test/nvm/current/bin/copilot")
+	if !ok {
+		t.Fatal("expected symlink target under @github/copilot to be accepted")
+	}
+	if runtimeRoot != "/home/test/nvm/current" {
+		t.Fatalf("runtimeRoot = %q, want /home/test/nvm/current", runtimeRoot)
+	}
+	if binDir != "/home/test/nvm/current/bin" {
+		t.Fatalf("binDir = %q, want /home/test/nvm/current/bin", binDir)
+	}
+}
+
+func TestResolveCopilotRuntimeMount_MissingRuntime(t *testing.T) {
 	setHook(t, &statFn, makeStatFn(map[string]fakeFileInfo{}))
 
-	_, ok := resolveVscodeNodePath("/usr/local/bin/copilot")
+	_, _, ok := resolveCopilotRuntimeMount("/home/test/nvm/current/bin/copilot")
 	if ok {
-		t.Fatal("expected resolveVscodeNodePath to return false when node binary is missing")
+		t.Fatal("expected standalone copilot runtime detection to fail when runtime files are missing")
 	}
 }
 
-func TestResolveVscodeNodePath_NoNodeReference(t *testing.T) {
-	script := `#!/bin/sh
-exec /usr/local/bin/copilot-real "$@"
-`
-	setHook(t, &readFileFn, func(path string) ([]byte, error) {
-		return []byte(script), nil
-	})
-	setHook(t, &statFn, makeStatFn(map[string]fakeFileInfo{}))
-
-	_, ok := resolveVscodeNodePath("/usr/local/bin/copilot")
-	if ok {
-		t.Fatal("expected resolveVscodeNodePath to return false for a script without a node reference")
-	}
-}
-
-func TestDiscoverHostTools_VscodeNodePath(t *testing.T) {
+func TestDiscoverHostTools_PrefersFallbackCopilotAfterVscodeWrapper(t *testing.T) {
 	home := "/fake/home"
-	script := `#!/bin/sh
-ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/some/copilot.js"
-`
+	wrapperPath := "/vscode/copilotCli/copilot"
+	standalonePath := "/home/test/nvm/current/bin/copilot"
 	setTestSeams(t,
-		makeLookPathFn(allRequiredTools()),
+		makeLookPathFn(map[string]string{
+			"copilot":          wrapperPath,
+			"git":              "/usr/bin/git",
+			"git-upload-pack":  "/usr/bin/git-upload-pack",
+			"git-receive-pack": "/usr/bin/git-receive-pack",
+			"gh":               "/usr/local/bin/gh",
+		}),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                          {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):         {name: ".copilot", isDir: true},
-			"/vscode/bin/linux-x64/abc123/node":     {name: "node"},
+			"/usr/bin/gh":                                           {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):                         {name: ".copilot", isDir: true},
+			standalonePath:                                           {name: "copilot"},
+			"/home/test/nvm/current/bin/node":                       {name: "node"},
+			"/home/test/nvm/current/lib/node_modules/@github/copilot": {name: "copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
 		nil,
 	)
+	t.Setenv("PATH", "/vscode/copilotCli:/home/test/nvm/current/bin")
 	setHook(t, &readFileFn, func(path string) ([]byte, error) {
-		return []byte(script), nil
+		if path == wrapperPath {
+			return []byte("#!/bin/sh\nELECTRON_RUN_AS_NODE=1 \"/vscode/bin/linux-x64/abc123/node\" \"/vscode/copilotCli/copilotCLIShim.js\" \"$@\"\n"), nil
+		}
+		return nil, os.ErrNotExist
 	})
 
 	tools, err := discoverHostTools()
 	if err != nil {
 		t.Fatalf("discoverHostTools failed: %v", err)
 	}
-	if tools.vscodeNodePath != "/vscode/bin/linux-x64/abc123/node" {
-		t.Fatalf("vscodeNodePath = %q, want /vscode/bin/linux-x64/abc123/node", tools.vscodeNodePath)
+	if tools.copilotPath != standalonePath {
+		t.Fatalf("copilotPath = %q, want %q", tools.copilotPath, standalonePath)
+	}
+	if tools.copilotRuntimeRoot != "/home/test/nvm/current" {
+		t.Fatalf("copilotRuntimeRoot = %q, want /home/test/nvm/current", tools.copilotRuntimeRoot)
+	}
+	if tools.copilotBinDir != "/home/test/nvm/current/bin" {
+		t.Fatalf("copilotBinDir = %q, want /home/test/nvm/current/bin", tools.copilotBinDir)
+	}
+	if tools.copilotConfigDir != filepath.Join(home, ".copilot") {
+		t.Fatalf("copilotConfigDir = %q, want %q", tools.copilotConfigDir, filepath.Join(home, ".copilot"))
 	}
 }
 
-func TestInspectHostTools_VscodeNodeFound(t *testing.T) {
+func TestDiscoverHostTools_VscodeWrapperWithoutFallbackFails(t *testing.T) {
 	home := "/fake/home"
-	script := `#!/bin/sh
-ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/some/copilot.js"
-`
+	wrapperPath := "/vscode/copilotCli/copilot"
 	setTestSeams(t,
-		makeLookPathFn(allRequiredTools()),
-		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                          {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):         {name: ".copilot", isDir: true},
-			"/vscode/bin/linux-x64/abc123/node":     {name: "node"},
+		makeLookPathFn(map[string]string{
+			"copilot":          wrapperPath,
+			"git":              "/usr/bin/git",
+			"git-upload-pack":  "/usr/bin/git-upload-pack",
+			"git-receive-pack": "/usr/bin/git-receive-pack",
+			"gh":               "/usr/local/bin/gh",
 		}),
-		func() (string, error) { return home, nil },
-		nil,
-	)
-	setHook(t, &readFileFn, func(path string) ([]byte, error) {
-		return []byte(script), nil
-	})
-
-	report := InspectHostTools()
-	for _, f := range report.Findings {
-		if f.Name == "vscode node" {
-			if !f.Found {
-				t.Fatal("expected vscode node finding to be Found=true")
-			}
-			if f.Path != "/vscode/bin/linux-x64/abc123/node" {
-				t.Fatalf("vscode node path = %q, want /vscode/bin/linux-x64/abc123/node", f.Path)
-			}
-			return
-		}
-	}
-	t.Fatal("expected a vscode node finding in report")
-}
-
-func TestInspectHostTools_VscodeNodeMissingIsOmitted(t *testing.T) {
-	home := "/fake/home"
-	script := `#!/bin/sh
-exec /usr/local/bin/copilot-real "$@"
-`
-	setTestSeams(t,
-		makeLookPathFn(allRequiredTools()),
 		makeStatFn(map[string]fakeFileInfo{
 			"/usr/bin/gh":                   {name: "gh", isDir: false},
 			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
@@ -858,14 +835,117 @@ exec /usr/local/bin/copilot-real "$@"
 		func() (string, error) { return home, nil },
 		nil,
 	)
+	t.Setenv("PATH", "/vscode/copilotCli")
 	setHook(t, &readFileFn, func(path string) ([]byte, error) {
-		return []byte(script), nil
+		if path == wrapperPath {
+			return []byte("#!/bin/sh\nELECTRON_RUN_AS_NODE=1 \"/vscode/bin/linux-x64/abc123/node\" \"/vscode/copilotCli/copilotCLIShim.js\" \"$@\"\n"), nil
+		}
+		return nil, os.ErrNotExist
+	})
+
+	_, err := discoverHostTools()
+	if err == nil {
+		t.Fatal("expected discoverHostTools to fail when only the VS Code wrapper is available")
+	}
+	if !strings.Contains(err.Error(), "no non-wrapper copilot executable later on PATH") {
+		t.Fatalf("error = %v, want fallback Copilot guidance", err)
+	}
+}
+
+func TestInspectHostTools_CopilotUsesFallbackAfterVscodeWrapper(t *testing.T) {
+	home := "/fake/home"
+	wrapperPath := "/vscode/copilotCli/copilot"
+	standalonePath := "/home/test/nvm/current/bin/copilot"
+	script := `#!/bin/sh
+ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/vscode/copilotCli/copilotCLIShim.js"
+`
+	setTestSeams(t,
+		makeLookPathFn(map[string]string{
+			"copilot":          wrapperPath,
+			"git":              "/usr/bin/git",
+			"git-upload-pack":  "/usr/bin/git-upload-pack",
+			"git-receive-pack": "/usr/bin/git-receive-pack",
+			"gh":               "/usr/local/bin/gh",
+		}),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                                           {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):                         {name: ".copilot", isDir: true},
+			standalonePath:                                           {name: "copilot"},
+			"/home/test/nvm/current/bin/node":                       {name: "node"},
+			"/home/test/nvm/current/lib/node_modules/@github/copilot": {name: "copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	t.Setenv("PATH", "/vscode/copilotCli:/home/test/nvm/current/bin")
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		if path == wrapperPath {
+			return []byte(script), nil
+		}
+		return nil, os.ErrNotExist
 	})
 
 	report := InspectHostTools()
 	for _, f := range report.Findings {
-		if f.Name == "vscode node" {
-			t.Fatal("expected missing best-effort vscode node finding to be omitted")
+		if f.Name == "copilot" {
+			if !f.Found {
+				t.Fatal("expected copilot finding to be Found=true")
+			}
+			if f.Path != standalonePath {
+				t.Fatalf("copilot path = %q, want %q", f.Path, standalonePath)
+			}
+			if !strings.Contains(f.Message, "skipping VS Code wrapper") {
+				t.Fatalf("copilot message = %q, want wrapper-skip detail", f.Message)
+			}
+			return
 		}
 	}
+	t.Fatal("expected a copilot finding in report")
+}
+
+func TestInspectHostTools_VscodeWrapperWithoutFallbackMarksCopilotMissing(t *testing.T) {
+	home := "/fake/home"
+	wrapperPath := "/vscode/copilotCli/copilot"
+	script := `#!/bin/sh
+ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/vscode/copilotCli/copilotCLIShim.js" "$@"
+`
+	setTestSeams(t,
+		makeLookPathFn(map[string]string{
+			"copilot":          wrapperPath,
+			"git":              "/usr/bin/git",
+			"git-upload-pack":  "/usr/bin/git-upload-pack",
+			"git-receive-pack": "/usr/bin/git-receive-pack",
+			"gh":               "/usr/local/bin/gh",
+		}),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	t.Setenv("PATH", "/vscode/copilotCli")
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		if path == wrapperPath {
+			return []byte(script), nil
+		}
+		return nil, os.ErrNotExist
+	})
+
+	report := InspectHostTools()
+	for _, f := range report.Findings {
+		if f.Name == "copilot" {
+			if f.Found {
+				t.Fatal("expected copilot finding to be missing when only the VS Code wrapper is available")
+			}
+			if !f.Required {
+				t.Fatal("expected copilot finding to remain required")
+			}
+			if !strings.Contains(f.Message, "no non-wrapper copilot executable later on PATH") {
+				t.Fatalf("copilot message = %q, want fallback guidance", f.Message)
+			}
+			return
+		}
+	}
+	t.Fatal("expected a copilot finding in report")
 }
