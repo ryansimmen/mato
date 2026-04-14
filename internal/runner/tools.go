@@ -1,10 +1,12 @@
 package runner
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -42,6 +44,7 @@ type hostTools struct {
 	copilotPath        string
 	copilotConfigDir   string
 	copilotCacheDir    string
+	vscodeNodePath     string
 	gitPath            string
 	gitUploadPackPath  string
 	gitReceivePackPath string
@@ -55,6 +58,44 @@ type hostTools struct {
 	homeDir            string
 	ghConfigDir        string
 	hasGhConfig        bool
+}
+
+// vscodeNodeRe matches quoted paths to the VS Code bundled node binary
+// in copilot wrapper scripts. The binary path ends with /node and is
+// enclosed in double quotes within the shell script.
+var vscodeNodeRe = regexp.MustCompile(`"(/[^"]+/node)"`)
+
+// readFileFn wraps os.ReadFile for test injection.
+var readFileFn = os.ReadFile
+
+// resolveVscodeNodePath reads the copilot wrapper script and extracts the
+// path to the VS Code-bundled node binary. The copilot CLI installed by
+// VS Code is a thin shell script that invokes node via an absolute path
+// like /vscode/bin/linux-x64/<commit>/node. When mato bind-mounts this
+// script into a Docker container, the node binary must also be mounted
+// at the same path for the script to work.
+//
+// Returns the resolved path and true if found and the binary exists on
+// disk, or empty string and false otherwise. This is best-effort: a
+// missing node path is not fatal because standalone copilot binaries
+// that do not depend on a separate node installation also exist.
+func resolveVscodeNodePath(copilotPath string) (string, bool) {
+	data, err := readFileFn(copilotPath)
+	if err != nil {
+		return "", false
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		m := vscodeNodeRe.FindStringSubmatch(scanner.Text())
+		if m == nil {
+			continue
+		}
+		nodePath := m[1]
+		if info, err := statFn(nodePath); err == nil && !info.IsDir() {
+			return nodePath, true
+		}
+	}
+	return "", false
 }
 
 // discoverHostTools locates all host binaries and directories required
@@ -130,10 +171,13 @@ func discoverHostTools() (hostTools, error) {
 		hasGhConfig = true
 	}
 
+	vscodeNodePath, _ := resolveVscodeNodePath(copilotPath)
+
 	return hostTools{
 		copilotPath:        copilotPath,
 		copilotConfigDir:   copilotConfigDir,
 		copilotCacheDir:    copilotCacheDir,
+		vscodeNodePath:     vscodeNodePath,
 		gitPath:            gitPath,
 		gitUploadPackPath:  gitUploadPackPath,
 		gitReceivePackPath: gitReceivePackPath,
@@ -171,6 +215,7 @@ type ToolReport struct {
 // discoverHostTools() is NOT modified.
 func InspectHostTools() ToolReport {
 	var r ToolReport
+	var copilotPathFound string
 
 	// Required tools.
 	for _, tool := range []struct {
@@ -199,12 +244,27 @@ func InspectHostTools() ToolReport {
 				Message:  fmt.Sprintf("%s not found", tool.name),
 			})
 		} else {
+			if tool.name == "copilot" {
+				copilotPathFound = path
+			}
 			r.Findings = append(r.Findings, ToolFinding{
 				Name:     tool.name,
 				Path:     path,
 				Required: tool.required,
 				Found:    true,
 				Message:  fmt.Sprintf("%s: %s", tool.name, path),
+			})
+		}
+	}
+
+	// VS Code bundled node binary (required by the copilot wrapper script).
+	if copilotPathFound != "" {
+		if nodePath, ok := resolveVscodeNodePath(copilotPathFound); ok {
+			r.Findings = append(r.Findings, ToolFinding{
+				Name:    "vscode node",
+				Path:    nodePath,
+				Found:   true,
+				Message: fmt.Sprintf("vscode node: %s", nodePath),
 			})
 		}
 	}
