@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,6 +19,7 @@ var lookPathFn = exec.LookPath
 var statFn = os.Stat
 var mkdirAllFn = os.MkdirAll
 var userHomeDirFn = os.UserHomeDir
+var evalSymlinksFn = filepath.EvalSymlinks
 
 //nolint:staticcheck // Compatibility fallback for standalone mato binaries when 'go' is unavailable on PATH.
 var runtimeGOROOTFn = runtime.GOROOT
@@ -42,9 +42,10 @@ var gitExecPathFn = func() (string, error) {
 // and directories that are bind-mounted into Docker agent containers.
 type hostTools struct {
 	copilotPath        string
+	copilotRuntimeRoot string
+	copilotBinDir      string
 	copilotConfigDir   string
 	copilotCacheDir    string
-	vscodeNodePath     string
 	gitPath            string
 	gitUploadPackPath  string
 	gitReceivePackPath string
@@ -59,51 +60,106 @@ type hostTools struct {
 	ghConfigDir        string
 	hasGhConfig        bool
 }
-
-// vscodeNodeRe matches quoted paths to the VS Code bundled node binary
-// in copilot wrapper scripts. The binary path ends with /node and is
-// enclosed in double quotes within the shell script.
-var vscodeNodeRe = regexp.MustCompile(`"(/[^"]+/node)"`)
+// vscodeCopilotShimRe matches the VS Code shim path embedded in the wrapper
+// script shipped by the Copilot Chat extension.
+var vscodeCopilotShimRe = regexp.MustCompile(`"(/[^"]+/copilotCLIShim\.js)"`)
 
 // readFileFn wraps os.ReadFile for test injection.
 var readFileFn = os.ReadFile
 
-// resolveVscodeNodePath reads the copilot wrapper script and extracts the
-// path to the VS Code-bundled node binary. The copilot CLI installed by
-// VS Code is a thin shell script that invokes node via an absolute path
-// like /vscode/bin/linux-x64/<commit>/node. When mato bind-mounts this
-// script into a Docker container, the node binary must also be mounted
-// at the same path for the script to work.
-//
-// Returns the resolved path and true if found and the binary exists on
-// disk, or empty string and false otherwise. This is best-effort: a
-// missing node path is not fatal because standalone copilot binaries
-// that do not depend on a separate node installation also exist.
-func resolveVscodeNodePath(copilotPath string) (string, bool) {
+func isVscodeCopilotWrapper(copilotPath string) bool {
 	data, err := readFileFn(copilotPath)
 	if err != nil {
-		return "", false
+		return false
 	}
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		m := vscodeNodeRe.FindStringSubmatch(scanner.Text())
-		if m == nil {
+	return vscodeCopilotShimRe.Match(data)
+}
+
+func isWithinDir(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != "..")
+}
+
+func resolveCopilotRuntimeMount(copilotPath string) (string, string, bool) {
+	if strings.TrimSpace(copilotPath) == "" {
+		return "", "", false
+	}
+	binDir := filepath.Dir(copilotPath)
+	if filepath.Base(binDir) != "bin" {
+		return "", "", false
+	}
+	runtimeRoot := filepath.Dir(binDir)
+	if info, err := statFn(filepath.Join(runtimeRoot, "bin", "node")); err != nil || info.IsDir() {
+		return "", "", false
+	}
+	pkgRoot := filepath.Join(runtimeRoot, "lib", "node_modules", "@github", "copilot")
+	if info, err := statFn(pkgRoot); err == nil && info.IsDir() {
+		return runtimeRoot, binDir, true
+	}
+	resolvedPath, err := evalSymlinksFn(copilotPath)
+	if err != nil {
+		return "", "", false
+	}
+	if !isWithinDir(pkgRoot, resolvedPath) {
+		return "", "", false
+	}
+	return runtimeRoot, binDir, true
+}
+
+func findFallbackCopilot(currentPath string) (string, bool) {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if strings.TrimSpace(dir) == "" {
 			continue
 		}
-		nodePath := m[1]
-		if info, err := statFn(nodePath); err == nil && !info.IsDir() {
-			return nodePath, true
+		candidate := filepath.Join(dir, "copilot")
+		if filepath.Clean(candidate) == filepath.Clean(currentPath) {
+			continue
 		}
+		if info, err := statFn(candidate); err != nil || info.IsDir() {
+			continue
+		}
+		if isVscodeCopilotWrapper(candidate) {
+			continue
+		}
+		return candidate, true
 	}
 	return "", false
+}
+
+type copilotTool struct {
+	path        string
+	runtimeRoot string
+	binDir      string
+	wrapperPath string
+}
+
+func resolveCopilotTool() (copilotTool, error) {
+	copilotPath, err := lookPathFn("copilot")
+	if err != nil {
+		return copilotTool{}, fmt.Errorf("find copilot CLI: %w\n  Install: see docs/configuration.md or https://docs.github.com/en/copilot", err)
+	}
+	tool := copilotTool{path: copilotPath}
+	if isVscodeCopilotWrapper(copilotPath) {
+		fallbackPath, ok := findFallbackCopilot(copilotPath)
+		if !ok {
+			return copilotTool{}, fmt.Errorf("find copilot CLI: found VS Code wrapper at %s but no non-wrapper copilot executable later on PATH; install the CLI or move it ahead of the VS Code wrapper", copilotPath)
+		}
+		tool.path = fallbackPath
+		tool.wrapperPath = copilotPath
+	}
+	tool.runtimeRoot, tool.binDir, _ = resolveCopilotRuntimeMount(tool.path)
+	return tool, nil
 }
 
 // discoverHostTools locates all host binaries and directories required
 // for Docker agent containers. It fails fast if a required tool is missing.
 func discoverHostTools() (hostTools, error) {
-	copilotPath, err := lookPathFn("copilot")
+	copilot, err := resolveCopilotTool()
 	if err != nil {
-		return hostTools{}, fmt.Errorf("find copilot CLI: %w\n  Install: see docs/configuration.md or https://docs.github.com/en/copilot", err)
+		return hostTools{}, err
 	}
 	gitPath, err := lookPathFn("git")
 	if err != nil {
@@ -171,13 +227,12 @@ func discoverHostTools() (hostTools, error) {
 		hasGhConfig = true
 	}
 
-	vscodeNodePath, _ := resolveVscodeNodePath(copilotPath)
-
 	return hostTools{
-		copilotPath:        copilotPath,
+		copilotPath:        copilot.path,
+		copilotRuntimeRoot: copilot.runtimeRoot,
+		copilotBinDir:      copilot.binDir,
 		copilotConfigDir:   copilotConfigDir,
 		copilotCacheDir:    copilotCacheDir,
-		vscodeNodePath:     vscodeNodePath,
 		gitPath:            gitPath,
 		gitUploadPackPath:  gitUploadPackPath,
 		gitReceivePackPath: gitReceivePackPath,
@@ -215,7 +270,27 @@ type ToolReport struct {
 // discoverHostTools() is NOT modified.
 func InspectHostTools() ToolReport {
 	var r ToolReport
-	var copilotPathFound string
+
+	if copilot, err := resolveCopilotTool(); err != nil {
+		r.Findings = append(r.Findings, ToolFinding{
+			Name:     "copilot",
+			Required: true,
+			Found:    false,
+			Message:  err.Error(),
+		})
+	} else {
+		message := fmt.Sprintf("copilot: %s", copilot.path)
+		if copilot.wrapperPath != "" {
+			message = fmt.Sprintf("copilot: %s (selected after skipping VS Code wrapper %s)", copilot.path, copilot.wrapperPath)
+		}
+		r.Findings = append(r.Findings, ToolFinding{
+			Name:     "copilot",
+			Path:     copilot.path,
+			Required: true,
+			Found:    true,
+			Message:  message,
+		})
+	}
 
 	// Required tools.
 	for _, tool := range []struct {
@@ -223,7 +298,6 @@ func InspectHostTools() ToolReport {
 		lookup   func() (string, error)
 		required bool
 	}{
-		{"copilot", func() (string, error) { return lookPathFn("copilot") }, true},
 		{"git", func() (string, error) { return lookPathFn("git") }, true},
 		{"git-upload-pack", func() (string, error) { return findGitHelper("git-upload-pack") }, true},
 		{"git-receive-pack", func() (string, error) { return findGitHelper("git-receive-pack") }, true},
@@ -244,27 +318,12 @@ func InspectHostTools() ToolReport {
 				Message:  fmt.Sprintf("%s not found", tool.name),
 			})
 		} else {
-			if tool.name == "copilot" {
-				copilotPathFound = path
-			}
 			r.Findings = append(r.Findings, ToolFinding{
 				Name:     tool.name,
 				Path:     path,
 				Required: tool.required,
 				Found:    true,
 				Message:  fmt.Sprintf("%s: %s", tool.name, path),
-			})
-		}
-	}
-
-	// VS Code bundled node binary (required by the copilot wrapper script).
-	if copilotPathFound != "" {
-		if nodePath, ok := resolveVscodeNodePath(copilotPathFound); ok {
-			r.Findings = append(r.Findings, ToolFinding{
-				Name:    "vscode node",
-				Path:    nodePath,
-				Found:   true,
-				Message: fmt.Sprintf("vscode node: %s", nodePath),
 			})
 		}
 	}

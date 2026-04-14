@@ -110,34 +110,26 @@ func TestBuildDockerArgs_AllOptionalMounts(t *testing.T) {
 	}
 }
 
-func TestBuildDockerArgs_VscodeNodeMount(t *testing.T) {
+func TestBuildDockerArgs_CopilotRuntimeMount(t *testing.T) {
 	env := envConfig{
-		homeDir:        "/home/test",
-		image:          "ubuntu:24.04",
-		workdir:        "/workspace",
-		vscodeNodePath: "/vscode/bin/linux-x64/abc123/node",
+		homeDir:            "/home/test",
+		image:              "ubuntu:24.04",
+		workdir:            "/workspace",
+		copilotRuntimeRoot: "/usr/local/share/nvm/versions/node/v24.11.1",
+		copilotBinDir:      "/usr/local/share/nvm/versions/node/v24.11.1/bin",
 	}
 	run := runContext{prompt: "test"}
 
 	args := buildDockerArgs(env, run, nil, nil)
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "/vscode/bin/linux-x64/abc123/node:/vscode/bin/linux-x64/abc123/node:ro") {
-		t.Fatal("vscode node binary should be bind-mounted read-only at its original path")
+	if !strings.Contains(joined, "/usr/local/share/nvm/versions/node/v24.11.1:/usr/local/share/nvm/versions/node/v24.11.1:ro") {
+		t.Fatal("copilot runtime root should be bind-mounted read-only at its original path")
 	}
-}
-
-func TestBuildDockerArgs_VscodeNodeNotMounted(t *testing.T) {
-	env := envConfig{
-		homeDir: "/home/test",
-		image:   "ubuntu:24.04",
-		workdir: "/workspace",
+	if strings.Contains(joined, ":/usr/local/bin/copilot:ro") {
+		t.Fatal("standalone copilot runtime should not relocate the copilot entrypoint to /usr/local/bin/copilot")
 	}
-	run := runContext{prompt: "test"}
-
-	args := buildDockerArgs(env, run, nil, nil)
-	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "/vscode/bin") {
-		t.Fatal("vscode node mount should be omitted when vscodeNodePath is empty")
+	if !strings.Contains(joined, "PATH=/usr/local/share/nvm/versions/node/v24.11.1/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin") {
+		t.Fatal("copilot runtime bin directory should be prepended to PATH")
 	}
 }
 
