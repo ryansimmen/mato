@@ -60,6 +60,7 @@ type hostTools struct {
 	ghConfigDir        string
 	hasGhConfig        bool
 }
+
 // vscodeCopilotShimRe matches the VS Code shim path embedded in the wrapper
 // script shipped by the Copilot Chat extension.
 var vscodeCopilotShimRe = regexp.MustCompile(`"(/[^"]+/copilotCLIShim\.js)"`)

@@ -721,10 +721,9 @@ func TestInspectHostTools_GhFallsBackToPATH(t *testing.T) {
 	t.Fatal("expected a gh finding in report")
 }
 
-
 func TestResolveCopilotRuntimeMount_Found(t *testing.T) {
 	setHook(t, &statFn, makeStatFn(map[string]fakeFileInfo{
-		"/home/test/nvm/current/bin/node":                          {name: "node"},
+		"/home/test/nvm/current/bin/node":                         {name: "node"},
 		"/home/test/nvm/current/lib/node_modules/@github/copilot": {name: "copilot", isDir: true},
 	}))
 
@@ -782,10 +781,10 @@ func TestDiscoverHostTools_PrefersFallbackCopilotAfterVscodeWrapper(t *testing.T
 			"gh":               "/usr/local/bin/gh",
 		}),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                                           {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):                         {name: ".copilot", isDir: true},
-			standalonePath:                                           {name: "copilot"},
-			"/home/test/nvm/current/bin/node":                       {name: "node"},
+			"/usr/bin/gh":                     {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):   {name: ".copilot", isDir: true},
+			standalonePath:                    {name: "copilot"},
+			"/home/test/nvm/current/bin/node": {name: "node"},
 			"/home/test/nvm/current/lib/node_modules/@github/copilot": {name: "copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
@@ -868,10 +867,10 @@ ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/vscode/copilotCli/c
 			"gh":               "/usr/local/bin/gh",
 		}),
 		makeStatFn(map[string]fakeFileInfo{
-			"/usr/bin/gh":                                           {name: "gh", isDir: false},
-			filepath.Join(home, ".copilot"):                         {name: ".copilot", isDir: true},
-			standalonePath:                                           {name: "copilot"},
-			"/home/test/nvm/current/bin/node":                       {name: "node"},
+			"/usr/bin/gh":                     {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):   {name: ".copilot", isDir: true},
+			standalonePath:                    {name: "copilot"},
+			"/home/test/nvm/current/bin/node": {name: "node"},
 			"/home/test/nvm/current/lib/node_modules/@github/copilot": {name: "copilot", isDir: true},
 		}),
 		func() (string, error) { return home, nil },
