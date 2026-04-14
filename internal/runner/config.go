@@ -100,6 +100,7 @@ type envConfig struct {
 	copilotPath, gitPath, gitUploadPackPath string
 	gitReceivePackPath, ghPath, goplsPath   string
 	goRoot                                  string
+	copilotRuntimeRoot, copilotBinDir       string
 	copilotConfigDir, copilotCacheDir       string
 	gitName, gitEmail, homeDir, ghConfigDir string
 	hasGhConfig                             bool
@@ -138,10 +139,135 @@ func isTerminal(f *os.File) bool {
 
 const containerOriginRepoDir = "/mato-host-repo"
 
+type queueMountCheck struct {
+	hostPath      string
+	containerPath string
+	writable      bool
+}
+
+func prepareCloneQueueMounts(cloneDir string) error {
+	if strings.TrimSpace(cloneDir) == "" {
+		return nil
+	}
+
+	for _, rel := range []string{
+		dirs.Root,
+		filepath.Join(dirs.Root, dirs.InProgress),
+		filepath.Join(dirs.Root, dirs.ReadyReview),
+		filepath.Join(dirs.Root, "messages"),
+	} {
+		path := filepath.Join(cloneDir, rel)
+		info, err := statPathFn(path)
+		switch {
+		case err == nil:
+			if !info.IsDir() {
+				return fmt.Errorf("clone mount path %s is not a directory", path)
+			}
+		case os.IsNotExist(err):
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				return fmt.Errorf("create clone mount path %s: %w", path, err)
+			}
+		default:
+			return fmt.Errorf("stat clone mount path %s: %w", path, err)
+		}
+	}
+
+	return nil
+}
+
+func taskQueueMountChecks(tasksDir, workdir string) []queueMountCheck {
+	if strings.TrimSpace(tasksDir) == "" {
+		return nil
+	}
+	return []queueMountCheck{
+		{
+			hostPath:      filepath.Join(tasksDir, dirs.InProgress),
+			containerPath: workdir + "/" + dirs.Root + "/" + dirs.InProgress,
+			writable:      false,
+		},
+		{
+			hostPath:      filepath.Join(tasksDir, dirs.ReadyReview),
+			containerPath: workdir + "/" + dirs.Root + "/" + dirs.ReadyReview,
+			writable:      false,
+		},
+		{
+			hostPath:      filepath.Join(tasksDir, "messages"),
+			containerPath: workdir + "/" + dirs.Root + "/messages",
+			writable:      true,
+		},
+	}
+}
+
+func reviewQueueMountChecks(tasksDir, workdir string) []queueMountCheck {
+	if strings.TrimSpace(tasksDir) == "" {
+		return nil
+	}
+	return []queueMountCheck{
+		{
+			hostPath:      filepath.Join(tasksDir, dirs.ReadyReview),
+			containerPath: workdir + "/" + dirs.Root + "/" + dirs.ReadyReview,
+			writable:      false,
+		},
+		{
+			hostPath:      filepath.Join(tasksDir, "messages"),
+			containerPath: workdir + "/" + dirs.Root + "/messages",
+			writable:      true,
+		},
+	}
+}
+
+func validateQueueMountAccess(checks []queueMountCheck) error {
+	var failures []string
+	for _, check := range checks {
+		if strings.TrimSpace(check.hostPath) == "" {
+			continue
+		}
+		if err := validateQueueMountPath(check); err != nil {
+			failures = append(failures, err.Error())
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("queue mount access check failed: %s", strings.Join(failures, "; "))
+}
+
+func validateQueueMountPath(check queueMountCheck) error {
+	info, err := statPathFn(check.hostPath)
+	if err != nil {
+		return fmt.Errorf("%s -> %s: %w", check.hostPath, check.containerPath, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s -> %s: host path is not a directory", check.hostPath, check.containerPath)
+	}
+	if !check.writable {
+		dir, err := os.Open(check.hostPath)
+		if err != nil {
+			return fmt.Errorf("%s -> %s: open directory: %w", check.hostPath, check.containerPath, err)
+		}
+		return dir.Close()
+	}
+
+	tmp, err := os.CreateTemp(check.hostPath, ".mato-mount-check-*")
+	if err != nil {
+		return fmt.Errorf("%s -> %s: create temp file: %w", check.hostPath, check.containerPath, err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("%s -> %s: close temp file: %w", check.hostPath, check.containerPath, err)
+	}
+	if err := os.Remove(tmpPath); err != nil {
+		return fmt.Errorf("%s -> %s: remove temp file: %w", check.hostPath, check.containerPath, err)
+	}
+	return nil
+}
+
 func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVolumes []string) []string {
 	containerHome := env.homeDir
 	goModCache := filepath.Join(env.homeDir, "go", "pkg", "mod")
 	goBuildCache := filepath.Join(env.homeDir, ".cache", "go-build")
+	containerPath := "/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 	runFlags := "-i"
 	if env.isTTY {
@@ -150,17 +276,26 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 	args := []string{
 		"run", "--rm", "--init", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath),
+	}
+	if runtimeRoot := strings.TrimSpace(env.copilotRuntimeRoot); runtimeRoot != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", runtimeRoot, runtimeRoot))
+		if binDir := strings.TrimSpace(env.copilotBinDir); binDir != "" {
+			containerPath = binDir + ":" + containerPath
+		}
+	} else {
+		args = append(args, "-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath))
+	}
+	args = append(args,
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", env.gitPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", env.gitUploadPackPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", env.gitReceivePackPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/gh:ro", env.ghPath),
 		"-v", fmt.Sprintf("%s:/usr/local/go:ro", env.goRoot),
 		"-e", "GOROOT=/usr/local/go",
-		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"-e", "PATH="+containerPath,
 		"-e", "GIT_PAGER=cat",
 		"-e", "PAGER=cat",
-	}
+	)
 	args = appendDockerBindMount(args, run.cloneDir, env.workdir, false)
 	args = appendDockerBindMount(args, env.repoRoot, containerOriginRepoDir, true)
 	if tasksDir := strings.TrimSpace(env.tasksDir); tasksDir != "" {

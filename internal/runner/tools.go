@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -18,6 +19,7 @@ var lookPathFn = exec.LookPath
 var statFn = os.Stat
 var mkdirAllFn = os.MkdirAll
 var userHomeDirFn = os.UserHomeDir
+var evalSymlinksFn = filepath.EvalSymlinks
 
 //nolint:staticcheck // Compatibility fallback for standalone mato binaries when 'go' is unavailable on PATH.
 var runtimeGOROOTFn = runtime.GOROOT
@@ -40,6 +42,8 @@ var gitExecPathFn = func() (string, error) {
 // and directories that are bind-mounted into Docker agent containers.
 type hostTools struct {
 	copilotPath        string
+	copilotRuntimeRoot string
+	copilotBinDir      string
 	copilotConfigDir   string
 	copilotCacheDir    string
 	gitPath            string
@@ -57,12 +61,106 @@ type hostTools struct {
 	hasGhConfig        bool
 }
 
+// vscodeCopilotShimRe matches the VS Code shim path embedded in the wrapper
+// script shipped by the Copilot Chat extension.
+var vscodeCopilotShimRe = regexp.MustCompile(`"(/[^"]+/copilotCLIShim\.js)"`)
+
+// readFileFn wraps os.ReadFile for test injection.
+var readFileFn = os.ReadFile
+
+func isVscodeCopilotWrapper(copilotPath string) bool {
+	data, err := readFileFn(copilotPath)
+	if err != nil {
+		return false
+	}
+	return vscodeCopilotShimRe.Match(data)
+}
+
+func isWithinDir(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != "..")
+}
+
+func resolveCopilotRuntimeMount(copilotPath string) (string, string, bool) {
+	if strings.TrimSpace(copilotPath) == "" {
+		return "", "", false
+	}
+	binDir := filepath.Dir(copilotPath)
+	if filepath.Base(binDir) != "bin" {
+		return "", "", false
+	}
+	runtimeRoot := filepath.Dir(binDir)
+	if info, err := statFn(filepath.Join(runtimeRoot, "bin", "node")); err != nil || info.IsDir() {
+		return "", "", false
+	}
+	pkgRoot := filepath.Join(runtimeRoot, "lib", "node_modules", "@github", "copilot")
+	if info, err := statFn(pkgRoot); err == nil && info.IsDir() {
+		return runtimeRoot, binDir, true
+	}
+	resolvedPath, err := evalSymlinksFn(copilotPath)
+	if err != nil {
+		return "", "", false
+	}
+	if !isWithinDir(pkgRoot, resolvedPath) {
+		return "", "", false
+	}
+	return runtimeRoot, binDir, true
+}
+
+func findFallbackCopilot(currentPath string) (string, bool) {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, "copilot")
+		if filepath.Clean(candidate) == filepath.Clean(currentPath) {
+			continue
+		}
+		if info, err := statFn(candidate); err != nil || info.IsDir() {
+			continue
+		}
+		if isVscodeCopilotWrapper(candidate) {
+			continue
+		}
+		return candidate, true
+	}
+	return "", false
+}
+
+type copilotTool struct {
+	path        string
+	runtimeRoot string
+	binDir      string
+	wrapperPath string
+}
+
+func resolveCopilotTool() (copilotTool, error) {
+	copilotPath, err := lookPathFn("copilot")
+	if err != nil {
+		return copilotTool{}, fmt.Errorf("find copilot CLI: %w\n  Install: see docs/configuration.md or https://docs.github.com/en/copilot", err)
+	}
+	tool := copilotTool{path: copilotPath}
+	if isVscodeCopilotWrapper(copilotPath) {
+		fallbackPath, ok := findFallbackCopilot(copilotPath)
+		if !ok {
+			return copilotTool{}, fmt.Errorf("find copilot CLI: found VS Code wrapper at %s but no non-wrapper copilot executable later on PATH; install the CLI or move it ahead of the VS Code wrapper", copilotPath)
+		}
+		tool.path = fallbackPath
+		tool.wrapperPath = copilotPath
+	}
+	tool.runtimeRoot, tool.binDir, _ = resolveCopilotRuntimeMount(tool.path)
+	return tool, nil
+}
+
 // discoverHostTools locates all host binaries and directories required
 // for Docker agent containers. It fails fast if a required tool is missing.
 func discoverHostTools() (hostTools, error) {
-	copilotPath, err := lookPathFn("copilot")
+	copilot, err := resolveCopilotTool()
 	if err != nil {
-		return hostTools{}, fmt.Errorf("find copilot CLI: %w\n  Install: see docs/configuration.md or https://docs.github.com/en/copilot", err)
+		return hostTools{}, err
 	}
 	gitPath, err := lookPathFn("git")
 	if err != nil {
@@ -131,7 +229,9 @@ func discoverHostTools() (hostTools, error) {
 	}
 
 	return hostTools{
-		copilotPath:        copilotPath,
+		copilotPath:        copilot.path,
+		copilotRuntimeRoot: copilot.runtimeRoot,
+		copilotBinDir:      copilot.binDir,
 		copilotConfigDir:   copilotConfigDir,
 		copilotCacheDir:    copilotCacheDir,
 		gitPath:            gitPath,
@@ -172,13 +272,33 @@ type ToolReport struct {
 func InspectHostTools() ToolReport {
 	var r ToolReport
 
+	if copilot, err := resolveCopilotTool(); err != nil {
+		r.Findings = append(r.Findings, ToolFinding{
+			Name:     "copilot",
+			Required: true,
+			Found:    false,
+			Message:  err.Error(),
+		})
+	} else {
+		message := fmt.Sprintf("copilot: %s", copilot.path)
+		if copilot.wrapperPath != "" {
+			message = fmt.Sprintf("copilot: %s (selected after skipping VS Code wrapper %s)", copilot.path, copilot.wrapperPath)
+		}
+		r.Findings = append(r.Findings, ToolFinding{
+			Name:     "copilot",
+			Path:     copilot.path,
+			Required: true,
+			Found:    true,
+			Message:  message,
+		})
+	}
+
 	// Required tools.
 	for _, tool := range []struct {
 		name     string
 		lookup   func() (string, error)
 		required bool
 	}{
-		{"copilot", func() (string, error) { return lookPathFn("copilot") }, true},
 		{"git", func() (string, error) { return lookPathFn("git") }, true},
 		{"git-upload-pack", func() (string, error) { return findGitHelper("git-upload-pack") }, true},
 		{"git-receive-pack", func() (string, error) { return findGitHelper("git-receive-pack") }, true},

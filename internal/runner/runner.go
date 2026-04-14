@@ -307,6 +307,8 @@ func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, git
 		image:                      image,
 		workdir:                    workdir,
 		copilotPath:                tools.copilotPath,
+		copilotRuntimeRoot:         tools.copilotRuntimeRoot,
+		copilotBinDir:              tools.copilotBinDir,
 		gitPath:                    tools.gitPath,
 		gitUploadPackPath:          tools.gitUploadPackPath,
 		gitReceivePackPath:         tools.gitReceivePackPath,

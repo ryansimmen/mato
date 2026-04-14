@@ -497,6 +497,8 @@ ownership.
 | `<repo>/.mato/in-progress` | `/workspace/.mato/in-progress` (ro) | Lets work agents read the claimed task file via `MATO_TASK_PATH`. |
 | `<repo>/.mato/ready-for-review` | `/workspace/.mato/ready-for-review` (ro) | Lets review agents read the review task file via `MATO_TASK_PATH`. |
 | `<repo>/.mato/messages` | `/workspace/.mato/messages` | Lets agents write coordination events and review verdict files. |
+
+Before each agent launch, mato pre-creates the clone-local `.mato/` mountpoints inside `/workspace` so Docker does not synthesize a root-owned parent directory for nested queue mounts. It also probes the host queue paths before launch and fails early with a host-to-container path error when a required mount like `.mato/messages` is not writable.
 | host `copilot` binary | `/usr/local/bin/copilot` (ro) | Runs Copilot CLI inside the container. |
 | host `git` binary | `/usr/local/bin/git` (ro) | Provides Git inside the container. |
 | host `git-upload-pack` | `/usr/local/bin/git-upload-pack` (ro) | Needed when Git fetches from the local-path remote. |

@@ -2,6 +2,11 @@
 
 -include .env
 
+# The dev container can export a stale GOROOT that does not match the active
+# Go toolchain binary. Let the Go tool infer its own root from the selected
+# binary so build/test targets work consistently.
+unexport GOROOT
+
 .PHONY: all build clean deadcode fmt help install integration-test lint run test vet
 
 BIN_DIR := bin

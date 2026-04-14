@@ -5309,6 +5309,8 @@ func TestResolveGitIdentity_FallsBackToDefaults(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(fakeHome, ".config"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(fakeHome, "nonexistent-gitconfig"))
 
 	name, email := resolveGitIdentity(dir)
 
