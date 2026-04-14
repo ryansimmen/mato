@@ -242,6 +242,13 @@ func pollReview(ctx context.Context, env envConfig, run runContext, tasksDir, br
 	fmt.Printf("Reviewing task %s on branch %s\n", reviewTask.Filename, reviewTask.Branch)
 	if err := runReview(ctx, env, run, reviewTask, branch); err != nil {
 		ui.Warnf("warning: review agent failed: %v\n", err)
+		var recordedErr *recordedReviewFailureError
+		if errors.As(err, &recordedErr) {
+			if summary != nil {
+				summary.review = summarizeReviewOutcome(tasksDir, reviewTask)
+			}
+			return true
+		}
 	}
 	postReviewAction(tasksDir, agentID, reviewTask)
 	if summary != nil {

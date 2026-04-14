@@ -739,6 +739,71 @@ func TestRunOnce_StartingTipFailureLeavesRecoverableTaskState(t *testing.T) {
 	}
 }
 
+func TestRunOnce_UnwritableMessagesDirRecordsSpecificFailure(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
+	setHook(t, &removeCloneFn, func(string) {})
+
+	messagesDir := filepath.Join(tasksDir, "messages")
+	if err := os.Chmod(messagesDir, 0o555); err != nil {
+		t.Fatalf("Chmod(messages): %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(messagesDir, 0o755)
+	})
+
+	taskFile := "mount-failure.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	if err := os.WriteFile(taskPath, []byte("# Mount Failure\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, targetBranch: "mato", workdir: "/workspace"}
+	run := runContext{agentID: "agent1", timeout: time.Second}
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/mount-failure", Title: "Mount Failure", TaskPath: taskPath}
+
+	err = runOnce(context.Background(), env, run, claimed)
+	if err == nil {
+		t.Fatal("expected runOnce error")
+	}
+	if !strings.Contains(err.Error(), "validate task queue mounts") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("ReadFile task: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "<!-- failure: agent1 at") {
+		t.Fatalf("expected prelaunch failure marker, got:\n%s", content)
+	}
+	if !strings.Contains(content, "validate task queue mounts") {
+		t.Fatalf("expected specific mount failure in marker, got:\n%s", content)
+	}
+
+	captureStdoutStderr(t, func() {
+		recoverStuckTask(tasksDir, "agent1", claimed)
+	})
+
+	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
+	data, err = os.ReadFile(backlogPath)
+	if err != nil {
+		t.Fatalf("ReadFile backlog task: %v", err)
+	}
+	content = string(data)
+	if got := strings.Count(content, "<!-- failure:"); got != 1 {
+		t.Fatalf("expected 1 failure marker after recovery, got %d:\n%s", got, content)
+	}
+	if strings.Contains(content, "agent container exited without cleanup") {
+		t.Fatalf("generic cleanup failure should not be appended when a specific prelaunch failure exists:\n%s", content)
+	}
+}
+
 func TestPostAgentPush_LogProbeFailureReturnsError(t *testing.T) {
 	tasksDir := t.TempDir()
 	for _, sub := range []string{dirs.InProgress, dirs.ReadyReview, "messages", "messages/events"} {

@@ -39,6 +39,34 @@ type reviewCandidate struct {
 	priority int
 }
 
+type recordedReviewFailureError struct {
+	cause error
+}
+
+func (e *recordedReviewFailureError) Error() string {
+	if e == nil || e.cause == nil {
+		return "review failure recorded"
+	}
+	return e.cause.Error()
+}
+
+func (e *recordedReviewFailureError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func recordReviewPrelaunchFailure(task *queue.ClaimedTask, agentID string, err error) error {
+	if task == nil || err == nil {
+		return err
+	}
+	if appendReviewFailure(task.TaskPath, prelaunchFailureAgentID(agentID), err.Error()) {
+		return &recordedReviewFailureError{cause: err}
+	}
+	return err
+}
+
 func quarantineMalformedReviewTask(tasksDir, failedDir string, pf queueview.ParseFailure) {
 	ui.Warnf("warning: quarantining unparseable review candidate %s: %v\n", pf.Filename, pf.Err)
 	if err := os.MkdirAll(failedDir, 0o755); err != nil {
@@ -270,7 +298,15 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 
 	cloneDir, err := git.CreateClone(env.repoRoot)
 	if err != nil {
-		return fmt.Errorf("create clone for review: %w", err)
+		return recordReviewPrelaunchFailure(task, run.agentID, fmt.Errorf("create clone for review: %w", err))
+	}
+	if err := prepareCloneQueueMounts(cloneDir); err != nil {
+		git.RemoveClone(cloneDir)
+		return recordReviewPrelaunchFailure(task, run.agentID, fmt.Errorf("prepare clone queue mounts for review: %w", err))
+	}
+	if err := validateQueueMountAccess(reviewQueueMountChecks(env.tasksDir, env.workdir)); err != nil {
+		git.RemoveClone(cloneDir)
+		return recordReviewPrelaunchFailure(task, run.agentID, fmt.Errorf("validate review queue mounts: %w", err))
 	}
 	defer git.RemoveClone(cloneDir)
 
@@ -279,7 +315,7 @@ func runReview(ctx context.Context, env envConfig, run runContext, task *queue.C
 	}
 	restoreOrigin, err := prepareCloneOriginForContainer(cloneDir)
 	if err != nil {
-		return fmt.Errorf("prepare review clone origin for container: %w", err)
+		return recordReviewPrelaunchFailure(task, run.agentID, fmt.Errorf("prepare review clone origin for container: %w", err))
 	}
 
 	run.cloneDir = cloneDir
