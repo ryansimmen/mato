@@ -566,7 +566,6 @@ func TestInspectHostTools_RequiredVsOptionalClassification(t *testing.T) {
 	optionalNames := map[string]bool{
 		"gopls": true, "copilot cache dir": true, "git templates dir": true, "system certs dir": true, "gh config dir": true,
 	}
-
 	for _, f := range report.Findings {
 		if requiredNames[f.Name] {
 			if !f.Required {
@@ -719,4 +718,154 @@ func TestInspectHostTools_GhFallsBackToPATH(t *testing.T) {
 		}
 	}
 	t.Fatal("expected a gh finding in report")
+}
+
+func TestResolveVscodeNodePath_Found(t *testing.T) {
+	script := `#!/bin/sh
+unset NODE_OPTIONS
+ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/some/copilot.js"
+`
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		return []byte(script), nil
+	})
+	setHook(t, &statFn, makeStatFn(map[string]fakeFileInfo{
+		"/vscode/bin/linux-x64/abc123/node": {name: "node"},
+	}))
+
+	nodePath, ok := resolveVscodeNodePath("/usr/local/bin/copilot")
+	if !ok {
+		t.Fatal("expected resolveVscodeNodePath to find the node binary")
+	}
+	if nodePath != "/vscode/bin/linux-x64/abc123/node" {
+		t.Fatalf("nodePath = %q, want /vscode/bin/linux-x64/abc123/node", nodePath)
+	}
+}
+
+func TestResolveVscodeNodePath_NotScript(t *testing.T) {
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	})
+
+	_, ok := resolveVscodeNodePath("/usr/local/bin/copilot")
+	if ok {
+		t.Fatal("expected resolveVscodeNodePath to return false for unreadable file")
+	}
+}
+
+func TestResolveVscodeNodePath_NodeBinaryMissing(t *testing.T) {
+	script := `#!/bin/sh
+ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/some/copilot.js"
+`
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		return []byte(script), nil
+	})
+	setHook(t, &statFn, makeStatFn(map[string]fakeFileInfo{}))
+
+	_, ok := resolveVscodeNodePath("/usr/local/bin/copilot")
+	if ok {
+		t.Fatal("expected resolveVscodeNodePath to return false when node binary is missing")
+	}
+}
+
+func TestResolveVscodeNodePath_NoNodeReference(t *testing.T) {
+	script := `#!/bin/sh
+exec /usr/local/bin/copilot-real "$@"
+`
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		return []byte(script), nil
+	})
+	setHook(t, &statFn, makeStatFn(map[string]fakeFileInfo{}))
+
+	_, ok := resolveVscodeNodePath("/usr/local/bin/copilot")
+	if ok {
+		t.Fatal("expected resolveVscodeNodePath to return false for a script without a node reference")
+	}
+}
+
+func TestDiscoverHostTools_VscodeNodePath(t *testing.T) {
+	home := "/fake/home"
+	script := `#!/bin/sh
+ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/some/copilot.js"
+`
+	setTestSeams(t,
+		makeLookPathFn(allRequiredTools()),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                          {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):         {name: ".copilot", isDir: true},
+			"/vscode/bin/linux-x64/abc123/node":     {name: "node"},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		return []byte(script), nil
+	})
+
+	tools, err := discoverHostTools()
+	if err != nil {
+		t.Fatalf("discoverHostTools failed: %v", err)
+	}
+	if tools.vscodeNodePath != "/vscode/bin/linux-x64/abc123/node" {
+		t.Fatalf("vscodeNodePath = %q, want /vscode/bin/linux-x64/abc123/node", tools.vscodeNodePath)
+	}
+}
+
+func TestInspectHostTools_VscodeNodeFound(t *testing.T) {
+	home := "/fake/home"
+	script := `#!/bin/sh
+ELECTRON_RUN_AS_NODE=1 "/vscode/bin/linux-x64/abc123/node" "/some/copilot.js"
+`
+	setTestSeams(t,
+		makeLookPathFn(allRequiredTools()),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                          {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"):         {name: ".copilot", isDir: true},
+			"/vscode/bin/linux-x64/abc123/node":     {name: "node"},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		return []byte(script), nil
+	})
+
+	report := InspectHostTools()
+	for _, f := range report.Findings {
+		if f.Name == "vscode node" {
+			if !f.Found {
+				t.Fatal("expected vscode node finding to be Found=true")
+			}
+			if f.Path != "/vscode/bin/linux-x64/abc123/node" {
+				t.Fatalf("vscode node path = %q, want /vscode/bin/linux-x64/abc123/node", f.Path)
+			}
+			return
+		}
+	}
+	t.Fatal("expected a vscode node finding in report")
+}
+
+func TestInspectHostTools_VscodeNodeMissingIsOmitted(t *testing.T) {
+	home := "/fake/home"
+	script := `#!/bin/sh
+exec /usr/local/bin/copilot-real "$@"
+`
+	setTestSeams(t,
+		makeLookPathFn(allRequiredTools()),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	setHook(t, &readFileFn, func(path string) ([]byte, error) {
+		return []byte(script), nil
+	})
+
+	report := InspectHostTools()
+	for _, f := range report.Findings {
+		if f.Name == "vscode node" {
+			t.Fatal("expected missing best-effort vscode node finding to be omitted")
+		}
+	}
 }

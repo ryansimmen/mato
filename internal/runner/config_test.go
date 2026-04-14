@@ -110,6 +110,37 @@ func TestBuildDockerArgs_AllOptionalMounts(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_VscodeNodeMount(t *testing.T) {
+	env := envConfig{
+		homeDir:        "/home/test",
+		image:          "ubuntu:24.04",
+		workdir:        "/workspace",
+		vscodeNodePath: "/vscode/bin/linux-x64/abc123/node",
+	}
+	run := runContext{prompt: "test"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "/vscode/bin/linux-x64/abc123/node:/vscode/bin/linux-x64/abc123/node:ro") {
+		t.Fatal("vscode node binary should be bind-mounted read-only at its original path")
+	}
+}
+
+func TestBuildDockerArgs_VscodeNodeNotMounted(t *testing.T) {
+	env := envConfig{
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
+	}
+	run := runContext{prompt: "test"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "/vscode/bin") {
+		t.Fatal("vscode node mount should be omitted when vscodeNodePath is empty")
+	}
+}
+
 func TestBuildDockerArgs_ExtraVolumes(t *testing.T) {
 	env := envConfig{
 		homeDir: "/home/test",

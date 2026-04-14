@@ -100,6 +100,7 @@ type envConfig struct {
 	copilotPath, gitPath, gitUploadPackPath string
 	gitReceivePackPath, ghPath, goplsPath   string
 	goRoot                                  string
+	vscodeNodePath                          string
 	copilotConfigDir, copilotCacheDir       string
 	gitName, gitEmail, homeDir, ghConfigDir string
 	hasGhConfig                             bool
@@ -151,6 +152,11 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"run", "--rm", "--init", runFlags,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/copilot:ro", env.copilotPath),
+	}
+	if p := strings.TrimSpace(env.vscodeNodePath); p != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", p, p))
+	}
+	args = append(args,
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git:ro", env.gitPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git-upload-pack:ro", env.gitUploadPackPath),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/git-receive-pack:ro", env.gitReceivePackPath),
@@ -160,7 +166,7 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"-e", "PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"-e", "GIT_PAGER=cat",
 		"-e", "PAGER=cat",
-	}
+	)
 	args = appendDockerBindMount(args, run.cloneDir, env.workdir, false)
 	args = appendDockerBindMount(args, env.repoRoot, containerOriginRepoDir, true)
 	if tasksDir := strings.TrimSpace(env.tasksDir); tasksDir != "" {
