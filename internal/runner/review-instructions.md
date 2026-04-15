@@ -74,7 +74,7 @@ printf '{"id":"%s-%s-verify-review-%s","from":"%s","type":"progress","task":"%s"
 ```
 If `TASK_TITLE` is empty, read the first `# ` heading from the task file and use it as the title. If no heading is found, use the filename (without `.md` extension) as the title.
 Read the full task file to understand the requirements. Task files may have YAML frontmatter between `---` delimiters at the top. This is metadata for the host scheduler. Ignore it when reading task instructions. The task instructions begin after the frontmatter block (or at the start if there is no frontmatter). The `#` heading is the task title.
-Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, `<!-- failure: ... -->`, `<!-- review-failure: ... -->`, and `<!-- review-rejection: ... -->` when interpreting the task body.
+Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, `<!-- branch-repair: ... -->`, `<!-- failure: ... -->`, `<!-- review-failure: ... -->`, and `<!-- review-rejection: ... -->` when interpreting the task body.
 **Decision table:**
 | If | Then |
 | --- | --- |
