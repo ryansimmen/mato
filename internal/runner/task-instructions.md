@@ -25,7 +25,7 @@ The host manages branch creation before you start and handles pushing the branch
 - Never push to any branch. The host pushes the task branch after you exit.
 - Never move task files between directories. The host handles all file moves.
 - Never delete unrelated files or revert someone else's work; change only files required by the task.
-- Preserve the `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` comment patterns exactly.
+- Preserve the `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, `<!-- branch-repair: ... -->`, and `<!-- failure: ... -->` comment patterns exactly.
 - Messaging is best-effort: if reading or writing messages fails, continue the task anyway.
 - Send at most 4 agent-written messages per task: up to 3 `progress` messages (one per state machine step) and up to 1 for `ON_FAILURE`. The `intent` message is sent by the host before the agent starts. Do NOT send messages for any other reason.
 - Do not stop midway. End only after a successful commit or after recording failure metadata via `ON_FAILURE`.
@@ -104,7 +104,7 @@ If `TASK_TITLE` is empty, read the first `# ` heading from the task file and use
 ## STATE: WORK
 **Goal:** Read the task instructions correctly, make the required changes, and validate them.
 Task files may have YAML frontmatter between `---` delimiters at the top. This is metadata for the host scheduler. Ignore it when reading task instructions. The task instructions begin after the frontmatter block (or at the start if there is no frontmatter). The `#` heading is the task title.
-Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, and `<!-- failure: ... -->` when interpreting the task body.
+Also ignore leading HTML comment metadata lines such as `<!-- claimed-by: ... -->`, `<!-- branch: ... -->`, `<!-- branch-repair: ... -->`, and `<!-- failure: ... -->` when interpreting the task body.
 **Commands:**
 ```bash
 date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt

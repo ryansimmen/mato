@@ -2211,7 +2211,159 @@ func TestPostAgentPush_BranchMarkerWriteFailureLeavesPushedTaskState(t *testing.
 	}
 }
 
-func TestRunOnce_RecordedBranchResumeRequiresLocalOrRemoteSource(t *testing.T) {
+func TestRunOnce_RecordedBranchResumeMissingRemoteStartsFreshSession(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	cloneDir, err := git.CreateClone(repoRoot)
+	if err != nil {
+		t.Fatalf("git.CreateClone: %v", err)
+	}
+	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
+	setHook(t, &removeCloneFn, func(string) {})
+
+	taskFile := "resume-repair.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	mustWriteFile(t, taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/resume-repair -->\n# Resume Repair\n"), 0o644)
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/resume-repair", Title: "Resume Repair", TaskPath: taskPath, HadRecordedBranchMark: true}
+
+	oldSessionID := "stale-work-session"
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindWork, taskFile, func(session *runtimedata.Session) {
+		session.CopilotSessionID = oldSessionID
+		session.TaskBranch = claimed.Branch
+	}); err != nil {
+		t.Fatalf("seed work session: %v", err)
+	}
+
+	setHook(t, &ensureBranchFn, func(repoRoot, branch string) (git.EnsureBranchResult, error) {
+		if _, err := git.Output(repoRoot, "checkout", "-b", branch); err != nil {
+			return git.EnsureBranchResult{}, err
+		}
+		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceHeadRemoteMissing}, nil
+	})
+
+	var capturedArgs []string
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		return cmd
+	})
+
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, workdir: repoRoot, copilotPath: "/bin/true", gitPath: "/usr/bin/git", gitUploadPackPath: "/usr/bin/git-upload-pack", gitReceivePackPath: "/usr/bin/git-receive-pack", ghPath: "/bin/true", goRoot: "/usr", homeDir: t.TempDir(), targetBranch: "mato", image: "test-image"}
+	run := runContext{agentID: "agent1", prompt: "test", timeout: time.Second}
+
+	if err := runOnce(context.Background(), env, run, claimed); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+
+	joined := strings.Join(capturedArgs, " ")
+	if strings.Contains(joined, "--resume=") {
+		t.Fatalf("expected stale recorded branch repair to start fresh, got docker args: %s", joined)
+	}
+
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("ReadFile task: %v", err)
+	}
+	if !taskfile.ContainsBranchRepairMarker(data) {
+		t.Fatalf("expected branch-repair marker, got:\n%s", string(data))
+	}
+	if taskfile.CountFailureMarkers(data) != 0 {
+		t.Fatalf("branch-repair should not consume retry budget, got %d failure markers", taskfile.CountFailureMarkers(data))
+	}
+
+	session, err := runtimedata.LoadSession(tasksDir, runtimedata.KindWork, taskFile)
+	if err != nil {
+		t.Fatalf("Load work session: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected work session after branch repair")
+	}
+	if session.CopilotSessionID == oldSessionID {
+		t.Fatal("expected repaired resume to rotate stale work session ID")
+	}
+}
+
+func TestRunOnce_RecordedBranchResumeMissingRemoteRepeatedRunsAppendRepairMarkersAndRotateSessions(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskFile := "repeat-repair.md"
+	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
+	mustWriteFile(t, taskPath, []byte("<!-- claimed-by: agent1 -->\n<!-- branch: task/repeat-repair -->\n# Repeat Repair\n"), 0o644)
+	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/repeat-repair", Title: "Repeat Repair", TaskPath: taskPath, HadRecordedBranchMark: true}
+
+	oldSessionID := "stale-work-session"
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindWork, taskFile, func(session *runtimedata.Session) {
+		session.CopilotSessionID = oldSessionID
+		session.TaskBranch = claimed.Branch
+	}); err != nil {
+		t.Fatalf("seed work session: %v", err)
+	}
+
+	setHook(t, &ensureBranchFn, func(repoRoot, branch string) (git.EnsureBranchResult, error) {
+		if _, err := git.Output(repoRoot, "checkout", "-b", branch); err != nil {
+			return git.EnsureBranchResult{}, err
+		}
+		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceHeadRemoteMissing}, nil
+	})
+
+	var commandLines []string
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		commandLines = append(commandLines, strings.Join(append([]string{name}, args...), " "))
+		cmd := exec.CommandContext(ctx, "true")
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = gracefulShutdownDelay
+		return cmd
+	})
+
+	env := envConfig{repoRoot: repoRoot, tasksDir: tasksDir, workdir: repoRoot, copilotPath: "/bin/true", gitPath: "/usr/bin/git", gitUploadPackPath: "/usr/bin/git-upload-pack", gitReceivePackPath: "/usr/bin/git-receive-pack", ghPath: "/bin/true", goRoot: "/usr", homeDir: t.TempDir(), targetBranch: "mato", image: "test-image"}
+	run := runContext{agentID: "agent1", prompt: "test", timeout: time.Second}
+
+	if err := runOnce(context.Background(), env, run, claimed); err != nil {
+		t.Fatalf("first runOnce: %v", err)
+	}
+	firstSession, err := runtimedata.LoadSession(tasksDir, runtimedata.KindWork, taskFile)
+	if err != nil {
+		t.Fatalf("load first work session: %v", err)
+	}
+	if firstSession == nil {
+		t.Fatal("expected work session after first repaired run")
+	}
+	if firstSession.CopilotSessionID == oldSessionID {
+		t.Fatal("expected first repaired run to rotate stale work session ID")
+	}
+
+	if err := runOnce(context.Background(), env, run, claimed); err != nil {
+		t.Fatalf("second runOnce: %v", err)
+	}
+	secondSession, err := runtimedata.LoadSession(tasksDir, runtimedata.KindWork, taskFile)
+	if err != nil {
+		t.Fatalf("load second work session: %v", err)
+	}
+	if secondSession == nil {
+		t.Fatal("expected work session after second repaired run")
+	}
+	if secondSession.CopilotSessionID == firstSession.CopilotSessionID {
+		t.Fatal("expected each repaired run to rotate the work session ID")
+	}
+
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		t.Fatalf("ReadFile task: %v", err)
+	}
+	if strings.Count(string(data), "<!-- branch-repair:") != 2 {
+		t.Fatalf("expected two branch-repair markers after two repaired runs, got:\n%s", string(data))
+	}
+	if taskfile.CountFailureMarkers(data) != 0 {
+		t.Fatalf("branch-repair markers should not consume retry budget, got %d failure markers", taskfile.CountFailureMarkers(data))
+	}
+	for _, commandLine := range commandLines {
+		if strings.Contains(commandLine, "--resume=") {
+			t.Fatalf("repaired runs should not use --resume, got command: %s", commandLine)
+		}
+	}
+}
+
+func TestRunOnce_RecordedBranchResumeStillFailsWhenOriginUnavailable(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "resume-guard.md"
 	taskPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
@@ -2219,7 +2371,7 @@ func TestRunOnce_RecordedBranchResumeRequiresLocalOrRemoteSource(t *testing.T) {
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/resume-guard", Title: "Resume Guard", TaskPath: taskPath, HadRecordedBranchMark: true}
 
 	setHook(t, &ensureBranchFn, func(repoRoot, branch string) (git.EnsureBranchResult, error) {
-		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceHeadRemoteMissing}, nil
+		return git.EnsureBranchResult{Branch: branch, Source: git.BranchSourceHeadRemoteUnavailable}, nil
 	})
 
 	dockerDir := t.TempDir()
@@ -2234,7 +2386,7 @@ func TestRunOnce_RecordedBranchResumeRequiresLocalOrRemoteSource(t *testing.T) {
 
 	err := runOnce(context.Background(), env, run, claimed)
 	if err == nil {
-		t.Fatal("expected runOnce to fail closed for recorded branch fallback")
+		t.Fatal("expected runOnce to fail closed when origin is unavailable")
 	}
 	if !strings.Contains(err.Error(), "unsupported branch source") {
 		t.Fatalf("unexpected error: %v", err)
