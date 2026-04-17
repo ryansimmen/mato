@@ -315,6 +315,8 @@ func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, git
 		ghPath:                     tools.ghPath,
 		goplsPath:                  tools.goplsPath,
 		goRoot:                     tools.goRoot,
+		hostGoModCache:             tools.goModCache,
+		hostGoBuildCache:           tools.goBuildCache,
 		copilotConfigDir:           tools.copilotConfigDir,
 		copilotCacheDir:            tools.copilotCacheDir,
 		gitName:                    gitName,
