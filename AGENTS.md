@@ -9,6 +9,7 @@ Go 1.26, module name `mato`, CLI built with `spf13/cobra`.
 # Build
 go build ./...                          # type-check all packages
 make build                              # compile binary to bin/mato
+make verify                             # run build, vet, lint, deadcode, and uncached tests
 
 # Lint
 go vet ./...                            # built-in static analysis
@@ -20,6 +21,7 @@ go fmt ./...                            # or: make fmt
 
 # Test — all
 go test -race ./...                     # or: make test
+go test -race -count=1 ./...            # or: make test-race
 go test -count=1 ./...                  # disable test cache (use before committing)
 
 # Test — single package
@@ -32,7 +34,7 @@ go test -race -run TestSafeRename_MissingSource ./internal/queue/...
 go test -race -v ./internal/integration/...   # or: make integration-test
 
 # Full verification (run before every commit)
-go build ./... && go vet ./... && make lint && make deadcode && go test -count=1 ./...
+make verify
 ```
 
 ## Project Layout
@@ -172,7 +174,7 @@ import (
 3. **Update docs** — If behavior changed, update this file (`AGENTS.md`) and any affected
    docs: `README.md`, `docs/architecture.md`, `docs/task-format.md`, `docs/messaging.md`,
    `docs/configuration.md`. If task format changed, also update `.github/skills/mato/SKILL.md`.
-4. **Verify** — `go build ./... && go vet ./... && make lint && make deadcode && go test -count=1 ./...`
+4. **Verify** — `make verify`
 5. **Commit** — Conventional commit messages (`feat:`, `fix:`, `docs:`, etc.).
 
 ### Pull Request Safety

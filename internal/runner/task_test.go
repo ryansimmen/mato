@@ -381,6 +381,7 @@ func TestPostAgentPush_RecordsWorkSessionHead(t *testing.T) {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
 	defer git.RemoveClone(cloneDir)
+	configureGitIdentity(t, cloneDir)
 
 	taskFile := "session-work.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
@@ -443,6 +444,7 @@ func TestPostAgentPush_UsesHostRepoWhenOriginIsRewritten(t *testing.T) {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
 	defer git.RemoveClone(cloneDir)
+	configureGitIdentity(t, cloneDir)
 
 	taskFile := "rewritten-origin.md"
 	inProgressPath := filepath.Join(tasksDir, dirs.InProgress, taskFile)
@@ -857,6 +859,7 @@ func TestRunOnce_PreservesCloneOnPostAgentPushFailure(t *testing.T) {
 		if _, err := git.Output("", "clone", "--quiet", repoRoot, cloneDir); err != nil {
 			return "", err
 		}
+		configureGitIdentity(t, cloneDir)
 		createdClone = cloneDir
 		return cloneDir, nil
 	})
@@ -937,6 +940,7 @@ func TestRunOnce_RestoreOriginFailureAfterPushStillHandsOffWork(t *testing.T) {
 		if err != nil {
 			return "", err
 		}
+		configureGitIdentity(t, cloneDir)
 		createdClone = cloneDir
 		return cloneDir, nil
 	})
@@ -1734,6 +1738,16 @@ func setupGitCloneWithCommits(t *testing.T, targetBranch, taskBranch string) str
 	gitRun(cloneDir, "git", "commit", "-m", "task work")
 
 	return cloneDir
+}
+
+func configureGitIdentity(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := git.Output(dir, "config", "user.name", "test"); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if _, err := git.Output(dir, "config", "user.email", "test@test.com"); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
 }
 
 // readEventMessages reads all message JSON files from the messages/events/
