@@ -74,6 +74,7 @@ var (
 	claimedByRe        = regexp.MustCompile(`<!-- claimed-by:\s*(\S+).*-->`)
 	claimedAtRe        = regexp.MustCompile(`<!-- claimed-by:\s*\S+\s+claimed-at:\s*(\S+)\s*-->`)
 	mergedMarkerRe     = regexp.MustCompile(`<!-- merged:\s*merge-queue at\s+(\S+)\s*-->`)
+	branchRepairPrefix = "<!-- branch-repair:"
 	reviewRejectionStr = "<!-- review-rejection:"
 	failurePrefix      = "<!-- failure:"
 	reviewFailureStr   = "<!-- review-failure:"
@@ -507,6 +508,32 @@ func AppendCancelledRecord(path string) error {
 	content := fmt.Sprintf("\n<!-- cancelled: operator at %s -->\n",
 		time.Now().UTC().Format(time.RFC3339))
 	return atomicwrite.AppendToFile(path, content)
+}
+
+// AppendBranchRepairRecord appends a <!-- branch-repair: ... --> record to the
+// task file at path using O_APPEND. Branch-repair records audit when the host
+// recreates a recorded task branch from current HEAD after the remote branch is
+// missing. These records are informational and do not consume retry budget.
+func AppendBranchRepairRecord(path, agentID, reason string) error {
+	agentID = SanitizeCommentText(agentID)
+	reason = SanitizeCommentText(reason)
+	content := fmt.Sprintf("\n<!-- branch-repair: %s at %s reason=%s -->\n",
+		agentID, time.Now().UTC().Format(time.RFC3339), reason)
+	return atomicwrite.AppendToFile(path, content)
+}
+
+// ContainsBranchRepairMarker reports whether data contains a
+// <!-- branch-repair: ... --> marker as a standalone line.
+func ContainsBranchRepairMarker(data []byte) bool {
+	found := false
+	forEachMarkerLine(data, func(trimmed string) bool {
+		if isStandaloneMarker(trimmed, branchRepairPrefix) {
+			found = true
+			return true
+		}
+		return false
+	})
+	return found
 }
 
 // ContainsCancelledMarker reports whether data contains a <!-- cancelled: ... -->

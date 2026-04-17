@@ -13,6 +13,8 @@ import (
 	"mato/internal/dirs"
 	"mato/internal/git"
 	"mato/internal/pause"
+	"mato/internal/runtimedata"
+	"mato/internal/taskfile"
 	"mato/internal/testutil"
 )
 
@@ -225,6 +227,91 @@ func TestBoundedRun_OnceClaimsAndLeavesTaskReadyForReview(t *testing.T) {
 	show, err := git.Output(repoRoot, "show", "task/once:once.txt")
 	if err != nil {
 		t.Fatalf("git show task/once:once.txt: %v", err)
+	}
+	if strings.TrimSpace(show) != "bounded once" {
+		t.Fatalf("once.txt = %q, want %q", strings.TrimSpace(show), "bounded once")
+	}
+}
+
+func TestBoundedRun_OnceRepairsMissingRecordedBranchAndStartsFreshSession(t *testing.T) {
+	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
+	taskFile := "resume-repair.md"
+	branch := "task/resume-repair"
+	writeTask(t, tasksDir, dirs.Backlog, taskFile, strings.Join([]string{
+		"<!-- branch: " + branch + " -->",
+		"# Resume Repair",
+		"Create once.txt on the repaired branch.",
+		"",
+	}, "\n"))
+
+	oldSessionID := "stale-session-id"
+	if err := runtimedata.UpdateSession(tasksDir, runtimedata.KindWork, taskFile, func(session *runtimedata.Session) {
+		session.CopilotSessionID = oldSessionID
+		session.TaskBranch = branch
+	}); err != nil {
+		t.Fatalf("seed work session: %v", err)
+	}
+
+	argsLog := filepath.Join(t.TempDir(), "docker-args.txt")
+	env := append(boundedRunWorkEnv(t), "MATO_DOCKER_ARGS_LOG="+argsLog)
+	out, err := runMatoCommandWithEnv(t, env, "run", "--repo", repoRoot, "--once")
+	assertExitCode(t, err, 0)
+
+	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
+	if _, err := os.Stat(readyPath); err != nil {
+		t.Fatalf("ready-for-review task missing: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); !os.IsNotExist(err) {
+		t.Fatalf("backlog task should be gone after repair run, stat err = %v\n%s", err, out)
+	}
+
+	taskData := readFile(t, readyPath)
+	if !strings.Contains(taskData, "<!-- branch: "+branch+" -->") {
+		t.Fatalf("task missing original branch marker after repair:\n%s", taskData)
+	}
+	if !taskfile.ContainsBranchRepairMarker([]byte(taskData)) {
+		t.Fatalf("task missing branch-repair marker after repair:\n%s", taskData)
+	}
+	if strings.Count(taskData, "<!-- branch-repair:") != 1 {
+		t.Fatalf("expected exactly one branch-repair marker, got:\n%s", taskData)
+	}
+	if taskfile.CountFailureMarkers([]byte(taskData)) != 0 {
+		t.Fatalf("branch repair should not consume retry budget, got %d failure markers", taskfile.CountFailureMarkers([]byte(taskData)))
+	}
+
+	if !strings.Contains(out, "starting a fresh work session") {
+		t.Fatalf("output = %q, want repair warning", out)
+	}
+	if !strings.Contains(out, "Pushed "+branch+" and moved "+taskFile+" to ready-for-review/") {
+		t.Fatalf("output = %q, want ready-for-review confirmation", out)
+	}
+
+	argsData, err := os.ReadFile(argsLog)
+	if err != nil {
+		t.Fatalf("read docker args log: %v", err)
+	}
+	args := string(argsData)
+	if strings.Contains(args, "--resume=") {
+		t.Fatalf("docker args should not reuse a stale session during branch repair:\n%s", args)
+	}
+
+	session, err := runtimedata.LoadSession(tasksDir, runtimedata.KindWork, taskFile)
+	if err != nil {
+		t.Fatalf("load work session: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected work session after repair run")
+	}
+	if session.CopilotSessionID == oldSessionID {
+		t.Fatal("expected repair run to rotate stale work session ID")
+	}
+	if session.TaskBranch != branch {
+		t.Fatalf("session branch = %q, want %q", session.TaskBranch, branch)
+	}
+
+	show, err := git.Output(repoRoot, "show", branch+":once.txt")
+	if err != nil {
+		t.Fatalf("git show %s:once.txt: %v", branch, err)
 	}
 	if strings.TrimSpace(show) != "bounded once" {
 		t.Fatalf("once.txt = %q, want %q", strings.TrimSpace(show), "bounded once")
