@@ -33,6 +33,12 @@ func TestDiscoverHostTools_ValidCopilotDir(t *testing.T) {
 	if tools.copilotCacheDir != wantCache {
 		t.Fatalf("copilotCacheDir = %q, want %q", tools.copilotCacheDir, wantCache)
 	}
+	if tools.goModCache != "/resolved/go/pkg/mod" {
+		t.Fatalf("goModCache = %q, want %q", tools.goModCache, "/resolved/go/pkg/mod")
+	}
+	if tools.goBuildCache != "/resolved/.cache/go-build" {
+		t.Fatalf("goBuildCache = %q, want %q", tools.goBuildCache, "/resolved/.cache/go-build")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +64,8 @@ func setTestSeams(t *testing.T, lp func(string) (string, error), st func(string)
 	t.Helper()
 	setHook(t, &mkdirAllFn, func(string, os.FileMode) error { return nil })
 	setHook(t, &goEnvGOROOTFn, func() (string, error) { return "/usr/local/go", nil })
+	setHook(t, &goEnvGOMODCACHEFn, func() (string, error) { return "/resolved/go/pkg/mod", nil })
+	setHook(t, &goEnvGOCACHEFn, func() (string, error) { return "/resolved/.cache/go-build", nil })
 	setHook(t, &runtimeGOROOTFn, func() string { return "/runtime/go" })
 	setHook(t, &evalSymlinksFn, func(path string) (string, error) { return path, nil })
 	if lp != nil {
@@ -416,6 +424,32 @@ func TestDiscoverHostTools_GOROOTFailsWhenNoSourceReturnsValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "neither 'go env GOROOT' nor runtime.GOROOT() returned a value") {
 		t.Fatalf("error = %v, want missing GOROOT message", err)
+	}
+}
+
+func TestDiscoverHostTools_GoCachesFallBackToHomeDefaultsWhenGoEnvUnavailable(t *testing.T) {
+	home := "/fake/home"
+	setTestSeams(t,
+		makeLookPathFn(allRequiredTools()),
+		makeStatFn(map[string]fakeFileInfo{
+			"/usr/bin/gh":                   {name: "gh", isDir: false},
+			filepath.Join(home, ".copilot"): {name: ".copilot", isDir: true},
+		}),
+		func() (string, error) { return home, nil },
+		nil,
+	)
+	setHook(t, &goEnvGOMODCACHEFn, func() (string, error) { return "", exec.ErrNotFound })
+	setHook(t, &goEnvGOCACHEFn, func() (string, error) { return "", exec.ErrNotFound })
+
+	tools, err := discoverHostTools()
+	if err != nil {
+		t.Fatalf("discoverHostTools() error: %v", err)
+	}
+	if tools.goModCache != filepath.Join(home, "go", "pkg", "mod") {
+		t.Fatalf("goModCache = %q, want home-based default", tools.goModCache)
+	}
+	if tools.goBuildCache != filepath.Join(home, ".cache", "go-build") {
+		t.Fatalf("goBuildCache = %q, want home-based default", tools.goBuildCache)
 	}
 }
 

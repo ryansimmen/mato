@@ -266,6 +266,37 @@ func TestBuildDockerArgs_IncludesExistingGoCacheMounts(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_UsesResolvedHostGoCacheMounts(t *testing.T) {
+	hostDir := t.TempDir()
+	hostGoModCache := filepath.Join(hostDir, "gomodcache")
+	hostGoBuildCache := filepath.Join(hostDir, "gocache")
+	if err := os.MkdirAll(hostGoModCache, 0o755); err != nil {
+		t.Fatalf("MkdirAll GOMODCACHE: %v", err)
+	}
+	if err := os.MkdirAll(hostGoBuildCache, 0o755); err != nil {
+		t.Fatalf("MkdirAll GOCACHE: %v", err)
+	}
+	env := envConfig{
+		homeDir:          "/home/test",
+		hostGoModCache:   hostGoModCache,
+		hostGoBuildCache: hostGoBuildCache,
+		image:            "ubuntu:24.04",
+		workdir:          "/workspace",
+		copilotConfigDir: "/home/test/.copilot",
+		copilotCacheDir:  "/home/test/.cache/copilot",
+	}
+	run := runContext{prompt: "test"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, hostGoModCache+":"+env.homeDir+"/go/pkg/mod") {
+		t.Fatal("expected resolved host GOMODCACHE mount")
+	}
+	if !strings.Contains(joined, hostGoBuildCache+":"+env.homeDir+"/.cache/go-build") {
+		t.Fatal("expected resolved host GOCACHE mount")
+	}
+}
+
 func TestBuildDockerArgs_ExtraEnvs(t *testing.T) {
 	env := envConfig{
 		homeDir: "/home/test",
