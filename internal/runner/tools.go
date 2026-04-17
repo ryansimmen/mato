@@ -30,6 +30,20 @@ var goEnvGOROOTFn = func() (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+var goEnvGOMODCACHEFn = func() (string, error) {
+	out, err := exec.Command("go", "env", "GOMODCACHE").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+var goEnvGOCACHEFn = func() (string, error) {
+	out, err := exec.Command("go", "env", "GOCACHE").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
 var gitExecPathFn = func() (string, error) {
 	out, err := exec.Command("git", "--exec-path").Output()
 	if err != nil {
@@ -52,6 +66,8 @@ type hostTools struct {
 	ghPath             string
 	goplsPath          string
 	goRoot             string
+	goModCache         string
+	goBuildCache       string
 	gitTemplatesDir    string
 	hasGitTemplates    bool
 	systemCertsDir     string
@@ -207,6 +223,14 @@ func discoverHostTools() (hostTools, error) {
 	if err != nil {
 		return hostTools{}, fmt.Errorf("resolve home directory: %w", err)
 	}
+	goModCache := filepath.Join(homeDir, "go", "pkg", "mod")
+	if path, err := goEnvGOMODCACHEFn(); err == nil && strings.TrimSpace(path) != "" {
+		goModCache = strings.TrimSpace(path)
+	}
+	goBuildCache := filepath.Join(homeDir, ".cache", "go-build")
+	if path, err := goEnvGOCACHEFn(); err == nil && strings.TrimSpace(path) != "" {
+		goBuildCache = strings.TrimSpace(path)
+	}
 
 	copilotConfigDir := filepath.Join(homeDir, ".copilot")
 	info, statErr := statFn(copilotConfigDir)
@@ -240,6 +264,8 @@ func discoverHostTools() (hostTools, error) {
 		ghPath:             ghPath,
 		goplsPath:          goplsPath,
 		goRoot:             goRoot,
+		goModCache:         goModCache,
+		goBuildCache:       goBuildCache,
 		gitTemplatesDir:    gitTemplatesDir,
 		hasGitTemplates:    hasGitTemplates,
 		systemCertsDir:     systemCertsDir,
