@@ -163,6 +163,12 @@ func TestInitRepo_RemoteBranchLeavesCleanWorktree(t *testing.T) {
 	if _, err := git.Output(cloneParent, "clone", remote, cloneDir); err != nil {
 		t.Fatalf("git clone: %v", err)
 	}
+	if _, err := git.Output(cloneDir, "config", "user.name", "test"); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if _, err := git.Output(cloneDir, "config", "user.email", "test@test.com"); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
 	if _, err := git.Output(cloneDir, "checkout", "-b", "mato"); err != nil {
 		t.Fatalf("git checkout -b mato: %v", err)
 	}

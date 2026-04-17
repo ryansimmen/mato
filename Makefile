@@ -7,7 +7,7 @@
 # binary so build/test targets work consistently.
 unexport GOROOT
 
-.PHONY: all build clean deadcode fmt help install integration-test lint run test vet
+.PHONY: all build clean deadcode fmt help install integration-test lint run test test-race verify vet
 
 BIN_DIR := bin
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || printf dev)
@@ -38,6 +38,16 @@ run: ## Run agent in Docker
 
 test: ## Run tests with race detector
 	go test -race ./...
+
+test-race: ## Run tests with race detector and no cache
+	go test -race -count=1 ./...
+
+verify: ## Run full PR verification suite
+	go build ./...
+	go vet ./...
+	$(MAKE) lint
+	$(MAKE) deadcode
+	go test -count=1 ./...
 
 vet: ## Run go vet
 	go vet ./...
