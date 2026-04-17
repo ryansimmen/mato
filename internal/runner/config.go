@@ -100,6 +100,7 @@ type envConfig struct {
 	copilotPath, gitPath, gitUploadPackPath string
 	gitReceivePackPath, ghPath, goplsPath   string
 	goRoot                                  string
+	hostGoModCache, hostGoBuildCache        string
 	copilotRuntimeRoot, copilotBinDir       string
 	copilotConfigDir, copilotCacheDir       string
 	gitName, gitEmail, homeDir, ghConfigDir string
@@ -265,8 +266,14 @@ func validateQueueMountPath(check queueMountCheck) error {
 
 func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVolumes []string) []string {
 	containerHome := env.homeDir
-	goModCache := filepath.Join(env.homeDir, "go", "pkg", "mod")
-	goBuildCache := filepath.Join(env.homeDir, ".cache", "go-build")
+	goModCache := strings.TrimSpace(env.hostGoModCache)
+	if goModCache == "" {
+		goModCache = filepath.Join(env.homeDir, "go", "pkg", "mod")
+	}
+	goBuildCache := strings.TrimSpace(env.hostGoBuildCache)
+	if goBuildCache == "" {
+		goBuildCache = filepath.Join(env.homeDir, ".cache", "go-build")
+	}
 	containerPath := "/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 	runFlags := "-i"
