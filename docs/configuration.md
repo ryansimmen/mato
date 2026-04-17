@@ -538,12 +538,15 @@ The Makefile loads `.env` if present, exports its variables, and defaults to the
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |
 | `run` | Run `go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato run --repo "$(REPO)"`. `REPO` is required; set it in `.env` or on the command line. |
 | `test` | Run `go test -race ./...`. |
+| `test-race` | Run `go test -race -count=1 ./...`. |
+| `verify` | Run `go build ./...`, `go vet ./...`, `make lint`, `make deadcode`, and `go test -count=1 ./...`. |
 | `vet` | Run `go vet ./...`. |
 | `lint` | Run `golangci-lint run ./...`. |
 | `deadcode` | Run `go tool staticcheck -checks U1000 ./...` and `go tool deadcode -test ./...`. |
 | `help` | Print the target list and descriptions. |
 Additional behavior:
 - `all` runs `fmt`, `vet`, `build`, and `test`.
+- `verify` is the repo's canonical PR-validation command and matches the documented full verification flow.
 - `deadcode` complements `lint`: it checks package-local unused code with `staticcheck`'s `U1000` rule and whole-program reachability with `go tool deadcode -test`.
 - `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --match 'v*' --always --dirty`, which ignores non-release tags, falls back to the commit hash when no matching release tag is reachable, and falls back to `dev` when git metadata is unavailable.
 - `REPO` is required for `make run` and may be supplied from `.env`.
