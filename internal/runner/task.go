@@ -58,6 +58,22 @@ func allowRecordedBranchResume(source git.BranchSource) bool {
 	}
 }
 
+func canRepairRecordedBranchResume(source git.BranchSource) bool {
+	return source == git.BranchSourceHeadRemoteMissing
+}
+
+func repairRecordedBranchResume(tasksDir string, claimed *queue.ClaimedTask, agentID string, branchResult git.EnsureBranchResult) {
+	if claimed == nil {
+		return
+	}
+	reason := fmt.Sprintf("recorded task branch %s missing on origin; recreated from %s", claimed.Branch, branchResult.SourceDescription())
+	if err := taskfile.AppendBranchRepairRecord(claimed.TaskPath, prelaunchFailureAgentID(agentID), reason); err != nil {
+		ui.Warnf("warning: could not record branch repair for %s: %v\n", claimed.Filename, err)
+	}
+	resetSession(tasksDir, runtimedata.KindWork, claimed.Filename, claimed.Branch)
+	ui.Warnf("warning: %s; starting a fresh work session\n", reason)
+}
+
 func recordWorkLaunchState(tasksDir, targetBranch string, claimed *queue.ClaimedTask, startingTip string) {
 	if claimed == nil {
 		return
@@ -123,6 +139,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 	extraEnvs := []string{}
 	startingTip := ""
 	if claimed != nil {
+		freshWorkSession := false
 		if meta, _, err := frontmatter.ParseTaskFile(claimed.TaskPath); err == nil {
 			maxRetries = meta.MaxRetries
 		}
@@ -132,8 +149,13 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		if err != nil {
 			return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("ensure task branch %s: %w", claimed.Branch, err))
 		}
-		if hasRecordedBranch && !allowRecordedBranchResume(branchResult.Source) {
-			return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("resume recorded task branch %s: unsupported branch source %s", claimed.Branch, branchResult.SourceDescription()))
+		if hasRecordedBranch {
+			if canRepairRecordedBranchResume(branchResult.Source) {
+				repairRecordedBranchResume(env.tasksDir, claimed, run.agentID, branchResult)
+				freshWorkSession = true
+			} else if !allowRecordedBranchResume(branchResult.Source) {
+				return recordTaskPrelaunchFailure(claimed, run.agentID, fmt.Errorf("resume recorded task branch %s: unsupported branch source %s", claimed.Branch, branchResult.SourceDescription()))
+			}
 		}
 
 		startingTip, err = git.Output(cloneDir, "rev-parse", "HEAD")
@@ -143,7 +165,7 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 		startingTip = strings.TrimSpace(startingTip)
 		recordWorkLaunchState(env.tasksDir, env.targetBranch, claimed, startingTip)
 		session := loadOrCreateSession(env.tasksDir, runtimedata.KindWork, claimed.Filename, claimed.Branch)
-		if session != nil {
+		if session != nil && !freshWorkSession {
 			run.resumeSessionID = session.CopilotSessionID
 		}
 		recordSessionUpdate(env.tasksDir, runtimedata.KindWork, claimed.Filename, "record work session", func(session *runtimedata.Session) {

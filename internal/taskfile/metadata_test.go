@@ -199,6 +199,7 @@ func TestCountFailureMarkers(t *testing.T) {
 		{"one", "<!-- failure: agent-1 at 2026-01-01T00:00:00Z step=WORK error=fail -->", 1},
 		{"two", "<!-- failure: a1 at T1 step=WORK error=e1 -->\n<!-- failure: a2 at T2 step=WORK error=e2 -->", 2},
 		{"ignores review-failure", "<!-- failure: a at T step=WORK error=e -->\n<!-- review-failure: b at T step=REVIEW error=e -->", 1},
+		{"ignores branch-repair", "<!-- branch-repair: mato at 2026-01-01T00:00:00Z reason=remote branch missing -->\n<!-- failure: a at T step=WORK error=e -->", 1},
 		{"ignores body text", "# Task\n`CountFailureLines()` counts `<!-- failure: ... -->` records.\n<!-- failure: a at T step=WORK error=e -->", 1},
 		{"ignores fenced code", "# Task\n```\n<!-- failure: a at T step=WORK error=e -->\n```\n<!-- failure: b at T step=WORK error=e -->", 1},
 		{"empty", "", 0},
@@ -210,6 +211,28 @@ func TestCountFailureMarkers(t *testing.T) {
 				t.Fatalf("got %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAppendBranchRepairRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.md")
+	if err := os.WriteFile(path, []byte("# Task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile task: %v", err)
+	}
+
+	if err := AppendBranchRepairRecord(path, "agent-1", "recorded branch recreated from current HEAD"); err != nil {
+		t.Fatalf("AppendBranchRepairRecord: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile task: %v", err)
+	}
+	if !ContainsBranchRepairMarker(data) {
+		t.Fatalf("expected branch-repair marker, got:\n%s", string(data))
+	}
+	if CountFailureMarkers(data) != 0 {
+		t.Fatalf("branch-repair marker must not consume retry budget, got %d failure markers", CountFailureMarkers(data))
 	}
 }
 
