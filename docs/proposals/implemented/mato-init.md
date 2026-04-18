@@ -84,7 +84,7 @@ Normal Cobra subcommand (no `DisableFlagParsing`).
 ### Package Structure
 
 **`internal/setup/`** — New package owning repo bootstrap orchestration.
-Imports `mato/internal/git`, `mato/internal/messaging`, `mato/internal/dirs`.
+Imports `github.com/ryansimmen/mato/internal/git`, `github.com/ryansimmen/mato/internal/messaging`, `github.com/ryansimmen/mato/internal/dirs`.
 No import cycle risk (none of these import `setup`).
 
 This separates repo-level orchestration (branch checkout, identity, gitignore,
@@ -279,7 +279,7 @@ command (no persistent configuration).
 
 **File**: `internal/setup/setup.go` (new)
 Contains: `InitResult`, `InitRepo()`, `initDirs()`, `computeIgnorePattern()`.
-Imports: `mato/internal/git`, `mato/internal/messaging`, `mato/internal/dirs`.
+Imports: `github.com/ryansimmen/mato/internal/git`, `github.com/ryansimmen/mato/internal/messaging`, `github.com/ryansimmen/mato/internal/dirs`.
 **Dependency**: Step 1.
 
 ### Step 4: Unit tests for setup package

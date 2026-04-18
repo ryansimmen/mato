@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
 )
 
 // ProblemKind classifies non-fatal pause sentinel read problems.

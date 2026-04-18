@@ -1,9 +1,9 @@
 package main
 
 import (
-	"mato/internal/dirs"
-	"mato/internal/inspect"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/inspect"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

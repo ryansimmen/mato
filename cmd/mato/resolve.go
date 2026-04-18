@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"mato/internal/configresolve"
-	"mato/internal/git"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/configresolve"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 func resolveRepo(repo string) (string, error) {

@@ -14,14 +14,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/queue"
-	"mato/internal/queueview"
-	"mato/internal/runtimedata"
-	"mato/internal/taskfile"
-	"mato/internal/testutil"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 func TestReviewVerdict_JSONRoundtrip(t *testing.T) {

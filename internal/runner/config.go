@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"golang.org/x/term"
 )

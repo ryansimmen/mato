@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/process"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/process"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestCleanStaleLocks_RemovesDeadProcessLock(t *testing.T) {

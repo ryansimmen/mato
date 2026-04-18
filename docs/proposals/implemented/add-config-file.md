@@ -384,7 +384,7 @@ Changes:
 
 Changes:
 - Add `runFn` and `dryRunFn` test hooks
-- Import `mato/internal/config`
+- Import `github.com/ryansimmen/mato/internal/config`
 - Add `resolveConfigBranch()` and `resolveRunOptions()` helpers
 - Root command `RunE`: resolve repo root -> load config -> resolve all values
   -> call `runFn` / `dryRunFn`

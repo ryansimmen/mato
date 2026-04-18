@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/merge"
-	"mato/internal/queue"
-	"mato/internal/runner"
-	"mato/internal/runtimedata"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/merge"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestResumeWorkAfterReviewRejection_ReusesBranchAndBranchContents(t *testing.T) {

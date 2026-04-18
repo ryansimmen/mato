@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
 )
 
 // DependencyBlock describes why a task dependency is not currently satisfied.

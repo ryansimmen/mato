@@ -6,10 +6,10 @@ import (
 	"sort"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/queueview"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // DryRunRenderer formats dry-run validation output to a writer with

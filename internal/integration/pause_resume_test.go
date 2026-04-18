@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/pause"
-	"mato/internal/status"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/status"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestPauseResume_StatusReflectsPauseState(t *testing.T) {

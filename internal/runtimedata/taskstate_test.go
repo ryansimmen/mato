@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 func TestLoadTaskState_MissingReturnsNil(t *testing.T) {

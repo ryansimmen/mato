@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 // DeleteRuntimeArtifacts removes taskstate, sessionmeta, and any preserved

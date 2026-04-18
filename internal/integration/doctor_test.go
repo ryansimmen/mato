@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mato/internal/doctor"
-	"mato/internal/runner"
-	"mato/internal/runtimedata"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/doctor"
+	"github.com/ryansimmen/mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestDoctor_Integration_FixCycle(t *testing.T) {

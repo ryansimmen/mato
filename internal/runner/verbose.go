@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/config"
-	"mato/internal/dirs"
-	"mato/internal/queue"
-	"mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
 )
 
 type pollVerboseSummary struct {

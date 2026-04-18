@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/atomicwrite"
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/git"
-	"mato/internal/messaging"
-	"mato/internal/queue"
-	"mato/internal/runtimedata"
-	"mato/internal/taskfile"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // NOTE: The hook variables below are package-level mutable state used as test

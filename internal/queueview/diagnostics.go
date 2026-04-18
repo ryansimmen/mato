@@ -3,8 +3,8 @@ package queueview
 import (
 	"sort"
 
-	"mato/internal/dag"
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dag"
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 // DependencyIssueKind classifies a dependency diagnostic issue.

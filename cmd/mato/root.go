@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

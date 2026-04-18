@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/queueview"
-	"mato/internal/runtimedata"
-	"mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 // appendCancelledRecordFn is the function used to append the cancelled marker.

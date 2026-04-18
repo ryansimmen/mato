@@ -5,12 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/queueview"
-	"mato/internal/runtimedata"
-	"mato/internal/taskfile"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // promotableTask describes a waiting task whose dependencies are satisfied.

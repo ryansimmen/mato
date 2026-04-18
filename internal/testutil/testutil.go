@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
 )
 
 // WriteFile creates a file at path with the given content, creating parent dirs.

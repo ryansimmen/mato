@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
 )
 
 var validateBranchFn = func(name string) error {

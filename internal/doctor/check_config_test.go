@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestCheckConfig_NoRepo_GitSelected(t *testing.T) {

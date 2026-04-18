@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 const resumeDetectionBufferLimit = 8192

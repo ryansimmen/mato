@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/pause"
-	"mato/internal/runtimedata"
-	"mato/internal/taskfile"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func assertExitCode(t *testing.T, err error, want int) {

@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/merge"
-	"mato/internal/messaging"
-	"mato/internal/pause"
-	"mato/internal/queue"
-	"mato/internal/queueview"
-	"mato/internal/runtimedata"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/merge"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 const (

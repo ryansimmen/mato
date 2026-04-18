@@ -18,6 +18,14 @@ on the host and bind-mounts those executables into agent containers. When
 task and review containers still launch but Go LSP features are unavailable and
 `mato` prints a warning up front.
 
+Install `mato` from source with:
+
+```bash
+go install github.com/ryansimmen/mato/cmd/mato@latest
+```
+
+`make install` remains available for contributors. It installs the binary and then runs `scripts/install-skill.sh`, which copies the bundled `mato` skill into supported local CLI skill directories.
+
 ## CLI Usage
 ```text
 mato [--version] [--repo <path>]
@@ -532,7 +540,7 @@ The Makefile defaults to the `help` target.
 | Target | Description |
 | --- | --- |
 | `build` | Build `bin/mato` with `go build -ldflags "$(GO_LDFLAGS)" -o bin/mato ./cmd/mato`. By default `GO_LDFLAGS` stamps `main.version` from `git describe --tags --match 'v*' --always --dirty`, which prefers release-style `v*` tags, falls back to the commit hash when no matching tag is reachable, and falls back to `dev` when git metadata is unavailable. |
-| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when `opencode` is on `PATH`, `~/.config/opencode/skills/mato/`. The skill is a task planner that breaks down work into actionable task files. |
+| `install` | Contributor convenience target: install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when supported CLIs are present, `~/.claude/skills/mato/` and `~/.config/opencode/skills/mato/`. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |

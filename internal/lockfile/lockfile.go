@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/process"
+	"github.com/ryansimmen/mato/internal/process"
 )
 
 // Test hooks for injecting I/O failures in Acquire.

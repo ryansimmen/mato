@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 // TaskSnapshot holds all metadata extracted from a single task file during

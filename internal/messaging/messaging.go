@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/atomicwrite"
-	"mato/internal/identity"
-	"mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/identity"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 var osReadFile = os.ReadFile

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 func TestComputeRunnableBacklogView_ExcludesDeferredTasks(t *testing.T) {

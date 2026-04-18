@@ -3,8 +3,8 @@ package main
 import (
 	"io"
 
-	"mato/internal/configresolve"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/configresolve"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

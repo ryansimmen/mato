@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/identity"
-	"mato/internal/lockfile"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/identity"
+	"github.com/ryansimmen/mato/internal/lockfile"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 const (

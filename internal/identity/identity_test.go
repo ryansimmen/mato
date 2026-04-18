@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mato/internal/process"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/process"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestGenerateAgentID_Format(t *testing.T) {

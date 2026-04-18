@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestParseBranch_ValidComment(t *testing.T) {

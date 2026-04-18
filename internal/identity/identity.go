@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/lockfile"
+	"github.com/ryansimmen/mato/internal/lockfile"
 )
 
 // GenerateAgentID returns a random 8-character hex string suitable for use

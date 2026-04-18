@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/queueview"
 
 	"github.com/spf13/cobra"
 )

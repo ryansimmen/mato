@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/config"
-	"mato/internal/git"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/git"
 )
 
 // ValidationIssue describes an invalid effective repository-default setting.

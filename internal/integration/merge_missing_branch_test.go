@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/merge"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/merge"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // TestMergeMissingBranch_ExplicitMarker verifies that a ready-to-merge task

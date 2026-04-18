@@ -4,22 +4,64 @@
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Runs an autonomous Copilot agent swarm against a filesystem-backed task queue in Docker. Agents claim work and every completed branch is automatically reviewed by an AI review agent. See
-[Architecture](docs/architecture.md) for details.
+`mato` orchestrates autonomous coding agents against a filesystem-backed task queue in Docker. Agents claim work, push task branches, and completed work is reviewed before it is merged back into the target branch.
+
+See [Architecture](docs/architecture.md) for the detailed runtime design.
+
+## Install
+
+### CLI Only
+
+Install the CLI from source:
+
+```bash
+go install github.com/ryansimmen/mato/cmd/mato@latest
+```
+
+### CLI And Bundled Skill
+
+If you want the full workflow with the bundled `mato` skill, install from a local checkout instead:
+
+```bash
+git clone https://github.com/ryansimmen/mato.git
+cd mato
+make install
+```
+
+`make install` installs the local `mato` binary and also copies the bundled `mato` skill into `~/.copilot/skills/mato/` and, when the corresponding CLIs are present, `~/.claude/skills/mato/` and `~/.config/opencode/skills/mato/`.
 
 ## Requirements
 
-- Go
+Runtime requirements for operators:
+
+- Go 1.26+
 - Git
 - Docker
-- GitHub CLI
-- Copilot CLI
+- [GitHub CLI (`gh`)](https://cli.github.com/)
+- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot)
+
+Additional contributor tools:
+
+- `golangci-lint`
+- `staticcheck`
+- `deadcode`
+- optional `gopls`
+
+## Platform Notes
+
+`mato` is built with Go and many commands work cross-platform, but the full agent runtime expects a Linux-style host environment with Docker available and the required host tools mounted into containers. In practice, the best-supported operator environment today is Linux.
+
+## Trust And Security
+
+`mato` is an operator tool, not a sandbox. It launches autonomous agents in Docker, bind-mounts host tooling and configuration into containers, and may forward GitHub authentication into those containers so the agent runtime can function. Only run it on repositories, branches, and machines you trust.
+
+For vulnerability reporting, see [SECURITY.md](SECURITY.md). For contribution guidance, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Quick Start
 
 ```bash
-# Install the mato binary and skill
-make install
+# Install the CLI
+go install github.com/ryansimmen/mato/cmd/mato@latest
 
 # cd into the target repository
 cd /path/to/repo
@@ -28,13 +70,13 @@ cd /path/to/repo
 mato init
 ```
 
-After initializing the repo, use Copilot with the `mato` skill to generate task files for the queue. For example:
+If you also installed the bundled `mato` skill with `make install`, you can use Copilot to generate task files for the queue. For example:
 
 ```bash
 copilot --interactive "Review this codebase for logical errors and create mato tasks of your findings"
 ```
 
-The `mato` skill will research the codebase and write task files into `.mato/backlog` or `.mato/waiting`.
+The `mato` skill researches the codebase and writes task files into `.mato/backlog` or `.mato/waiting`.
 
 These task files live under `.mato`. The scheduler reads their frontmatter for dependency, priority, and conflict metadata, then passes the markdown body to the agent as instructions.
 
@@ -100,10 +142,12 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 | `mato pause` | Pause new claims and review launches. Supports `--format text|json` for script-friendly output. |
 | `mato resume` | Resume normal polling after a pause. Supports `--format text|json` for script-friendly output. |
 
-
 ## Documentation
 
 - [Architecture](docs/architecture.md) - host loop, task lifecycle, review flow, merge queue
 - [Configuration](docs/configuration.md) - CLI flags, environment variables, `.mato.yaml`, Docker setup
 - [Task Format](docs/task-format.md) - frontmatter fields, runtime markers, placement rules, examples
 - [Messaging](docs/messaging.md) - inter-agent coordination protocol
+- [Contributing](CONTRIBUTING.md) - development setup, expectations, and PR guidance
+- [Code Of Conduct](CODE_OF_CONDUCT.md) - community participation guidelines
+- [Support](SUPPORT.md) - where to ask questions and file issues

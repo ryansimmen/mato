@@ -1,8 +1,8 @@
 package main
 
 import (
-	"mato/internal/graph"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/graph"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

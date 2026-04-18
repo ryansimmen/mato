@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/inspect"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/inspect"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestInspect_TextAndJSON(t *testing.T) {

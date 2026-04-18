@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/messaging"
 )
 
 const ignorePattern = "/" + dirs.Root + "/"

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 func withCreateRetryTempFileFn(t *testing.T, fn func(string, string) (*os.File, error)) {

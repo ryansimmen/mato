@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/git"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 var gitOutput = git.Output

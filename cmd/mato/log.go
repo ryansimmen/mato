@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"mato/internal/history"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/history"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

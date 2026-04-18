@@ -9,16 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/git"
-	"mato/internal/merge"
-	"mato/internal/messaging"
-	"mato/internal/queue"
-	"mato/internal/queueview"
-	"mato/internal/runtimedata"
-	"mato/internal/status"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/merge"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/status"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func mustGitOutput(t *testing.T, dir string, args ...string) string {

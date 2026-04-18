@@ -1,4 +1,4 @@
-module mato
+module github.com/ryansimmen/mato
 
 go 1.26.0
 

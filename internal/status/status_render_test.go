@@ -7,12 +7,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"mato/internal/dirs"
-	"mato/internal/lockfile"
-	"mato/internal/messaging"
-	"mato/internal/pause"
-	"mato/internal/queueview"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/lockfile"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // plainColorSet returns a colorSet with no ANSI formatting.

@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/identity"
-	"mato/internal/lockfile"
-	"mato/internal/queue"
-	"mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/identity"
+	"github.com/ryansimmen/mato/internal/lockfile"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 // ---------- F. Locks & Orphans ----------

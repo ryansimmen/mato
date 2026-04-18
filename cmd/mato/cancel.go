@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/queue"
-	"mato/internal/queueview"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"

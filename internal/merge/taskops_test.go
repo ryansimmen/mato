@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/queue"
-	"mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/runtimedata"
 )
 
 func TestTaskHasMergeSuccessRecord(t *testing.T) {

@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/config"
-	"mato/internal/process"
-	"mato/internal/runner"
-	"mato/internal/runtimedata"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/process"
+	"github.com/ryansimmen/mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func writeDoctorConfig(t *testing.T, repoRoot, content string) {

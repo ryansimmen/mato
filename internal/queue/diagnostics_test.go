@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mato/internal/dag"
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dag"
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 func TestDiagnoseDependencies_DuplicateWaitingID(t *testing.T) {

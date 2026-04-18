@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/lockfile"
-	"mato/internal/messaging"
-	"mato/internal/pause"
-	"mato/internal/queue"
-	"mato/internal/queueview"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/lockfile"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // setupTasksDir creates the standard queue directory structure in a temp dir.

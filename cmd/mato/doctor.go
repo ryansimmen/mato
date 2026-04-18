@@ -5,9 +5,9 @@ import (
 	"os"
 	"os/signal"
 
-	"mato/internal/configresolve"
-	"mato/internal/doctor"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/configresolve"
+	"github.com/ryansimmen/mato/internal/doctor"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

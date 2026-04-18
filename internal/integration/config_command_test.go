@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestConfigCommand_TextAndJSON(t *testing.T) {

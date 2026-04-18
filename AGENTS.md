@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Guide for AI coding agents working in the `mato` codebase (Multi Agent Task Orchestrator).
-Go 1.26, module name `mato`, CLI built with `spf13/cobra`.
+Go 1.26, module name `github.com/ryansimmen/mato`, CLI built with `spf13/cobra`.
 
 ## Build / Lint / Test Commands
 
@@ -79,7 +79,7 @@ docs/              Architecture, configuration, messaging, task-format docs
 ### Imports
 
 Three groups separated by blank lines. Standard library first, then internal
-(`mato/internal/...`) and third-party — the relative order of the latter two
+(`github.com/ryansimmen/mato/internal/...`) and third-party — the relative order of the latter two
 groups is not strictly enforced but each group is alphabetically sorted.
 
 ```go
@@ -87,7 +87,7 @@ import (
     "fmt"
     "os"
 
-    "mato/internal/queue"
+    "github.com/ryansimmen/mato/internal/queue"
 
     "github.com/spf13/cobra"
 )

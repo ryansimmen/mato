@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestCheckGit_FindingClassification(t *testing.T) {
