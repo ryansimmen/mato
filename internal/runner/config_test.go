@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // withStatPathFn is a convenience wrapper around setHook for statPathFn.

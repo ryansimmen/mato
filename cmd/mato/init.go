@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/config"
-	"mato/internal/configresolve"
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/setup"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/configresolve"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/setup"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

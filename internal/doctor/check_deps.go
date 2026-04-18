@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"sort"
 
-	"mato/internal/dag"
-	"mato/internal/dirs"
-	"mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/dag"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/queueview"
 )
 
 // ---------- H. Dependency Integrity ----------

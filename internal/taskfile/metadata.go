@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
 )
 
 // MarkerRecord is a typed durable marker parsed from a task file.

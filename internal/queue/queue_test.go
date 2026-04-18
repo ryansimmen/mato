@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/process"
-	"mato/internal/runtimedata"
-	"mato/internal/taskfile"
-	"mato/internal/testutil"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/process"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 func captureStderr(t *testing.T, fn func()) string {

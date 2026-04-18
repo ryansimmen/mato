@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/messaging"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func writeExecutable(t *testing.T, path, content string) {

@@ -1,6 +1,6 @@
 package queue
 
-import "mato/internal/queueview"
+import "github.com/ryansimmen/mato/internal/queueview"
 
 type TaskSnapshot = queueview.TaskSnapshot
 type ParseFailure = queueview.ParseFailure

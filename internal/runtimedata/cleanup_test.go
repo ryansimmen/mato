@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 func captureStderr(t *testing.T, fn func()) string {

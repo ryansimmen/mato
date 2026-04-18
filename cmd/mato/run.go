@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"mato/internal/config"
-	"mato/internal/configresolve"
-	"mato/internal/runner"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/configresolve"
+	"github.com/ryansimmen/mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

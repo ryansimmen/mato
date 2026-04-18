@@ -18,6 +18,14 @@ on the host and bind-mounts those executables into agent containers. When
 task and review containers still launch but Go LSP features are unavailable and
 `mato` prints a warning up front.
 
+Install `mato` from source with:
+
+```bash
+go install github.com/ryansimmen/mato/cmd/mato@latest
+```
+
+`make install` remains available for contributors. It installs the binary and then runs `scripts/install-skill.sh`, which copies the bundled `mato` skill into supported local CLI skill directories.
+
 ## CLI Usage
 ```text
 mato [--version] [--repo <path>]
@@ -528,16 +536,14 @@ When choosing a custom Docker image via `MATO_DOCKER_IMAGE` or `.mato.yaml`, use
 host binaries and standard Linux filesystem layout expected above.
 
 ## Makefile Targets
-The Makefile loads `.env` if present, exports its variables, and defaults to the
-`help` target.
+The Makefile defaults to the `help` target.
 | Target | Description |
 | --- | --- |
 | `build` | Build `bin/mato` with `go build -ldflags "$(GO_LDFLAGS)" -o bin/mato ./cmd/mato`. By default `GO_LDFLAGS` stamps `main.version` from `git describe --tags --match 'v*' --always --dirty`, which prefers release-style `v*` tags, falls back to the commit hash when no matching tag is reachable, and falls back to `dev` when git metadata is unavailable. |
-| `install` | Install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when `opencode` is on `PATH`, `~/.config/opencode/skills/mato/`. The skill is a task planner that breaks down work into actionable task files. |
+| `install` | Contributor convenience target: install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when supported CLIs are present, `~/.claude/skills/mato/` and `~/.config/opencode/skills/mato/`. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |
-| `run` | Run `go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato run --repo "$(REPO)"`. `REPO` is required; set it in `.env` or on the command line. |
 | `test` | Run `go test -race ./...`. |
 | `test-race` | Run `go test -race -count=1 ./...`. |
 | `verify` | Run `go build ./...`, `go vet ./...`, `make lint`, `make deadcode`, and `go test -count=1 ./...`. |
@@ -550,4 +556,5 @@ Additional behavior:
 - `verify` is the repo's canonical PR-validation command and matches the documented full verification flow.
 - `deadcode` complements `lint`: it checks package-local unused code with `staticcheck`'s `U1000` rule and whole-program reachability with `go tool deadcode -test`.
 - `VERSION` can be overridden on the make command line; otherwise it comes from `git describe --tags --match 'v*' --always --dirty`, which ignores non-release tags, falls back to the commit hash when no matching release tag is reachable, and falls back to `dev` when git metadata is unavailable.
-- `REPO` is required for `make run` and may be supplied from `.env`.
+
+To run mato directly from source, use `go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato run --repo <path>`.

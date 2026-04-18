@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"time"
 
-	"mato/internal/timeutil"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/timeutil"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // rfc3339Re matches RFC3339 timestamps in reason strings so we can annotate

@@ -13,15 +13,15 @@ import (
 	"syscall"
 	"time"
 
-	"mato/internal/atomicwrite"
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/identity"
-	"mato/internal/lockfile"
-	"mato/internal/queueview"
-	"mato/internal/runtimedata"
-	"mato/internal/taskfile"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/identity"
+	"github.com/ryansimmen/mato/internal/lockfile"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 var writeBranchMarkerRecoveryFn = WriteBranchMarker

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 func renderReadyToMerge(w io.Writer, c colorSet, data statusData) error {

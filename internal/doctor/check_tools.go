@@ -1,7 +1,7 @@
 package doctor
 
 import (
-	"mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/runner"
 )
 
 // Function variable hook for test injection.

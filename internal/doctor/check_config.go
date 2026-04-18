@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"mato/internal/configresolve"
+	"github.com/ryansimmen/mato/internal/configresolve"
 )
 
 func checkConfig(cc *checkContext) CheckReport {

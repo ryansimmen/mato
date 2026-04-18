@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/atomicwrite"
-	"mato/internal/config"
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/queueview"
-	"mato/internal/runtimedata"
-	"mato/internal/taskfile"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // errFailedDirUnavailable is the sentinel wrapped by FailedDirUnavailableError.

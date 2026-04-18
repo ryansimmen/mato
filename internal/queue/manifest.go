@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/atomicwrite"
-	"mato/internal/dirs"
-	"mato/internal/queueview"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // ComputeQueueManifest returns the queue manifest content as a string without

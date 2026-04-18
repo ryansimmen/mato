@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"mato/internal/atomicwrite"
-	"mato/internal/git"
-	"mato/internal/queueview"
-	"mato/internal/runtimedata"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runtimedata"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 const (

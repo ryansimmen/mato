@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/pause"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

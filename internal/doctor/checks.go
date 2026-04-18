@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"mato/internal/configresolve"
-	"mato/internal/git"
-	"mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/configresolve"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/queueview"
 )
 
 // checkContext carries shared state across checks within a single doctor run.

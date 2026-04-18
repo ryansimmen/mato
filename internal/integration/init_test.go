@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/config"
-	"mato/internal/git"
-	"mato/internal/runner"
-	"mato/internal/setup"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/setup"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestInitRepo_EndToEnd(t *testing.T) {

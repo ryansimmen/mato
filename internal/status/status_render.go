@@ -5,8 +5,8 @@ import (
 	"io"
 	"time"
 
-	"mato/internal/pause"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // colorSet is an alias for the shared ui.ColorSet used by render helpers.

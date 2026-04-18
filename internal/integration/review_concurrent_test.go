@@ -8,11 +8,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/queue"
-	"mato/internal/queueview"
-	"mato/internal/runner"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // TestConcurrentReviewLockRace verifies that when two goroutines race to

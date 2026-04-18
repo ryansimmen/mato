@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/runner"
 )
 
 func TestCheckTools_SeverityMapping(t *testing.T) {

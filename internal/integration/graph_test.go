@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/graph"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/graph"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestGraph_LinearDependencyChain(t *testing.T) {

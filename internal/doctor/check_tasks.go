@@ -2,7 +2,7 @@ package doctor
 
 import (
 	"fmt"
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dirs"
 	"path/filepath"
 	"strings"
 )

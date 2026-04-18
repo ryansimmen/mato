@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
 )
 
 // activeDirs lists the directories that contain tasks currently being

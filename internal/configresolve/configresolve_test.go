@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/config"
-	"mato/internal/testutil"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 func TestResolveRepoDefaults_DefaultsOnly(t *testing.T) {

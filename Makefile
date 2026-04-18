@@ -1,13 +1,11 @@
 .DEFAULT_GOAL := help
 
--include .env
-
 # The dev container can export a stale GOROOT that does not match the active
 # Go toolchain binary. Let the Go tool infer its own root from the selected
 # binary so build/test targets work consistently.
 unexport GOROOT
 
-.PHONY: all build clean deadcode fmt help install integration-test lint run test test-race verify vet
+.PHONY: all build clean deadcode fmt help install integration-test lint test test-race verify vet
 
 BIN_DIR := bin
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || printf dev)
@@ -31,10 +29,6 @@ install: ## Install mato binary to GOBIN and mato skill to ~/.copilot/skills/
 
 integration-test: ## Run integration tests with race detector
 	go test -race -v ./internal/integration/...
-
-run: ## Run agent in Docker
-	@if [ -z "$(REPO)" ]; then echo "REPO is required. Set REPO=<path> in .env or pass it on the command line."; exit 1; fi
-	go run -ldflags "$(GO_LDFLAGS)" ./cmd/mato run --repo "$(REPO)"
 
 test: ## Run tests with race detector
 	go test -race ./...

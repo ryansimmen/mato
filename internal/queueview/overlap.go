@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
 
 	"github.com/bmatcuk/doublestar/v4"
 )

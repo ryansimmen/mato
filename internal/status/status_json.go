@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/pause"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // StatusJSON is the top-level JSON output for the status command.

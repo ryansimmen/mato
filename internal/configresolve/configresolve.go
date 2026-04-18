@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/config"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/config"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 type Source string

@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/frontmatter"
-	"mato/internal/git"
-	"mato/internal/messaging"
-	"mato/internal/taskfile"
-	"mato/internal/timeutil"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/timeutil"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 // Event is a durable task outcome shown by mato log.

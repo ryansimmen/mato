@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 func TestLoadSession_MissingReturnsNil(t *testing.T) {

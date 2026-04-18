@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 // setupTasksDirs creates the standard queue directories under a temp dir.

@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/merge"
-	"mato/internal/queue"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/merge"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // substitutePromptPlaceholders replaces the 3 prompt placeholders with real paths.

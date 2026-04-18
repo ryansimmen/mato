@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/pause"
-	"mato/internal/process"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/process"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // ---------- Orphaned Message Files ----------

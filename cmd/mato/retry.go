@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/queue"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/ui"
 
 	"github.com/spf13/cobra"
 )

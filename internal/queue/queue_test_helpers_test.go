@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 // setupIndexDirs creates the standard .mato directory tree in a temp dir

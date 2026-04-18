@@ -6,9 +6,9 @@ import (
 	"sort"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/taskfile"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/taskfile"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestCollectActiveAffects_MultipleDirs(t *testing.T) {

@@ -1,7 +1,7 @@
 package queue
 
 import (
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dirs"
 	"strings"
 	"testing"
 )

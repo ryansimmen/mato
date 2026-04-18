@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/dirs"
-	"mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/messaging"
 )
 
 // ---------- D. Queue Layout ----------

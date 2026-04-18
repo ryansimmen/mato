@@ -11,11 +11,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"mato/internal/dirs"
-	"mato/internal/messaging"
-	"mato/internal/queue"
-	"mato/internal/testutil"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 func TestShowTo_TextMixedHistoryNewestFirst(t *testing.T) {

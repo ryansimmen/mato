@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/config"
+	"github.com/ryansimmen/mato/internal/config"
 )
 
 // Function variable hooks for test injection.

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/git"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // reviewInstructionsPath returns the absolute path to review-instructions.md.

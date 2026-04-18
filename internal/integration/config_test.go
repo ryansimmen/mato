@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func runMatoCommand(t *testing.T, args ...string) (string, error) {

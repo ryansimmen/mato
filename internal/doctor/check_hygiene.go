@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/messaging"
-	"mato/internal/pause"
-	"mato/internal/process"
-	"mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/pause"
+	"github.com/ryansimmen/mato/internal/process"
+	"github.com/ryansimmen/mato/internal/queue"
 )
 
 // ---------- G. Hygiene (Messages, Merge Lock, Temp Files) ----------

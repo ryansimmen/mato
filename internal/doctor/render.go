@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 var colors = ui.NewColorSet()

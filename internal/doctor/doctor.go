@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 // Severity classifies the severity of a diagnostic finding.

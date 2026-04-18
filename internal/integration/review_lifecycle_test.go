@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/messaging"
-	"mato/internal/queue"
-	"mato/internal/queueview"
-	"mato/internal/runner"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/messaging"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/runner"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // writeVerdict writes a JSON verdict file at the standard path.

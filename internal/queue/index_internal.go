@@ -1,6 +1,6 @@
 package queue
 
-import "mato/internal/queueview"
+import "github.com/ryansimmen/mato/internal/queueview"
 
 func ensureIndex(tasksDir string, idx *PollIndex) *PollIndex {
 	if idx != nil {

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"mato/internal/git"
-	"mato/internal/testutil"
-	"mato/internal/ui"
+	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/ui"
 )
 
 func TestParseAgentCommitLog(t *testing.T) {

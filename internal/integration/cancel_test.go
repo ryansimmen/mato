@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"mato/internal/dirs"
-	"mato/internal/inspect"
-	"mato/internal/queue"
-	"mato/internal/queueview"
-	"mato/internal/status"
-	"mato/internal/testutil"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/inspect"
+	"github.com/ryansimmen/mato/internal/queue"
+	"github.com/ryansimmen/mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/status"
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 func TestCancelRetryLifecycle(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"mato/internal/atomicwrite"
-	"mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/atomicwrite"
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 const sessionVersion = 1

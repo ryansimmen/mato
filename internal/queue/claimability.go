@@ -3,8 +3,8 @@ package queue
 import (
 	"time"
 
-	"mato/internal/dirs"
-	"mato/internal/queueview"
+	"github.com/ryansimmen/mato/internal/dirs"
+	"github.com/ryansimmen/mato/internal/queueview"
 )
 
 func HasClaimableBacklogTask(tasksDir string, exclude map[string]struct{}, cooldown time.Duration, idx *PollIndex) bool {

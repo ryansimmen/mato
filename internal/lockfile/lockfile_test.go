@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"mato/internal/process"
+	"github.com/ryansimmen/mato/internal/process"
 )
 
 func TestAcquireAndRelease(t *testing.T) {
