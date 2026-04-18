@@ -21,9 +21,6 @@ Runs an autonomous Copilot agent swarm against a filesystem-backed task queue in
 # Install the mato binary and skill
 make install
 
-# Authenticate with Copilot
-copilot login
-
 # cd into the target repository
 cd /path/to/repo
 
@@ -31,15 +28,15 @@ cd /path/to/repo
 mato init
 ```
 
-Then ask Copilot to use the `mato` skill to create tasks. For example:
+After initializing the repo, use Copilot with the `mato` skill to generate task files for the queue. For example:
 
 ```bash
-copilot --interactive "Review the entire codebase for logical errors and create mato tasks of your findings"
+copilot --interactive "Review this codebase for logical errors and create mato tasks of your findings"
 ```
 
-The skill will research the codebase and write task files into `.mato/backlog` or `.mato/waiting`.
+The `mato` skill will research the codebase and write task files into `.mato/backlog` or `.mato/waiting`.
 
-Task files are markdown files created by the `mato` skill and live under `.mato`. The scheduler reads frontmatter for dependency, priority, and conflict metadata, then passes the markdown body to the agent as instructions.
+These task files live under `.mato`. The scheduler reads their frontmatter for dependency, priority, and conflict metadata, then passes the markdown body to the agent as instructions.
 
 For the full task-file specification, see [Task Format](docs/task-format.md).
 
