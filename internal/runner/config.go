@@ -105,6 +105,7 @@ type envConfig struct {
 	copilotConfigDir, copilotCacheDir       string
 	gitName, gitEmail, homeDir, ghConfigDir string
 	hasGhConfig                             bool
+	authEnv                                 []string
 	gitTemplatesDir                         string
 	hasGitTemplates                         bool
 	systemCertsDir                          string
@@ -320,6 +321,13 @@ func buildDockerArgs(env envConfig, run runContext, extraEnvs []string, extraVol
 		"-e", "MATO_MESSAGING_ENABLED=1",
 		"-e", fmt.Sprintf("MATO_MESSAGES_DIR=%s/%s/messages", env.workdir, dirs.Root),
 	)
+	for _, e := range env.authEnv {
+		name, _, ok := strings.Cut(e, "=")
+		name = strings.TrimSpace(name)
+		if ok && name != "" {
+			args = append(args, "-e", name)
+		}
+	}
 	for _, e := range extraEnvs {
 		args = append(args, "-e", e)
 	}

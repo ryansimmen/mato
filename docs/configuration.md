@@ -506,7 +506,7 @@ Before each agent launch, mato pre-creates the clone-local `.mato/` mountpoints 
 | host `gh` binary | `/usr/local/bin/gh` (ro) | Makes GitHub CLI available in the container. |
 | host `gopls` binary | `/usr/local/bin/gopls` (ro, optional) | Enables Go LSP requests inside the container when `gopls` exists on the host `PATH`. |
 | host `GOROOT` | `/usr/local/go` (ro) | Provides the Go toolchain in the container. |
-| host `~/.copilot` | `$HOME/.copilot` | For Copilot authentication and package data. |
+| host `~/.copilot` | `$HOME/.copilot` | Copilot config, package data, and any plaintext auth fallback files. |
 | host `~/.cache/copilot` | `$HOME/.cache/copilot` | Copilot cache data. |
 | host `~/go/pkg/mod` | `$HOME/go/pkg/mod` | Shares Go module cache. |
 | host `~/.cache/go-build` | `$HOME/.cache/go-build` | Shares Go build cache. |
@@ -518,6 +518,7 @@ Before each agent launch, mato pre-creates the clone-local `.mato/` mountpoints 
 - `HOME` inside the container is set to the host home directory path.
 - `GOROOT=/usr/local/go` and `PATH` are set so mounted Go and CLI binaries are usable.
 - `GOPATH`, `GOMODCACHE`, and `GOCACHE` point at the mounted host cache paths.
+- `mato` forwards `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN` into the container when they are already set on the host. If none are set, it makes a best-effort `gh auth token` lookup and forwards that as `GH_TOKEN`. This avoids Docker auth failures when `copilot login` stored credentials only in the host credential store instead of a plaintext file under `~/.copilot`.
 - Before launching the container, `mato` rewrites the clone's `origin` remote to `/mato-host-repo` and restores the original host path afterwards so in-container `git fetch origin ...` still works without exposing the host repo as writable.
 - `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and `GIT_CONFIG_VALUE_0=/workspace` trust only the container clone path instead of every directory visible inside the container.
 - If Git user name/email are configured on the host repository or globally, `mato` forwards them as `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL`.

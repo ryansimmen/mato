@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -5657,7 +5658,7 @@ func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 }
 
 func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
-	tools := hostTools{homeDir: "/home/test"}
+	tools := hostTools{homeDir: "/home/test", authEnv: []string{"GH_TOKEN=gh-token"}}
 	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", ReviewSessionResumeEnabled: false, TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour, Verbose: true})
 
 	if run.model != "claude-sonnet-4" {
@@ -5677,6 +5678,65 @@ func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	}
 	if !env.verbose {
 		t.Fatal("expected verbose flag to be threaded into envConfig")
+	}
+	if !reflect.DeepEqual(env.authEnv, tools.authEnv) {
+		t.Fatalf("env.authEnv = %#v, want %#v", env.authEnv, tools.authEnv)
+	}
+}
+
+func TestRunCopilotCommand_AuthEnvStaysOffCommandLine(t *testing.T) {
+	var capturedArgs []string
+	var capturedCmd *exec.Cmd
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, args...)
+		capturedCmd = exec.CommandContext(ctx, "true")
+		capturedCmd.Cancel = func() error { return nil }
+		capturedCmd.WaitDelay = gracefulShutdownDelay
+		return capturedCmd
+	})
+
+	env := envConfig{
+		workdir:            "/workspace",
+		homeDir:            "/home/test",
+		copilotPath:        "/usr/local/bin/copilot",
+		gitPath:            "/usr/local/bin/git",
+		gitUploadPackPath:  "/usr/local/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/local/bin/git-receive-pack",
+		ghPath:             "/usr/local/bin/gh",
+		goRoot:             "/usr/local/go",
+		copilotConfigDir:   "/home/test/.copilot",
+		copilotCacheDir:    "/home/test/.cache/copilot",
+		image:              "ubuntu:24.04",
+		authEnv:            []string{"GH_TOKEN=super-secret-token", "GH_HOST=example.ghe.com"},
+	}
+	run := runContext{
+		agentID:         "agent-1",
+		prompt:          "test prompt",
+		model:           "gpt-5.4",
+		reasoningEffort: "low",
+		timeout:         time.Second,
+	}
+
+	if err := runCopilotCommand(context.Background(), env, run, nil, nil, "test-agent", nil); err != nil {
+		t.Fatalf("runCopilotCommand: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if strings.Contains(joined, "super-secret-token") || strings.Contains(joined, "example.ghe.com") {
+		t.Fatalf("auth values leaked into docker args: %s", joined)
+	}
+	for _, want := range []string{"-e GH_TOKEN", "-e GH_HOST"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in docker args, got %s", want, joined)
+		}
+	}
+	if capturedCmd == nil {
+		t.Fatal("expected execCommandContext to capture command")
+	}
+	envJoined := strings.Join(capturedCmd.Env, "\n")
+	for _, want := range env.authEnv {
+		if !strings.Contains(envJoined, want) {
+			t.Fatalf("expected %q in command env", want)
+		}
 	}
 }
 

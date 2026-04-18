@@ -20,6 +20,7 @@ var statFn = os.Stat
 var mkdirAllFn = os.MkdirAll
 var userHomeDirFn = os.UserHomeDir
 var evalSymlinksFn = filepath.EvalSymlinks
+var lookupEnvFn = os.LookupEnv
 
 //nolint:staticcheck // Compatibility fallback for standalone mato binaries when 'go' is unavailable on PATH.
 var runtimeGOROOTFn = runtime.GOROOT
@@ -51,6 +52,13 @@ var gitExecPathFn = func() (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+var ghAuthTokenFn = func() (string, error) {
+	out, err := exec.Command("gh", "auth", "token").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
 
 // hostTools holds the resolved paths and availability of host binaries
 // and directories that are bind-mounted into Docker agent containers.
@@ -75,7 +83,10 @@ type hostTools struct {
 	homeDir            string
 	ghConfigDir        string
 	hasGhConfig        bool
+	authEnv            []string
 }
+
+var forwardedAuthEnvNames = []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
 
 // vscodeCopilotShimRe matches the VS Code shim path embedded in the wrapper
 // script shipped by the Copilot Chat extension.
@@ -273,7 +284,40 @@ func discoverHostTools() (hostTools, error) {
 		homeDir:            homeDir,
 		ghConfigDir:        ghConfigDir,
 		hasGhConfig:        hasGhConfig,
+		authEnv:            resolveCopilotAuthEnv(),
 	}, nil
+}
+
+func resolveCopilotAuthEnv() []string {
+	forwarded := make([]string, 0, len(forwardedAuthEnvNames)+1)
+	hasExplicitToken := false
+	for _, name := range forwardedAuthEnvNames {
+		value, ok := lookupEnvFn(name)
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		forwarded = append(forwarded, name+"="+value)
+		hasExplicitToken = true
+	}
+	if !hasExplicitToken {
+		if token, err := ghAuthTokenFn(); err == nil {
+			token = strings.TrimSpace(token)
+			if token != "" {
+				forwarded = append(forwarded, "GH_TOKEN="+token)
+			}
+		}
+	}
+	if host, ok := lookupEnvFn("GH_HOST"); ok {
+		host = strings.TrimSpace(host)
+		if host != "" {
+			forwarded = append(forwarded, "GH_HOST="+host)
+		}
+	}
+	return forwarded
 }
 
 // ToolFinding describes a single tool or directory inspection result.

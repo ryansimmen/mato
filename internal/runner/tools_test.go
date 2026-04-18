@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,73 @@ func TestDiscoverHostTools_ValidCopilotDir(t *testing.T) {
 	}
 }
 
+func TestResolveCopilotAuthEnv_PrefersExplicitEnvVars(t *testing.T) {
+	values := map[string]string{
+		"COPILOT_GITHUB_TOKEN": "copilot-token",
+		"GH_TOKEN":             "gh-token",
+		"GITHUB_TOKEN":         "github-token",
+		"GH_HOST":              "example.ghe.com",
+	}
+	setHook(t, &lookupEnvFn, func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	})
+	called := false
+	setHook(t, &ghAuthTokenFn, func() (string, error) {
+		called = true
+		return "fallback-token", nil
+	})
+
+	got := resolveCopilotAuthEnv()
+	want := []string{
+		"COPILOT_GITHUB_TOKEN=copilot-token",
+		"GH_TOKEN=gh-token",
+		"GITHUB_TOKEN=github-token",
+		"GH_HOST=example.ghe.com",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveCopilotAuthEnv() = %#v, want %#v", got, want)
+	}
+	if called {
+		t.Fatal("ghAuthTokenFn should not be called when explicit token env vars are present")
+	}
+}
+
+func TestResolveCopilotAuthEnv_FallsBackToGhAuthToken(t *testing.T) {
+	setHook(t, &lookupEnvFn, func(name string) (string, bool) {
+		if name == "GH_HOST" {
+			return "github.com", true
+		}
+		return "", false
+	})
+	setHook(t, &ghAuthTokenFn, func() (string, error) { return "gh-auth-token", nil })
+
+	got := resolveCopilotAuthEnv()
+	want := []string{"GH_TOKEN=gh-auth-token", "GH_HOST=github.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveCopilotAuthEnv() = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveCopilotAuthEnv_IgnoresEmptyValuesAndGhFailures(t *testing.T) {
+	setHook(t, &lookupEnvFn, func(name string) (string, bool) {
+		switch name {
+		case "COPILOT_GITHUB_TOKEN":
+			return "   ", true
+		case "GH_HOST":
+			return "  ", true
+		default:
+			return "", false
+		}
+	})
+	setHook(t, &ghAuthTokenFn, func() (string, error) { return "", exec.ErrNotFound })
+
+	got := resolveCopilotAuthEnv()
+	if len(got) != 0 {
+		t.Fatalf("resolveCopilotAuthEnv() = %#v, want nil", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers for controlling function-variable seams
 // ---------------------------------------------------------------------------
@@ -63,9 +131,11 @@ func (f fakeFileInfo) Sys() any           { return nil }
 func setTestSeams(t *testing.T, lp func(string) (string, error), st func(string) (os.FileInfo, error), home func() (string, error), gep func() (string, error)) {
 	t.Helper()
 	setHook(t, &mkdirAllFn, func(string, os.FileMode) error { return nil })
+	setHook(t, &lookupEnvFn, os.LookupEnv)
 	setHook(t, &goEnvGOROOTFn, func() (string, error) { return "/usr/local/go", nil })
 	setHook(t, &goEnvGOMODCACHEFn, func() (string, error) { return "/resolved/go/pkg/mod", nil })
 	setHook(t, &goEnvGOCACHEFn, func() (string, error) { return "/resolved/.cache/go-build", nil })
+	setHook(t, &ghAuthTokenFn, func() (string, error) { return "", exec.ErrNotFound })
 	setHook(t, &runtimeGOROOTFn, func() string { return "/runtime/go" })
 	setHook(t, &evalSymlinksFn, func(path string) (string, error) { return path, nil })
 	if lp != nil {
