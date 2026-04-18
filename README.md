@@ -1,5 +1,9 @@
 # Multi Agent Task Orchestrator (mato)
 
+[![CI](https://github.com/ryansimmen/mato/actions/workflows/ci.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 Runs an autonomous Copilot agent swarm against a filesystem-backed task queue in Docker. Agents claim work and every completed branch is automatically reviewed by an AI review agent. See
 [Architecture](docs/architecture.md) for details.
 
