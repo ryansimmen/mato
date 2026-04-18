@@ -325,6 +325,29 @@ func TestBuildDockerArgs_ExtraEnvs(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_AuthEnv(t *testing.T) {
+	env := envConfig{
+		homeDir: "/home/test",
+		image:   "ubuntu:24.04",
+		workdir: "/workspace",
+		authEnv: []string{"GH_TOKEN=gh-token", "GH_HOST=example.ghe.com"},
+	}
+	run := runContext{prompt: "test", agentID: "test-agent"}
+
+	args := buildDockerArgs(env, run, nil, nil)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"GH_TOKEN", "GH_HOST"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in docker args", want)
+		}
+	}
+	for _, secret := range []string{"gh-token", "example.ghe.com"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("did not expect auth value %q in docker args", secret)
+		}
+	}
+}
+
 func TestBuildDockerArgs_GitIdentity(t *testing.T) {
 	env := envConfig{
 		homeDir:  "/home/test",
