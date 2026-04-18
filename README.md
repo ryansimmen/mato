@@ -37,8 +37,8 @@ Runtime requirements for operators:
 - Go 1.26+
 - Git
 - Docker
-- [GitHub CLI (`gh`)](https://cli.github.com/)
-- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot)
+- [GitHub CLI (`gh`)](https://github.com/cli/cli#installation)
+- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
 
 Additional contributor tools:
 
