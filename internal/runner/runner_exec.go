@@ -53,6 +53,7 @@ func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extra
 		defer timeoutCancel()
 
 		cmd := execCommandContext(timeoutCtx, "docker", args...)
+		cmd.Env = append(os.Environ(), env.authEnv...)
 		cmd.Cancel = func() error {
 			return cmd.Process.Signal(syscall.SIGTERM)
 		}

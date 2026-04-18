@@ -324,6 +324,7 @@ func buildEnvAndRunContext(branch string, tools hostTools, agentID, gitName, git
 		homeDir:                    tools.homeDir,
 		ghConfigDir:                tools.ghConfigDir,
 		hasGhConfig:                tools.hasGhConfig,
+		authEnv:                    tools.authEnv,
 		gitTemplatesDir:            tools.gitTemplatesDir,
 		hasGitTemplates:            tools.hasGitTemplates,
 		systemCertsDir:             tools.systemCertsDir,
