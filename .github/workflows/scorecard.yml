@@ -19,7 +19,9 @@ jobs:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: github.repository == 'ryansimmen/mato'
+    # Scorecard only supports public repositories. Remove the `false &&` guard
+    # below once this repository is made public so the workflow starts running.
+    if: false && github.repository == 'ryansimmen/mato'
 
     permissions:
       security-events: write
