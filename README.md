@@ -1,5 +1,7 @@
 # Multi Agent Task Orchestrator (mato)
 
+> _Run a swarm of autonomous Copilot agents against one repository — each working in its own Docker sandbox, every change reviewed by AI before it merges._
+
 [![CI](https://github.com/ryansimmen/mato/actions/workflows/ci.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
