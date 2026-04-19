@@ -34,7 +34,7 @@ Or, if you only want the local binary without the skill install side effects:
 go install ./cmd/mato
 ```
 
-`make install` installs the local `mato` binary and also installs the bundled `mato` skill into local CLI skill directories.
+`make install` installs the local `mato` binary and also installs the bundled `mato` skill into `~/.copilot/skills/mato/`. When the `claude` or `opencode` CLI is detected, the installer prompts before writing to their skill directories. Pass `--yes`/`--no` to `scripts/install-skill.sh` (or set `MATO_SKILL_INSTALL=yes|no`) to skip the prompts; non-interactive runs default to skipping those targets.
 
 ## Development Workflow
 

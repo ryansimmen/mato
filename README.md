@@ -38,7 +38,7 @@ cd mato
 make install
 ```
 
-`make install` installs the local `mato` binary and also copies the bundled `mato` skill into `~/.copilot/skills/mato/` and, when the corresponding CLIs are present, `~/.claude/skills/mato/` and `~/.config/opencode/skills/mato/`.
+`make install` installs the local `mato` binary and also copies the bundled `mato` skill into `~/.copilot/skills/mato/`. When the `claude` or `opencode` CLI is detected, the installer prompts before writing to `~/.claude/skills/mato/` or `~/.config/opencode/skills/mato/`. Pass `--yes`/`--no` to `scripts/install-skill.sh` (or set `MATO_SKILL_INSTALL=yes|no`) to skip the prompts; non-interactive runs default to skipping those targets.
 
 ## Requirements
 

@@ -24,7 +24,7 @@ Install `mato` from source with:
 go install github.com/ryansimmen/mato/cmd/mato@latest
 ```
 
-`make install` remains available for contributors. It installs the binary and then runs `scripts/install-skill.sh`, which copies the bundled `mato` skill into supported local CLI skill directories.
+`make install` remains available for contributors. It installs the binary and then runs `scripts/install-skill.sh`, which always copies the bundled `mato` skill into `~/.copilot/skills/mato/` and prompts before copying it into the Claude Code (`~/.claude/skills/mato/`) and OpenCode (`~/.config/opencode/skills/mato/`) skill directories when those CLIs are detected. Pass `--yes`/`--no` to `scripts/install-skill.sh` or set `MATO_SKILL_INSTALL=yes|no` to skip the prompts; non-interactive runs (e.g. CI) default to skipping the optional targets.
 
 ## CLI Usage
 ```text
@@ -540,7 +540,7 @@ The Makefile defaults to the `help` target.
 | Target | Description |
 | --- | --- |
 | `build` | Build `bin/mato` with `go build -ldflags "$(GO_LDFLAGS)" -o bin/mato ./cmd/mato`. By default `GO_LDFLAGS` stamps `main.version` from `git describe --tags --match 'v*' --always --dirty`, which prefers release-style `v*` tags, falls back to the commit hash when no matching tag is reachable, and falls back to `dev` when git metadata is unavailable. |
-| `install` | Contributor convenience target: install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/` and, when supported CLIs are present, `~/.claude/skills/mato/` and `~/.config/opencode/skills/mato/`. |
+| `install` | Contributor convenience target: install `mato` into `GOBIN`/`GOPATH/bin` with `go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato`, then run `scripts/install-skill.sh` to install the `mato` skill to `~/.copilot/skills/mato/`. The script prompts before installing to `~/.claude/skills/mato/` and `~/.config/opencode/skills/mato/` when the `claude` or `opencode` CLI is detected. Use `--yes`/`--no` or `MATO_SKILL_INSTALL=yes\|no` to skip the prompts; non-interactive runs default to skipping those targets. |
 | `clean` | Remove the `bin/` directory. |
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |
