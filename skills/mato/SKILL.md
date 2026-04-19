@@ -1,9 +1,7 @@
 ---
 name: mato
-description: >
-  Task planner that breaks down work into actionable task files.
-  Use when asked to plan work with mato, create mato tasks, break down features,
-  or populate a task backlog.
+description: Plans work for the mato task orchestrator by researching the codebase, breaking features into actionable task files, and writing them to .mato/backlog (no dependencies) or .mato/waiting (with depends_on). Use when asked to plan with mato, create mato tasks, break down features, or populate a mato backlog.
+license: MIT
 ---
 
 # Task Planner
