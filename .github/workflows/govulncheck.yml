@@ -39,3 +39,4 @@ jobs:
           go-version-file: go.mod
           check-latest: true
           cache: true
+          repo-checkout: false
