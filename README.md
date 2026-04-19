@@ -44,7 +44,7 @@ make install
 
 Runtime requirements for operators:
 
-- **Platform:** Linux is the best-supported environment. Many commands work cross-platform, but the agent runtime expects a Linux-style host with Docker available.
+- Linux
 - Go 1.26+
 - Git
 - Docker
