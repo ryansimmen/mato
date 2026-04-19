@@ -15,6 +15,8 @@
 See [Architecture](docs/architecture.md) for the detailed runtime design.
 
 > **Status:** alpha. APIs, task-file format, and CLI flags may change between commits. Pin to a commit SHA if you depend on it today.
+>
+> **Run only on machines and repositories you trust** — `mato` is an operator tool, not a sandbox. See [Security](#security) for details.
 
 ## Install
 
@@ -42,9 +44,9 @@ make install
 
 Runtime requirements for operators:
 
-- Go 1.26+
-- Git
+- Linux
 - Docker
+- Go 1.26+
 - [GitHub CLI (`gh`)](https://github.com/cli/cli#installation)
 - [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
 
@@ -54,16 +56,6 @@ Additional contributor tools:
 - optional `gopls`
 
 `staticcheck` and `deadcode` are managed via `go tool` and do not need to be installed separately.
-
-## Platform Notes
-
-`mato` is built with Go and many commands work cross-platform, but the full agent runtime expects a Linux-style host environment with Docker available and the required host tools mounted into containers. In practice, the best-supported operator environment today is Linux.
-
-## Trust And Security
-
-`mato` is an operator tool, not a sandbox. It launches autonomous agents in Docker, bind-mounts host tooling and configuration into containers, and may forward GitHub authentication into those containers so the agent runtime can function. Only run it on repositories, branches, and machines you trust.
-
-For vulnerability reporting, see [SECURITY.md](SECURITY.md). For contribution guidance, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Quick Start
 
@@ -149,6 +141,12 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 | `mato retry` | Requeue one or more failed tasks. |
 | `mato pause` | Pause new claims and review launches. Supports `--format text|json` for script-friendly output. |
 | `mato resume` | Resume normal polling after a pause. Supports `--format text|json` for script-friendly output. |
+
+## Security
+
+`mato` is an operator tool, not a sandbox. It launches autonomous agents in Docker, bind-mounts host tooling and configuration into containers, and may forward GitHub authentication into those containers so the agent runtime can function. Only run it on repositories, branches, and machines you trust.
+
+Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
