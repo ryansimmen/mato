@@ -3,10 +3,13 @@
 [![CI](https://github.com/ryansimmen/mato/actions/workflows/ci.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-alpha-orange)
 
 `mato` orchestrates autonomous coding agents against a filesystem-backed task queue in Docker. Agents claim work, push task branches, and completed work is reviewed before it is merged back into the target branch.
 
 See [Architecture](docs/architecture.md) for the detailed runtime design.
+
+> **Status:** alpha. APIs, task-file format, and CLI flags may change between commits. Pin to a commit SHA if you depend on it today.
 
 ## Install
 
@@ -42,10 +45,10 @@ Runtime requirements for operators:
 
 Additional contributor tools:
 
-- `golangci-lint`
-- `staticcheck`
-- `deadcode`
+- [`golangci-lint`](https://golangci-lint.run/welcome/install/) v2.11.4+
 - optional `gopls`
+
+`staticcheck` and `deadcode` are managed via `go tool` and do not need to be installed separately.
 
 ## Platform Notes
 
@@ -149,5 +152,6 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 - [Task Format](docs/task-format.md) - frontmatter fields, runtime markers, placement rules, examples
 - [Messaging](docs/messaging.md) - inter-agent coordination protocol
 - [Contributing](CONTRIBUTING.md) - development setup, expectations, and PR guidance
+- [Changelog](CHANGELOG.md) - notable changes per release
 - [Code Of Conduct](CODE_OF_CONDUCT.md) - community participation guidelines
 - [Support](SUPPORT.md) - where to ask questions and file issues

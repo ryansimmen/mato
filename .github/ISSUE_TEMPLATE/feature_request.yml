@@ -19,6 +19,13 @@ body:
     validations:
       required: true
   - type: textarea
+    id: use-case
+    attributes:
+      label: Use case / who benefits
+      description: Describe a concrete scenario and which users or workflows benefit.
+    validations:
+      required: true
+  - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered

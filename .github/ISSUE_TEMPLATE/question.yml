@@ -1,0 +1,48 @@
+name: Question
+description: Ask for help using, configuring, or understanding mato
+title: "question: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For unexpected behavior, crashes, or regressions, please use the **Bug Report** template instead.
+
+        Before opening a question, check the docs — [Architecture](../../blob/main/docs/architecture.md), [Configuration](../../blob/main/docs/configuration.md), and [Task Format](../../blob/main/docs/task-format.md) cover most usage questions.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to do, and where are you blocked?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include the command, repository setup, and any relevant queue or runtime details.
+      placeholder: |
+        Command:
+        Repository state:
+        What I expected:
+        What happened instead:
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What I've already tried
+      description: Docs read, commands run (e.g. `mato doctor`), workarounds attempted.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Go version, Docker version, `gh` version, and `copilot` version when relevant.
+      placeholder: |
+        OS:
+        Go:
+        Docker:
+        gh:
+        copilot:
+        mato:
