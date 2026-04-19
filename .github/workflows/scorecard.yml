@@ -1,7 +1,7 @@
 name: Scorecard
 
 on:
-  branch_protection_rule:
+  workflow_dispatch:
   schedule:
     - cron: '17 4 * * 2'
   push:
@@ -19,7 +19,7 @@ jobs:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: github.event_name != 'schedule' || github.repository == 'ryansimmen/mato'
+    if: github.repository == 'ryansimmen/mato'
 
     permissions:
       security-events: write
