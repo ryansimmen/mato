@@ -1,3 +1,6 @@
+// Package main is the entrypoint for the mato CLI, the multi-agent task
+// orchestrator that runs autonomous coding agents against a filesystem-backed
+// task queue. See https://github.com/ryansimmen/mato for documentation.
 package main
 
 import (
