@@ -6,6 +6,7 @@ Thanks for contributing to `mato`.
 
 - Read the [README](README.md) for the public install and runtime model.
 - File an issue before starting larger changes so scope and approach are aligned.
+- For substantial features or design changes, open an issue or draft a short proposal in [`docs/proposals/`](docs/proposals/) before implementing.
 - Keep changes focused. Small PRs are easier to review and merge.
 
 ## Development Setup
@@ -15,11 +16,11 @@ Required tools:
 - Go 1.26+
 - Git
 - Docker
-- [GitHub CLI (`gh`)](https://cli.github.com/)
-- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot) for full agent-runtime testing
-- `golangci-lint`
-- `staticcheck`
-- `deadcode`
+- [GitHub CLI (`gh`)](https://github.com/cli/cli#installation)
+- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli) for full agent-runtime testing
+- [`golangci-lint`](https://golangci-lint.run/welcome/install/) v2.11.4 or newer
+
+`staticcheck` and `deadcode` are managed via `go tool` (declared in `go.mod`) and do not need to be installed separately.
 
 Install the local checkout:
 
@@ -71,6 +72,17 @@ go test -race -v ./internal/integration/...
 - Include validation notes with the commands you ran.
 - Call out follow-up work separately instead of hiding it in the PR.
 - Keep unrelated changes out of the same PR.
+
+## Commit Messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) prefixes:
+
+- `feat:` new user-facing functionality
+- `fix:` bug fix
+- `docs:` documentation only
+- `refactor:` internal change with no behavior change
+- `test:` test-only change
+- `chore:` tooling, build, or housekeeping
 
 ## Questions And Support
 

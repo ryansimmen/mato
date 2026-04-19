@@ -2,7 +2,10 @@
 
 ## Reporting A Vulnerability
 
-Please report suspected vulnerabilities privately to `ryan.simmen@gmail.com`.
+Please report suspected vulnerabilities privately using one of:
+
+- GitHub's [private vulnerability reporting](https://github.com/ryansimmen/mato/security/advisories/new) (preferred)
+- Email to `ryan.simmen@gmail.com`
 
 Do not open a public GitHub issue for security-sensitive reports.
 

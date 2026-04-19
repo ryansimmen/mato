@@ -35,6 +35,16 @@ body:
       label: Actual behavior
     validations:
       required: true
+  - type: dropdown
+    id: reproduces-on-main
+    attributes:
+      label: Reproduces on latest main?
+      options:
+        - "Yes"
+        - "No"
+        - "Have not tested"
+    validations:
+      required: true
   - type: textarea
     id: environment
     attributes:
