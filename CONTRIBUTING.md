@@ -28,13 +28,21 @@ Install the local checkout:
 make install
 ```
 
-Or, if you only want the local binary without the skill install side effects:
+`make install` builds and installs the `mato` binary into `GOBIN`. The bundled `mato` skill (`skills/mato/SKILL.md`) is published separately and installed via [`gh skill`](https://cli.github.com/manual/gh_skill) (requires `gh` v2.90.0 or later):
 
 ```bash
-go install ./cmd/mato
+# Install from the local checkout (handy while iterating on the skill)
+gh skill install . mato --from-local --scope user
+
+# Or install the published version from GitHub
+gh skill install ryansimmen/mato mato --scope user
 ```
 
-`make install` installs the local `mato` binary and also installs the bundled `mato` skill into `~/.copilot/skills/mato/`. When the `claude` or `opencode` CLI is detected, the installer prompts before writing to their skill directories. Pass `--yes`/`--no` to `scripts/install-skill.sh` (or set `MATO_SKILL_INSTALL=yes|no`) to skip the prompts; non-interactive runs default to skipping those targets.
+After editing `skills/mato/SKILL.md`, validate against the [agentskills.io spec](https://agentskills.io/specification) before opening a PR:
+
+```bash
+gh skill publish --dry-run
+```
 
 ## Development Workflow
 
