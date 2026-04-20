@@ -17,8 +17,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
-  actions: read
 
 concurrency:
   group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -30,6 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name != 'schedule' || github.repository == 'ryansimmen/mato'
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
 
     strategy:
       fail-fast: false
