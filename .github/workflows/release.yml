@@ -42,26 +42,30 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
+          # Write outside the worktree so GoReleaser's git-clean check
+          # does not flag release-notes.md as a dirty/untracked file.
+          notes="${RUNNER_TEMP}/release-notes.md"
           # Match "## [X.Y.Z..." line, capture everything until the next
           # "## [" heading, a link-reference footer, or end-of-file.
           if ! awk -v v="$version" '
             $0 ~ "^## \\[" v "(\\]| )" { p = 1; next }
             p && (/^## \[/ || /^\[Unreleased\]:/ || /^\[[0-9]+\.[0-9]+\.[0-9]+\]:/) { exit }
             p { print }
-          ' CHANGELOG.md > release-notes.md; then
+          ' CHANGELOG.md > "$notes"; then
             echo "Failed to extract release notes for $version" >&2
             exit 1
           fi
-          if [ ! -s release-notes.md ]; then
+          if [ ! -s "$notes" ]; then
             echo "No CHANGELOG section found for version $version" >&2
             exit 1
           fi
           # Trim leading/trailing blank lines without depending on sed-in-place.
-          awk 'NF { p = 1 } p { print }' release-notes.md \
-            | tac | awk 'NF { p = 1 } p { print }' | tac > release-notes.trimmed.md
-          mv release-notes.trimmed.md release-notes.md
+          awk 'NF { p = 1 } p { print }' "$notes" \
+            | tac | awk 'NF { p = 1 } p { print }' | tac > "${notes}.trimmed"
+          mv "${notes}.trimmed" "$notes"
+          echo "notes-path=${notes}" >> "$GITHUB_OUTPUT"
           echo "Release notes for $version:"
-          cat release-notes.md
+          cat "$notes"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@e24998b8b67b290c2fa8b7c14fcfa7de2c5c9b8c # v7.1.0
@@ -75,6 +79,6 @@ jobs:
           # pinning would require manual upkeep that is more likely to go
           # stale than the floating constraint is to break.
           version: "~> v2"
-          args: release --clean --release-notes=release-notes.md
+          args: release --clean --release-notes=${{ steps.notes.outputs.notes-path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

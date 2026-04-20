@@ -14,39 +14,32 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 - GoReleaser configuration (`.goreleaser.yaml`) and signed-release
   workflow (`.github/workflows/release.yml`) that build Linux
   amd64/arm64 binaries on every `v*` tag, sign each archive and the
-  `checksums.txt` with cosign keyless (Sigstore + GitHub OIDC), and
-  publish a GitHub Release using the matching `CHANGELOG.md` section
-  as release notes.
+  `checksums.txt` with cosign keyless (Sigstore + GitHub OIDC) using
+  the `.sigstore.json` bundle format, and publish a GitHub Release
+  with notes extracted from the matching `CHANGELOG.md` section.
+  Verification:
+  `cosign verify-blob --certificate-identity-regexp 'https://github.com/ryansimmen/mato/.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com --bundle <artifact>.sigstore.json <artifact>`.
 - Scheduled CI workflow `.github/workflows/fuzz.yml` that runs each of
   the 14 native Go fuzz targets weekly (Mondays 12:00 UTC) and on
   manual dispatch. Each target runs for two minutes in its own matrix
-  job; crash corpora are uploaded as artifacts on failure. The workflow
-  is intentionally not a required check while seed-corpus stability is
-  observed.
-- Native Go fuzz harnesses for `internal/messaging` covering `safeEncode`
-  (collision-resistance and traversal-safety contracts), `ReadMessages`,
-  `ReadCompletionDetail` (path-containment invariant for adversarial task
-  IDs), and `ReadAllPresence`. Run with
-  `go test -run=^$ -fuzz=Fuzz... ./internal/messaging/`.
-- Native Go fuzz harnesses for `internal/taskfile` covering
-  `ParseBranchMarkerLine`, `ReplaceBranchMarkerLine`, `RemoveBranchMarkerLine`,
-  `ParseClaimedBy`, `StripFailureMarkers`, and `SanitizeCommentText`. Run
-  with `go test -run=^$ -fuzz=Fuzz... ./internal/taskfile/`.
-- Native Go fuzz harnesses for `internal/frontmatter` covering
-  `ParseTaskData`, `ExtractTitle`, `SanitizeBranchName`, and
-  `ValidateAffectsGlobs`. Run with `go test -run=^$ -fuzz=Fuzz... ./internal/frontmatter/`.
+  job; crash corpora are uploaded as artifacts on failure.
+- Native Go fuzz harnesses for `internal/frontmatter`,
+  `internal/taskfile`, and `internal/messaging` (14 targets total)
+  exercising parser, sanitizer, and JSON-decoder contracts including a
+  path-containment invariant for adversarial task IDs. Run with
+  `go test -run=^$ -fuzz=Fuzz... ./internal/<pkg>/`.
 
+### Changed
+
+- Pin all GitHub Actions in `.github/workflows/` to commit SHAs with
+  human-readable version comments. Dependabot continues to manage
+  updates via the existing `github-actions` package ecosystem grouping.
+
+### Security
 
 - Scope `security-events: write` permission to the `analyze` job in
   `.github/workflows/codeql.yml` instead of granting it workflow-wide,
   following the principle of least privilege.
-- Pin all GitHub Actions in `.github/workflows/` to commit SHAs with
-  human-readable version comments. Dependabot continues to manage updates
-  via the existing `github-actions` package ecosystem grouping.
-
-### Fixed
-
-### Removed
 
 ## [0.1.0] - 2026-04-20
 
