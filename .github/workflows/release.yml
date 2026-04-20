@@ -86,7 +86,12 @@ jobs:
           # pinning would require manual upkeep that is more likely to go
           # stale than the floating constraint is to break.
           version: "~> v2"
-          args: release --clean --release-notes=${{ steps.notes.outputs.notes-path }}
+          # NOTE: --release-notes is intentionally omitted because GoReleaser
+          # has been observed to leave the release body empty regardless of
+          # whether this flag is passed (v0.1.1 through v0.1.3 all shipped
+          # with empty bodies). The release body is set explicitly via
+          # `gh release edit` in a later step using the same notes file.
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -117,3 +122,17 @@ jobs:
           asset="${RUNNER_TEMP}/mato_${GITHUB_REF_NAME#v}.intoto.jsonl"
           cp "$BUNDLE_PATH" "$asset"
           gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
+
+      - name: Set release body from CHANGELOG
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES_PATH: ${{ steps.notes.outputs.notes-path }}
+        run: |
+          set -euo pipefail
+          # GoReleaser's --release-notes flag is supposed to populate the
+          # release body, but in practice the body is always empty after a
+          # GoReleaser publish (observed on v0.1.1, v0.1.2, and v0.1.3).
+          # Removing release.mode: replace did not help. As a workaround,
+          # explicitly set the body via gh release edit after GoReleaser
+          # has finished publishing the release.
+          gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES_PATH"

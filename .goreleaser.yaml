@@ -123,15 +123,12 @@ release:
     owner: ryansimmen
     name: mato
   prerelease: auto
-  # NOTE: do not set `mode:` here. Per the GoReleaser docs, `mode` controls
-  # how release notes are merged when the release **already exists**, and
-  # has been observed to cause empty release bodies on first publication
-  # (the release is created in two steps: first as `untagged-...` with no
-  # body, then finalized at the tag; with `mode: replace` the finalize
-  # step appears to overwrite the just-uploaded body with empty content,
-  # which is what produced the empty bodies on v0.1.1 and v0.1.2).
-  # Defaulting to `keep-existing` is correct here: the workflow only
-  # publishes each tag once, so no merge is needed.
+  # NOTE: do not set `mode:` here. The release body is set explicitly by
+  # the workflow via `gh release edit` after GoReleaser publishes, so
+  # GoReleaser's own release-notes handling is bypassed entirely.
+  # `mode: replace` was tried as a fix for empty release bodies but had
+  # no effect; the workaround in the workflow is what actually populates
+  # the body.
   #
   # Replace assets that already exist with the same name. Without this, a
   # rerun after a partial failure (e.g. transient signing error after some
