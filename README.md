@@ -6,8 +6,8 @@
 [![CodeQL](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://github.com/ryansimmen/mato/actions/workflows/scorecard.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/scorecard.yml)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-alpha-orange)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Status](https://img.shields.io/badge/Status-alpha-orange)
 
 `mato` orchestrates autonomous coding agents against a filesystem-backed task queue in Docker. Agents claim work, push task branches, and completed work is reviewed before it is merged back into the target branch.
 
