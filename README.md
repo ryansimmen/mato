@@ -4,7 +4,6 @@
 
 [![CI](https://github.com/ryansimmen/mato/actions/workflows/ci.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml)
-[![govulncheck](https://github.com/ryansimmen/mato/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/govulncheck.yml)
 [![OpenSSF Scorecard](https://github.com/ryansimmen/mato/actions/workflows/scorecard.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/scorecard.yml)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
