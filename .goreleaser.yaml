@@ -1,0 +1,102 @@
+# GoReleaser configuration for mato.
+# Schema documentation: https://goreleaser.com/customization/
+#
+# Build matrix is intentionally Linux-only because mato orchestrates Docker
+# containers running Copilot agents; the deployment target is Linux servers
+# and Linux developer workstations. macOS and Windows are out of scope.
+
+version: 2
+
+project_name: mato
+
+before:
+  hooks:
+    # Fail fast if go.mod/go.sum drift from what `go mod tidy` would produce,
+    # without mutating any tracked files. The release should be a deterministic
+    # snapshot of the tagged tree; running `go mod tidy` here would mask drift
+    # by silently fixing it. (`go mod verify` only checks that the module cache
+    # matches go.sum hashes; it does not detect tidiness drift, so it is not
+    # the right tool for this hook.) `make verify` runs the same `tidy -diff`
+    # check during normal development and CI.
+    - go mod tidy -diff
+
+builds:
+  - id: mato
+    main: ./cmd/mato
+    binary: mato
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - id: mato
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# Cosign keyless signing via Sigstore + GitHub OIDC.
+# - Each archive is signed individually (.sig + .pem certificate).
+# - The checksums.txt file is signed as well so a single signed file
+#   transitively attests to every artifact in the release.
+signs:
+  - id: cosign-archives
+    cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+    artifacts: archive
+    output: true
+  - id: cosign-checksums
+    cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+    artifacts: checksum
+    output: true
+
+# Release notes are supplied via --release-notes from the workflow,
+# extracted from CHANGELOG.md by tag. Disable GoReleaser's own changelog
+# generation so it does not append commit summaries on top.
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: ryansimmen
+    name: mato
+  prerelease: auto
+  mode: replace
+  # Replace assets that already exist with the same name. Without this, a
+  # rerun after a partial failure (e.g. transient signing error after some
+  # archives have already uploaded) hits GitHub's 422 already_exists and
+  # requires manual asset cleanup before the workflow can finish.
+  replace_existing_artifacts: true
+  name_template: "{{ .Tag }}"
