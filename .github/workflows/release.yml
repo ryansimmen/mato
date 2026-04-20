@@ -40,6 +40,9 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
 
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
       - name: Extract release notes from CHANGELOG
         id: notes
         run: |
@@ -91,12 +94,14 @@ jobs:
         id: provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          # Attest each archive emitted by GoReleaser. The bundle path
-          # output points to a single .jsonl file containing one DSSE-
+          # Attest each archive and SBOM emitted by GoReleaser. The bundle
+          # path output points to a single .jsonl file containing one DSSE-
           # wrapped in-toto SLSA v1 provenance statement per subject.
           subject-path: |
             dist/mato_*_linux_amd64.tar.gz
             dist/mato_*_linux_arm64.tar.gz
+            dist/mato_*_linux_amd64.tar.gz.sbom.json
+            dist/mato_*_linux_arm64.tar.gz.sbom.json
 
       - name: Attach provenance to GitHub Release
         env:

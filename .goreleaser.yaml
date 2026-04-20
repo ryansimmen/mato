@@ -86,6 +86,31 @@ signs:
       - "${artifact}"
     artifacts: checksum
     output: true
+  - id: cosign-sboms
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--bundle=${signature}"
+      - "${artifact}"
+    artifacts: sbom
+    output: true
+
+# SBOM generation via Syft. One SPDX JSON SBOM per archive, named to
+# match the archive (e.g. mato_0.1.3_linux_amd64.tar.gz.sbom.json),
+# uploaded as release assets. Provides a verifiable inventory of every
+# Go module and license shipped in each binary, satisfying emerging
+# supply-chain requirements (Scorecard SBOM check, EU CRA, SSDF).
+#
+# Verification (consumer side):
+#   syft scan file:./mato_<version>_linux_amd64.tar.gz -o spdx-json \
+#     | diff - mato_<version>_linux_amd64.tar.gz.sbom.json
+sboms:
+  - id: archive-sboms
+    artifacts: archive
+    documents:
+      - "${artifact}.sbom.json"
 
 # Release notes are supplied via --release-notes from the workflow,
 # extracted from CHANGELOG.md by tag. Disable GoReleaser's own changelog
