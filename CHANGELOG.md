@@ -11,7 +11,10 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
-### Changed
+- Native Go fuzz harnesses for `internal/frontmatter` covering
+  `ParseTaskData`, `ExtractTitle`, `SanitizeBranchName`, and
+  `ValidateAffectsGlobs`. Run with `go test -run=^$ -fuzz=Fuzz... ./internal/frontmatter/`.
+
 
 - Scope `security-events: write` permission to the `analyze` job in
   `.github/workflows/codeql.yml` instead of granting it workflow-wide,
