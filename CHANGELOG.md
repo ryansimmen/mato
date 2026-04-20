@@ -11,6 +11,9 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
+- OpenSSF Best Practices badge in the README
+  ([project 12606](https://www.bestpractices.dev/projects/12606)).
+
 ### Changed
 
 - Scope `security-events: write` permission to the `analyze` job in
