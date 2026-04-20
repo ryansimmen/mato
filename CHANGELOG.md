@@ -19,6 +19,13 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Fixed
 
+- Release notes are now correctly published to the GitHub Release body.
+  GoReleaser's `--release-notes` flag was observed to leave the body
+  empty regardless of input (verified across v0.1.1 through v0.1.3, both
+  with and without `release.mode: replace`). The release workflow now
+  sets the body explicitly via `gh release edit --notes-file` after
+  GoReleaser finishes publishing.
+
 ### Security
 
 ## [0.1.3] - 2026-04-20
@@ -31,16 +38,6 @@ While the project is pre-`v1`, breaking changes may occur in any release.
   cosign keyless (Sigstore + GitHub OIDC) and covered by SLSA build
   provenance, providing a verifiable inventory of every Go module and
   license shipped in each binary.
-
-### Fixed
-
-- Release notes are now correctly published to the GitHub Release body.
-  Previously, `release.mode: replace` in `.goreleaser.yaml` caused
-  GoReleaser to overwrite the body extracted from CHANGELOG.md with empty
-  content during the second phase of release publication, leaving v0.1.1
-  and v0.1.2 with empty release notes. Removed `mode:` so GoReleaser uses
-  the default `keep-existing` behavior, which preserves the body uploaded
-  via `--release-notes`.
 
 ## [0.1.2] - 2026-04-20
 
