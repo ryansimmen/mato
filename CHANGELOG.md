@@ -11,6 +11,12 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
+- Scheduled CI workflow `.github/workflows/fuzz.yml` that runs each of
+  the 14 native Go fuzz targets weekly (Mondays 12:00 UTC) and on
+  manual dispatch. Each target runs for two minutes in its own matrix
+  job; crash corpora are uploaded as artifacts on failure. The workflow
+  is intentionally not a required check while seed-corpus stability is
+  observed.
 - Native Go fuzz harnesses for `internal/messaging` covering `safeEncode`
   (collision-resistance and traversal-safety contracts), `ReadMessages`,
   `ReadCompletionDetail` (path-containment invariant for adversarial task

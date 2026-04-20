@@ -1,0 +1,62 @@
+name: fuzz
+
+# Run the native Go fuzz harnesses on a weekly schedule and on demand.
+# Each target runs in its own matrix job for fastest wall-clock and easiest
+# triage. This workflow is intentionally not wired to pull_request or push;
+# it observes seed-corpus stability over time and is not a required check.
+
+on:
+  schedule:
+    # Mondays at 12:00 UTC.
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target.package }} / ${{ matrix.target.func }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # internal/frontmatter
+          - { package: internal/frontmatter, func: FuzzParseTaskData }
+          - { package: internal/frontmatter, func: FuzzExtractTitle }
+          - { package: internal/frontmatter, func: FuzzSanitizeBranchName }
+          - { package: internal/frontmatter, func: FuzzValidateAffectsGlobs }
+          # internal/taskfile
+          - { package: internal/taskfile, func: FuzzParseBranchMarkerLine }
+          - { package: internal/taskfile, func: FuzzReplaceBranchMarkerLine }
+          - { package: internal/taskfile, func: FuzzRemoveBranchMarkerLine }
+          - { package: internal/taskfile, func: FuzzParseClaimedBy }
+          - { package: internal/taskfile, func: FuzzStripFailureMarkers }
+          - { package: internal/taskfile, func: FuzzSanitizeCommentText }
+          # internal/messaging
+          - { package: internal/messaging, func: FuzzSafeEncode }
+          - { package: internal/messaging, func: FuzzReadMessagesJSON }
+          - { package: internal/messaging, func: FuzzReadCompletionDetailJSON }
+          - { package: internal/messaging, func: FuzzReadAllPresenceJSON }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fuzz ${{ matrix.target.func }}
+        run: |
+          go test -run='^$' -fuzz='^${{ matrix.target.func }}$' \
+            -fuzztime=2m ./${{ matrix.target.package }}/...
+      - name: Upload crash corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-corpus-${{ matrix.target.func }}
+          path: ${{ matrix.target.package }}/testdata/fuzz/
+          if-no-files-found: ignore
+          retention-days: 30
