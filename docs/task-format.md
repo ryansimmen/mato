@@ -1,7 +1,7 @@
 # mato Task File Format Reference
 
-<!-- NOTE: The task format spec is also duplicated in .github/skills/mato/SKILL.md
-     (distributed standalone via scripts/install-skill.sh). Keep both in sync. -->
+<!-- NOTE: The task format spec is also duplicated in skills/mato/SKILL.md
+     (published as a gh skill from this repo). Keep both in sync. -->
 
 ## Overview
 A mato task file is a markdown `.md` file with optional YAML frontmatter.

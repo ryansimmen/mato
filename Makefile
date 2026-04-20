@@ -23,9 +23,8 @@ clean: ## Remove build artifacts
 fmt: ## Format Go source files
 	go fmt ./...
 
-install: ## Install mato binary to GOBIN and mato skill to ~/.copilot/skills/
+install: ## Install mato binary to GOBIN
 	go install -ldflags "$(GO_LDFLAGS)" ./cmd/mato
-	./scripts/install-skill.sh
 
 integration-test: ## Run integration tests with race detector
 	go test -race -v ./internal/integration/...

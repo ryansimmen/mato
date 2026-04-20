@@ -71,7 +71,7 @@ internal/          All library packages:
   timeutil/        Shared time-formatting helpers
   ui/              Shared CLI formatting helpers
 docs/              Architecture, configuration, messaging, task-format docs
-.github/skills/mato/SKILL.md     Task planning skill
+skills/mato/SKILL.md             Task planning skill (published via `gh skill`)
 ```
 
 ## Code Style
@@ -173,7 +173,7 @@ import (
       run the relevant commands proactively and report the results.
 3. **Update docs** — If behavior changed, update this file (`AGENTS.md`) and any affected
    docs: `README.md`, `docs/architecture.md`, `docs/task-format.md`, `docs/messaging.md`,
-   `docs/configuration.md`. If task format changed, also update `.github/skills/mato/SKILL.md`.
+   `docs/configuration.md`. If task format changed, also update `skills/mato/SKILL.md`.
 4. **Verify** — `make verify`
 5. **Commit** — Conventional commit messages (`feat:`, `fix:`, `docs:`, etc.).
 

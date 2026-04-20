@@ -27,17 +27,17 @@ Install the CLI from source:
 go install github.com/ryansimmen/mato/cmd/mato@latest
 ```
 
-### CLI And Bundled Skill
+### Bundled `mato` Skill
 
-If you want the full workflow with the bundled `mato` skill, install from a local checkout instead:
+The `mato` task-planner skill is published from this repo and installed via the [GitHub CLI](https://cli.github.com/) (`gh` v2.90.0 or later):
 
 ```bash
-git clone https://github.com/ryansimmen/mato.git
-cd mato
-make install
+gh skill install ryansimmen/mato mato --scope user
 ```
 
-`make install` installs the local `mato` binary and also copies the bundled `mato` skill into `~/.copilot/skills/mato/` and, when the corresponding CLIs are present, `~/.claude/skills/mato/` and `~/.config/opencode/skills/mato/`.
+`gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code). Use `--agent claude-code|cursor|codex|gemini|antigravity` to target a non-Copilot host. Run `gh skill update mato` to pick up changes after a new release.
+
+OpenCode is not yet a `gh skill`-supported host; install there with `gh skill install ryansimmen/mato mato --dir ~/.config/opencode/skills` as a workaround.
 
 ## Requirements
 
@@ -69,7 +69,7 @@ cd /path/to/repo
 mato init
 ```
 
-If you also installed the bundled `mato` skill with `make install`, you can use Copilot to generate task files for the queue. For example:
+If you also installed the bundled `mato` skill with `gh skill install`, you can use Copilot to generate task files for the queue. For example:
 
 ```bash
 copilot --interactive "Review this codebase for logical errors and create mato tasks of your findings"
