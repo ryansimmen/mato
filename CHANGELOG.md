@@ -26,6 +26,14 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Fixed
 
+- Release notes are now correctly published to the GitHub Release body.
+  Previously, `release.mode: replace` in `.goreleaser.yaml` caused
+  GoReleaser to overwrite the body extracted from CHANGELOG.md with empty
+  content during the second phase of release publication, leaving v0.1.1
+  and v0.1.2 with empty release notes. Removed `mode:` so GoReleaser uses
+  the default `keep-existing` behavior, which preserves the body uploaded
+  via `--release-notes`.
+
 ### Security
 
 ## [0.1.2] - 2026-04-20
