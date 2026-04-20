@@ -11,6 +11,11 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
+- Native Go fuzz harnesses for `internal/messaging` covering `safeEncode`
+  (collision-resistance and traversal-safety contracts), `ReadMessages`,
+  `ReadCompletionDetail` (path-containment invariant for adversarial task
+  IDs), and `ReadAllPresence`. Run with
+  `go test -run=^$ -fuzz=Fuzz... ./internal/messaging/`.
 - Native Go fuzz harnesses for `internal/taskfile` covering
   `ParseBranchMarkerLine`, `ReplaceBranchMarkerLine`, `RemoveBranchMarkerLine`,
   `ParseClaimedBy`, `StripFailureMarkers`, and `SanitizeCommentText`. Run
