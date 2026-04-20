@@ -6,6 +6,7 @@
 [![CodeQL](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://github.com/ryansimmen/mato/actions/workflows/scorecard.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/scorecard.yml)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ryansimmen/mato.svg)](https://pkg.go.dev/github.com/ryansimmen/mato)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-alpha-orange)
 
