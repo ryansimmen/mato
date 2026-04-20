@@ -11,7 +11,13 @@ project_name: mato
 
 before:
   hooks:
-    - go mod tidy
+    # Verify the module graph matches the committed go.sum without mutating
+    # any tracked files. The release should be a deterministic snapshot of
+    # the tagged tree; running `go mod tidy` here would mask dependency drift
+    # and could publish binaries that do not correspond to the tagged source.
+    # `make verify` is the place that enforces tidiness during normal
+    # development.
+    - go mod verify
 
 builds:
   - id: mato
@@ -87,4 +93,9 @@ release:
     name: mato
   prerelease: auto
   mode: replace
+  # Replace assets that already exist with the same name. Without this, a
+  # rerun after a partial failure (e.g. transient signing error after some
+  # archives have already uploaded) hits GitHub's 422 already_exists and
+  # requires manual asset cleanup before the workflow can finish.
+  replace_existing_artifacts: true
   name_template: "{{ .Tag }}"

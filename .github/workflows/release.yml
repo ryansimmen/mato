@@ -67,6 +67,13 @@ jobs:
         uses: goreleaser/goreleaser-action@e24998b8b67b290c2fa8b7c14fcfa7de2c5c9b8c # v7.1.0
         with:
           distribution: goreleaser
+          # Floats to the latest GoReleaser v2 release at workflow-run time.
+          # Accepted tradeoff: historical tag rebuilds may not be byte-
+          # identical to the original release, but the binaries are signed
+          # at the time of the original release run and rebuilds are not
+          # expected. Dependabot does not update this `version:` input, so
+          # pinning would require manual upkeep that is more likely to go
+          # stale than the floating constraint is to break.
           version: "~> v2"
           args: release --clean --release-notes=release-notes.md
         env:
