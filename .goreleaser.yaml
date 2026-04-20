@@ -11,13 +11,14 @@ project_name: mato
 
 before:
   hooks:
-    # Verify the module graph matches the committed go.sum without mutating
-    # any tracked files. The release should be a deterministic snapshot of
-    # the tagged tree; running `go mod tidy` here would mask dependency drift
-    # and could publish binaries that do not correspond to the tagged source.
-    # `make verify` is the place that enforces tidiness during normal
-    # development.
-    - go mod verify
+    # Fail fast if go.mod/go.sum drift from what `go mod tidy` would produce,
+    # without mutating any tracked files. The release should be a deterministic
+    # snapshot of the tagged tree; running `go mod tidy` here would mask drift
+    # by silently fixing it. (`go mod verify` only checks that the module cache
+    # matches go.sum hashes; it does not detect tidiness drift, so it is not
+    # the right tool for this hook.) `make verify` runs the same `tidy -diff`
+    # check during normal development and CI.
+    - go mod tidy -diff
 
 builds:
   - id: mato
