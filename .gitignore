@@ -8,6 +8,9 @@ bin/*
 *.test
 /mato
 
+# GoReleaser output
+/dist/
+
 # Coverage and test outputs
 *.out
 

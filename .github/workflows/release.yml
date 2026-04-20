@@ -1,0 +1,73 @@
+name: release
+
+# Triggered by pushing a v* tag. Builds linux/amd64 + linux/arm64 binaries
+# with GoReleaser, signs each archive and the checksums.txt with cosign
+# keyless (Sigstore + GitHub OIDC), and publishes a GitHub Release using
+# the matching CHANGELOG.md section as release notes.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write   # publish the GitHub Release and upload artifacts.
+      id-token: write   # OIDC token for cosign keyless signing.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0   # GoReleaser needs full history to compute version.
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          # Match "## [X.Y.Z..." line, capture everything until the next
+          # "## [" heading, a link-reference footer, or end-of-file.
+          if ! awk -v v="$version" '
+            $0 ~ "^## \\[" v "(\\]| )" { p = 1; next }
+            p && (/^## \[/ || /^\[Unreleased\]:/ || /^\[[0-9]+\.[0-9]+\.[0-9]+\]:/) { exit }
+            p { print }
+          ' CHANGELOG.md > release-notes.md; then
+            echo "Failed to extract release notes for $version" >&2
+            exit 1
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG section found for version $version" >&2
+            exit 1
+          fi
+          # Trim leading/trailing blank lines without depending on sed-in-place.
+          awk 'NF { p = 1 } p { print }' release-notes.md \
+            | tac | awk 'NF { p = 1 } p { print }' | tac > release-notes.trimmed.md
+          mv release-notes.trimmed.md release-notes.md
+          echo "Release notes for $version:"
+          cat release-notes.md
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@e24998b8b67b290c2fa8b7c14fcfa7de2c5c9b8c # v7.1.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --release-notes=release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

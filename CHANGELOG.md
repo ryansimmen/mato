@@ -11,6 +11,12 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
+- GoReleaser configuration (`.goreleaser.yaml`) and signed-release
+  workflow (`.github/workflows/release.yml`) that build Linux
+  amd64/arm64 binaries on every `v*` tag, sign each archive and the
+  `checksums.txt` with cosign keyless (Sigstore + GitHub OIDC), and
+  publish a GitHub Release using the matching `CHANGELOG.md` section
+  as release notes.
 - Scheduled CI workflow `.github/workflows/fuzz.yml` that runs each of
   the 14 native Go fuzz targets weekly (Mondays 12:00 UTC) and on
   manual dispatch. Each target runs for two minutes in its own matrix
