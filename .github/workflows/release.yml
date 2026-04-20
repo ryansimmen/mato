@@ -2,7 +2,8 @@ name: release
 
 # Triggered by pushing a v* tag. Builds linux/amd64 + linux/arm64 binaries
 # with GoReleaser, signs each archive and the checksums.txt with cosign
-# keyless (Sigstore + GitHub OIDC), and publishes a GitHub Release using
+# keyless (Sigstore + GitHub OIDC), generates SLSA build provenance
+# attestations for each archive, and publishes a GitHub Release using
 # the matching CHANGELOG.md section as release notes.
 
 on:
@@ -19,8 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write   # publish the GitHub Release and upload artifacts.
-      id-token: write   # OIDC token for cosign keyless signing.
+      contents: write       # publish the GitHub Release and upload artifacts.
+      id-token: write       # OIDC token for cosign keyless signing and
+                            # SLSA provenance attestations.
+      attestations: write   # actions/attest-build-provenance writes to the
+                            # repository's attestation store.
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -82,3 +86,29 @@ jobs:
           args: release --clean --release-notes=${{ steps.notes.outputs.notes-path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate SLSA build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          # Attest each archive emitted by GoReleaser. The bundle path
+          # output points to a single .jsonl file containing one DSSE-
+          # wrapped in-toto SLSA v1 provenance statement per subject.
+          subject-path: |
+            dist/mato_*_linux_amd64.tar.gz
+            dist/mato_*_linux_arm64.tar.gz
+
+      - name: Attach provenance to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          # Scorecard's Signed-Releases check looks for *.intoto.jsonl
+          # release assets to award full credit for SLSA provenance.
+          # The attest action's bundle is already in JSONL DSSE format;
+          # rename to the conventional extension and upload alongside
+          # the archives.
+          asset="${RUNNER_TEMP}/mato_${GITHUB_REF_NAME#v}.intoto.jsonl"
+          cp "$BUNDLE_PATH" "$asset"
+          gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
