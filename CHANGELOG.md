@@ -11,6 +11,20 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.1.1] - 2026-04-20
+
+### Added
+
 - GoReleaser configuration (`.goreleaser.yaml`) and signed-release
   workflow (`.github/workflows/release.yml`) that build Linux
   amd64/arm64 binaries on every `v*` tag, sign each archive and the
@@ -67,5 +81,6 @@ Initial public alpha release.
 - Secret scanning, push protection, and private vulnerability reporting enabled.
 - MIT licensed; see [SECURITY.md](SECURITY.md) for the disclosure process.
 
-[Unreleased]: https://github.com/ryansimmen/mato/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ryansimmen/mato/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ryansimmen/mato/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ryansimmen/mato/releases/tag/v0.1.0
