@@ -16,6 +16,9 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 - Scope `security-events: write` permission to the `analyze` job in
   `.github/workflows/codeql.yml` instead of granting it workflow-wide,
   following the principle of least privilege.
+- Pin all GitHub Actions in `.github/workflows/` to commit SHAs with
+  human-readable version comments. Dependabot continues to manage updates
+  via the existing `github-actions` package ecosystem grouping.
 
 ### Fixed
 
