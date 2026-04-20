@@ -16,3 +16,32 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 ### Fixed
 
 ### Removed
+
+## [0.1.0] - 2026-04-20
+
+Initial public alpha release.
+
+### Added
+
+- Filesystem-backed task queue with atomic claim, move, and squash-merge semantics.
+- Autonomous Copilot coding agents running in per-task Docker sandboxes.
+- AI-assisted review gate before changes merge into the target branch.
+- Inter-agent messaging protocol for coordinating dependent work.
+- Dependency DAG analysis with cycle detection (Kahn + Tarjan).
+- Repository-local `.mato.yaml` configuration with source attribution.
+- `mato status`, `mato log`, `mato inspect`, and `mato doctor` commands.
+- Durable `.paused` sentinel for safely halting the queue.
+- Lockfile-based agent identity and orphan recovery.
+- Embedded task-instructions prompt with integration-test validation.
+- `skills/mato/SKILL.md` task planner skill installable via `gh skill`.
+
+### Security
+
+- CodeQL advanced scanning with `security-extended` query suite.
+- govulncheck workflow on push and daily schedule.
+- OpenSSF Scorecard workflow with SARIF upload.
+- Secret scanning, push protection, and private vulnerability reporting enabled.
+- MIT licensed; see [SECURITY.md](SECURITY.md) for the disclosure process.
+
+[Unreleased]: https://github.com/ryansimmen/mato/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ryansimmen/mato/releases/tag/v0.1.0
