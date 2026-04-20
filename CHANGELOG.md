@@ -46,6 +46,16 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Fixed
 
+- Release workflow now writes the extracted CHANGELOG release notes to
+  `$RUNNER_TEMP` instead of the repository worktree so that GoReleaser's
+  git-clean check does not fail with "git is in a dirty state".
+- `.goreleaser.yaml` now signs artifacts using cosign v3's
+  `--bundle=${artifact}.sigstore.json` form. The previous configuration
+  used the deprecated `--output-signature`/`--output-certificate` flags,
+  which cosign v3 (installed by `cosign-installer@v4.1.1`) refuses to
+  emit without `--bundle`. Verification command:
+  `cosign verify-blob --certificate-identity-regexp 'https://github.com/ryansimmen/mato/.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com --bundle <artifact>.sigstore.json <artifact>`.
+
 ### Removed
 
 ## [0.1.0] - 2026-04-20

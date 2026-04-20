@@ -53,31 +53,36 @@ checksum:
   algorithm: sha256
 
 # Cosign keyless signing via Sigstore + GitHub OIDC.
-# - Each archive is signed individually (.sig + .pem certificate).
-# - The checksums.txt file is signed as well so a single signed file
-#   transitively attests to every artifact in the release.
+#
+# cosign v3+ uses a single .sigstore.json bundle file per artifact (the
+# new bundle format) instead of separate .sig + .pem files. Each archive
+# and the checksums.txt are signed; verifying checksums.txt transitively
+# attests to every artifact in the release.
+#
+# Verification (consumer side):
+#   cosign verify-blob \
+#     --certificate-identity-regexp 'https://github.com/ryansimmen/mato/.*' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     --bundle <artifact>.sigstore.json \
+#     <artifact>
 signs:
   - id: cosign-archives
     cmd: cosign
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.sigstore.json"
     args:
       - sign-blob
       - "--yes"
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
+      - "--bundle=${signature}"
       - "${artifact}"
     artifacts: archive
     output: true
   - id: cosign-checksums
     cmd: cosign
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.sigstore.json"
     args:
       - sign-blob
       - "--yes"
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
+      - "--bundle=${signature}"
       - "${artifact}"
     artifacts: checksum
     output: true
