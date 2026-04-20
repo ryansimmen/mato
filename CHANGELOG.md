@@ -13,6 +13,10 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Changed
 
+- Scope `security-events: write` permission to the `analyze` job in
+  `.github/workflows/codeql.yml` instead of granting it workflow-wide,
+  following the principle of least privilege.
+
 ### Fixed
 
 ### Removed
