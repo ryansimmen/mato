@@ -19,14 +19,18 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Fixed
 
+### Security
+
+## [0.1.4] - 2026-04-20
+
+### Fixed
+
 - Release notes are now correctly published to the GitHub Release body.
   GoReleaser's `--release-notes` flag was observed to leave the body
   empty regardless of input (verified across v0.1.1 through v0.1.3, both
   with and without `release.mode: replace`). The release workflow now
   sets the body explicitly via `gh release edit --notes-file` after
   GoReleaser finishes publishing.
-
-### Security
 
 ## [0.1.3] - 2026-04-20
 
@@ -110,7 +114,8 @@ Initial public alpha release.
 - Secret scanning, push protection, and private vulnerability reporting enabled.
 - MIT licensed; see [SECURITY.md](SECURITY.md) for the disclosure process.
 
-[Unreleased]: https://github.com/ryansimmen/mato/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/ryansimmen/mato/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/ryansimmen/mato/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/ryansimmen/mato/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ryansimmen/mato/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ryansimmen/mato/compare/v0.1.0...v0.1.1
