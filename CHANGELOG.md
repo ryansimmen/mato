@@ -11,15 +11,18 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
+- `scripts/install.sh` and `docs/install.md` for installing the signed Linux
+  binary release. The script honors `VERSION` and `PREFIX`, verifies sha256
+  and (when present) cosign signatures, and optionally adds the install
+  directory to the user's shell `PATH`.
+
 ### Changed
 
-### Deprecated
-
-### Removed
-
-### Fixed
-
-### Security
+- README "Install" section now leads with the binary one-liner and links to
+  `docs/install.md` for verification, environment variables, and building
+  from source.
+- README contributor-tools list removed; CONTRIBUTING.md is the single
+  source for development setup tooling.
 
 ## [0.1.4] - 2026-04-20
 

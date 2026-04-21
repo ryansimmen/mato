@@ -19,6 +19,7 @@ Required tools:
 - [GitHub CLI (`gh`)](https://github.com/cli/cli#installation)
 - [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli) for full agent-runtime testing
 - [`golangci-lint`](https://golangci-lint.run/welcome/install/) v2.11.4 or newer
+- optional: [`gopls`](https://pkg.go.dev/golang.org/x/tools/gopls) for editor integration
 
 `staticcheck` and `deadcode` are managed via `go tool` (declared in `go.mod`) and do not need to be installed separately.
 

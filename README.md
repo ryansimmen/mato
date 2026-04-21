@@ -20,13 +20,13 @@ See [Architecture](docs/architecture.md) for the detailed runtime design.
 
 ## Install
 
-### CLI Only
-
-Install the CLI from source:
+`mato` ships signed `linux/amd64` and `linux/arm64` binaries with each release:
 
 ```bash
-go install github.com/ryansimmen/mato/cmd/mato@latest
+curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
 ```
+
+The script verifies sha256 checksums and (when [`cosign`](https://docs.sigstore.dev/cosign/installation/) is on `PATH`) the cosign signature before installing the binary. See [Install](docs/install.md) for the inspect-then-run variant, system-wide install, `VERSION` / `PREFIX` environment variables, manual download verification with `gh attestation verify` or `cosign verify-blob`, and building from source.
 
 ### Bundled `mato` Skill
 
@@ -46,22 +46,16 @@ Runtime requirements for operators:
 
 - Linux
 - Docker
-- Go 1.26+
 - [GitHub CLI (`gh`)](https://github.com/cli/cli#installation)
 - [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
 
-Additional contributor tools:
-
-- [`golangci-lint`](https://golangci-lint.run/welcome/install/) v2.11.4+
-- optional `gopls`
-
-`staticcheck` and `deadcode` are managed via `go tool` and do not need to be installed separately.
+Tooling for building from source or contributing is documented in [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
 ## Quick Start
 
 ```bash
 # Install the CLI
-go install github.com/ryansimmen/mato/cmd/mato@latest
+curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
 
 # cd into the target repository
 cd /path/to/repo
@@ -151,6 +145,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 ## Documentation
 
 - [Architecture](docs/architecture.md) - host loop, task lifecycle, review flow, merge queue
+- [Install](docs/install.md) - binary install, manual download verification, build from source
 - [Configuration](docs/configuration.md) - CLI flags, environment variables, `.mato.yaml`, Docker setup
 - [Task Format](docs/task-format.md) - frontmatter fields, runtime markers, placement rules, examples
 - [Messaging](docs/messaging.md) - inter-agent coordination protocol
