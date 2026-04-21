@@ -49,13 +49,7 @@ Runtime requirements for operators:
 - [GitHub CLI (`gh`)](https://github.com/cli/cli#installation)
 - [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
 
-Additional contributor tools:
-
-- [Go](https://go.dev/doc/install) 1.26+ (only required when building from source)
-- [`golangci-lint`](https://golangci-lint.run/welcome/install/) v2.11.4+
-- optional `gopls`
-
-`staticcheck` and `deadcode` are managed via `go tool` and do not need to be installed separately.
+Tooling for building from source or contributing is documented in [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
 ## Quick Start
 
