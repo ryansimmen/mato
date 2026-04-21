@@ -135,7 +135,9 @@ elif command -v shasum >/dev/null 2>&1; then
   ( cd "$TMP_DIR" && shasum -a 256 --ignore-missing -c checksums.txt >/dev/null )
   info "sha256 verified (shasum)"
 else
-  warn "no sha256sum or shasum on PATH; skipping checksum verification"
+  err "neither sha256sum nor shasum found on PATH; cannot verify checksums"
+  err "install coreutils (sha256sum) or perl-tools (shasum) and re-run"
+  exit 1
 fi
 
 # --- verify cosign signature --------------------------------------------------
