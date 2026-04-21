@@ -19,6 +19,9 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Fixed
 
+- Pin `govulncheck` install to `v1.1.4` instead of `@latest` so OSSF Scorecard
+  Pinned-Dependencies stays at 10/10.
+
 ### Security
 
 ## [0.1.5] - 2026-04-21
