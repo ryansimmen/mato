@@ -20,13 +20,93 @@ See [Architecture](docs/architecture.md) for the detailed runtime design.
 
 ## Install
 
-### CLI Only
+### Linux binary (recommended)
 
-Install the CLI from source:
+`mato` ships signed `linux/amd64` and `linux/arm64` binaries with each release. The install script downloads the archive, verifies its `sha256` checksum, and (when [`cosign`](https://docs.sigstore.dev/cosign/installation/) is on `PATH`) verifies the cosign signature before installing the binary.
+
+Inspect-then-run (recommended):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh
+less install.sh   # review the script
+bash install.sh
+```
+
+One-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
+```
+
+System-wide install (`/usr/local/bin`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | sudo bash
+```
+
+The script honors two environment variables:
+
+- `VERSION` — release tag (e.g. `v0.1.4`). Defaults to the latest release.
+- `PREFIX` — install prefix; the binary is placed in `$PREFIX/bin/mato`. Defaults to `/usr/local` for root, `$HOME/.local` for non-root.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh \
+  | VERSION=v0.1.4 PREFIX=$HOME/custom bash
+```
+
+macOS and Windows are not currently published as binaries — see [Build from source](#build-from-source).
+
+### Verify the download
+
+Each release publishes a `*.intoto.jsonl` SLSA build provenance bundle, per-archive cosign `.sigstore.json` bundles, a signed `checksums.txt`, and per-archive [SPDX 2.3](https://spdx.dev/) SBOMs. The install script performs verification automatically when run, but you can also verify a manually-downloaded archive.
+
+**With `gh` (recommended):**
+
+```bash
+gh release download v0.1.4 -R ryansimmen/mato -p 'mato_0.1.4_linux_amd64.tar.gz'
+gh attestation verify -R ryansimmen/mato mato_0.1.4_linux_amd64.tar.gz
+```
+
+A successful verification exits 0; in non-interactive shells the command is silent on success. Use `--format json` for full attestation details.
+
+**Without `gh`** (using `sha256sum` and [`cosign`](https://docs.sigstore.dev/cosign/installation/)):
+
+```bash
+VERSION=v0.1.4
+ASSETS="mato_${VERSION#v}_linux_amd64.tar.gz checksums.txt checksums.txt.sigstore.json mato_${VERSION#v}_linux_amd64.tar.gz.sigstore.json"
+for f in $ASSETS; do
+  curl -fsSLO "https://github.com/ryansimmen/mato/releases/download/${VERSION}/${f}"
+done
+
+sha256sum --ignore-missing -c checksums.txt
+
+CERT_ID="https://github.com/ryansimmen/mato/.github/workflows/release.yml@refs/tags/${VERSION}"
+ISSUER="https://token.actions.githubusercontent.com"
+
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity "$CERT_ID" \
+  --certificate-oidc-issuer "$ISSUER" \
+  checksums.txt
+
+cosign verify-blob \
+  --bundle "mato_${VERSION#v}_linux_amd64.tar.gz.sigstore.json" \
+  --certificate-identity "$CERT_ID" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "mato_${VERSION#v}_linux_amd64.tar.gz"
+```
+
+SBOM (`*.sbom.json`) and SLSA provenance (`*.intoto.jsonl`) bundles are also attached to each release.
+
+### Build from source
+
+If you have [Go](https://go.dev/doc/install) 1.26+:
 
 ```bash
 go install github.com/ryansimmen/mato/cmd/mato@latest
 ```
+
+Note: binaries built via `go install` do not embed a version string (`mato --version` reports `dev`).
 
 ### Bundled `mato` Skill
 
@@ -46,12 +126,12 @@ Runtime requirements for operators:
 
 - Linux
 - Docker
-- Go 1.26+
 - [GitHub CLI (`gh`)](https://github.com/cli/cli#installation)
 - [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
 
 Additional contributor tools:
 
+- [Go](https://go.dev/doc/install) 1.26+ (only required when building from source)
 - [`golangci-lint`](https://golangci-lint.run/welcome/install/) v2.11.4+
 - optional `gopls`
 
@@ -61,7 +141,7 @@ Additional contributor tools:
 
 ```bash
 # Install the CLI
-go install github.com/ryansimmen/mato/cmd/mato@latest
+curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
 
 # cd into the target repository
 cd /path/to/repo

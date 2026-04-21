@@ -11,15 +11,20 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
+- `scripts/install.sh` to download, verify, and install the latest signed Linux
+  binary release. Honors `VERSION` and `PREFIX` environment variables, verifies
+  the `sha256` checksum and (when `cosign` is on `PATH`) the cosign signature,
+  and offers to add the install directory to the user's shell `PATH`.
+- README install instructions covering the binary release path, including
+  `gh attestation verify` and `cosign verify-blob` workflows for verifying
+  downloads against the published SLSA build provenance and Sigstore bundles.
+
 ### Changed
 
-### Deprecated
-
-### Removed
-
-### Fixed
-
-### Security
+- README "Install" section now leads with the signed binary release; building
+  via `go install` is documented as "Build from source".
+- `Go 1.26+` moved from runtime requirements to the contributor tools list,
+  since the binary install path no longer requires Go.
 
 ## [0.1.4] - 2026-04-20
 
