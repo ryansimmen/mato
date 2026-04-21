@@ -29,11 +29,11 @@ err()  { printf 'error: %s\n' "$*" >&2; }
 case "$(uname -s 2>/dev/null || echo unknown)" in
   Linux) OS="linux" ;;
   Darwin)
-    err "macOS is not currently supported. Build from source: https://github.com/${REPO}/blob/main/docs/install.md#build-from-source"
+    err "macOS is not supported. mato requires Linux (uses /proc and a local Docker daemon)."
     exit 1
     ;;
   *)
-    err "unsupported OS: $(uname -s 2>/dev/null || echo unknown). See ${RELEASES_URL}"
+    err "unsupported OS: $(uname -s 2>/dev/null || echo unknown). mato requires Linux. See ${RELEASES_URL}"
     exit 1
     ;;
 esac

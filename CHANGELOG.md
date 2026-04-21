@@ -26,6 +26,9 @@ While the project is pre-`v1`, breaking changes may occur in any release.
   for verification, environment variables, and building from source.
 - `Go 1.26+` moved from runtime requirements to the contributor tools list,
   since the binary install path no longer requires Go.
+- Install docs and the install script's macOS error message no longer suggest
+  "build from source" as a workaround for non-Linux platforms; mato is
+  Linux-only at runtime (uses `/proc` and a local Docker daemon).
 
 ## [0.1.4] - 2026-04-20
 

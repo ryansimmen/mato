@@ -1,6 +1,8 @@
 # Install
 
-`mato` ships signed `linux/amd64` and `linux/arm64` binaries with each release. macOS and Windows users should [build from source](#build-from-source).
+`mato` only supports Linux at runtime — it reads `/proc` for process supervision and assumes a Docker daemon on the local host. macOS and Windows are not supported, including from source.
+
+`mato` ships signed `linux/amd64` and `linux/arm64` binaries with each release.
 
 ## Linux binary (recommended)
 
@@ -91,7 +93,7 @@ The provenance bundle is what `gh attestation verify` consumes.
 
 ## Build from source
 
-If you have [Go](https://go.dev/doc/install) 1.26+ installed:
+For Linux contributors who want to build from a local checkout. If you have [Go](https://go.dev/doc/install) 1.26+ installed:
 
 ```bash
 go install github.com/ryansimmen/mato/cmd/mato@latest
