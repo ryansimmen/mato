@@ -11,24 +11,19 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
-- `scripts/install.sh` to download, verify, and install the latest signed Linux
-  binary release. Honors `VERSION` and `PREFIX` environment variables, verifies
-  the `sha256` checksum and (when `cosign` is on `PATH`) the cosign signature,
-  and offers to add the install directory to the user's shell `PATH`.
-- `docs/install.md` covering the binary install variants (inspect-then-run,
-  one-liner, system-wide, `VERSION` / `PREFIX` env vars), manual download
-  verification with `gh attestation verify` or `cosign verify-blob`, SBOM and
-  SLSA provenance bundle layout, and building from source.
+- `scripts/install.sh` and `docs/install.md` for installing the signed Linux
+  binary release. The script honors `VERSION` and `PREFIX`, verifies sha256
+  and (when present) cosign signatures, and optionally adds the install
+  directory to the user's shell `PATH`.
 
 ### Changed
 
-- README "Install" section trimmed to a one-liner pointing at `docs/install.md`
-  for verification, environment variables, and building from source.
-- `Go 1.26+` moved from runtime requirements to the contributor tools list,
-  since the binary install path no longer requires Go.
-- Install docs and the install script's macOS error message no longer suggest
-  "build from source" as a workaround for non-Linux platforms; mato is
-  Linux-only at runtime (uses `/proc` and a local Docker daemon).
+- README "Install" section now leads with the binary one-liner and links to
+  `docs/install.md` for verification, environment variables, and building
+  from source.
+- `Go 1.26+` moved from runtime requirements to contributor tools.
+- Install docs clarify that mato is Linux-only; "build from source" is no
+  longer suggested as a workaround for macOS or Windows.
 
 ## [0.1.4] - 2026-04-20
 
