@@ -29,7 +29,7 @@ err()  { printf 'error: %s\n' "$*" >&2; }
 case "$(uname -s 2>/dev/null || echo unknown)" in
   Linux) OS="linux" ;;
   Darwin)
-    err "macOS is not currently supported. Build from source: https://github.com/${REPO}#build-from-source"
+    err "macOS is not currently supported. Build from source: https://github.com/${REPO}/blob/main/docs/install.md#build-from-source"
     exit 1
     ;;
   *)
@@ -144,19 +144,25 @@ if [ "$COSIGN_AVAILABLE" = "true" ]; then
   CERT_IDENTITY="https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/v${RESOLVED_VERSION}"
   CERT_ISSUER="https://token.actions.githubusercontent.com"
 
-  cosign verify-blob \
+  if ! cosign verify-blob \
     --bundle "${CHECKSUMS_FILE}.sigstore.json" \
     --certificate-identity "${CERT_IDENTITY}" \
     --certificate-oidc-issuer "${CERT_ISSUER}" \
-    "${CHECKSUMS_FILE}" >/dev/null 2>&1 \
-    && info "cosign verified checksums.txt"
+    "${CHECKSUMS_FILE}" >/dev/null 2>&1; then
+    err "cosign signature verification failed for checksums.txt"
+    exit 1
+  fi
+  info "cosign verified checksums.txt"
 
-  cosign verify-blob \
+  if ! cosign verify-blob \
     --bundle "${ARCHIVE_PATH}.sigstore.json" \
     --certificate-identity "${CERT_IDENTITY}" \
     --certificate-oidc-issuer "${CERT_ISSUER}" \
-    "${ARCHIVE_PATH}" >/dev/null 2>&1 \
-    && info "cosign verified ${ARCHIVE_NAME}"
+    "${ARCHIVE_PATH}" >/dev/null 2>&1; then
+    err "cosign signature verification failed for ${ARCHIVE_NAME}"
+    exit 1
+  fi
+  info "cosign verified ${ARCHIVE_NAME}"
 else
   warn "cosign not found; skipping signature verification"
   warn "install cosign to verify signatures: https://docs.sigstore.dev/cosign/installation/"
