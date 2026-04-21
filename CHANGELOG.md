@@ -11,6 +11,20 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Added
 
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.1.5] - 2026-04-21
+
+### Added
+
 - `scripts/install.sh` and `docs/install.md` for installing the signed Linux
   binary release. The script honors `VERSION` and `PREFIX`, verifies sha256
   and (when present) cosign signatures, and optionally adds the install
@@ -23,6 +37,13 @@ While the project is pre-`v1`, breaking changes may occur in any release.
   from source.
 - README contributor-tools list removed; CONTRIBUTING.md is the single
   source for development setup tooling.
+
+### Fixed
+
+- `govulncheck` workflow inlines `actions/setup-go` and the govulncheck
+  install/run steps instead of using the `golang/govulncheck-action`
+  wrapper, which referenced nested actions by tag and was rejected by the
+  repo's "require pinned SHAs" policy.
 
 ## [0.1.4] - 2026-04-20
 
