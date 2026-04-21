@@ -20,93 +20,13 @@ See [Architecture](docs/architecture.md) for the detailed runtime design.
 
 ## Install
 
-### Linux binary (recommended)
-
-`mato` ships signed `linux/amd64` and `linux/arm64` binaries with each release. The install script downloads the archive, verifies its `sha256` checksum, and (when [`cosign`](https://docs.sigstore.dev/cosign/installation/) is on `PATH`) verifies the cosign signature before installing the binary.
-
-Inspect-then-run (recommended):
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh
-less install.sh   # review the script
-bash install.sh
-```
-
-One-liner:
+`mato` ships signed `linux/amd64` and `linux/arm64` binaries with each release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
 ```
 
-System-wide install (`/usr/local/bin`):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | sudo bash
-```
-
-The script honors two environment variables:
-
-- `VERSION` — release tag (e.g. `v0.1.4`). Defaults to the latest release.
-- `PREFIX` — install prefix; the binary is placed in `$PREFIX/bin/mato`. Defaults to `/usr/local` for root, `$HOME/.local` for non-root.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh \
-  | VERSION=v0.1.4 PREFIX=$HOME/custom bash
-```
-
-macOS and Windows are not currently published as binaries — see [Build from source](#build-from-source).
-
-### Verify the download
-
-Each release publishes a `*.intoto.jsonl` SLSA build provenance bundle, per-archive cosign `.sigstore.json` bundles, a signed `checksums.txt`, and per-archive [SPDX 2.3](https://spdx.dev/) SBOMs. The install script performs verification automatically when run, but you can also verify a manually-downloaded archive.
-
-**With `gh` (recommended):**
-
-```bash
-gh release download v0.1.4 -R ryansimmen/mato -p 'mato_0.1.4_linux_amd64.tar.gz'
-gh attestation verify -R ryansimmen/mato mato_0.1.4_linux_amd64.tar.gz
-```
-
-A successful verification exits 0; in non-interactive shells the command is silent on success. Use `--format json` for full attestation details.
-
-**Without `gh`** (using `sha256sum` and [`cosign`](https://docs.sigstore.dev/cosign/installation/)):
-
-```bash
-VERSION=v0.1.4
-ASSETS="mato_${VERSION#v}_linux_amd64.tar.gz checksums.txt checksums.txt.sigstore.json mato_${VERSION#v}_linux_amd64.tar.gz.sigstore.json"
-for f in $ASSETS; do
-  curl -fsSLO "https://github.com/ryansimmen/mato/releases/download/${VERSION}/${f}"
-done
-
-sha256sum --ignore-missing -c checksums.txt
-
-CERT_ID="https://github.com/ryansimmen/mato/.github/workflows/release.yml@refs/tags/${VERSION}"
-ISSUER="https://token.actions.githubusercontent.com"
-
-cosign verify-blob \
-  --bundle checksums.txt.sigstore.json \
-  --certificate-identity "$CERT_ID" \
-  --certificate-oidc-issuer "$ISSUER" \
-  checksums.txt
-
-cosign verify-blob \
-  --bundle "mato_${VERSION#v}_linux_amd64.tar.gz.sigstore.json" \
-  --certificate-identity "$CERT_ID" \
-  --certificate-oidc-issuer "$ISSUER" \
-  "mato_${VERSION#v}_linux_amd64.tar.gz"
-```
-
-SBOM (`*.sbom.json`) and SLSA provenance (`*.intoto.jsonl`) bundles are also attached to each release.
-
-### Build from source
-
-If you have [Go](https://go.dev/doc/install) 1.26+:
-
-```bash
-go install github.com/ryansimmen/mato/cmd/mato@latest
-```
-
-Note: binaries built via `go install` do not embed a version string (`mato --version` reports `dev`).
+The script verifies sha256 checksums and (when [`cosign`](https://docs.sigstore.dev/cosign/installation/) is on `PATH`) the cosign signature before installing the binary. See [Install](docs/install.md) for the inspect-then-run variant, system-wide install, `VERSION` / `PREFIX` environment variables, manual download verification with `gh attestation verify` or `cosign verify-blob`, and building from source.
 
 ### Bundled `mato` Skill
 
@@ -231,6 +151,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 ## Documentation
 
 - [Architecture](docs/architecture.md) - host loop, task lifecycle, review flow, merge queue
+- [Install](docs/install.md) - binary install, manual download verification, build from source
 - [Configuration](docs/configuration.md) - CLI flags, environment variables, `.mato.yaml`, Docker setup
 - [Task Format](docs/task-format.md) - frontmatter fields, runtime markers, placement rules, examples
 - [Messaging](docs/messaging.md) - inter-agent coordination protocol

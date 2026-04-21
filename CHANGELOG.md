@@ -15,14 +15,15 @@ While the project is pre-`v1`, breaking changes may occur in any release.
   binary release. Honors `VERSION` and `PREFIX` environment variables, verifies
   the `sha256` checksum and (when `cosign` is on `PATH`) the cosign signature,
   and offers to add the install directory to the user's shell `PATH`.
-- README install instructions covering the binary release path, including
-  `gh attestation verify` and `cosign verify-blob` workflows for verifying
-  downloads against the published SLSA build provenance and Sigstore bundles.
+- `docs/install.md` covering the binary install variants (inspect-then-run,
+  one-liner, system-wide, `VERSION` / `PREFIX` env vars), manual download
+  verification with `gh attestation verify` or `cosign verify-blob`, SBOM and
+  SLSA provenance bundle layout, and building from source.
 
 ### Changed
 
-- README "Install" section now leads with the signed binary release; building
-  via `go install` is documented as "Build from source".
+- README "Install" section trimmed to a one-liner pointing at `docs/install.md`
+  for verification, environment variables, and building from source.
 - `Go 1.26+` moved from runtime requirements to the contributor tools list,
   since the binary install path no longer requires Go.
 
