@@ -23,8 +23,6 @@ While the project is pre-`v1`, breaking changes may occur in any release.
   from source.
 - README contributor-tools list removed; CONTRIBUTING.md is the single
   source for development setup tooling.
-- Install docs clarify that mato is Linux-only; "build from source" is no
-  longer suggested as a workaround for macOS or Windows.
 
 ## [0.1.4] - 2026-04-20
 
