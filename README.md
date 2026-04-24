@@ -129,8 +129,8 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 | `mato config` | Show effective repository defaults and where each value came from. |
 | `mato cancel` | Move tasks to `failed` with a cancellation marker. |
 | `mato retry` | Requeue one or more failed tasks. |
-| `mato pause` | Pause new claims and review launches. Supports `--format text|json` for script-friendly output. |
-| `mato resume` | Resume normal polling after a pause. Supports `--format text|json` for script-friendly output. |
+| `mato pause` | Pause new claims and review launches. |
+| `mato resume` | Resume normal polling after a pause. |
 
 ## Documentation
 
