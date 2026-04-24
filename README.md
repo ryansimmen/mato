@@ -1,6 +1,6 @@
 # Multi Agent Task Orchestrator (mato)
 
-> _Run a swarm of autonomous Copilot agents against one repository — each working in its own Docker sandbox, every change reviewed by AI before it merges._
+> _Run a swarm of autonomous Copilot agents against one repository — each working in its own Docker container, every change reviewed by AI before it merges._
 
 [![CI](https://github.com/ryansimmen/mato/actions/workflows/ci.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml)
@@ -10,13 +10,9 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-alpha-orange)
 
-`mato` orchestrates autonomous coding agents against a filesystem-backed task queue in Docker. Agents claim work, push task branches, and completed work is reviewed before it is merged back into the target branch.
+`mato` orchestrates autonomous coding agents against a filesystem-backed task queue in Docker. Agents claim work, push task branches, and work is reviewed before it is merged back into the target branch.
 
-See [Architecture](docs/architecture.md) for the detailed runtime design.
-
-> **Status:** alpha. APIs, task-file format, and CLI flags may change between commits. Pin to a commit SHA if you depend on it today.
->
-> **Run only on machines and repositories you trust** — `mato` is an operator tool, not a sandbox. See [Security](#security) for details.
+See [Architecture](docs/architecture.md) for more details.
 
 ## Install
 
@@ -26,7 +22,7 @@ See [Architecture](docs/architecture.md) for the detailed runtime design.
 curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
 ```
 
-The script verifies sha256 checksums and (when [`cosign`](https://docs.sigstore.dev/cosign/installation/) is on `PATH`) the cosign signature before installing the binary. See [Install](docs/install.md) for the inspect-then-run variant, system-wide install, `VERSION` / `PREFIX` environment variables, manual download verification with `gh attestation verify` or `cosign verify-blob`, and building from source.
+See [Install](docs/install.md) for alternative installation and verification methods.
 
 ### Bundled `mato` Skill
 
@@ -64,13 +60,13 @@ cd /path/to/repo
 mato init
 ```
 
-If you also installed the bundled `mato` skill with `gh skill install`, you can use Copilot to generate task files for the queue. For example:
+If you also installed the bundled `mato` skill with `gh skill install`, you can use Copilot to generate task files for the queue:
 
 ```bash
 copilot --interactive "Review this codebase for logical errors and create mato tasks of your findings"
 ```
 
-The `mato` skill researches the codebase and writes task files into `.mato/backlog` or `.mato/waiting`.
+The `mato` skill writes task files into `.mato/backlog` or `.mato/waiting`.
 
 These task files live under `.mato`. The scheduler reads their frontmatter for dependency, priority, and conflict metadata, then passes the markdown body to the agent as instructions.
 
@@ -135,12 +131,6 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 | `mato retry` | Requeue one or more failed tasks. |
 | `mato pause` | Pause new claims and review launches. Supports `--format text|json` for script-friendly output. |
 | `mato resume` | Resume normal polling after a pause. Supports `--format text|json` for script-friendly output. |
-
-## Security
-
-`mato` is an operator tool, not a sandbox. It launches autonomous agents in Docker, bind-mounts host tooling and configuration into containers, and may forward GitHub authentication into those containers so the agent runtime can function. Only run it on repositories, branches, and machines you trust.
-
-Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
