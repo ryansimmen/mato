@@ -111,6 +111,8 @@ func promptPreamble(t *testing.T) string {
 }
 
 func TestPromptNoPushInstructions(t *testing.T) {
+	t.Parallel()
+
 	// Verify the agent prompt does not contain push or file-move instructions.
 	data, err := os.ReadFile(taskInstructionsPath(t))
 	if err != nil {
@@ -140,6 +142,8 @@ func TestPromptNoPushInstructions(t *testing.T) {
 }
 
 func TestPromptFileClaimsMentionDirectoryPrefixes(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(taskInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(task instructions): %v", err)
@@ -154,6 +158,8 @@ func TestPromptFileClaimsMentionDirectoryPrefixes(t *testing.T) {
 }
 
 func TestPromptFileClaimsMentionGlobPatterns(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(taskInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(task instructions): %v", err)
@@ -172,6 +178,8 @@ func TestPromptFileClaimsMentionGlobPatterns(t *testing.T) {
 // sandboxes: command substitution, heredocs with variable interpolation,
 // ${VAR:?} parameter expansions, and process-management commands.
 func TestPromptSandboxSafeShellPatterns(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(taskInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(task instructions): %v", err)
@@ -212,6 +220,8 @@ func TestPromptSandboxSafeShellPatterns(t *testing.T) {
 // TestPromptSandboxSafeInvariants verifies the task instructions include
 // guidance telling agents to avoid sandbox-risky patterns.
 func TestPromptSandboxSafeInvariants(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(taskInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(task instructions): %v", err)
@@ -344,6 +354,8 @@ func quotedPath(path string) string {
 }
 
 func TestPromptVerifyClaim(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	claimed, err := queue.SelectAndClaimTask(tasksDir, "test-agent-1", nil, 0, nil)
@@ -407,6 +419,8 @@ func TestPromptVerifyClaim(t *testing.T) {
 }
 
 func TestPromptHostCreatesBranch(t *testing.T) {
+	t.Parallel()
+
 	// The host creates the task branch before the agent runs.
 	// Verify the agent can commit on the pre-created branch.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -452,6 +466,8 @@ func TestPromptHostCreatesBranch(t *testing.T) {
 }
 
 func TestPromptCommitIncludesDescription(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.InProgress, "my-task.md", "<!-- claimed-by: test-agent  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
 
@@ -494,6 +510,8 @@ func TestPromptCommitIncludesDescription(t *testing.T) {
 }
 
 func TestHostPushAndMarkReady(t *testing.T) {
+	t.Parallel()
+
 	// Simulate the host post-agent push: push branch, write marker, move to ready-for-review.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.InProgress, "my-task.md", "<!-- claimed-by: test-agent-4  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
@@ -536,6 +554,8 @@ func TestHostPushAndMarkReady(t *testing.T) {
 }
 
 func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
+	t.Parallel()
+
 	// Verify branch marker is written to the task file after the host pushes.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.InProgress, "my-task.md", "<!-- claimed-by: test-agent-branch  claimed-at: 2026-01-01T00:00:00Z -->\n# My Task\n")
@@ -570,6 +590,8 @@ func TestHostBranchMarkerWrittenAfterPush(t *testing.T) {
 }
 
 func TestHostRetryResumesExistingRemoteBranch(t *testing.T) {
+	t.Parallel()
+
 	// When a task is retried with a recorded branch, the host should resume from
 	// the existing task branch tip instead of recreating the branch from target.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -622,6 +644,8 @@ func TestHostRetryResumesExistingRemoteBranch(t *testing.T) {
 }
 
 func TestPromptOnFailure(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.InProgress, "my-task.md", strings.Join([]string{
 		"<!-- claimed-by: test-agent-5  claimed-at: 2026-01-01T00:00:00Z -->",
@@ -663,6 +687,8 @@ func TestPromptOnFailure(t *testing.T) {
 }
 
 func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
+	t.Parallel()
+
 	// Even with many prior failures, ON_FAILURE only writes the failure record.
 	// The host moves to backlog and handles retry budgets.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -705,6 +731,8 @@ func TestPromptOnFailureDoesNotMoveFile(t *testing.T) {
 }
 
 func TestPromptTwoAgentsParallelClaim(t *testing.T) {
+	t.Parallel()
+
 	_, tasksDir := testutil.SetupRepoWithTasks(t)
 	for _, name := range []string{"task-alpha.md", "task-beta.md", "task-gamma.md"} {
 		writeTask(t, tasksDir, dirs.Backlog, name, "# "+strings.TrimSuffix(name, ".md")+"\n")
@@ -742,6 +770,8 @@ func TestPromptTwoAgentsParallelClaim(t *testing.T) {
 }
 
 func TestPromptVerifyClaimDependencyContext(t *testing.T) {
+	t.Parallel()
+
 	// MATO_DEPENDENCY_CONTEXT points to a JSON file written by the host with
 	// details about completed prerequisite tasks. The VERIFY_CLAIM block should
 	// read and echo its contents.
@@ -790,6 +820,8 @@ func TestPromptVerifyClaimDependencyContext(t *testing.T) {
 }
 
 func TestPromptVerifyClaimFileClaims(t *testing.T) {
+	t.Parallel()
+
 	// MATO_FILE_CLAIMS points to a JSON file listing files claimed by other
 	// in-progress tasks. VERIFY_CLAIM should read and echo the contents.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -837,6 +869,8 @@ func TestPromptVerifyClaimFileClaims(t *testing.T) {
 }
 
 func TestPromptVerifyClaimPreviousFailures(t *testing.T) {
+	t.Parallel()
+
 	// MATO_PREVIOUS_FAILURES is a string env var containing prior failure
 	// records. VERIFY_CLAIM should echo the content.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -878,6 +912,8 @@ func TestPromptVerifyClaimPreviousFailures(t *testing.T) {
 }
 
 func TestPromptVerifyClaimReviewFeedback(t *testing.T) {
+	t.Parallel()
+
 	// MATO_REVIEW_FEEDBACK is a string env var containing prior review
 	// rejection feedback. VERIFY_CLAIM should echo the content.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -916,6 +952,8 @@ func TestPromptVerifyClaimReviewFeedback(t *testing.T) {
 }
 
 func TestPromptVerifyClaimReviewFeedbackAfterRetryFromVerdictFallback(t *testing.T) {
+	t.Parallel()
+
 	// End-to-end guardrail for the preserved verdict lifecycle:
 	// reject -> failed -> retry -> claim -> MATO_REVIEW_FEEDBACK.
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
@@ -984,6 +1022,8 @@ func TestPromptVerifyClaimReviewFeedbackAfterRetryFromVerdictFallback(t *testing
 }
 
 func TestPromptFullLifecycleWithMerge(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.Backlog, "add-hello.md", "# Add hello\nCreate hello.txt with hello world.\n")
 
@@ -1063,6 +1103,8 @@ func TestPromptFullLifecycleWithMerge(t *testing.T) {
 // filename so that messages are never overwritten even when all three states
 // run in the same second.
 func TestPromptProgressMessagesAreDistinct(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, dirs.InProgress, "progress-test.md",
@@ -1133,6 +1175,8 @@ func TestPromptProgressMessagesAreDistinct(t *testing.T) {
 // do not overwrite each other, even when both runs happen in the exact same
 // second. This is a regression test for the append-only messaging invariant.
 func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, dirs.InProgress, "accumulate-test.md",
@@ -1251,6 +1295,8 @@ func TestPromptProgressMessagesAccumulateAcrossRuns(t *testing.T) {
 // preserving the equal-timestamp tie-break contract (lexically smallest ID wins)
 // via a deterministic <ts>-<agent>-<state> prefix.
 func TestPromptProgressIDsPreserveTieBreakSemantics(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, dirs.InProgress, "tiebreak-test.md",
