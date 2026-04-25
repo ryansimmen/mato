@@ -12,6 +12,8 @@ import (
 )
 
 func TestLogCommand_MergedTaskAppears(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	if err := messaging.WriteCompletionDetail(tasksDir, messaging.CompletionDetail{
 		TaskID:    "add-log-command",
@@ -34,6 +36,8 @@ func TestLogCommand_MergedTaskAppears(t *testing.T) {
 }
 
 func TestLogCommand_FailedTaskAppears(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Failed, "cleanup-reconcile.md"), "# Cleanup reconcile\n\n<!-- failure: worker-a at 2026-03-20T17:55:31Z step=WORK error=tests_failed -->\n")
 
@@ -47,6 +51,8 @@ func TestLogCommand_FailedTaskAppears(t *testing.T) {
 }
 
 func TestLogCommand_RejectedTaskAppears(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "tighten-review-tests.md"), "# Tighten review tests\n\n<!-- review-rejection: reviewer-a at 2026-03-20T18:12:04Z — missing integration coverage -->\n")
 
@@ -60,6 +66,8 @@ func TestLogCommand_RejectedTaskAppears(t *testing.T) {
 }
 
 func TestLogCommand_RejectedTaskAppearsFromVerdictFallback(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "recover-review-feedback.md"), "# Recover review feedback\n")
 	writeVerdict(t, tasksDir, "recover-review-feedback.md", map[string]string{
@@ -77,6 +85,8 @@ func TestLogCommand_RejectedTaskAppearsFromVerdictFallback(t *testing.T) {
 }
 
 func TestLogCommand_EmptyHistory(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, _ := testutil.SetupRepoWithTasks(t)
 
 	out, err := runMatoCommand(t, "log", "--repo", repoRoot)

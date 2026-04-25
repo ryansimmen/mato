@@ -5,7 +5,7 @@
 # binary so build/test targets work consistently.
 unexport GOROOT
 
-.PHONY: all build clean deadcode fmt help install integration-test lint test test-race verify vet
+.PHONY: all build clean deadcode fmt help install integration-test lint test test-fast test-race verify vet
 
 BIN_DIR := bin
 VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || printf dev)
@@ -31,6 +31,9 @@ integration-test: ## Run integration tests with race detector
 
 test: ## Run tests with race detector
 	go test -race ./...
+
+test-fast: ## Run fast unit tests without race detector or integration tests
+	go test $$(go list ./... | grep -v '/internal/integration')
 
 test-race: ## Run tests with race detector and no cache
 	go test -race -count=1 ./...

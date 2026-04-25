@@ -89,10 +89,18 @@ func WriteVerdictFile(t testing.TB, tasksDir, filename string, verdict map[strin
 // SetupRepo creates a temporary git repository with one initial commit
 // containing a README.md file. It returns the repo root directory.
 func SetupRepo(t *testing.T) string {
+	return setupRepo(t, "")
+}
+
+func setupRepo(t *testing.T, initialBranch string) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	if _, err := git.Output(dir, "init"); err != nil {
+	initArgs := []string{"init"}
+	if initialBranch != "" {
+		initArgs = append(initArgs, "-b", initialBranch)
+	}
+	if _, err := git.Output(dir, initArgs...); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
 	if _, err := git.Output(dir, "config", "user.email", "test@test.com"); err != nil {
@@ -114,16 +122,13 @@ func SetupRepo(t *testing.T) string {
 }
 
 // SetupRepoWithTasks creates a temporary git repository like SetupRepo but
-// additionally checks out a "mato" branch, creates the standard .mato
-// subdirectory tree, initialises messaging, and sets
+// initialized on a "mato" branch, creates the standard .mato subdirectory tree,
+// initialises messaging, and sets
 // receive.denyCurrentBranch=updateInstead. It returns (repoRoot, tasksDir).
 func SetupRepoWithTasks(t *testing.T) (string, string) {
 	t.Helper()
 
-	dir := SetupRepo(t)
-	if _, err := git.Output(dir, "checkout", "-b", "mato"); err != nil {
-		t.Fatalf("git checkout -b mato: %v", err)
-	}
+	dir := setupRepo(t, "mato")
 
 	tasksDir := filepath.Join(dir, ".mato")
 	for _, sub := range dirs.All {
