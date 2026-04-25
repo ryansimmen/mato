@@ -5740,6 +5740,53 @@ func TestRunCopilotCommand_AuthEnvStaysOffCommandLine(t *testing.T) {
 	}
 }
 
+func TestRunCopilotCommand_TTYUsesTerminalWriters(t *testing.T) {
+	var capturedCmd *exec.Cmd
+	stdout := os.Stdout
+	stderr := os.Stderr
+	setHook(t, &execCommandContext, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedCmd = exec.CommandContext(ctx, "true")
+		capturedCmd.Cancel = func() error { return nil }
+		capturedCmd.WaitDelay = gracefulShutdownDelay
+		return capturedCmd
+	})
+
+	env := envConfig{
+		workdir:            "/workspace",
+		homeDir:            "/home/test",
+		copilotPath:        "/usr/local/bin/copilot",
+		gitPath:            "/usr/local/bin/git",
+		gitUploadPackPath:  "/usr/local/bin/git-upload-pack",
+		gitReceivePackPath: "/usr/local/bin/git-receive-pack",
+		ghPath:             "/usr/local/bin/gh",
+		goRoot:             "/usr/local/go",
+		copilotConfigDir:   "/home/test/.copilot",
+		copilotCacheDir:    "/home/test/.cache/copilot",
+		image:              "ubuntu:24.04",
+		isTTY:              true,
+	}
+	run := runContext{
+		agentID:         "agent-1",
+		prompt:          "test prompt",
+		model:           "gpt-5.4",
+		reasoningEffort: "low",
+		timeout:         time.Second,
+	}
+
+	if err := runCopilotCommand(context.Background(), env, run, nil, nil, "test-agent", nil); err != nil {
+		t.Fatalf("runCopilotCommand: %v", err)
+	}
+	if capturedCmd == nil {
+		t.Fatal("expected execCommandContext to capture command")
+	}
+	if capturedCmd.Stdout != stdout {
+		t.Fatal("TTY docker stdout should use os.Stdout directly so Docker can inherit terminal dimensions")
+	}
+	if capturedCmd.Stderr != stderr {
+		t.Fatal("TTY docker stderr should use os.Stderr directly so Docker can inherit terminal dimensions")
+	}
+}
+
 func TestBuildEnvAndRunContext_MissingGoplsEnablesWarning(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test"}
 	env, _ := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{
