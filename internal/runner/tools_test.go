@@ -138,6 +138,7 @@ func setTestSeams(t *testing.T, lp func(string) (string, error), st func(string)
 	setHook(t, &ghAuthTokenFn, func() (string, error) { return "", exec.ErrNotFound })
 	setHook(t, &runtimeGOROOTFn, func() string { return "/runtime/go" })
 	setHook(t, &evalSymlinksFn, func(path string) (string, error) { return path, nil })
+	setHook(t, &readFileFn, func(string) ([]byte, error) { return nil, os.ErrNotExist })
 	if lp != nil {
 		setHook(t, &lookPathFn, lp)
 	}
