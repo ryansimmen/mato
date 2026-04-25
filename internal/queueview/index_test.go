@@ -1,7 +1,6 @@
 package queueview
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/ryansimmen/mato/internal/dirs"
 	"github.com/ryansimmen/mato/internal/frontmatter"
+	"github.com/ryansimmen/mato/internal/testutil"
 	"github.com/ryansimmen/mato/internal/ui"
 )
 
@@ -31,21 +31,6 @@ func writeTask(t *testing.T, tasksDir, state, filename, content string) {
 	path := filepath.Join(tasksDir, state, filename)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("os.WriteFile(%s): %v", path, err)
-	}
-}
-
-func writeVerdictFile(t *testing.T, tasksDir, filename string, verdict map[string]string) {
-	t.Helper()
-	msgDir := filepath.Join(tasksDir, "messages")
-	if err := os.MkdirAll(msgDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	data, err := json.Marshal(verdict)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(msgDir, "verdict-"+filename+".json"), data, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
 	}
 }
 
@@ -963,7 +948,7 @@ func TestActiveBranches_DefensiveCopy(t *testing.T) {
 func TestBuildIndex_ReviewRejectionFromVerdictFallback(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	writeTask(t, tasksDir, dirs.Backlog, "needs-rework.md", "---\npriority: 5\n---\n# Needs Rework\n")
-	writeVerdictFile(t, tasksDir, "needs-rework.md", map[string]string{"verdict": "reject", "reason": "missing test coverage"})
+	testutil.WriteVerdictFile(t, tasksDir, "needs-rework.md", map[string]string{"verdict": "reject", "reason": "missing test coverage"})
 	idx := BuildIndex(tasksDir)
 	if snap := idx.Snapshot(dirs.Backlog, "needs-rework.md"); snap == nil || snap.LastReviewRejectionReason != "missing test coverage" {
 		t.Fatal("expected verdict fallback rejection reason")
@@ -973,7 +958,7 @@ func TestBuildIndex_ReviewRejectionFromVerdictFallback(t *testing.T) {
 func TestBuildIndex_ReviewRejectionPrefersDurableMarker(t *testing.T) {
 	tasksDir := setupIndexDirs(t)
 	writeTask(t, tasksDir, dirs.Backlog, "has-marker.md", "---\npriority: 5\n---\n# Has Marker\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — durable reason -->\n")
-	writeVerdictFile(t, tasksDir, "has-marker.md", map[string]string{"verdict": "reject", "reason": "verdict reason should not appear"})
+	testutil.WriteVerdictFile(t, tasksDir, "has-marker.md", map[string]string{"verdict": "reject", "reason": "verdict reason should not appear"})
 	idx := BuildIndex(tasksDir)
 	if snap := idx.Snapshot(dirs.Backlog, "has-marker.md"); snap == nil || snap.LastReviewRejectionReason != "durable reason" {
 		t.Fatal("expected durable marker to win over verdict fallback")

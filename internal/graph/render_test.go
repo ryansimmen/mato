@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/ryansimmen/mato/internal/testutil"
 )
 
 // --- helpers ---
@@ -518,7 +520,7 @@ func TestRenderDOT_NodeColors(t *testing.T) {
 
 func TestRenderDOT_WriteError(t *testing.T) {
 	writeErr := errors.New("broken pipe")
-	fw := &failAfterNWriter{n: 1, err: writeErr}
+	fw := &testutil.FailAfterNWriter{N: 1, Err: writeErr}
 
 	err := RenderDOT(fw, simpleGraph())
 	if err == nil {

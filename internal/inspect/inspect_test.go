@@ -468,7 +468,7 @@ func TestShowTo_TextWriterError(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "sample.md", "---\nid: sample\npriority: 5\n---\n# Sample\n")
 
 	writeErr := errors.New("broken pipe")
-	fw := &failAfterNWriter{n: 1, err: writeErr}
+	fw := &testutil.FailAfterNWriter{N: 1, Err: writeErr}
 
 	err := ShowTo(fw, repoRoot, "sample", "text")
 	if err == nil {
@@ -516,35 +516,6 @@ func writeTask(t *testing.T, tasksDir, dir, name, content string) {
 	}
 }
 
-func writeVerdictFile(t *testing.T, tasksDir, filename string, verdict map[string]string) {
-	t.Helper()
-	msgDir := filepath.Join(tasksDir, "messages")
-	if err := os.MkdirAll(msgDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	data, err := json.Marshal(verdict)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(msgDir, "verdict-"+filename+".json"), data, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-}
-
-type failAfterNWriter struct {
-	n      int
-	err    error
-	writes int
-}
-
-func (w *failAfterNWriter) Write(p []byte) (int, error) {
-	w.writes++
-	if w.writes > w.n {
-		return 0, w.err
-	}
-	return len(p), nil
-}
-
 func TestShowTo_VerdictFallbackShowsRejectionReason(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
@@ -558,7 +529,7 @@ func TestShowTo_VerdictFallbackShowsRejectionReason(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "rework.md",
 		"---\nid: rework\npriority: 5\n---\n# Needs Rework\n")
 	// Preserved verdict file with rejection reason.
-	writeVerdictFile(t, tasksDir, "rework.md", map[string]string{
+	testutil.WriteVerdictFile(t, tasksDir, "rework.md", map[string]string{
 		"verdict": "reject",
 		"reason":  "missing integration tests",
 	})
@@ -599,7 +570,7 @@ func TestShowTo_VerdictFallbackPrefersDurableMarker(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "marked.md",
 		"---\nid: marked\npriority: 5\n---\n# Marked\n<!-- review-rejection: reviewer at 2026-01-01T00:00:00Z — durable marker reason -->\n")
 	// And a verdict file with a different reason.
-	writeVerdictFile(t, tasksDir, "marked.md", map[string]string{
+	testutil.WriteVerdictFile(t, tasksDir, "marked.md", map[string]string{
 		"verdict": "reject",
 		"reason":  "verdict reason should not appear",
 	})
@@ -1047,7 +1018,7 @@ func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
 	// rejection marker, plus a verdict file that should survive retry.
 	writeTask(t, tasksDir, dirs.Failed, filename,
 		"---\nid: retry-keeps-verdict\npriority: 10\n---\n# Retry Keeps Verdict\n\n<!-- failure: abc at 2026-01-01T00:00:00Z step=WORK error=build -->\n")
-	writeVerdictFile(t, tasksDir, filename, map[string]string{
+	testutil.WriteVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",
 		"reason":  "preserved rejection reason",
 	})
@@ -1107,7 +1078,7 @@ func TestShowTo_VerdictFallbackClearedAfterCancel(t *testing.T) {
 	// Task in backlog/ with a stale verdict file (no durable marker).
 	writeTask(t, tasksDir, dirs.Backlog, filename,
 		"---\nid: cancel-clears-verdict\npriority: 10\n---\n# Cancel Clears Verdict\n")
-	writeVerdictFile(t, tasksDir, filename, map[string]string{
+	testutil.WriteVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",
 		"reason":  "terminal stale reason",
 	})
