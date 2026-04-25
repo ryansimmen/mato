@@ -5,6 +5,7 @@
 [![CI](https://github.com/ryansimmen/mato/actions/workflows/ci.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/ryansimmen/mato?label=OpenSSF%20Scorecard)](https://securityscorecards.dev/viewer/?uri=github.com/ryansimmen/mato)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12606/badge)](https://www.bestpractices.dev/projects/12606)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 [![Go Reference](https://pkg.go.dev/badge/github.com/ryansimmen/mato.svg)](https://pkg.go.dev/github.com/ryansimmen/mato)
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -202,9 +203,14 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 - [Architecture](docs/architecture.md) - host loop, task lifecycle, review flow, merge queue
 - [Install](docs/install.md) - binary install, bundled skill install, manual download verification, build from source
 - [Configuration](docs/configuration.md) - CLI flags, environment variables, `.mato.yaml`, Docker setup
+- [Release Process](docs/release.md) - signed release flow and repeatable build inputs
 - [Task Format](docs/task-format.md) - frontmatter fields, runtime markers, placement rules, examples
 - [Messaging](docs/messaging.md) - inter-agent coordination protocol
+- [Testing](docs/testing.md) - verification, coverage measurement, and regression-test evidence
+- [Assurance Case](docs/assurance-case.md) - security requirements, trust boundaries, and residual risks
+- [Roadmap](docs/roadmap.md) - planned direction, non-goals, and contribution areas
 - [Contributing](CONTRIBUTING.md) - development setup, expectations, and PR guidance
+- [Governance](GOVERNANCE.md) - decision model, roles, review expectations, and continuity
 - [Changelog](CHANGELOG.md) - notable changes per release
 - [Code Of Conduct](CODE_OF_CONDUCT.md) - community participation guidelines
 - [Support](SUPPORT.md) - where to ask questions and file issues

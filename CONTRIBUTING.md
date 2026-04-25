@@ -5,6 +5,7 @@ Thanks for contributing to `mato`.
 ## Before You Start
 
 - Read the [README](README.md) for the public install and runtime model.
+- Read [GOVERNANCE.md](GOVERNANCE.md) for the decision model, roles, review expectations, and continuity policy.
 - File an issue before starting larger changes so scope and approach are aligned.
 - For substantial features or design changes, open an issue or draft a short proposal in [`docs/proposals/`](docs/proposals/) before implementing.
 - Keep changes focused. Small PRs are easier to review and merge.
@@ -70,6 +71,8 @@ go test -race ./internal/queue/...
 go test -race -run TestSafeRename_MissingSource ./internal/queue/...
 go test -race -v ./internal/integration/...
 ```
+
+Coverage measurement and regression-test evidence are documented in [Testing](docs/testing.md).
 
 ## Expectations
 

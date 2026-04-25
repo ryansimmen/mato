@@ -36,10 +36,36 @@ The script honors:
 
 - `VERSION` — release tag (e.g. `v0.1.4`). Defaults to the latest release.
 - `PREFIX` — install prefix; the binary is placed in `$PREFIX/bin/mato`. Defaults to `/usr/local` for root, `$HOME/.local` for non-root.
+- `DESTDIR` — optional staging root for packaging; when set, the binary is written to `$DESTDIR$PREFIX/bin/mato` and no shell `PATH` prompt is shown.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh \
   | VERSION=v0.1.4 PREFIX=$HOME/custom bash
+```
+
+Package-style staging example:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh
+DESTDIR=/tmp/mato-package PREFIX=/usr/local VERSION=v0.1.4 bash install.sh
+# writes /tmp/mato-package/usr/local/bin/mato
+```
+
+### Uninstall
+
+Remove the binary from the prefix where it was installed:
+
+```bash
+rm -f "$HOME/.local/bin/mato"
+sudo rm -f /usr/local/bin/mato
+```
+
+`gh skill` currently provides `install`, `preview`, `publish`, `search`, and `update`, but no uninstall/remove command. If you installed the bundled skill, remove its installed directory for your agent host. Common locations include:
+
+```bash
+rm -rf "$HOME/.copilot/skills/mato"
+rm -rf "$HOME/.claude/skills/mato"
+rm -rf "$HOME/.config/opencode/skills/mato"
 ```
 
 ## Bundled `mato` Skill

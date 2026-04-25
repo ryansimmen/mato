@@ -5,7 +5,7 @@ Makefile targets used to build and run it.
 
 ## Prerequisites
 Install these tools on the host that runs `mato`:
-- Go 1.26+ (the module currently declares `go 1.26.0`)
+- Go 1.26+; see [`go.mod`](../go.mod) for the exact module version
 - Docker
 - [Git](https://git-scm.com/downloads)
 - [GitHub CLI (`gh`)](https://cli.github.com/)
