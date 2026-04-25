@@ -22,9 +22,32 @@
 
 See [Architecture](docs/architecture.md) for more details.
 
-## Project Status
+## When To Use This
 
-`mato` is alpha software. The core queue model is usable, but CLI flags, configuration keys, task metadata, and the bundled skill may still change between releases. Pin a release for automation and read the [Changelog](CHANGELOG.md) before upgrading shared workflows.
+`mato` is useful when work can be split into multiple clear tasks and run through the same review-and-merge gate:
+
+- large cleanup or refactor efforts with independent files or packages
+- bug sweeps where each finding can become a focused task
+- dependency-ordered implementation plans that should advance one task at a time
+- parallel documentation, test, and maintenance work across one repository
+
+## Requirements
+
+Runtime requirements for operators:
+
+- Linux
+- Docker
+- [GitHub CLI (`gh` v2.90.0 or later)](https://github.com/cli/cli#installation)
+- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
+
+Before running workers, authenticate both CLI tools on the host:
+
+```bash
+gh auth login
+copilot login
+```
+
+Tooling for building from source or contributing is documented in [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
 ## Install
 
@@ -40,28 +63,9 @@ Install the bundled task-planning skill with the [GitHub CLI](https://cli.github
 gh skill install ryansimmen/mato mato --scope user
 ```
 
-The CLI runs the queue. The skill creates task files that populate it.
+The CLI runs the queue; the skill creates the task files that populate it.
 
 See [Install](docs/install.md) for alternative CLI installation and verification methods.
-
-## Requirements
-
-Runtime requirements for operators:
-
-- Linux
-- Docker
-- [Git](https://git-scm.com/downloads)
-- [GitHub CLI (`gh` v2.90.0 or later)](https://github.com/cli/cli#installation)
-- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
-
-Before running workers, authenticate both CLI tools on the host:
-
-```bash
-gh auth login
-copilot login
-```
-
-Tooling for building from source or contributing is documented in [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
 ## Quick Start
 
@@ -75,13 +79,33 @@ mato init
 # Generate task files for the queue
 copilot --interactive "Review this codebase for logical errors and create mato tasks of your findings"
 
+# Validate queue layout, task metadata, and dependencies
+mato doctor --only queue,tasks,deps
+
 # Start one worker
 mato run
 ```
 
 The `mato` skill writes task files into `.mato/backlog` or `.mato/waiting`. These task files live under `.mato`; the scheduler reads their frontmatter for dependency, priority, and conflict metadata, then passes the markdown body to the agent as instructions.
 
-For the full task-file specification, see [Task Format](docs/task-format.md).
+A minimal task file looks like:
+
+```md
+---
+id: add-http-timeout
+priority: 20
+affects:
+  - src/client/http.go
+  - src/client/http_test.go
+---
+# Add a timeout to outbound HTTP requests
+
+Ensure outbound HTTP requests use a reasonable timeout so callers do not hang indefinitely when a service is slow or unavailable.
+
+Add or update tests that cover the timeout behavior.
+```
+
+For the full task-file specification, see [Task Format](docs/task-format.md). If setup or queue validation fails, run `mato doctor` for the full health check.
 
 Run more workers or inspect the queue from other terminals:
 
@@ -105,19 +129,25 @@ mato log
 A compact `mato status` view looks like:
 
 ```text
-Queue: 4 backlog | 2 runnable | 1 running | 1 review | 0 merge | 0 failed
+Queue: 5 backlog | 3 runnable | 1 running | 1 review | 0 merge | 0 failed
 Pause: not paused   Merge queue: idle
 
-Agents (1)
-  agent-abc12345  fix-config.md  task/fix-config  WORK  2 min
+Agents (2)
+  agent-abc12345  validate-config.md  task/validate-config  WORK  2 min
+  agent-def67890  add-http-timeout.md  task/add-http-timeout  VERIFY_REVIEW  45 sec
 
 Attention
   1 blocked by dependencies
 
 Next Up
-  1. add-doctor-check.md — Add doctor check for stale sessions
-  2. tighten-readme.md — Clarify README install flow
+  1. log-failed-jobs.md — Log failed background jobs with context
+  2. add-retry-backoff.md — Retry transient API failures with backoff
+  3. improve-error-messages.md — Include actionable hints in error messages
 ```
+
+## Project Status
+
+`mato` is alpha software. The core queue model is usable, but CLI flags, configuration keys, task metadata, and the bundled skill may still change between releases. Pin a release for automation and read the [Changelog](CHANGELOG.md) before upgrading shared workflows.
 
 ### Skill Installation Notes
 
@@ -135,6 +165,13 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 - The host serializes squash merges through a merge lock to avoid concurrent target-branch writes.
 - Queue state is ordinary filesystem data under `.mato/`, so operators can inspect, pause, cancel, retry, and diagnose work with CLI commands.
 - Task `affects:` metadata lets the scheduler defer overlapping work while other agents, reviews, or merges are active.
+
+## What Mato Does Not Do
+
+- `mato` does not replace human review or repository policy; it adds an AI review gate before merging back into the target branch.
+- `mato` does not run on macOS or Windows hosts.
+- `mato` does not require a service, daemon, or database; queue state stays in the repository-local `.mato/` directory.
+- `mato` does not keep agents in a shared planning session after task creation; coordination happens through task files, Git branches, and queue metadata.
 
 ## Queue Layout
 
