@@ -37,15 +37,8 @@ Runtime requirements for operators:
 
 - Linux
 - Docker
-- [GitHub CLI (`gh` v2.90.0 or later)](https://github.com/cli/cli#installation)
-- [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
-
-Before running workers, authenticate both CLI tools on the host:
-
-```bash
-gh auth login
-copilot login
-```
+- [GitHub CLI](https://github.com/cli/cli#installation) (`gh` v2.90.0 or later)
+- [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
 
 Tooling for building from source or contributing is documented in [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
@@ -78,9 +71,6 @@ mato init
 
 # Generate task files for the queue
 copilot --interactive "Review this codebase for logical errors and create mato tasks of your findings"
-
-# Validate queue layout, task metadata, and dependencies
-mato doctor --only queue,tasks,deps
 
 # Start one worker
 mato run
@@ -126,7 +116,7 @@ mato graph
 mato log
 ```
 
-A compact `mato status` view looks like:
+The `mato status` view looks like:
 
 ```text
 Queue: 5 backlog | 3 runnable | 1 running | 1 review | 0 merge | 0 failed
@@ -145,11 +135,7 @@ Next Up
   3. improve-error-messages.md — Include actionable hints in error messages
 ```
 
-## Project Status
-
-`mato` is alpha software. The core queue model is usable, but CLI flags, configuration keys, task metadata, and the bundled skill may still change between releases. Pin a release for automation and read the [Changelog](CHANGELOG.md) before upgrading shared workflows.
-
-### Skill Installation Notes
+## Skill Installation Notes
 
 `gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code). Use `--agent claude-code|cursor|codex|gemini|antigravity` to target a non-Copilot host. Run `gh skill update mato` to pick up changes after a new release.
 
@@ -168,7 +154,7 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 
 ## What Mato Does Not Do
 
-- `mato` does not replace human review or repository policy; it adds an AI review gate before merging back into the target branch.
+- `mato` does not replace human review or repository policy; it adds an AI review gate before merging back into the target branch on your machine.
 - `mato` does not run on macOS or Windows hosts.
 - `mato` does not require a service, daemon, or database; queue state stays in the repository-local `.mato/` directory.
 - `mato` does not keep agents in a shared planning session after task creation; coordination happens through task files, Git branches, and queue metadata.
