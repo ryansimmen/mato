@@ -1,6 +1,6 @@
 # Multi Agent Task Orchestrator (mato)
 
-> _Run a swarm of autonomous Copilot agents against one repository — each working in its own Docker container, every change reviewed by AI before it merges._
+> _Run multiple autonomous Copilot agents in parallel, each isolated in Docker and AI-reviewed before merge._
 
 [![CI](https://github.com/ryansimmen/mato/actions/workflows/ci.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml)
@@ -10,7 +10,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-alpha-orange)
 
-`mato` orchestrates autonomous coding agents against a filesystem-backed task queue in Docker. Agents claim work, push task branches, and work is reviewed before it is merged back into the target branch.
+`mato` turns markdown task files into a filesystem-backed work queue for autonomous coding agents. Workers claim tasks, push branches, and serialize reviewed changes back into your target branch.
 
 See [Architecture](docs/architecture.md) for more details.
 
