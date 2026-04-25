@@ -108,6 +108,8 @@ type reviewVerdict struct {
 // ready-for-review/ and verifies it reads variables, confirms the task exists,
 // and writes exactly one progress message.
 func TestReviewVerifyReview(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, dirs.ReadyReview, "review-task.md",
@@ -207,6 +209,8 @@ func TestReviewVerifyReview(t *testing.T) {
 // blocks when the task branch has no changes relative to the target branch.
 // The DIFF decision table says to reject with "branch contains no changes".
 func TestReviewEmptyDiffRejects(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Create a task branch that is identical to mato (no diff).
@@ -274,6 +278,8 @@ func TestReviewEmptyDiffRejects(t *testing.T) {
 }
 
 func TestReviewDiff_FetchesFromRewrittenOriginPath(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	targetBranch, err := git.Output(repoRoot, "branch", "--show-current")
 	if err != nil {
@@ -342,6 +348,8 @@ func TestReviewDiff_FetchesFromRewrittenOriginPath(t *testing.T) {
 // for the task branch, the real DIFF block sets FAIL_STEP/FAIL_REASON and the
 // ON_FAILURE block writes a verdict file with {"verdict":"error",...}.
 func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, dirs.ReadyReview, "fetch-fail.md",
@@ -410,6 +418,8 @@ func TestReviewFetchFailureWritesErrorVerdict(t *testing.T) {
 // For reasons containing raw special characters (unescaped quotes, newlines),
 // the prompt instructs agents to use their file-writing tools instead of bash.
 func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		reason string // text substituted into the VERDICT reject block placeholder
@@ -486,6 +496,8 @@ func TestReviewRejectReasonWithSpecialChars(t *testing.T) {
 // contain raw special characters (double quotes, backslashes, newlines)
 // rather than relying on shell-based JSON escaping.
 func TestReviewSpecialCharGuidanceInPrompt(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(reviewInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(review instructions): %v", err)
@@ -504,6 +516,8 @@ func TestReviewSpecialCharGuidanceInPrompt(t *testing.T) {
 // not contain instructions for git push, git commit, or file moves — the
 // review agent must never perform these actions.
 func TestReviewNoPushNoCommitNoMoveInstructions(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(reviewInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(review instructions): %v", err)
@@ -529,6 +543,8 @@ func TestReviewNoPushNoCommitNoMoveInstructions(t *testing.T) {
 // progress, one host completion. This prevents the prompt from drifting out
 // of sync with the runtime behavior in review.go.
 func TestReviewMessageBudgetMatchesRuntime(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(reviewInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(review instructions): %v", err)
@@ -564,6 +580,8 @@ func TestReviewMessageBudgetMatchesRuntime(t *testing.T) {
 // TestReviewVerdictApproveFormat verifies that the real VERDICT state approve
 // block produces a well-formed JSON verdict file.
 func TestReviewVerdictApproveFormat(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
@@ -606,6 +624,8 @@ func TestReviewVerdictApproveFormat(t *testing.T) {
 // TestReviewVerifyReviewMissingTask verifies that the VERIFY_REVIEW state
 // exits gracefully when the task file does not exist at MATO_TASK_PATH.
 func TestReviewVerifyReviewMissingTask(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	cloneDir := createPromptClone(t, repoRoot, tasksDir)
@@ -645,6 +665,8 @@ func TestReviewVerifyReviewMissingTask(t *testing.T) {
 // (verify-review) rather than a generic one, ensuring it won't collide with
 // task-agent progress messages written by the same agent ID.
 func TestReviewProgressMessageFilenameIsDistinct(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, dirs.ReadyReview, "review-progress.md",
@@ -701,6 +723,8 @@ func TestReviewProgressMessageFilenameIsDistinct(t *testing.T) {
 // ${VAR:?} parameter expansions, shell escaping pipelines, and
 // process-management commands.
 func TestReviewSandboxSafeShellPatterns(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(reviewInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(review instructions): %v", err)
@@ -746,6 +770,8 @@ func TestReviewSandboxSafeShellPatterns(t *testing.T) {
 // TestReviewSandboxSafeInvariants verifies the review instructions include
 // guidance telling agents to avoid sandbox-risky patterns.
 func TestReviewSandboxSafeInvariants(t *testing.T) {
+	t.Parallel()
+
 	data, err := os.ReadFile(reviewInstructionsPath(t))
 	if err != nil {
 		t.Fatalf("os.ReadFile(review instructions): %v", err)
@@ -794,6 +820,8 @@ func extractReviewBashBlocks(t *testing.T, text string) []string {
 // that do not overwrite each other, even when both runs happen in the exact
 // same second. This is a regression test for the append-only messaging invariant.
 func TestReviewProgressMessagesAccumulateAcrossRuns(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, dirs.ReadyReview, "review-accum.md",

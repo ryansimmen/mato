@@ -188,6 +188,8 @@ func boundedRunWorkEnv(t *testing.T) []string {
 }
 
 func TestBoundedRun_OnceExitsOnEmptyQueue(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	_, err := runMatoCommandWithEnv(t, boundedRunTestEnv(t), "run", "--repo", repoRoot, "--once")
@@ -204,6 +206,8 @@ func TestBoundedRun_OnceExitsOnEmptyQueue(t *testing.T) {
 }
 
 func TestBoundedRun_OnceClaimsAndLeavesTaskReadyForReview(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.Backlog, "once.md", "# Once\nCreate once.txt\n")
 
@@ -234,6 +238,8 @@ func TestBoundedRun_OnceClaimsAndLeavesTaskReadyForReview(t *testing.T) {
 }
 
 func TestBoundedRun_OnceRepairsMissingRecordedBranchAndStartsFreshSession(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	taskFile := "resume-repair.md"
 	branch := "task/resume-repair"
@@ -319,6 +325,8 @@ func TestBoundedRun_OnceRepairsMissingRecordedBranchAndStartsFreshSession(t *tes
 }
 
 func TestBoundedRun_OnceUsesRestrictedContainerMounts(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.Backlog, "once.md", "# Once\nCreate once.txt\n")
 
@@ -360,6 +368,8 @@ func TestBoundedRun_OnceUsesRestrictedContainerMounts(t *testing.T) {
 }
 
 func TestBoundedRun_UntilIdleExitsWhenPausedAndQueueIsEmpty(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	if _, err := pause.Pause(tasksDir, time.Now().UTC()); err != nil {
 		t.Fatalf("pause repo: %v", err)
@@ -373,6 +383,8 @@ func TestBoundedRun_UntilIdleExitsWhenPausedAndQueueIsEmpty(t *testing.T) {
 }
 
 func TestBoundedRun_OnceExitsNonZeroOnParseFailure(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.Failed, "stale-broken.md", "---\npriority: nope\n---\n# Broken failed\n")
 	writeTask(t, tasksDir, dirs.Backlog, "broken.md", "---\npriority: nope\n---\n# Broken\n")
@@ -392,6 +404,8 @@ func TestBoundedRun_OnceExitsNonZeroOnParseFailure(t *testing.T) {
 }
 
 func TestBoundedRun_OnceIgnoresMalformedFailedTask(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.Failed, "stale-broken.md", "---\npriority: nope\n---\n# Broken failed\n")
 
@@ -407,6 +421,8 @@ func TestBoundedRun_OnceIgnoresMalformedFailedTask(t *testing.T) {
 }
 
 func TestBoundedRun_OnceExitsNonZeroOnMalformedReviewTask(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.ReadyReview, "broken-review.md", "---\npriority: [\n# Broken review\n")
 
@@ -425,6 +441,8 @@ func TestBoundedRun_OnceExitsNonZeroOnMalformedReviewTask(t *testing.T) {
 }
 
 func TestBoundedRun_OnceExitsNonZeroOnMalformedReadyMergeTask(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	writeTask(t, tasksDir, dirs.ReadyMerge, "broken-merge.md", "<!-- branch: task/broken-merge -->\n---\npriority: nope\n---\n# Broken merge\n")
 
@@ -443,6 +461,8 @@ func TestBoundedRun_OnceExitsNonZeroOnMalformedReadyMergeTask(t *testing.T) {
 }
 
 func TestBoundedRun_OnceProcessesReviewOnlyQueueAndExitsSuccess(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	mustGitOutput(t, repoRoot, "checkout", "-b", "task/review-only", "mato")
 	testutil.WriteFile(t, filepath.Join(repoRoot, "review.txt"), "reviewed\n")
@@ -479,6 +499,8 @@ func TestBoundedRun_OnceProcessesReviewOnlyQueueAndExitsSuccess(t *testing.T) {
 }
 
 func TestBoundedRun_UntilIdleDrainsReadyToMergeAndExits(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	createTaskBranch(t, repoRoot, "task/add-bounded", map[string]string{"bounded.txt": "bounded\n"}, "add bounded")
 	writeTask(t, tasksDir, dirs.ReadyMerge, "add-bounded.md", strings.Join([]string{
@@ -505,6 +527,8 @@ func TestBoundedRun_UntilIdleDrainsReadyToMergeAndExits(t *testing.T) {
 }
 
 func TestBoundedRun_OnceLeavesDeferredBacklogTaskUnclaimed(t *testing.T) {
+	t.Parallel()
+
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	writeTask(t, tasksDir, dirs.InProgress, "active.md", strings.Join([]string{

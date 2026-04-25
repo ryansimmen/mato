@@ -20,6 +20,7 @@ make deadcode                           # detect unreachable exported code and u
 go fmt ./...                            # or: make fmt
 
 # Test — all
+make test-fast                         # fast local unit tests, skips integration and race detector
 go test -race ./...                     # or: make test
 go test -race -count=1 ./...            # or: make test-race
 go test -count=1 ./...                  # disable test cache (use before committing)

@@ -51,8 +51,10 @@ Fast local checks:
 
 ```bash
 go build ./...
-go test -race ./...
+make test-fast
 ```
+
+`make test-fast` skips integration tests and the race detector for a quick local loop. Use the full verification command before opening or updating a PR.
 
 Full verification before opening or updating a PR:
 
@@ -63,6 +65,7 @@ make verify
 Useful targeted commands:
 
 ```bash
+go test -race ./...
 go test -race ./internal/queue/...
 go test -race -run TestSafeRename_MissingSource ./internal/queue/...
 go test -race -v ./internal/integration/...
