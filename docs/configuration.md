@@ -545,6 +545,7 @@ The Makefile defaults to the `help` target.
 | `fmt` | Run `go fmt ./...`. |
 | `integration-test` | Run `go test -race -v ./internal/integration/...`. |
 | `test` | Run `go test -race ./...`. |
+| `test-fast` | Run fast local unit tests with `go test` across non-integration packages, skipping the race detector. |
 | `test-race` | Run `go test -race -count=1 ./...`. |
 | `verify` | Run `go build ./...`, `go vet ./...`, `make lint`, `make deadcode`, and `go test -count=1 ./...`. |
 | `vet` | Run `go vet ./...`. |
