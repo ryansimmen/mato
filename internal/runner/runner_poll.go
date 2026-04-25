@@ -202,7 +202,7 @@ func pollClaimAndRun(ctx context.Context, env envConfig, run runContext, tasksDi
 		ui.Warnf("warning: agent run failed: %v\n", err)
 	}
 
-	recoverStuckTask(tasksDir, agentID, task)
+	recoverStuckTask(tasksDir, agentID, task, ctx.Err() != nil)
 	return true, hadError
 }
 

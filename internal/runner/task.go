@@ -363,10 +363,11 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 // recoverStuckTask checks whether a claimed task is still in in-progress/
 // after the agent container exits and post-agent push completes. If the
 // runtime taskstate still shows a pre-push work launch, the host moves the
-// task back to backlog/ with a failure record. If pushed-task handoff metadata
-// is missing or unusable, the host quarantines the task to failed/ with a
-// terminal marker instead of leaving it stranded in in-progress/.
-func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
+// task back to backlog/. Non-cancellation recoveries also receive a generic
+// failure record when the agent did not already write one. If pushed-task
+// handoff metadata is missing or unusable, the host quarantines the task to
+// failed/ with a terminal marker instead of leaving it stranded in in-progress/.
+func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask, cancelled bool) {
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
 		// Task was moved (to ready-for-review by post-agent push); nothing to do.
 		return
@@ -389,8 +390,9 @@ func recoverStuckTask(tasksDir, agentID string, claimed *queue.ClaimedTask) {
 	}
 
 	// Only append a generic failure record if the agent did not already write
-	// one (via ON_FAILURE). This prevents double-counting retries.
-	if !agentWroteFailureRecord(dst, agentID) {
+	// one (via ON_FAILURE). Cancellation-driven shutdown recovery should not
+	// burn retry budget for work the agent never completed.
+	if !cancelled && !agentWroteFailureRecord(dst, agentID) {
 		content := fmt.Sprintf("\n<!-- failure: %s at %s — agent container exited without cleanup -->\n",
 			agentID, time.Now().UTC().Format(time.RFC3339))
 		if err := atomicwrite.AppendToFile(dst, content); err != nil {

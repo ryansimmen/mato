@@ -158,7 +158,7 @@ func TestRecoverStuckTask_MovesToBacklog(t *testing.T) {
 	}
 	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
-	recoverStuckTask(tasksDir, "agent1", claimed)
+	recoverStuckTask(tasksDir, "agent1", claimed, false)
 
 	// Task should no longer be in in-progress/
 	if _, err := os.Stat(inProgressPath); err == nil {
@@ -203,7 +203,7 @@ func TestRecoverStuckTask_NoopWhenTaskAlreadyMoved(t *testing.T) {
 	}
 
 	// Should be a no-op since the task is not in in-progress/
-	recoverStuckTask(tasksDir, "agent1", claimed)
+	recoverStuckTask(tasksDir, "agent1", claimed, false)
 
 	// backlog/ should remain empty
 	entries, _ := os.ReadDir(filepath.Join(tasksDir, dirs.Backlog))
@@ -246,7 +246,7 @@ func TestRecoverStuckTask_BacklogCollision(t *testing.T) {
 	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
 	// Recovery should refuse to overwrite the existing backlog file
-	recoverStuckTask(tasksDir, "agent1", claimed)
+	recoverStuckTask(tasksDir, "agent1", claimed, false)
 
 	// The existing backlog file must be untouched
 	data, err := os.ReadFile(backlogPath)
@@ -290,7 +290,7 @@ func TestRecoverStuckTask_PushedTaskMovesToReadyReview(t *testing.T) {
 
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/pushed-task", Title: "Example Task", TaskPath: inProgressPath}
 	stdout, stderr := captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 	if !strings.Contains(stdout, "Recovered pushed task") {
 		t.Fatalf("expected pushed-task recovery message in stdout, got:\n%s", stdout)
@@ -365,7 +365,7 @@ func TestRecoverStuckTask_MissingTaskStateMovesToFailed(t *testing.T) {
 
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/missing-taskstate", Title: "Example Task", TaskPath: inProgressPath}
 	_, stderr := captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 	if !strings.Contains(stderr, "pushed-task recovery metadata is missing") {
 		t.Fatalf("expected missing metadata warning, got:\n%s", stderr)
@@ -421,7 +421,7 @@ func TestRecoverStuckTask_CorruptTaskStateMovesToFailed(t *testing.T) {
 
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/corrupt-taskstate", Title: "Example Task", TaskPath: inProgressPath}
 	_, stderr := captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 	if !strings.Contains(stderr, "pushed-task recovery metadata is unavailable") {
 		t.Fatalf("expected unavailable metadata warning, got:\n%s", stderr)
@@ -459,7 +459,7 @@ func TestRecoverStuckTask_UnreadableTaskStateMovesToFailed(t *testing.T) {
 
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/unreadable-taskstate", Title: "Example Task", TaskPath: inProgressPath}
 	_, stderr := captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 	if !strings.Contains(stderr, "pushed-task recovery metadata is unavailable") {
 		t.Fatalf("expected unavailable metadata warning, got:\n%s", stderr)
@@ -500,7 +500,7 @@ func TestRecoverStuckTask_MissingTaskBranchMovesToFailed(t *testing.T) {
 
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/missing-branch", Title: "Example Task", TaskPath: inProgressPath}
 	_, stderr := captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 	if !strings.Contains(stderr, "missing task branch") {
 		t.Fatalf("expected missing branch warning, got:\n%s", stderr)
@@ -532,7 +532,7 @@ func TestRecoverStuckTask_UnusablePushedOutcomeMovesToFailed(t *testing.T) {
 
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/unusable-outcome", Title: "Example Task", TaskPath: inProgressPath}
 	_, stderr := captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 	if !strings.Contains(stderr, `unusable (last outcome "work-pushed")`) {
 		t.Fatalf("expected unusable metadata warning, got:\n%s", stderr)
@@ -1205,7 +1205,7 @@ func TestRecoverStuckTask_StillMovesWhenAppendFails(t *testing.T) {
 	}
 	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
-	recoverStuckTask(tasksDir, "agent1", claimed)
+	recoverStuckTask(tasksDir, "agent1", claimed, false)
 
 	// Task should be moved to backlog even though append will fail
 	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
@@ -2035,7 +2035,7 @@ func TestRecoverStuckTask_SkipsDuplicateFailureRecord(t *testing.T) {
 	}
 	seedWorkLaunchedTaskState(t, tasksDir, taskFile, claimed.Branch)
 
-	recoverStuckTask(tasksDir, "agent-x", claimed)
+	recoverStuckTask(tasksDir, "agent-x", claimed, false)
 
 	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
 	data, err := os.ReadFile(backlogPath)
@@ -4082,7 +4082,7 @@ func TestGracefulShutdown_RecoversDuringSignal(t *testing.T) {
 
 	// recoverStuckTask is called after runOnce returns, even during shutdown.
 	stdout, _ := captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, true)
 	})
 
 	// Task should be recovered to backlog/.
@@ -4094,8 +4094,8 @@ func TestGracefulShutdown_RecoversDuringSignal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task not found in backlog/: %v", err)
 	}
-	if !strings.Contains(string(data), "<!-- failure: agent1") {
-		t.Fatal("failure record not appended to recovered task")
+	if strings.Contains(string(data), "<!-- failure:") {
+		t.Fatalf("cancellation recovery should not append failure markers, got:\n%s", string(data))
 	}
 	if !strings.Contains(stdout, "Recovered task") {
 		t.Fatalf("expected recovery message, got: %s", stdout)
@@ -4462,7 +4462,7 @@ func TestRecoverStuckTask_PushedTaskRecoveryUsesAffectsForMessageFiles(t *testin
 
 	claimed := &queue.ClaimedTask{Filename: taskFile, Branch: "task/recovered-files", Title: "Recovered Files", TaskPath: inProgressPath}
 	captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 
 	msgs, err := messaging.ReadMessages(tasksDir, time.Time{})
@@ -5272,6 +5272,149 @@ func TestCollectBoundedRunState_BranchlessReviewIsIdle(t *testing.T) {
 	// The branchless task must remain in ready-for-review/ — not moved.
 	if _, err := os.Stat(branchlessPath); err != nil {
 		t.Fatalf("branchless review task should remain in ready-for-review/: %v", err)
+	}
+}
+
+func TestReadPauseState_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name          string
+		setup         func(t *testing.T, tasksDir string)
+		wantActive    bool
+		wantProblem   pause.ProblemKind
+		wantProblemIn string
+	}{
+		{
+			name: "missing pause file",
+			setup: func(t *testing.T, tasksDir string) {
+				t.Helper()
+			},
+		},
+		{
+			name: "malformed pause file",
+			setup: func(t *testing.T, tasksDir string) {
+				t.Helper()
+				mustWriteFile(t, filepath.Join(tasksDir, ".paused"), []byte("not-a-time\n"), 0o644)
+			},
+			wantActive:    true,
+			wantProblem:   pause.ProblemMalformed,
+			wantProblemIn: "invalid timestamp",
+		},
+		{
+			name: "hard read error",
+			setup: func(t *testing.T, tasksDir string) {
+				t.Helper()
+				setHook(t, &pauseReadFn, func(string) (pause.State, error) {
+					return pause.State{}, fmt.Errorf("boom")
+				})
+			},
+			wantActive:    true,
+			wantProblem:   pause.ProblemUnreadable,
+			wantProblemIn: "stat error: boom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasksDir := t.TempDir()
+			tt.setup(t, tasksDir)
+
+			got := readPauseState(tasksDir)
+
+			if got.Active != tt.wantActive {
+				t.Fatalf("Active = %v, want %v", got.Active, tt.wantActive)
+			}
+			if got.ProblemKind != tt.wantProblem {
+				t.Fatalf("ProblemKind = %v, want %v", got.ProblemKind, tt.wantProblem)
+			}
+			if tt.wantProblemIn != "" && !strings.Contains(got.Problem, tt.wantProblemIn) {
+				t.Fatalf("Problem = %q, want substring %q", got.Problem, tt.wantProblemIn)
+			}
+		})
+	}
+}
+
+func TestCollectBoundedRunState_DetectsQueuedWork(t *testing.T) {
+	tests := []struct {
+		name             string
+		setup            func(t *testing.T, tasksDir string)
+		wantBacklog      bool
+		wantReviewTasks  bool
+		wantReadyMerge   bool
+		wantPollHadError bool
+	}{
+		{
+			name: "backlog work",
+			setup: func(t *testing.T, tasksDir string) {
+				t.Helper()
+				mustWriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "backlog.md"), []byte("---\nid: backlog\n---\n# Backlog\n"), 0o644)
+			},
+			wantBacklog: true,
+		},
+		{
+			name: "review work",
+			setup: func(t *testing.T, tasksDir string) {
+				t.Helper()
+				mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyReview, "review.md"), []byte("<!-- branch: task/review -->\n---\nid: review\n---\n# Review\n"), 0o644)
+			},
+			wantReviewTasks: true,
+		},
+		{
+			name: "merge work",
+			setup: func(t *testing.T, tasksDir string) {
+				t.Helper()
+				mustWriteFile(t, filepath.Join(tasksDir, dirs.ReadyMerge, "merge.md"), []byte("<!-- branch: task/merge -->\n---\nid: merge\n---\n# Merge\n"), 0o644)
+			},
+			wantReadyMerge: true,
+		},
+		{
+			name: "manifest error",
+			setup: func(t *testing.T, tasksDir string) {
+				t.Helper()
+				setHook(t, &pollWriteManifestFn, func(string, map[string]struct{}, *queueview.PollIndex) (queueview.RunnableBacklogView, bool) {
+					return queueview.RunnableBacklogView{}, true
+				})
+			},
+			wantPollHadError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tasksDir := setupFullTasksDir(t)
+			tt.setup(t, tasksDir)
+
+			state := collectBoundedRunState(tasksDir, map[string]struct{}{}, 0)
+
+			if state.hasClaimableBacklog != tt.wantBacklog {
+				t.Fatalf("hasClaimableBacklog = %v, want %v", state.hasClaimableBacklog, tt.wantBacklog)
+			}
+			if state.hasReviewTasks != tt.wantReviewTasks {
+				t.Fatalf("hasReviewTasks = %v, want %v", state.hasReviewTasks, tt.wantReviewTasks)
+			}
+			if state.hasReadyMerge != tt.wantReadyMerge {
+				t.Fatalf("hasReadyMerge = %v, want %v", state.hasReadyMerge, tt.wantReadyMerge)
+			}
+			if state.pollHadError != tt.wantPollHadError {
+				t.Fatalf("pollHadError = %v, want %v", state.pollHadError, tt.wantPollHadError)
+			}
+			if state.isIdle() == (tt.wantBacklog || tt.wantReviewTasks || tt.wantReadyMerge) {
+				t.Fatalf("isIdle = %v, queued work state = %+v", state.isIdle(), state)
+			}
+		})
+	}
+}
+
+func TestBoundedRunExit_AccumulatedErrors(t *testing.T) {
+	if err := boundedRunExit(0); err != nil {
+		t.Fatalf("boundedRunExit(0) = %v, want nil", err)
+	}
+
+	err := boundedRunExit(3)
+	if err == nil {
+		t.Fatal("boundedRunExit(3) = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "bounded run encountered 3 poll cycle error(s)") {
+		t.Fatalf("boundedRunExit(3) = %v", err)
 	}
 }
 

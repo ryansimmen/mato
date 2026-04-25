@@ -198,7 +198,7 @@ func TestRecoverStuckTask_PushedTaskUsesRecordedBranchMarkerWhenTaskStateBranchM
 	}
 
 	captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 
 	readyPath := filepath.Join(tasksDir, dirs.ReadyReview, taskFile)
@@ -243,7 +243,7 @@ func TestRecoverStuckTask_PushedTaskRetryFailureMovesToFailed(t *testing.T) {
 	})
 
 	_, stderr := captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 
 	if !strings.Contains(stderr, "write branch marker") {
@@ -700,7 +700,7 @@ func TestRunOnce_CreateCloneFailureLeavesRecoverableTaskState(t *testing.T) {
 	}
 	assertWorkLaunchTaskState(t, tasksDir, taskFile, claimed.Branch, "mato", "")
 
-	recoverStuckTask(tasksDir, "agent1", claimed)
+	recoverStuckTask(tasksDir, "agent1", claimed, false)
 
 	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); statErr != nil {
 		t.Fatalf("task should be recoverable to backlog after clone failure: %v", statErr)
@@ -734,7 +734,7 @@ func TestRunOnce_StartingTipFailureLeavesRecoverableTaskState(t *testing.T) {
 	}
 	assertWorkLaunchTaskState(t, tasksDir, taskFile, claimed.Branch, "mato", "")
 
-	recoverStuckTask(tasksDir, "agent1", claimed)
+	recoverStuckTask(tasksDir, "agent1", claimed, false)
 
 	if _, statErr := os.Stat(filepath.Join(tasksDir, dirs.Backlog, taskFile)); statErr != nil {
 		t.Fatalf("task should be recoverable to backlog after starting-tip failure: %v", statErr)
@@ -789,7 +789,7 @@ func TestRunOnce_UnwritableMessagesDirRecordsSpecificFailure(t *testing.T) {
 	}
 
 	captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent1", claimed)
+		recoverStuckTask(tasksDir, "agent1", claimed, false)
 	})
 
 	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
@@ -1609,7 +1609,7 @@ func TestRecoverStuckTask_AppendsFailureWithTimestamp(t *testing.T) {
 	}
 
 	captureStdoutStderr(t, func() {
-		recoverStuckTask(tasksDir, "agent-x", claimed)
+		recoverStuckTask(tasksDir, "agent-x", claimed, false)
 	})
 
 	backlogPath := filepath.Join(tasksDir, dirs.Backlog, taskFile)
