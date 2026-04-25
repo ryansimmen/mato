@@ -6,21 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/ryansimmen/mato/internal/testutil"
 )
-
-type failAfterNWriter struct {
-	n      int
-	err    error
-	writes int
-}
-
-func (w *failAfterNWriter) Write(p []byte) (int, error) {
-	w.writes++
-	if w.writes > w.n {
-		return 0, w.err
-	}
-	return len(p), nil
-}
 
 func TestSeveritySuffix(t *testing.T) {
 	tests := []struct {
@@ -463,7 +451,7 @@ func TestRenderText_WriteError(t *testing.T) {
 	}
 
 	writeErr := errors.New("broken pipe")
-	fw := &failAfterNWriter{n: 2, err: writeErr}
+	fw := &testutil.FailAfterNWriter{N: 2, Err: writeErr}
 
 	err := RenderText(fw, report)
 	if !errors.Is(err, writeErr) {

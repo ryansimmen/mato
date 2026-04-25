@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -251,11 +252,22 @@ func TestReadMessages_ConcurrentWrite(t *testing.T) {
 	const total = 20
 	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
 	errCh := make(chan error, 2)
+	start := make(chan struct{})
+	readerReady := make(chan struct{})
+	abort := make(chan struct{})
+	var abortOnce sync.Once
+	stop := func() {
+		abortOnce.Do(func() {
+			close(abort)
+		})
+	}
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		<-start
+		<-readerReady
 		for i := 0; i < total; i++ {
 			msg := Message{
 				ID:     "msg-" + strconv.Itoa(i),
@@ -268,40 +280,34 @@ func TestReadMessages_ConcurrentWrite(t *testing.T) {
 			}
 			if err := WriteMessage(tasksDir, msg); err != nil {
 				errCh <- fmt.Errorf("WriteMessage(%s): %w", msg.ID, err)
+				stop()
 				return
 			}
-			time.Sleep(5 * time.Millisecond)
 		}
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			msgs, err := ReadMessages(tasksDir, time.Time{})
-			if err != nil {
-				errCh <- fmt.Errorf("ReadMessages: %w", err)
+		<-start
+		close(readerReady)
+		msgs, err := waitForMessageCount(tasksDir, total, abort)
+		if err != nil {
+			errCh <- err
+			stop()
+			return
+		}
+		for i, msg := range msgs {
+			wantID := "msg-" + strconv.Itoa(i)
+			if msg.ID != wantID {
+				errCh <- fmt.Errorf("messages[%d].ID = %q, want %q", i, msg.ID, wantID)
+				stop()
 				return
 			}
-			if len(msgs) == total {
-				for i, msg := range msgs {
-					wantID := "msg-" + strconv.Itoa(i)
-					if msg.ID != wantID {
-						errCh <- fmt.Errorf("messages[%d].ID = %q, want %q", i, msg.ID, wantID)
-						return
-					}
-				}
-				return
-			}
-			if time.Now().After(deadline) {
-				errCh <- fmt.Errorf("timed out waiting for %d messages, got %d", total, len(msgs))
-				return
-			}
-			time.Sleep(2 * time.Millisecond)
 		}
 	}()
 
+	close(start)
 	wg.Wait()
 	close(errCh)
 	for err := range errCh {
@@ -316,6 +322,80 @@ func TestReadMessages_ConcurrentWrite(t *testing.T) {
 	}
 	if len(got) != total {
 		t.Fatalf("final ReadMessages count = %d, want %d", len(got), total)
+	}
+}
+
+func waitForMessageCount(tasksDir string, want int, abort <-chan struct{}) ([]Message, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case <-abort:
+			return nil, fmt.Errorf("aborted waiting for %d messages", want)
+		default:
+		}
+
+		msgs, err := ReadMessages(tasksDir, time.Time{})
+		if err != nil {
+			return nil, fmt.Errorf("ReadMessages: %w", err)
+		}
+		if len(msgs) == want {
+			return msgs, nil
+		}
+		if len(msgs) > want {
+			return nil, fmt.Errorf("ReadMessages returned %d messages, want %d", len(msgs), want)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for %d messages, got %d", want, len(msgs))
+		}
+		runtime.Gosched()
+	}
+}
+
+func withMessageFilesDeletedDuringRead(t *testing.T, deletePaths map[string]struct{}, read func()) {
+	t.Helper()
+
+	origReadFile := osReadFile
+	restored := false
+	restore := func() {
+		if !restored {
+			osReadFile = origReadFile
+			restored = true
+		}
+	}
+	t.Cleanup(restore)
+
+	readAttempted := make(chan string)
+	deleted := make(chan struct{})
+	deleteErrCh := make(chan error, len(deletePaths))
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < len(deletePaths); i++ {
+			path := <-readAttempted
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				deleteErrCh <- fmt.Errorf("Remove(%s): %w", filepath.Base(path), err)
+			}
+			deleted <- struct{}{}
+		}
+	}()
+
+	osReadFile = func(path string) ([]byte, error) {
+		if _, ok := deletePaths[path]; ok {
+			readAttempted <- path
+			<-deleted
+		}
+		return origReadFile(path)
+	}
+
+	read()
+	restore()
+	wg.Wait()
+	close(deleteErrCh)
+	for err := range deleteErrCh {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -364,7 +444,6 @@ func TestReadMessages_FileDeletedDuringRead(t *testing.T) {
 	const total = 5
 	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
 	payload := strings.Repeat("payload-", 256*1024)
-	wantByID := make(map[string]Message, total)
 	for i := 0; i < total; i++ {
 		msg := Message{
 			ID:     "msg-" + strconv.Itoa(i),
@@ -375,7 +454,6 @@ func TestReadMessages_FileDeletedDuringRead(t *testing.T) {
 			Body:   payload + strconv.Itoa(i),
 			SentAt: base.Add(time.Duration(i) * time.Millisecond),
 		}
-		wantByID[msg.ID] = msg
 		if err := WriteMessage(tasksDir, msg); err != nil {
 			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
 		}
@@ -390,67 +468,24 @@ func TestReadMessages_FileDeletedDuringRead(t *testing.T) {
 		t.Fatalf("expected %d message files, got %d", total, len(entries))
 	}
 
-	errCh := make(chan error, 2)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < 10; i++ {
-			msgs, err := ReadMessages(tasksDir, time.Time{})
-			if err != nil {
-				errCh <- fmt.Errorf("ReadMessages iteration %d: %w", i, err)
-				return
-			}
-			if len(msgs) > total {
-				errCh <- fmt.Errorf("ReadMessages iteration %d returned %d messages, want <= %d", i, len(msgs), total)
-				return
-			}
-			for j, msg := range msgs {
-				want, ok := wantByID[msg.ID]
-				if !ok {
-					errCh <- fmt.Errorf("ReadMessages iteration %d returned unexpected message ID %q", i, msg.ID)
-					return
-				}
-				if !reflect.DeepEqual(msg, want) {
-					errCh <- fmt.Errorf("ReadMessages iteration %d returned %#v, want %#v", i, msg, want)
-					return
-				}
-				if j > 0 && msgs[j-1].SentAt.After(msg.SentAt) {
-					errCh <- fmt.Errorf("ReadMessages iteration %d returned messages out of order", i)
-					return
-				}
-			}
-			time.Sleep(2 * time.Millisecond)
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-start
-		time.Sleep(1 * time.Millisecond)
-		for _, entry := range entries {
-			if err := os.Remove(filepath.Join(eventsDir, entry.Name())); err != nil && !os.IsNotExist(err) {
-				errCh <- fmt.Errorf("Remove(%s): %w", entry.Name(), err)
-				return
-			}
-			time.Sleep(1 * time.Millisecond)
-		}
-	}()
-
-	close(start)
-	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			t.Fatal(err)
-		}
+	deletePaths := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		deletePaths[filepath.Join(eventsDir, entry.Name())] = struct{}{}
 	}
 
-	got, err := ReadMessages(tasksDir, time.Time{})
+	var got []Message
+	withMessageFilesDeletedDuringRead(t, deletePaths, func() {
+		var readErr error
+		got, readErr = ReadMessages(tasksDir, time.Time{})
+		if readErr != nil {
+			t.Fatalf("ReadMessages: %v", readErr)
+		}
+	})
+	if len(got) != 0 {
+		t.Fatalf("ReadMessages count = %d, want 0 deleted messages", len(got))
+	}
+
+	got, err = ReadMessages(tasksDir, time.Time{})
 	if err != nil {
 		t.Fatalf("ReadMessages final: %v", err)
 	}
@@ -2811,7 +2846,6 @@ func TestReadRecentMessages_ToleratesDeletedFiles(t *testing.T) {
 
 	const total = 5
 	base := time.Date(2024, time.May, 1, 12, 0, 0, 0, time.UTC)
-	wantByID := make(map[string]Message, total)
 	for i := 0; i < total; i++ {
 		msg := Message{
 			ID:     "rmsg-" + strconv.Itoa(i),
@@ -2822,7 +2856,6 @@ func TestReadRecentMessages_ToleratesDeletedFiles(t *testing.T) {
 			Body:   "body-" + strconv.Itoa(i),
 			SentAt: base.Add(time.Duration(i) * time.Millisecond),
 		}
-		wantByID[msg.ID] = msg
 		if err := WriteMessage(tasksDir, msg); err != nil {
 			t.Fatalf("WriteMessage(%s): %v", msg.ID, err)
 		}
@@ -2837,60 +2870,25 @@ func TestReadRecentMessages_ToleratesDeletedFiles(t *testing.T) {
 		t.Fatalf("expected %d files, got %d", total, len(entries))
 	}
 
-	errCh := make(chan error, 2)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
+	deletePaths := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		deletePaths[filepath.Join(eventsDir, entry.Name())] = struct{}{}
+	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < 10; i++ {
-			msgs, _, readErr := ReadRecentMessages(tasksDir, total+5)
-			if readErr != nil {
-				errCh <- fmt.Errorf("ReadRecentMessages iteration %d: %w", i, readErr)
-				return
-			}
-			if len(msgs) > total {
-				errCh <- fmt.Errorf("iteration %d: got %d messages, want <= %d", i, len(msgs), total)
-				return
-			}
-			for _, msg := range msgs {
-				want, ok := wantByID[msg.ID]
-				if !ok {
-					errCh <- fmt.Errorf("iteration %d: unexpected ID %q", i, msg.ID)
-					return
-				}
-				if msg.Body != want.Body {
-					errCh <- fmt.Errorf("iteration %d: body mismatch for %q", i, msg.ID)
-					return
-				}
-			}
-			time.Sleep(2 * time.Millisecond)
+	var got []Message
+	var warnings []string
+	withMessageFilesDeletedDuringRead(t, deletePaths, func() {
+		var readErr error
+		got, warnings, readErr = ReadRecentMessages(tasksDir, total+5)
+		if readErr != nil {
+			t.Fatalf("ReadRecentMessages: %v", readErr)
 		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-start
-		time.Sleep(1 * time.Millisecond)
-		for _, entry := range entries {
-			if rmErr := os.Remove(filepath.Join(eventsDir, entry.Name())); rmErr != nil && !os.IsNotExist(rmErr) {
-				errCh <- fmt.Errorf("Remove(%s): %w", entry.Name(), rmErr)
-				return
-			}
-			time.Sleep(1 * time.Millisecond)
-		}
-	}()
-
-	close(start)
-	wg.Wait()
-	close(errCh)
-	for chErr := range errCh {
-		if chErr != nil {
-			t.Fatal(chErr)
-		}
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("ReadRecentMessages warnings = %v, want none for deleted files", warnings)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ReadRecentMessages count = %d, want 0 deleted messages", len(got))
 	}
 
 	final, _, err := ReadRecentMessages(tasksDir, total+5)
@@ -3645,28 +3643,60 @@ func TestCleanStalePresence_WritePresence_Interleaving(t *testing.T) {
 	// errors or leave malformed JSON.
 	var wg sync.WaitGroup
 	errCh := make(chan error, 20)
+	start := make(chan struct{})
+	writeDone := make(chan struct{})
+	cleanupDone := make(chan struct{})
+	abort := make(chan struct{})
+	var abortOnce sync.Once
+	stop := func() {
+		abortOnce.Do(func() {
+			close(abort)
+		})
+	}
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		<-start
 		for i := 0; i < 5; i++ {
+			select {
+			case <-writeDone:
+			case <-abort:
+				return
+			}
 			CleanStalePresence(tasksDir)
-			time.Sleep(1 * time.Millisecond)
+			select {
+			case cleanupDone <- struct{}{}:
+			case <-abort:
+				return
+			}
 		}
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		<-start
 		for i := 0; i < 5; i++ {
 			if writeErr := WritePresence(tasksDir, "fresh-agent", "fresh-task.md", "fresh-branch"); writeErr != nil {
 				errCh <- fmt.Errorf("WritePresence iteration %d: %w", i, writeErr)
+				stop()
 				return
 			}
-			time.Sleep(1 * time.Millisecond)
+			select {
+			case writeDone <- struct{}{}:
+			case <-abort:
+				return
+			}
+			select {
+			case <-cleanupDone:
+			case <-abort:
+				return
+			}
 		}
 	}()
 
+	close(start)
 	wg.Wait()
 	close(errCh)
 	for chErr := range errCh {

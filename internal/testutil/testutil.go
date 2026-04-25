@@ -3,12 +3,14 @@
 package testutil
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ryansimmen/mato/internal/dirs"
 	"github.com/ryansimmen/mato/internal/git"
+	"github.com/ryansimmen/mato/internal/taskfile"
 )
 
 // WriteFile creates a file at path with the given content, creating parent dirs.
@@ -49,6 +51,38 @@ func MakeUnreadablePath(t *testing.T, path string) {
 	}
 	if err := os.Symlink(filepath.Base(path), path); err != nil {
 		t.Skipf("create unreadable path %s: %v", path, err)
+	}
+}
+
+// FailAfterNWriter succeeds for the first N writes, then returns Err.
+type FailAfterNWriter struct {
+	N      int
+	Err    error
+	writes int
+}
+
+// Write implements io.Writer without buffering successful writes.
+func (w *FailAfterNWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.N {
+		return 0, w.Err
+	}
+	return len(p), nil
+}
+
+// WriteVerdictFile writes a preserved review verdict JSON file for filename.
+func WriteVerdictFile(t testing.TB, tasksDir, filename string, verdict map[string]string) {
+	t.Helper()
+	path := taskfile.VerdictPath(tasksDir, filename)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := json.Marshal(verdict)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 }
 

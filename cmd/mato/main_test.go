@@ -333,20 +333,6 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(data)
 }
 
-type failAfterNWriter struct {
-	n      int
-	err    error
-	writes int
-}
-
-func (w *failAfterNWriter) Write(p []byte) (int, error) {
-	w.writes++
-	if w.writes > w.n {
-		return 0, w.err
-	}
-	return len(p), nil
-}
-
 func renderCommandError(t *testing.T, err error) (string, int) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -1289,7 +1275,7 @@ func TestDoctorCmd_TextWriterErrorPropagates(t *testing.T) {
 		}, nil
 	}
 
-	fw := &failAfterNWriter{n: 2, err: writeErr}
+	fw := &testutil.FailAfterNWriter{N: 2, Err: writeErr}
 
 	cmd := newRootCmd()
 	cmd.SetOut(fw)
@@ -2005,7 +1991,7 @@ func TestInspectCmd_TextWriterErrorPropagates(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "sample.md"), "---\nid: sample\npriority: 1\n---\n# Sample task\n")
 
 	writeErr := errors.New("broken pipe")
-	fw := &failAfterNWriter{n: 1, err: writeErr}
+	fw := &testutil.FailAfterNWriter{N: 1, Err: writeErr}
 
 	cmd := newRootCmd()
 	cmd.SetOut(fw)

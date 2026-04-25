@@ -21,6 +21,10 @@ const (
 	KindReview = "review"
 )
 
+var sessionNow = func() time.Time {
+	return time.Now().UTC()
+}
+
 // Session records durable Copilot resume metadata for a task phase.
 type Session struct {
 	Version          int    `json:"version"`
@@ -261,12 +265,12 @@ func normalizeSession(session *Session, kind, taskFilename string) {
 	session.CopilotSessionID = strings.TrimSpace(session.CopilotSessionID)
 	session.LastHeadSHA = strings.TrimSpace(session.LastHeadSHA)
 	if strings.TrimSpace(session.UpdatedAt) == "" {
-		session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		session.UpdatedAt = sessionNow().Format(time.RFC3339)
 	}
 }
 
 func writeSession(statePath string, session *Session) error {
-	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	session.UpdatedAt = sessionNow().Format(time.RFC3339)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		return fmt.Errorf("create sessionmeta dir for %s: %w", session.TaskFile, err)
 	}

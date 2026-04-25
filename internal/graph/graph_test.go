@@ -639,7 +639,7 @@ func TestShowTo_TextWriteErrorPropagates(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "sample.md", "---\nid: sample\npriority: 10\n---\n# Sample task\n")
 
 	writeErr := errors.New("broken pipe")
-	fw := &failAfterNWriter{n: 1, err: writeErr}
+	fw := &testutil.FailAfterNWriter{N: 1, Err: writeErr}
 
 	err := ShowTo(fw, repoDir, "text", false)
 	if err == nil {
@@ -661,7 +661,7 @@ func TestShowTo_DOTWriteErrorPropagates(t *testing.T) {
 	writeTask(t, tasksDir, "backlog", "sample.md", "---\nid: sample\npriority: 10\n---\n# Sample task\n")
 
 	writeErr := errors.New("broken pipe")
-	fw := &failAfterNWriter{n: 1, err: writeErr}
+	fw := &testutil.FailAfterNWriter{N: 1, Err: writeErr}
 
 	err := ShowTo(fw, repoDir, "dot", false)
 	if err == nil {
@@ -935,20 +935,6 @@ func edgesTo(data GraphData, toKey string) []Edge {
 		}
 	}
 	return result
-}
-
-type failAfterNWriter struct {
-	n      int
-	err    error
-	writes int
-}
-
-func (w *failAfterNWriter) Write(p []byte) (int, error) {
-	w.writes++
-	if w.writes > w.n {
-		return 0, w.err
-	}
-	return len(p), nil
 }
 
 func TestShowTo_MissingMatoDir(t *testing.T) {

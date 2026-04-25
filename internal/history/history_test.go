@@ -125,7 +125,7 @@ func TestShowTo_TextWriterError(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Failed, "broken.md", "# Broken\n\n<!-- failure: worker-a at 2026-03-20T09:00:00Z step=WORK error=broken -->\n")
 
 	writeErr := errors.New("broken pipe")
-	fw := &failAfterNWriter{n: 1, err: writeErr}
+	fw := &testutil.FailAfterNWriter{N: 1, Err: writeErr}
 
 	err := ShowTo(fw, repoRoot, 20, "text")
 	if err == nil {
@@ -324,20 +324,6 @@ func mustParseTime(t *testing.T, value string) time.Time {
 		t.Fatalf("time.Parse(%q): %v", value, err)
 	}
 	return ts
-}
-
-type failAfterNWriter struct {
-	n      int
-	err    error
-	writes int
-}
-
-func (w *failAfterNWriter) Write(p []byte) (int, error) {
-	w.writes++
-	if w.writes > w.n {
-		return 0, w.err
-	}
-	return len(p), nil
 }
 
 func TestShowTo_TextRelativeTimeAnnotation(t *testing.T) {
@@ -559,28 +545,13 @@ func TestShowTo_TextNarrowTerminalFitsWidth(t *testing.T) {
 	}
 }
 
-func writeVerdictFile(t *testing.T, tasksDir, filename string, verdict map[string]string) {
-	t.Helper()
-	msgDir := filepath.Join(tasksDir, "messages")
-	if err := os.MkdirAll(msgDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	data, err := json.Marshal(verdict)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(msgDir, "verdict-"+filename+".json"), data, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-}
-
 func TestShowTo_VerdictFallbackShowsRejectedEvent(t *testing.T) {
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Task with no review-rejection markers.
 	writeTask(t, tasksDir, dirs.Backlog, "rework.md", "# Needs Rework\n")
 	// Preserved verdict file.
-	writeVerdictFile(t, tasksDir, "rework.md", map[string]string{
+	testutil.WriteVerdictFile(t, tasksDir, "rework.md", map[string]string{
 		"verdict": "reject",
 		"reason":  "missing test coverage",
 	})
@@ -626,7 +597,7 @@ func TestShowTo_VerdictFallbackNotUsedWhenMarkersExist(t *testing.T) {
 	writeTask(t, tasksDir, dirs.Backlog, "marked.md",
 		"# Marked\n\n<!-- review-rejection: reviewer at 2026-03-20T10:00:00Z — durable reason -->\n")
 	// Verdict file with different reason.
-	writeVerdictFile(t, tasksDir, "marked.md", map[string]string{
+	testutil.WriteVerdictFile(t, tasksDir, "marked.md", map[string]string{
 		"verdict": "reject",
 		"reason":  "verdict only reason",
 	})
@@ -663,7 +634,7 @@ func TestShowTo_VerdictFallbackPreservedAfterRetry(t *testing.T) {
 	// that should survive retry.
 	writeTask(t, tasksDir, dirs.Failed, filename,
 		"# Retry Keeps Log Verdict\n\n<!-- failure: abc at 2026-03-20T10:00:00Z step=WORK error=build -->\n")
-	writeVerdictFile(t, tasksDir, filename, map[string]string{
+	testutil.WriteVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",
 		"reason":  "preserved log reason",
 	})
@@ -700,7 +671,7 @@ func TestShowTo_VerdictFallbackClearedAfterCancel(t *testing.T) {
 	// Task in backlog/ with no durable rejection marker, plus stale verdict.
 	writeTask(t, tasksDir, dirs.Backlog, filename,
 		"# Cancel Clears Log Verdict\n")
-	writeVerdictFile(t, tasksDir, filename, map[string]string{
+	testutil.WriteVerdictFile(t, tasksDir, filename, map[string]string{
 		"verdict": "reject",
 		"reason":  "terminal log reason",
 	})

@@ -1004,36 +1004,32 @@ func TestWatch(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Capture stdout.
-	originalStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stdout = w
-	defer func() { os.Stdout = originalStdout }()
-
+	var buf bytes.Buffer
+	ticks := make(chan time.Time, 1)
+	redraws := make(chan struct{}, 2)
+	w := &redrawSignalWriter{w: &buf, redraws: redraws}
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- Watch(ctx, repoRoot, 100*time.Millisecond)
+		errCh <- watchToModeWithTicks(ctx, w, repoRoot, 100*time.Millisecond, textViewCompact, ticks)
 	}()
 
-	// Let Watch run for at least one refresh cycle.
-	time.Sleep(250 * time.Millisecond)
+	waitForRedraw(t, redraws)
+	ticks <- time.Now()
+	waitForRedraw(t, redraws)
 	cancel()
 
-	watchErr := <-errCh
-	w.Close()
-	out, readErr := io.ReadAll(r)
-	if readErr != nil {
-		t.Fatalf("io.ReadAll: %v", readErr)
+	var watchErr error
+	select {
+	case watchErr = <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Watch did not exit after context cancellation")
 	}
 	if watchErr != nil {
 		t.Fatalf("Watch returned error: %v", watchErr)
 	}
 
-	output := string(out)
+	output := buf.String()
 	if !contains(output, "backlog") {
 		t.Errorf("Watch output should contain queue overview with 'backlog', got:\n%s", output)
 	}
@@ -1266,6 +1262,31 @@ func (w *failAfterNWriter) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
+type redrawSignalWriter struct {
+	w       io.Writer
+	redraws chan struct{}
+}
+
+func (w *redrawSignalWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if err == nil && bytes.Equal(p, []byte("\033[J")) {
+		select {
+		case w.redraws <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+func waitForRedraw(t *testing.T, redraws <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-redraws:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch did not redraw")
+	}
+}
+
 func TestWatchTo_PartialRedrawFailure(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	tasksDir := filepath.Join(repoRoot, ".mato")
@@ -1321,14 +1342,18 @@ func TestWatchTo_ReturnsNilOnCancel(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
+	ticks := make(chan time.Time, 1)
+	redraws := make(chan struct{}, 2)
+	w := &redrawSignalWriter{w: &buf, redraws: redraws}
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- WatchTo(ctx, &buf, repoRoot, 50*time.Millisecond)
+		errCh <- watchToModeWithTicks(ctx, w, repoRoot, 50*time.Millisecond, textViewCompact, ticks)
 	}()
 
-	// Let WatchTo run for a few iterations.
-	time.Sleep(150 * time.Millisecond)
+	waitForRedraw(t, redraws)
+	ticks <- time.Now()
+	waitForRedraw(t, redraws)
 	cancel()
 
 	select {

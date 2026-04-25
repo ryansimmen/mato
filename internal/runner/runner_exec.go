@@ -62,8 +62,13 @@ func runCopilotCommand(ctx context.Context, env envConfig, run runContext, extra
 
 		var stdoutDetect resumeDetectionBuffer
 		var stderrDetect resumeDetectionBuffer
-		cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutDetect)
-		cmd.Stderr = io.MultiWriter(os.Stderr, &stderrDetect)
+		if env.isTTY {
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		} else {
+			cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutDetect)
+			cmd.Stderr = io.MultiWriter(os.Stderr, &stderrDetect)
+		}
 
 		err := cmd.Run()
 		if timeoutCtx.Err() == context.DeadlineExceeded {

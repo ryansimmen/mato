@@ -362,9 +362,13 @@ func WatchTo(ctx context.Context, w io.Writer, repoRoot string, interval time.Du
 }
 
 func watchToMode(ctx context.Context, w io.Writer, repoRoot string, interval time.Duration, mode textViewMode) error {
-	dim := color.New(color.Faint).SprintFunc()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	return watchToModeWithTicks(ctx, w, repoRoot, interval, mode, ticker.C)
+}
+
+func watchToModeWithTicks(ctx context.Context, w io.Writer, repoRoot string, interval time.Duration, mode textViewMode, ticks <-chan time.Time) error {
+	dim := color.New(color.Faint).SprintFunc()
 	for {
 		var buf bytes.Buffer
 		if err := showToMode(&buf, repoRoot, mode); err != nil {
@@ -391,7 +395,10 @@ func watchToMode(ctx context.Context, w io.Writer, repoRoot string, interval tim
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case _, ok := <-ticks:
+			if !ok {
+				return nil
+			}
 		}
 	}
 }

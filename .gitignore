@@ -20,4 +20,6 @@ bin/*
 # Environment files
 .env
 .envrc
+/.mato.yaml
+/.mato.yml
 /.mato/

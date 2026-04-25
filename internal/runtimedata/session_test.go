@@ -1,6 +1,7 @@
 package runtimedata
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -108,24 +109,48 @@ func TestLoadOrCreateSession_RotatesSessionIDOnBranchChange(t *testing.T) {
 
 func TestLoadOrCreateSession_DoesNotRewriteWhenUnchanged(t *testing.T) {
 	tasksDir := t.TempDir()
-	if _, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task"); err != nil {
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	later := createdAt.Add(time.Hour)
+	originalSessionNow := sessionNow
+	sessionNow = func() time.Time {
+		return createdAt
+	}
+	t.Cleanup(func() {
+		sessionNow = originalSessionNow
+	})
+
+	first, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
+	if err != nil {
 		t.Fatalf("first LoadOrCreateSession: %v", err)
 	}
-	path := filepath.Join(tasksDir, "runtime", "sessionmeta", "work-task.md.json")
-	infoBefore, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat before: %v", err)
+	if first.UpdatedAt != createdAt.Format(time.RFC3339) {
+		t.Fatalf("first UpdatedAt = %q, want %q", first.UpdatedAt, createdAt.Format(time.RFC3339))
 	}
-	time.Sleep(1100 * time.Millisecond)
-	if _, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task"); err != nil {
+	path := filepath.Join(tasksDir, "runtime", "sessionmeta", "work-task.md.json")
+	contentBefore, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile before: %v", err)
+	}
+
+	sessionNow = func() time.Time {
+		return later
+	}
+	second, err := LoadOrCreateSession(tasksDir, KindWork, "task.md", "task/task")
+	if err != nil {
 		t.Fatalf("second LoadOrCreateSession: %v", err)
 	}
-	infoAfter, err := os.Stat(path)
+	contentAfter, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("Stat after: %v", err)
+		t.Fatalf("ReadFile after: %v", err)
 	}
-	if !infoAfter.ModTime().Equal(infoBefore.ModTime()) {
-		t.Fatalf("expected unchanged session file mtime, before=%v after=%v", infoBefore.ModTime(), infoAfter.ModTime())
+	if second.UpdatedAt != first.UpdatedAt {
+		t.Fatalf("second UpdatedAt = %q, want unchanged %q", second.UpdatedAt, first.UpdatedAt)
+	}
+	if bytes.Contains(contentAfter, []byte(later.Format(time.RFC3339))) {
+		t.Fatalf("session content includes later timestamp %q after unchanged load", later.Format(time.RFC3339))
+	}
+	if !bytes.Equal(contentAfter, contentBefore) {
+		t.Fatalf("session content changed after unchanged load\nbefore:\n%s\nafter:\n%s", contentBefore, contentAfter)
 	}
 }
 

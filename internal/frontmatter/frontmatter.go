@@ -27,6 +27,7 @@ type StrippedAffect struct {
 	Reason string
 }
 
+// TaskMeta describes scheduler metadata parsed from a task file's YAML frontmatter.
 type TaskMeta struct {
 	ID         string   `yaml:"id"`
 	Priority   int      `yaml:"priority"`
@@ -173,6 +174,7 @@ func isNullScalarNode(node *yaml.Node) bool {
 	return node.Tag == "!!null"
 }
 
+// TaskFileStem returns the filename stem used as a fallback task ID.
 func TaskFileStem(path string) string {
 	base := filepath.Base(path)
 	return strings.TrimSuffix(base, filepath.Ext(base))
