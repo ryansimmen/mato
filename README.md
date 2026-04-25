@@ -12,7 +12,19 @@
 
 `mato` turns markdown task files into a filesystem-backed work queue for autonomous coding agents. Workers claim tasks, push branches, and serialize reviewed changes back into your target branch.
 
+## How It Works
+
+1. The bundled `mato` skill turns a request into markdown task files under `.mato/backlog` or `.mato/waiting`.
+2. `mato run` claims runnable tasks and launches isolated Copilot agents in Docker.
+3. Each agent works on its own task branch and commits locally.
+4. The host pushes completed task branches, runs an AI review pass, and requeues rejected work with feedback.
+5. Approved tasks are squash-merged serially into the target branch and recorded in the completion log.
+
 See [Architecture](docs/architecture.md) for more details.
+
+## Project Status
+
+`mato` is alpha software. The core queue model is usable, but CLI flags, configuration keys, task metadata, and the bundled skill may still change between releases. Pin a release for automation and read the [Changelog](CHANGELOG.md) before upgrading shared workflows.
 
 ## Install
 
@@ -38,8 +50,16 @@ Runtime requirements for operators:
 
 - Linux
 - Docker
+- [Git](https://git-scm.com/downloads)
 - [GitHub CLI (`gh` v2.90.0 or later)](https://github.com/cli/cli#installation)
 - [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
+
+Before running workers, authenticate both CLI tools on the host:
+
+```bash
+gh auth login
+copilot login
+```
 
 Tooling for building from source or contributing is documented in [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
 
@@ -82,6 +102,23 @@ mato graph
 mato log
 ```
 
+A compact `mato status` view looks like:
+
+```text
+Queue: 4 backlog | 2 runnable | 1 running | 1 review | 0 merge | 0 failed
+Pause: not paused   Merge queue: idle
+
+Agents (1)
+  agent-abc12345  fix-config.md  task/fix-config  WORK  2 min
+
+Attention
+  1 blocked by dependencies
+
+Next Up
+  1. add-doctor-check.md — Add doctor check for stale sessions
+  2. tighten-readme.md — Clarify README install flow
+```
+
 ### Skill Installation Notes
 
 `gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code). Use `--agent claude-code|cursor|codex|gemini|antigravity` to target a non-Copilot host. Run `gh skill update mato` to pick up changes after a new release.
@@ -89,6 +126,15 @@ mato log
 OpenCode is not yet a `gh skill`-supported host; install there with `gh skill install ryansimmen/mato mato --dir ~/.config/opencode/skills` as a workaround.
 
 See [Configuration](docs/configuration.md) for all flags, environment variables, and `.mato.yaml` options.
+
+## Safety Model
+
+- Agents run in short-lived Docker containers against isolated temporary clones.
+- Work lands on task branches first; agents do not merge directly into the target branch.
+- Every completed task branch passes through an AI review before merge.
+- The host serializes squash merges through a merge lock to avoid concurrent target-branch writes.
+- Queue state is ordinary filesystem data under `.mato/`, so operators can inspect, pause, cancel, retry, and diagnose work with CLI commands.
+- Task `affects:` metadata lets the scheduler defer overlapping work while other agents, reviews, or merges are active.
 
 ## Queue Layout
 
@@ -131,7 +177,7 @@ See [Configuration](docs/configuration.md) for all flags, environment variables,
 ## Documentation
 
 - [Architecture](docs/architecture.md) - host loop, task lifecycle, review flow, merge queue
-- [Install](docs/install.md) - binary install, manual download verification, build from source
+- [Install](docs/install.md) - binary install, bundled skill install, manual download verification, build from source
 - [Configuration](docs/configuration.md) - CLI flags, environment variables, `.mato.yaml`, Docker setup
 - [Task Format](docs/task-format.md) - frontmatter fields, runtime markers, placement rules, examples
 - [Messaging](docs/messaging.md) - inter-agent coordination protocol

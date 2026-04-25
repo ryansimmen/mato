@@ -4,6 +4,8 @@
 
 `mato` ships signed `linux/amd64` and `linux/arm64` binaries with each release.
 
+The CLI runs the queue. For the normal first-run workflow, also install the bundled `mato` task-planning skill; it creates the markdown task files that populate `.mato/backlog` and `.mato/waiting`.
+
 ## Linux binary (recommended)
 
 The install script downloads the archive, verifies its `sha256` checksum, and (when [`cosign`](https://docs.sigstore.dev/cosign/installation/) is on `PATH`) verifies the cosign signature before installing the binary.
@@ -39,6 +41,39 @@ The script honors:
 curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh \
   | VERSION=v0.1.4 PREFIX=$HOME/custom bash
 ```
+
+## Bundled `mato` Skill
+
+Install the task-planning skill with the [GitHub CLI](https://cli.github.com/) (`gh` v2.90.0 or later):
+
+```bash
+gh skill install ryansimmen/mato mato --scope user
+```
+
+`gh skill` writes to the appropriate per-host directory, such as `~/.copilot/skills/mato/` for GitHub Copilot or `~/.claude/skills/mato/` for Claude Code. To target another supported host, pass `--agent claude-code|cursor|codex|gemini|antigravity`.
+
+Update the installed skill after new releases with:
+
+```bash
+gh skill update mato
+```
+
+OpenCode is not yet a `gh skill`-supported host. Install there with an explicit directory as a workaround:
+
+```bash
+gh skill install ryansimmen/mato mato --dir ~/.config/opencode/skills
+```
+
+## Authentication
+
+Before running `mato run`, make sure both GitHub CLI and Copilot CLI authentication are ready on the host:
+
+```bash
+gh auth login
+copilot login
+```
+
+At runtime, `mato` forwards `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN` into Docker containers when they are set. If none are set, it makes a best-effort `gh auth token` lookup so host-side GitHub authentication can still be used inside agent containers.
 
 ## Verify a manual download
 
