@@ -22,19 +22,15 @@ See [Architecture](docs/architecture.md) for more details.
 curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
 ```
 
-See [Install](docs/install.md) for alternative installation and verification methods.
-
-### Bundled `mato` Skill
-
-The `mato` task-planner skill is published from this repo and installed via the [GitHub CLI](https://cli.github.com/) (`gh` v2.90.0 or later):
+Install the bundled task-planning skill with the [GitHub CLI](https://cli.github.com/) (`gh` v2.90.0 or later):
 
 ```bash
 gh skill install ryansimmen/mato mato --scope user
 ```
 
-`gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code). Use `--agent claude-code|cursor|codex|gemini|antigravity` to target a non-Copilot host. Run `gh skill update mato` to pick up changes after a new release.
+The CLI runs the queue. The skill creates task files that populate it.
 
-OpenCode is not yet a `gh skill`-supported host; install there with `gh skill install ryansimmen/mato mato --dir ~/.config/opencode/skills` as a workaround.
+See [Install](docs/install.md) for alternative CLI installation and verification methods.
 
 ## Requirements
 
@@ -42,7 +38,7 @@ Runtime requirements for operators:
 
 - Linux
 - Docker
-- [GitHub CLI (`gh`)](https://github.com/cli/cli#installation)
+- [GitHub CLI (`gh` v2.90.0 or later)](https://github.com/cli/cli#installation)
 - [GitHub Copilot CLI (`copilot`)](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
 
 Tooling for building from source or contributing is documented in [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
@@ -50,36 +46,30 @@ Tooling for building from source or contributing is documented in [CONTRIBUTING.
 ## Quick Start
 
 ```bash
-# Install the CLI
-curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
-
 # cd into the target repository
 cd /path/to/repo
 
 # Bootstrap the repository for mato
 mato init
-```
 
-If you also installed the bundled `mato` skill with `gh skill install`, you can use Copilot to generate task files for the queue:
-
-```bash
+# Generate task files for the queue
 copilot --interactive "Review this codebase for logical errors and create mato tasks of your findings"
+
+# Start one worker
+mato run
 ```
 
-The `mato` skill writes task files into `.mato/backlog` or `.mato/waiting`.
-
-These task files live under `.mato`. The scheduler reads their frontmatter for dependency, priority, and conflict metadata, then passes the markdown body to the agent as instructions.
+The `mato` skill writes task files into `.mato/backlog` or `.mato/waiting`. These task files live under `.mato`; the scheduler reads their frontmatter for dependency, priority, and conflict metadata, then passes the markdown body to the agent as instructions.
 
 For the full task-file specification, see [Task Format](docs/task-format.md).
 
+Run more workers or inspect the queue from other terminals:
+
 ```bash
-# Start one worker
+# Start another worker
 mato run
 
-# In another terminal, start another worker
-mato run
-
-# In a third terminal, inspect the queue health
+# Inspect the queue health
 mato status
 
 # List active queue tasks in a flat view
@@ -91,6 +81,12 @@ mato graph
 # View completions
 mato log
 ```
+
+### Skill Installation Notes
+
+`gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code). Use `--agent claude-code|cursor|codex|gemini|antigravity` to target a non-Copilot host. Run `gh skill update mato` to pick up changes after a new release.
+
+OpenCode is not yet a `gh skill`-supported host; install there with `gh skill install ryansimmen/mato mato --dir ~/.config/opencode/skills` as a workaround.
 
 See [Configuration](docs/configuration.md) for all flags, environment variables, and `.mato.yaml` options.
 
