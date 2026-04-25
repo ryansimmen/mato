@@ -17,8 +17,6 @@ import (
 // is moved to failed/ (when retries are exhausted) with a merge-queue failure
 // record.
 func TestMergeMissingBranch_ExplicitMarker(t *testing.T) {
-	t.Parallel()
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Record the HEAD of the target branch before the merge attempt.
@@ -83,8 +81,6 @@ func TestMergeMissingBranch_ExplicitMarker(t *testing.T) {
 // no explicit <!-- branch: ... --> marker is treated as a corrupted handoff and
 // moved to failed/ when its retry budget is exhausted.
 func TestMergeMissingBranch_MissingMarker(t *testing.T) {
-	t.Parallel()
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	headBefore := strings.TrimSpace(mustGitOutput(t, repoRoot, "rev-parse", "mato"))
@@ -141,8 +137,6 @@ func TestMergeMissingBranch_MissingMarker(t *testing.T) {
 // an invalid explicit <!-- branch: ... --> marker is treated as a corrupted
 // handoff and moved to failed/ when its retry budget is exhausted.
 func TestMergeMissingBranch_InvalidMarker(t *testing.T) {
-	t.Parallel()
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	headBefore := strings.TrimSpace(mustGitOutput(t, repoRoot, "rev-parse", "mato"))
@@ -190,8 +184,6 @@ func TestMergeMissingBranch_InvalidMarker(t *testing.T) {
 // TestMergeMissingBranch_RetriesRemaining verifies that when a missing-branch
 // failure occurs but retries remain, the task moves to backlog/ (not failed/).
 func TestMergeMissingBranch_RetriesRemaining(t *testing.T) {
-	t.Parallel()
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	headBefore := strings.TrimSpace(mustGitOutput(t, repoRoot, "rev-parse", "mato"))
@@ -247,8 +239,6 @@ func TestMergeMissingBranch_RetriesRemaining(t *testing.T) {
 // task still merges correctly even when another task in the same queue has a
 // missing branch.
 func TestMergeMissingBranch_SuccessfulTaskUnaffected(t *testing.T) {
-	t.Parallel()
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	// Create a real task branch for the good task.

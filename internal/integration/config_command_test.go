@@ -9,8 +9,6 @@ import (
 )
 
 func TestConfigCommand_TextAndJSON(t *testing.T) {
-	t.Parallel()
-
 	repoRoot := testutil.SetupRepo(t)
 	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yml"), "branch: main\nreview_model: gpt-5.4\n")
 
@@ -35,8 +33,6 @@ func TestConfigCommand_TextAndJSON(t *testing.T) {
 }
 
 func TestConfigCommand_EnvOverride(t *testing.T) {
-	t.Parallel()
-
 	repoRoot := testutil.SetupRepo(t)
 	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yaml"), "docker_image: from-config:1.0\n")
 	out, err := runMatoCommandWithEnv(t, []string{"MATO_DOCKER_IMAGE=from-env:2.0"}, "config", "--repo", repoRoot)
@@ -49,8 +45,6 @@ func TestConfigCommand_EnvOverride(t *testing.T) {
 }
 
 func TestConfigCommand_BothConfigFilesError(t *testing.T) {
-	t.Parallel()
-
 	repoRoot := testutil.SetupRepo(t)
 	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yaml"), "branch: main\n")
 	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yml"), "branch: develop\n")
@@ -64,8 +58,6 @@ func TestConfigCommand_BothConfigFilesError(t *testing.T) {
 }
 
 func TestConfigCommand_WorksWithoutMatoDir(t *testing.T) {
-	t.Parallel()
-
 	repoRoot := testutil.SetupRepo(t)
 	out, err := runMatoCommandWithEnv(t, []string{"MATO_BRANCH="}, "config", "--repo", repoRoot)
 	if err != nil {

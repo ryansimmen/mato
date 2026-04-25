@@ -12,8 +12,6 @@ import (
 )
 
 func TestPauseResume_StatusReflectsPauseState(t *testing.T) {
-	t.Parallel()
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 
 	if _, err := pause.Pause(tasksDir, time.Now().UTC()); err != nil {

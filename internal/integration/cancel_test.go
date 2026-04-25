@@ -15,8 +15,6 @@ import (
 )
 
 func TestCancelRetryLifecycle(t *testing.T) {
-	t.Parallel()
-
 	repoRoot, tasksDir := testutil.SetupRepoWithTasks(t)
 	testutil.WriteFile(t, filepath.Join(tasksDir, dirs.Backlog, "task.md"), "---\nid: task\n---\n# Task\n")
 
