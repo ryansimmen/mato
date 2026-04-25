@@ -19,10 +19,31 @@ While the project is pre-`v1`, breaking changes may occur in any release.
 
 ### Fixed
 
+### Security
+
+## [0.1.6] - 2026-04-25
+
+### Added
+
+- `make test-fast` target for fast local unit-test feedback without the race
+  detector or integration tests.
+
+### Changed
+
+- README onboarding now better explains setup, usage, and development workflow.
+- Test fixtures and timing-sensitive tests now run faster and more reliably.
+
+### Fixed
+
 - Pin `govulncheck` install to `v1.1.4` instead of `@latest` so OSSF Scorecard
   Pinned-Dependencies stays at 10/10.
 
 ### Security
+
+- Runner hardening and expanded timing coverage improve task execution safety
+  around agent lifecycle handling.
+- Security reporting instructions now point directly at GitHub private
+  vulnerability reporting.
 
 ## [0.1.5] - 2026-04-21
 
@@ -141,7 +162,9 @@ Initial public alpha release.
 - Secret scanning, push protection, and private vulnerability reporting enabled.
 - MIT licensed; see [SECURITY.md](SECURITY.md) for the disclosure process.
 
-[Unreleased]: https://github.com/ryansimmen/mato/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/ryansimmen/mato/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/ryansimmen/mato/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/ryansimmen/mato/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/ryansimmen/mato/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/ryansimmen/mato/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ryansimmen/mato/compare/v0.1.1...v0.1.2
