@@ -4,12 +4,12 @@
 
 [![CI](https://github.com/ryansimmen/mato/actions/workflows/ci.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml/badge.svg)](https://github.com/ryansimmen/mato/actions/workflows/codeql.yml)
+[![OpenSSF Best Practices](https://img.shields.io/badge/OpenSSF%20Best%20Practices-Passing-brightgreen)](https://www.bestpractices.dev/projects/12606)
 [![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/ryansimmen/mato?label=OpenSSF%20Scorecard)](https://securityscorecards.dev/viewer/?uri=github.com/ryansimmen/mato)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12606/badge)](https://www.bestpractices.dev/projects/12606)
-![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Go Reference](https://pkg.go.dev/badge/github.com/ryansimmen/mato.svg)](https://pkg.go.dev/github.com/ryansimmen/mato)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Status](https://img.shields.io/badge/Status-alpha-orange)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-Alpha-orange)](docs/roadmap.md)
 
 `mato` turns markdown task files into a filesystem-backed work queue for autonomous coding agents. Workers claim tasks, push branches, and serialize reviewed changes back into your target branch.
 
