@@ -33,6 +33,7 @@ builds:
       - arm64
     flags:
       - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X main.version={{ .Version }}
@@ -43,10 +44,18 @@ archives:
       - tar.gz
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    builds_info:
+      mtime: "{{ .CommitDate }}"
     files:
-      - LICENSE
-      - README.md
-      - CHANGELOG.md
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: CHANGELOG.md
+        info:
+          mtime: "{{ .CommitDate }}"
 
 checksum:
   name_template: "checksums.txt"

@@ -11,6 +11,8 @@
 #   VERSION   Release tag to install (e.g. "v0.1.4"). Defaults to latest.
 #   PREFIX    Install prefix. Binary is placed in $PREFIX/bin/mato.
 #             Defaults to /usr/local for root, $HOME/.local for non-root.
+#   DESTDIR   Optional staging root for packaging. When set, writes to
+#             $DESTDIR$PREFIX/bin/mato and does not prompt to modify PATH.
 #
 # Verifies sha256 checksums and, if cosign is installed, the cosign signature
 # of both the checksums file and the downloaded archive.
@@ -186,7 +188,8 @@ if [ -z "${PREFIX:-}" ]; then
     PREFIX="${HOME}/.local"
   fi
 fi
-INSTALL_DIR="${PREFIX}/bin"
+FINAL_INSTALL_DIR="${PREFIX}/bin"
+INSTALL_DIR="${DESTDIR:-}${FINAL_INSTALL_DIR}"
 
 if ! mkdir -p "${INSTALL_DIR}" 2>/dev/null; then
   err "cannot create ${INSTALL_DIR}; re-run with sudo or set PREFIX=\$HOME/.local"
@@ -207,6 +210,13 @@ fi
 tar -xzf "${ARCHIVE_PATH}" -C "${TMP_DIR}" mato
 mv "${TMP_DIR}/mato" "${INSTALL_DIR}/mato"
 chmod +x "${INSTALL_DIR}/mato"
+
+if [ -n "${DESTDIR:-}" ]; then
+  info "Staged mato v${RESOLVED_VERSION} to ${INSTALL_DIR}/mato"
+  info "Final install path: ${FINAL_INSTALL_DIR}/mato"
+  info "Run 'mato --help' after installing the staged binary into its final location."
+  exit 0
+fi
 
 info "Installed mato v${RESOLVED_VERSION} to ${INSTALL_DIR}/mato"
 
