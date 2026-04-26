@@ -34,20 +34,20 @@ curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/instal
 
 The script honors:
 
-- `VERSION` — release tag (e.g. `v0.1.4`). Defaults to the latest release.
+- `VERSION` — release tag (e.g. `v0.1.6`). Defaults to the latest release.
 - `PREFIX` — install prefix; the binary is placed in `$PREFIX/bin/mato`. Defaults to `/usr/local` for root, `$HOME/.local` for non-root.
 - `DESTDIR` — optional staging root for packaging; when set, the binary is written to `$DESTDIR$PREFIX/bin/mato` and no shell `PATH` prompt is shown.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh \
-  | VERSION=v0.1.4 PREFIX=$HOME/custom bash
+  | VERSION=v0.1.6 PREFIX=$HOME/custom bash
 ```
 
 Package-style staging example:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh
-DESTDIR=/tmp/mato-package PREFIX=/usr/local VERSION=v0.1.4 bash install.sh
+DESTDIR=/tmp/mato-package PREFIX=/usr/local VERSION=v0.1.6 bash install.sh
 # writes /tmp/mato-package/usr/local/bin/mato
 ```
 
@@ -108,8 +108,8 @@ Each release publishes a `*.intoto.jsonl` SLSA build provenance bundle, per-arch
 ### With `gh` (recommended)
 
 ```bash
-gh release download v0.1.4 -R ryansimmen/mato -p 'mato_0.1.4_linux_amd64.tar.gz'
-gh attestation verify -R ryansimmen/mato mato_0.1.4_linux_amd64.tar.gz
+gh release download v0.1.6 -R ryansimmen/mato -p 'mato_0.1.6_linux_amd64.tar.gz'
+gh attestation verify -R ryansimmen/mato mato_0.1.6_linux_amd64.tar.gz
 ```
 
 A successful verification exits 0; in non-interactive shells the command is silent on success. Use `--format json` for full attestation details.
@@ -119,7 +119,7 @@ A successful verification exits 0; in non-interactive shells the command is sile
 Using `sha256sum` and [`cosign`](https://docs.sigstore.dev/cosign/installation/):
 
 ```bash
-VERSION=v0.1.4
+VERSION=v0.1.6
 ASSETS="mato_${VERSION#v}_linux_amd64.tar.gz checksums.txt checksums.txt.sigstore.json mato_${VERSION#v}_linux_amd64.tar.gz.sigstore.json"
 for f in $ASSETS; do
   curl -fsSLO "https://github.com/ryansimmen/mato/releases/download/${VERSION}/${f}"
