@@ -74,12 +74,18 @@ go test -race -v ./internal/integration/...
 
 Coverage measurement and regression-test evidence are documented in [Testing](docs/testing.md).
 
+## Code Style
+
+- Format Go code with `gofmt`; `make verify` runs `golangci-lint`, which includes `gofmt` checks.
+- Follow idiomatic Go naming and structure, including the conventions in [Effective Go](https://go.dev/doc/effective_go) and [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments).
+- Keep imports grouped and sorted by Go tooling conventions.
+- Prefer small, minimal changes over broad refactors unless the refactor is the point of the work.
+
 ## Expectations
 
 - Add or update tests for behavior changes.
 - Update docs when user-visible behavior, setup, configuration, or task format changes.
 - Follow existing code structure and naming patterns.
-- Prefer small, minimal changes over broad refactors unless the refactor is the point of the work.
 
 ## Pull Requests
 
