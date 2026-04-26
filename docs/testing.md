@@ -29,11 +29,13 @@ go test ./... -coverprofile=coverage.out
 go tool cover -func=coverage.out
 ```
 
-On 2026-04-25, this command reported total statement coverage of 86.6%, which exceeds the OpenSSF Silver 80% statement-coverage criterion.
+On 2026-04-25, this command reported total statement coverage of 86.6%.
 
 ## Regression Tests
 
-Project policy requires tests for behavior changes. For OpenSSF Silver regression-test evidence, bug-fix commits on `main` can be audited by checking whether `fix:` commits touched test files.
+Project policy requires tests for behavior changes. Bug-fix commits on `main` can be audited by checking whether `fix:` commits touched test files.
+
+This is supporting evidence for the project testing policy, not a substitute for judgment about individual bug reports. `mato` is a young project with mostly maintainer-filed fixes; the audit below tracks the convention the project uses in practice: bug-fix commits should include regression-test changes when the fix is behavioral and testable.
 
 The audit command used on 2026-04-25 was:
 
@@ -47,4 +49,6 @@ The result was:
 271 fix commits; 235 touched tests; 86%
 ```
 
-This is an automated proxy, not a substitute for human audit of every bug report. It counts a bug-fix commit as having regression-test evidence when the same `fix:` commit changes at least one Go test file, integration test file, or testdata path. It does not count nearby follow-up `test:` commits, so manual review may find additional covered fixes. It also counts fix commits rather than distinct user-reported bugs; use this as supporting evidence when completing the OpenSSF form, not as the only audit artifact if stricter review is requested.
+This audit counted `fix:` commits rather than distinct externally reported bugs. It counts a bug-fix commit as having regression-test evidence when the same `fix:` commit changes at least one Go test file, integration test file, or testdata path. It does not count nearby follow-up `test:` commits, so manual review may find additional covered fixes. It also does not require tests for non-behavioral fixes such as CI configuration corrections when a test is not practical.
+
+Because the measured rate is high even with those conservative limitations, the result supports the project practice of adding regression tests for behavioral fixes. If a future review needs stricter evidence, audit individual bug reports and release-note bug fixes against their associated pull requests.

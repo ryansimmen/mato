@@ -4,7 +4,7 @@ This roadmap describes the intended direction for `mato` over the next year. It 
 
 ## Near-Term Priorities
 
-- Improve public project readiness, including OpenSSF Best Practices Silver documentation, installation compliance, governance, and security assurance evidence.
+- Improve public project readiness, including installation compliance, governance, and security assurance evidence.
 - Harden release and installation workflows so users can verify binaries, provenance, checksums, and installed paths consistently.
 - Add a project-maintained Dockerfile/image for agent execution so containers can depend on a known toolchain instead of bind-mounting most host tools into each run.
 - Keep queue diagnostics clear and actionable through `mato status`, `mato list`, `mato inspect`, `mato doctor`, and failure markers.

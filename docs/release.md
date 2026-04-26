@@ -34,4 +34,6 @@ done
 
 This compares the published release archives and checksum file. GoReleaser also writes internal run metadata such as `metadata.json` and `artifacts.json` under `dist/`; those files are not published release assets and may include run-local ordering or environment details.
 
+On 2026-04-25, this check was run locally after pinning GoReleaser and normalizing archive timestamps. The two snapshot runs produced identical `checksums.txt` and identical `.tar.gz` archives.
+
 The full release workflow additionally signs artifacts and generates SBOM and SLSA provenance assets. Those assets should be checked in the release environment because they depend on tools installed by the workflow. This document does not claim SBOMs, signatures, or attestations are bit-for-bit reproducible across independent runs; it documents repeatability for the binary archives and checksum file.
