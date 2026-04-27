@@ -351,9 +351,9 @@ func moveTaskToReviewWithMarker(tasksDir string, claimed *queue.ClaimedTask, bra
 			detail := fmt.Sprintf("write branch marker to %s: %v (rollback failed: %v)", readyPath, err, rollbackErr)
 			if quarantineErr := queue.QuarantinePushedTaskHandoff(tasksDir, claimed.Filename, readyPath, detail); quarantineErr != nil {
 				fmt.Fprintf(os.Stderr, "error: branch marker write failed, rollback to in-progress/ also failed, and quarantine to failed/ also failed: %v\n", quarantineErr)
-				return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v; quarantine to failed/ also failed: %v)", readyPath, err, rollbackErr, quarantineErr)
+				return fmt.Errorf("write branch marker to %s: %w (rollback failed: %w; quarantine to failed/ also failed: %w)", readyPath, err, rollbackErr, quarantineErr)
 			}
-			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %v; moved task to failed/)", readyPath, err, rollbackErr)
+			return fmt.Errorf("write branch marker to %s: %w (rollback failed: %w; moved task to failed/)", readyPath, err, rollbackErr)
 		}
 		return fmt.Errorf("write branch marker to %s: %w (rolled back to in-progress/)", readyPath, err)
 	}

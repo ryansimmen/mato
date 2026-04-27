@@ -3,6 +3,7 @@ linters:
   default: none
   enable:
     - errcheck
+    - errorlint
     - govet
     - ineffassign
     - staticcheck
@@ -15,13 +16,13 @@ linters:
     presets:
       - comments
       - common-false-positives
-      - legacy
       - std-error-handling
     paths:
       - vendor
 formatters:
   enable:
     - gofmt
+    - goimports
   exclusions:
     generated: lax
     paths:

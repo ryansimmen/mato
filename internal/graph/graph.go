@@ -367,7 +367,7 @@ func ShowTo(w io.Writer, repoRoot, format string, showAll bool) error {
 	// Fail on directory-level read errors only; skip glob warnings.
 	for _, bw := range idx.BuildWarnings() {
 		if !isGlobWarning(bw) {
-			return fmt.Errorf("incomplete index: %s: %v", bw.State, bw.Err)
+			return fmt.Errorf("incomplete index: %s: %w", bw.State, bw.Err)
 		}
 	}
 

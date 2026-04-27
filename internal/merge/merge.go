@@ -149,7 +149,7 @@ func loadMergeTaskBranch(path string) (string, error) {
 		return "", errTaskBranchMarkerMissing
 	}
 	if err := git.ValidateBranch(taskBranch); err != nil {
-		return "", fmt.Errorf("%w: %v", errTaskBranchMarkerInvalid, err)
+		return "", fmt.Errorf("%w: %w", errTaskBranchMarkerInvalid, err)
 	}
 	return taskBranch, nil
 }

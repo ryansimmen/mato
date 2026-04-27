@@ -1247,7 +1247,7 @@ func TestDoctorCmd_HardFailurePropagated(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected hard failure error, got nil")
 	}
-	if err != hardErr {
+	if !errors.Is(err, hardErr) {
 		t.Errorf("error = %v, want %v", err, hardErr)
 	}
 
