@@ -72,7 +72,6 @@ func ListCancellableTasks(tasksDir string) []TaskMatch {
 		if _, ok := stateSet[pf.State]; !ok {
 			continue
 		}
-		pf := pf
 		matches = append(matches, TaskMatch{
 			Filename:     pf.Filename,
 			State:        pf.State,

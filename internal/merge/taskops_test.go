@@ -126,7 +126,6 @@ func TestAppendTaskRecord(t *testing.T) {
 		errCh := make(chan error, len(records))
 		var wg sync.WaitGroup
 		for _, record := range records {
-			record := record
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

@@ -2,10 +2,13 @@ version: "2"
 linters:
   default: none
   enable:
+    - bodyclose
+    - copyloopvar
     - errcheck
     - errorlint
     - govet
     - ineffassign
+    - misspell
     - staticcheck
     - unused
   settings:
