@@ -4,12 +4,16 @@ linters:
   enable:
     - bodyclose
     - copyloopvar
+    - durationcheck
     - errcheck
     - errorlint
     - govet
     - ineffassign
+    - makezero
     - misspell
+    - nolintlint
     - staticcheck
+    - unconvert
     - unused
   settings:
     errcheck:
