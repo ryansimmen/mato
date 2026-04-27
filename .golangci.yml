@@ -2,11 +2,21 @@ version: "2"
 linters:
   default: none
   enable:
+    - bodyclose
+    - copyloopvar
+    - durationcheck
     - errcheck
+    - errorlint
     - govet
     - ineffassign
+    - makezero
+    - misspell
+    - nilerr
+    - nolintlint
     - staticcheck
+    - unconvert
     - unused
+    - wastedassign
   settings:
     errcheck:
       check-type-assertions: true
@@ -15,13 +25,22 @@ linters:
     presets:
       - comments
       - common-false-positives
-      - legacy
       - std-error-handling
     paths:
       - vendor
+    rules:
+      - linters:
+          - nilerr
+        path: internal/integration/bounded_run_test\.go
+        text: "error is not nil"
+      - linters:
+          - nilerr
+        path: internal/pause/pause\.go
+        text: "error is not nil"
 formatters:
   enable:
     - gofmt
+    - goimports
   exclusions:
     generated: lax
     paths:

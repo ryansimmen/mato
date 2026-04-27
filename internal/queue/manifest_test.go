@@ -1,11 +1,12 @@
 package queue
 
 import (
-	"github.com/ryansimmen/mato/internal/dirs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 func TestComputeQueueManifest_PriorityOrder(t *testing.T) {

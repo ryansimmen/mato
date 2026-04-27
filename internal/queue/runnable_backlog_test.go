@@ -1,9 +1,10 @@
 package queue
 
 import (
-	"github.com/ryansimmen/mato/internal/dirs"
 	"strings"
 	"testing"
+
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 func TestFormatDependencyBlocks(t *testing.T) {

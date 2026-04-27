@@ -13,7 +13,7 @@ make verify                             # run build, vet, lint, deadcode, and un
 
 # Lint
 go vet ./...                            # built-in static analysis
-make lint                               # golangci-lint (errcheck, gosimple, govet, ineffassign, staticcheck, unused, gofmt)
+make lint                               # golangci-lint (bodyclose, copyloopvar, durationcheck, errcheck, errorlint, govet, ineffassign, makezero, misspell, nilerr, nolintlint, staticcheck, unconvert, unused, wastedassign, gofmt, goimports)
 make deadcode                           # detect unreachable exported code and unused symbols
 
 # Format

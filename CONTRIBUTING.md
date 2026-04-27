@@ -76,7 +76,7 @@ Coverage measurement and regression-test evidence are documented in [Testing](do
 
 ## Code Style
 
-- Format Go code with `gofmt`; `make verify` runs `golangci-lint`, which includes `gofmt` checks.
+- Format Go code with `gofmt`; `make verify` runs `golangci-lint`, which includes `gofmt` and `goimports` checks.
 - Follow idiomatic Go naming and structure, including the conventions in [Effective Go](https://go.dev/doc/effective_go) and [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments).
 - Keep imports grouped and sorted by Go tooling conventions.
 - Prefer small, minimal changes over broad refactors unless the refactor is the point of the work.

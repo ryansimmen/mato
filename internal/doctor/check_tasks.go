@@ -2,9 +2,10 @@ package doctor
 
 import (
 	"fmt"
-	"github.com/ryansimmen/mato/internal/dirs"
 	"path/filepath"
 	"strings"
+
+	"github.com/ryansimmen/mato/internal/dirs"
 )
 
 // ---------- E. Task Parsing ----------

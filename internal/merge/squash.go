@@ -46,7 +46,7 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 	}
 
 	if _, err := gitOutput(cloneDir, "merge", "--squash", "origin/"+taskBranch); err != nil {
-		return nil, fmt.Errorf("%w: %s: %v", errSquashMergeConflict, taskBranch, err)
+		return nil, fmt.Errorf("%w: %s: %w", errSquashMergeConflict, taskBranch, err)
 	}
 
 	// If the squash produced no staged changes, the task branch is already
@@ -63,7 +63,7 @@ func mergeReadyTask(repoRoot, branch string, task mergeQueueTask) (*mergeResult,
 		return nil, fmt.Errorf("commit squash merge: %w", err)
 	}
 	if _, err := gitOutput(cloneDir, "push", "origin", branch); err != nil {
-		return nil, fmt.Errorf("%w: push %s: %v", errPushAfterSquashFailed, branch, err)
+		return nil, fmt.Errorf("%w: push %s: %w", errPushAfterSquashFailed, branch, err)
 	}
 
 	// Capture merge result for completion detail.

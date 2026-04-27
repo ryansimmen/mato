@@ -490,7 +490,7 @@ func finalizeAtomicMove(src, dst, mode string) error {
 		}
 		cleanupErr := removeFn(dst)
 		if cleanupErr != nil && !os.IsNotExist(cleanupErr) {
-			return fmt.Errorf("atomic move %s → %s: remove source after %s: %w (also failed to remove destination during rollback: %v)", src, dst, mode, err, cleanupErr)
+			return fmt.Errorf("atomic move %s → %s: remove source after %s: %w (also failed to remove destination during rollback: %w)", src, dst, mode, err, cleanupErr)
 		}
 		return fmt.Errorf("atomic move %s → %s: remove source after %s: %w", src, dst, mode, err)
 	}

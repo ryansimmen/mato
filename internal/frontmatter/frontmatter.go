@@ -3,6 +3,7 @@ package frontmatter
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -129,7 +130,7 @@ func decodeTaskMeta(block string, meta *TaskMeta) error {
 	dec := yaml.NewDecoder(strings.NewReader(block))
 	dec.KnownFields(true)
 	if err := dec.Decode(meta); err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		return err

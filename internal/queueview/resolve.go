@@ -70,7 +70,6 @@ func CollectTaskMatches(idx *PollIndex, taskRef string, states []string) (string
 		if _, ok := allowed[pf.State]; !ok {
 			continue
 		}
-		pf := pf
 		match := TaskMatch{
 			Filename:     pf.Filename,
 			State:        pf.State,

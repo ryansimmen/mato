@@ -72,7 +72,6 @@ func ListCancellableTasks(tasksDir string) []TaskMatch {
 		if _, ok := stateSet[pf.State]; !ok {
 			continue
 		}
-		pf := pf
 		matches = append(matches, TaskMatch{
 			Filename:     pf.Filename,
 			State:        pf.State,
@@ -126,7 +125,7 @@ func cancelResolvedTask(tasksDir string, idx *PollIndex, match TaskMatch) (Cance
 	if err := appendCancelledRecordFn(failedPath); err != nil {
 		if rollbackErr := AtomicMove(failedPath, match.Path); rollbackErr != nil {
 			fmt.Fprintf(os.Stderr, "error: cancelled marker write failed and rollback to %s/ also failed: %v\n", match.State, rollbackErr)
-			return CancelResult{}, fmt.Errorf("write cancelled marker: %w (rollback failed: %v)", err, rollbackErr)
+			return CancelResult{}, fmt.Errorf("write cancelled marker: %w (rollback failed: %w)", err, rollbackErr)
 		}
 		return CancelResult{}, fmt.Errorf("write cancelled marker to %s: %w (rolled back to %s/)", failedPath, err, match.State)
 	}

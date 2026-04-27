@@ -283,7 +283,7 @@ func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
 		// Move back to backlog so the task is not left orphaned
 		// in in-progress/ without a claimed-by marker.
 		if rbErr := retryExhaustedRollback(dst, src); rbErr != nil {
-			return fmt.Errorf("retry-exhausted rollback failed for %s (task stranded in in-progress): move-to-failed: %v, rollback: %w", name, err, rbErr)
+			return fmt.Errorf("retry-exhausted rollback failed for %s (task stranded in in-progress): move-to-failed: %w, rollback: %w", name, err, rbErr)
 		}
 		// Rollback succeeded, but the task is now back in backlog/
 		// while still retry-exhausted. Return a hard error so the
@@ -300,7 +300,7 @@ func handleRetryExhaustedTask(name, dst, src, failedDir string) error {
 // meaning the task is stranded in in-progress/ without ownership metadata.
 func rollbackClaimToBacklog(name, dst, src string, claimErr error) error {
 	if rbErr := claimRollbackFn(dst, src); rbErr != nil {
-		return fmt.Errorf("claim rollback failed for %s (task stranded in in-progress): prepend: %v, rollback: %w", name, claimErr, rbErr)
+		return fmt.Errorf("claim rollback failed for %s (task stranded in in-progress): prepend: %w, rollback: %w", name, claimErr, rbErr)
 	}
 	return nil
 }
@@ -399,7 +399,7 @@ func SelectAndClaimTask(tasksDir, agentID string, candidates []string, cooldown 
 		if err != nil {
 			ui.Warnf("warning: could not assign branch for %s: %v\n", name, err)
 			if restoreErr := restoreClaimedTaskContents(dst, originalData); restoreErr != nil {
-				return nil, fmt.Errorf("assign branch for %s: %w (also failed to restore task contents: %v)", name, err, restoreErr)
+				return nil, fmt.Errorf("assign branch for %s: %w (also failed to restore task contents: %w)", name, err, restoreErr)
 			}
 			if rbErr := rollbackClaimToBacklog(name, dst, src, err); rbErr != nil {
 				return nil, rbErr

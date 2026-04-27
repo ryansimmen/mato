@@ -3,6 +3,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,7 +95,7 @@ func LoadFile(path string) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return Config{}, nil
 		}
 		return Config{}, fmt.Errorf("parse config file %s: %w", path, err)
@@ -102,7 +103,7 @@ func LoadFile(path string) (Config, error) {
 
 	// Reject multi-document YAML: a second Decode must return io.EOF.
 	var extra interface{}
-	if err := dec.Decode(&extra); err != io.EOF {
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("parse config file %s: contains multiple YAML documents", path)
 	}
 
