@@ -228,25 +228,19 @@ func executeMergeRound(ctx context.Context, repoRoot, tasksDir, branch string, t
 		if !detailWritten {
 			continue
 		}
-		bookkeepingComplete := false
 		if err := moveTaskWithRetry(ctx, task.path, completedPath); err != nil {
 			if _, statErr := os.Stat(completedPath); statErr == nil {
 				if removeErr := removeTaskFileFn(task.path); removeErr != nil {
 					ui.Warnf("warning: could not remove duplicate ready-to-merge task %s: %v\n", task.name, removeErr)
 					continue
 				}
-				bookkeepingComplete = true
 			} else {
 				ui.Warnf("warning: merged task %s but could not move to completed: %v\n", task.name, err)
 				continue
 			}
-		} else {
-			bookkeepingComplete = true
 		}
-		if bookkeepingComplete {
-			runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
-			cleanupTaskBranch(repoRoot, taskBranchName(task))
-		}
+		runtimedata.DeleteRuntimeArtifacts(tasksDir, task.name)
+		cleanupTaskBranch(repoRoot, taskBranchName(task))
 		merged++
 	}
 

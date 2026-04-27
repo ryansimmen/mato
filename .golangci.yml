@@ -11,10 +11,12 @@ linters:
     - ineffassign
     - makezero
     - misspell
+    - nilerr
     - nolintlint
     - staticcheck
     - unconvert
     - unused
+    - wastedassign
   settings:
     errcheck:
       check-type-assertions: true
@@ -26,6 +28,15 @@ linters:
       - std-error-handling
     paths:
       - vendor
+    rules:
+      - linters:
+          - nilerr
+        path: internal/integration/bounded_run_test\.go
+        text: "error is not nil"
+      - linters:
+          - nilerr
+        path: internal/pause/pause\.go
+        text: "error is not nil"
 formatters:
   enable:
     - gofmt

@@ -230,6 +230,9 @@ func runOnce(ctx context.Context, env envConfig, run runContext, claimed *queue.
 func postAgentPush(env envConfig, agentID string, claimed *queue.ClaimedTask, cloneDir, startingTip string) error {
 	// Task must still be in in-progress/ (agent no longer moves files).
 	if _, err := os.Stat(claimed.TaskPath); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat claimed task %s: %w", claimed.TaskPath, err)
+		}
 		return nil
 	}
 

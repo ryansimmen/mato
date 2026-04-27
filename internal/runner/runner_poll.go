@@ -467,8 +467,10 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 	boundedErrorCount := 0
 	priorPaused := false
 	for {
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return nil
+		default:
 		}
 
 		result := pollIterate(ctx, env, run, repoRoot, tasksDir, branch, agentID, cooldown, &heartbeat, failedDirExcluded, priorPaused)
@@ -478,8 +480,10 @@ func pollLoop(ctx context.Context, env envConfig, run runContext, repoRoot, task
 		// immediately. This is unconditional — regardless of whether a
 		// task was claimed — to avoid starting new work with a cancelled
 		// context.
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return nil
+		default:
 		}
 
 		cycleHadError := result.pollHadError

@@ -192,7 +192,7 @@ func validateDurationResolved(resolved Resolved[string], settingName, configPath
 	if err == nil && d > 0 {
 		return nil
 	}
-	message := ""
+	var message string
 	if err != nil {
 		if resolved.Source == SourceEnv {
 			message = fmt.Sprintf("invalid %s %q: %v", resolved.EnvVar, resolved.Value, err)
