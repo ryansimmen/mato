@@ -497,6 +497,7 @@ func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
+	t.Cleanup(func() { git.RemoveClone(cloneDir) })
 	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
 	setHook(t, &removeCloneFn, func(string) {})
 	setHook(t, &ensureBranchFn, func(cloneDir, branch string) (git.EnsureBranchResult, error) {
@@ -558,6 +559,7 @@ func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
+	t.Cleanup(func() { git.RemoveClone(cloneDir) })
 	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
 	setHook(t, &removeCloneFn, func(string) {})
 	setHook(t, &ensureBranchFn, func(cloneDir, branch string) (git.EnsureBranchResult, error) {
@@ -643,6 +645,7 @@ func TestRunOnce_BranchSetupFailureDoesNotCreateWorkSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
+	t.Cleanup(func() { git.RemoveClone(cloneDir) })
 	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
 	setHook(t, &removeCloneFn, func(string) {})
 	setHook(t, &ensureBranchFn, func(string, string) (git.EnsureBranchResult, error) {
@@ -747,6 +750,7 @@ func TestRunOnce_UnwritableMessagesDirRecordsSpecificFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
+	t.Cleanup(func() { git.RemoveClone(cloneDir) })
 	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
 	setHook(t, &removeCloneFn, func(string) {})
 
@@ -2231,6 +2235,7 @@ func TestRunOnce_RecordedBranchResumeMissingRemoteStartsFreshSession(t *testing.
 	if err != nil {
 		t.Fatalf("git.CreateClone: %v", err)
 	}
+	t.Cleanup(func() { git.RemoveClone(cloneDir) })
 	setHook(t, &createCloneFn, func(string) (string, error) { return cloneDir, nil })
 	setHook(t, &removeCloneFn, func(string) {})
 
