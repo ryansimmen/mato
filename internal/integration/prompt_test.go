@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +27,8 @@ func substitutePromptPlaceholders(script, tasksDir, branch string) string {
 	return s
 }
 
+const promptTempDir = "/tmp"
+
 // runBash executes a bash script in the given directory with the given env vars.
 // Returns combined stdout+stderr and any error.
 func runBash(t *testing.T, dir string, env []string, script string) (string, error) {
@@ -33,8 +36,31 @@ func runBash(t *testing.T, dir string, env []string, script string) (string, err
 	cmd := exec.Command("bash", "-euo", "pipefail", "-c", script)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		return out.String(), err
+	}
+	pid := cmd.Process.Pid
+	err := cmd.Wait()
+	removePromptTempFiles(pid)
+	return out.String(), err
+}
+
+func removePromptTempFiles(pid int) {
+	if pid <= 0 {
+		return
+	}
+	for _, name := range []string{
+		fmt.Sprintf("mato-ts-%d.txt", pid),
+		fmt.Sprintf("mato-sent-at-%d.txt", pid),
+		fmt.Sprintf("mato-commit-msg-%d.txt", pid),
+		fmt.Sprintf("mato-files-changed-%d.txt", pid),
+		fmt.Sprintf("mato-fail-line-%d.txt", pid),
+	} {
+		_ = os.Remove(filepath.Join(promptTempDir, name))
+	}
 }
 
 type promptEventMessage struct {
@@ -351,6 +377,43 @@ func countFailureRecords(content string) int {
 
 func quotedPath(path string) string {
 	return fmt.Sprintf("%q", path)
+}
+
+func TestRunBashCleansPromptTempFiles(t *testing.T) {
+	t.Parallel()
+
+	pidsDir := t.TempDir()
+	pidFile := filepath.Join(pidsDir, "pid.txt")
+	script := strings.Join([]string{
+		"printf '%s\n' \"$$\" > " + quotedPath(pidFile),
+		"date -u +%Y%m%dT%H%M%SZ > /tmp/mato-ts-$$.txt",
+		"date -u +%Y-%m-%dT%H:%M:%SZ > /tmp/mato-sent-at-$$.txt",
+		"printf 'commit\n' > /tmp/mato-commit-msg-$$.txt",
+		"printf 'files\n' > /tmp/mato-files-changed-$$.txt",
+		"printf 'failure\n' > /tmp/mato-fail-line-$$.txt",
+	}, "\n")
+
+	out, err := runBash(t, t.TempDir(), nil, script)
+	if err != nil {
+		t.Fatalf("runBash: %v\noutput:\n%s", err, out)
+	}
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("ReadFile pid: %v", err)
+	}
+	pid := strings.TrimSpace(string(pidData))
+	for _, name := range []string{
+		"mato-ts-" + pid + ".txt",
+		"mato-sent-at-" + pid + ".txt",
+		"mato-commit-msg-" + pid + ".txt",
+		"mato-files-changed-" + pid + ".txt",
+		"mato-fail-line-" + pid + ".txt",
+	} {
+		path := filepath.Join(promptTempDir, name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be removed, stat err: %v", path, err)
+		}
+	}
 }
 
 func TestPromptVerifyClaim(t *testing.T) {
