@@ -1,7 +1,7 @@
 ---
-description: "Use when another agent needs a GPT-5.4 reviewer for implementation plan critiques. Review proposed plans, find gaps, challenge assumptions, and return structured feedback only."
-name: "plan-reviewer-gpt54"
-model: "GPT-5.4"
+description: "Use when another agent needs a GPT-5.6 Sol reviewer for implementation plan critiques. Review proposed plans, find gaps, challenge assumptions, and return structured feedback only."
+name: "plan-reviewer-gpt56-sol"
+model: "GPT-5.6 Sol"
 tools: [read, search, web]
 user-invocable: false
 ---

@@ -541,7 +541,7 @@ func TestRunOnce_UsesExistingWorkSessionResumeID(t *testing.T) {
 		image:              "ubuntu:24.04",
 		targetBranch:       "mato",
 	}
-	run := runContext{agentID: "agent1", prompt: "test prompt", model: "claude-opus-4.6", reasoningEffort: "high", timeout: time.Second}
+	run := runContext{agentID: "agent1", prompt: "test prompt", model: "claude-opus-5", reasoningEffort: "high", timeout: time.Second}
 	claimed := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task", Title: "Task", TaskPath: taskPath}
 
 	if err := runOnce(context.Background(), env, run, claimed); err != nil {
@@ -606,7 +606,7 @@ func TestRunOnce_BranchChangeRotatesWorkSessionID(t *testing.T) {
 		image:              "ubuntu:24.04",
 		targetBranch:       "mato",
 	}
-	run := runContext{agentID: "agent1", prompt: "test prompt", model: "claude-opus-4.6", reasoningEffort: "high", timeout: time.Second}
+	run := runContext{agentID: "agent1", prompt: "test prompt", model: "claude-opus-5", reasoningEffort: "high", timeout: time.Second}
 	// The claimed task uses a DIFFERENT branch than the seeded session.
 	claimed := &queue.ClaimedTask{Filename: "task.md", Branch: "task/task-new", Title: "Task", TaskPath: taskPath}
 

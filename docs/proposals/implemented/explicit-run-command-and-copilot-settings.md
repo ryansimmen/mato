@@ -74,7 +74,7 @@ The root command gets these changes:
   remains useful for true root-command positional-arg validation, but the
   verified behavior with the Cobra version used by this repo is that
   unresolved tokens such as `mato foo` and post-`--` tokens such as
-  `mato -- --model gpt-5.4` still surface as unknown-command errors during
+  `mato -- --model gpt-5.6-sol` still surface as unknown-command errors during
   command resolution rather than as `usageNoArgs` failures.
 - Remove the documentation-only flag definitions for `--branch`, `--dry-run`
   on root (these move to `mato run`).
@@ -83,8 +83,8 @@ Result: `mato` → help (exit 0), `mato --version` / `mato -v` →
 version (exit 0), `mato --help` → help (exit 0),
 `mato run` → orchestrator,
 `mato foo` → `unknown command "foo" for "mato"`,
-`mato -- --model gpt-5.4` → `unknown command "--model" for "mato"`,
-`mato --model gpt-5.4` → unknown flag error.
+`mato -- --model gpt-5.6-sol` → `unknown command "--model" for "mato"`,
+`mato --model gpt-5.6-sol` → unknown flag error.
 
 Root help text must not mention passthrough semantics. `mato run --help`
 should expose the new run-only flags.
@@ -229,13 +229,13 @@ Removed: `MATO_DEFAULT_MODEL`
 **Hardcoded defaults:**
 
 These are **new product decisions**. The current codebase has a single
-model default (`defaultCopilotModel = "claude-opus-4.6"` in
+model default (`defaultCopilotModel = "claude-opus-5"` in
 `internal/runner/runner.go:40`) used for both task and review agents, and
 no reasoning-effort concept. The values below are deliberate choices for
 the new split-model design:
 
-- task model: `"claude-opus-4.6"` (constant `runner.DefaultTaskModel`)
-- review model: `"gpt-5.4"` (constant `runner.DefaultReviewModel`)
+- task model: `"claude-opus-5"` (constant `runner.DefaultTaskModel`)
+- review model: `"gpt-5.6-sol"` (constant `runner.DefaultReviewModel`)
 - task reasoning effort: `"high"` (constant `runner.DefaultReasoningEffort`)
 - review reasoning effort: `"high"` (constant
   `runner.DefaultReasoningEffort`)
@@ -265,8 +265,8 @@ ReviewReasoningEffort string
 Add exported constants:
 
 ```go
-const DefaultTaskModel = "claude-opus-4.6"
-const DefaultReviewModel = "gpt-5.4"
+const DefaultTaskModel = "claude-opus-5"
+const DefaultReviewModel = "gpt-5.6-sol"
 const DefaultReasoningEffort = "high"
 ```
 
@@ -332,8 +332,8 @@ defaults are applied here — values are assigned directly from `opts`.
 
 ```
 === Resolved Settings ===
-  task model:              claude-opus-4.6
-  review model:            gpt-5.4
+  task model:              claude-opus-5
+  review model:            gpt-5.6-sol
   task reasoning effort:   high
   review reasoning effort: high
 ```
@@ -571,7 +571,7 @@ have their invocations updated in this step to keep the suite green.
    verified behavior in this repo is still `unknown command "foo" for
    "mato"` and `unknown command "--model" for "mato"` after `--`.
 10. Update root `Use`, `Short`, `Long`, and `Example` strings (remove
-    forwarding examples like `mato --model gpt-5.4`).
+    forwarding examples like `mato --model gpt-5.6-sol`).
 11. Add `root.AddCommand(newRunCmd())`.
 12. Add `validateReasoningEffort()` function.
 13. Implement `resolveStringOption` helper and update `resolveRunOptions` to
@@ -591,7 +591,7 @@ have their invocations updated in this step to keep the suite green.
 **Test changes — rewrite assertions:**
 
 19. Update `TestRootCmd_HelpListsCompletionCommand` (line 519) — remove
-    the assertion checking for `"mato --model gpt-5.4"`, replace with an
+    the assertion checking for `"mato --model gpt-5.6-sol"`, replace with an
     assertion for the new `run` subcommand in help output.
 20. Rewrite `TestRootCmd_InvalidBranchRejected` (line 1541) — stop using
     `extractKnownFlags`; use `mato run --branch=foo..bar` instead.
@@ -633,9 +633,9 @@ expecting the run path must change to
 40. `mato version` prints version via the existing version subcommand.
 41. Root unknown subcommand rejected (`mato foo` → `unknown command "foo"
     for "mato"`).
-42. Root `--` passthrough rejected (`mato -- --model gpt-5.4` →
+42. Root `--` passthrough rejected (`mato -- --model gpt-5.6-sol` →
     `unknown command "--model" for "mato"`).
-43. Run `--` passthrough rejected (`mato run -- --model gpt-5.4` →
+43. Run `--` passthrough rejected (`mato run -- --model gpt-5.6-sol` →
     `unknown command "--model" for "mato run"`).
 44. Table-driven precedence tests (CLI > env > config > default) for all
     four settings.
@@ -690,7 +690,7 @@ expecting the run path must change to
 - Quick Start: `mato` → `mato run`.
 - Useful flags: remove root-level `--model` forwarding, add `mato run`
   flags.
-- Docker section: remove `mato --model gpt-5.4`, add
+- Docker section: remove `mato --model gpt-5.6-sol`, add
   `mato run --task-model ...`.
 - Remove `--` passthrough description.
 - Update `.mato.yaml`: remove `default_model`, add new keys.
@@ -758,11 +758,11 @@ go build ./... && go vet ./... && go test -count=1 ./...
 - **Bare `mato`**: no positional args; `RunE` calls `cmd.Help()`, exit 0.
 - **`mato foo`**: verified Cobra behavior is `unknown command "foo" for
   "mato"`.
-- **`mato -- --model gpt-5.4`**: verified Cobra behavior is
+- **`mato -- --model gpt-5.6-sol`**: verified Cobra behavior is
   `unknown command "--model" for "mato"`.
-- **`mato --model gpt-5.4`**: Unknown flag → usage error.
+- **`mato --model gpt-5.6-sol`**: Unknown flag → usage error.
 - **`mato -v`**: Cobra's auto-added `-v` shorthand → version (exit 0).
-- **`mato run -- --model gpt-5.4`**: verified Cobra behavior is
+- **`mato run -- --model gpt-5.6-sol`**: verified Cobra behavior is
   `unknown command "--model" for "mato run"`.
 - **Unknown `mato run` flags**: Cobra rejects → `FlagErrorFunc` wraps with
   `UsageError`.
@@ -831,9 +831,9 @@ go build ./... && go vet ./... && go test -count=1 ./...
 - Unknown root flags rejected.
 - Root unknown subcommand rejected (`mato foo` → `unknown command "foo"
   for "mato"`).
-- Root `--` passthrough rejected (`mato -- --model gpt-5.4` →
+- Root `--` passthrough rejected (`mato -- --model gpt-5.6-sol` →
   `unknown command "--model" for "mato"`).
-- Run `--` passthrough rejected (`mato run -- --model gpt-5.4` →
+- Run `--` passthrough rejected (`mato run -- --model gpt-5.6-sol` →
   `unknown command "--model" for "mato run"`).
 - Persistent `--repo` in multiple positions.
 - `mato run --dry-run` calls `dryRunFn` with opts.

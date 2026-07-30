@@ -331,8 +331,8 @@ Config file: /work/repo/.mato.yml
 
 branch: main                         (config)
 docker_image: ghcr.io/acme/mato:dev  (env: MATO_DOCKER_IMAGE)
-task_model: claude-opus-4.6          (default)
-review_model: gpt-5.4                (config)
+task_model: claude-opus-5            (default)
+review_model: gpt-5.6-sol            (config)
 review_session_resume_enabled: true  (default)
 task_reasoning_effort: high          (config)
 review_reasoning_effort: high        (config)

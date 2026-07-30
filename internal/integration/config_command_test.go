@@ -10,7 +10,7 @@ import (
 
 func TestConfigCommand_TextAndJSON(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yml"), "branch: main\nreview_model: gpt-5.4\n")
+	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yml"), "branch: main\nreview_model: gpt-5.6-sol\n")
 
 	textOut, err := runMatoCommandWithEnv(t, []string{"MATO_BRANCH="}, "config", "--repo", repoRoot)
 	if err != nil {

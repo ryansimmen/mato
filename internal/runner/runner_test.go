@@ -550,12 +550,12 @@ func TestBuildDockerArgs_ModelAndReasoningEffort_FromRunContext(t *testing.T) {
 	}
 	baseRun := runContext{
 		prompt:          "do stuff",
-		model:           "claude-opus-4.6",
+		model:           "claude-opus-5",
 		reasoningEffort: "high",
 	}
 
 	joined := strings.Join(buildDockerArgs(baseEnv, baseRun, nil, nil), " ")
-	if !strings.Contains(joined, "--model claude-opus-4.6") {
+	if !strings.Contains(joined, "--model claude-opus-5") {
 		t.Fatalf("expected task model in docker args, got %s", joined)
 	}
 	if !strings.Contains(joined, "--reasoning-effort high") {
@@ -3397,8 +3397,8 @@ func TestDryRun_ResolvedSettingsOutput(t *testing.T) {
 	}
 
 	opts := RunOptions{
-		TaskModel:             "claude-sonnet-4",
-		ReviewModel:           "gpt-5.4",
+		TaskModel:             "claude-sonnet-5",
+		ReviewModel:           "gpt-5.6-sol",
 		TaskReasoningEffort:   "medium",
 		ReviewReasoningEffort: "xhigh",
 	}
@@ -3412,10 +3412,10 @@ func TestDryRun_ResolvedSettingsOutput(t *testing.T) {
 	if !strings.Contains(stdout, "=== Resolved Settings ===") {
 		t.Fatalf("missing Resolved Settings section, got:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "task model:") || !strings.Contains(stdout, "claude-sonnet-4") {
+	if !strings.Contains(stdout, "task model:") || !strings.Contains(stdout, "claude-sonnet-5") {
 		t.Fatalf("missing task model output, got:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "review model:") || !strings.Contains(stdout, "gpt-5.4") {
+	if !strings.Contains(stdout, "review model:") || !strings.Contains(stdout, "gpt-5.6-sol") {
 		t.Fatalf("missing review model output, got:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "task reasoning effort:") || !strings.Contains(stdout, "medium") {
@@ -5627,8 +5627,8 @@ func TestRun_CleanGitignoreAddsTasksDirEntry(t *testing.T) {
 func TestNormalizeAndValidateRunOptions(t *testing.T) {
 	t.Run("trims valid values", func(t *testing.T) {
 		opts, err := normalizeAndValidateRunOptions(RunOptions{
-			TaskModel:                  "  claude-opus-4.6  ",
-			ReviewModel:                "  gpt-5.4  ",
+			TaskModel:                  "  claude-opus-5  ",
+			ReviewModel:                "  gpt-5.6-sol  ",
 			ReviewSessionResumeEnabled: true,
 			TaskReasoningEffort:        "  high  ",
 			ReviewReasoningEffort:      "  medium  ",
@@ -5636,11 +5636,11 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("normalizeAndValidateRunOptions returned error: %v", err)
 		}
-		if opts.TaskModel != "claude-opus-4.6" {
-			t.Fatalf("TaskModel = %q, want %q", opts.TaskModel, "claude-opus-4.6")
+		if opts.TaskModel != "claude-opus-5" {
+			t.Fatalf("TaskModel = %q, want %q", opts.TaskModel, "claude-opus-5")
 		}
-		if opts.ReviewModel != "gpt-5.4" {
-			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, "gpt-5.4")
+		if opts.ReviewModel != "gpt-5.6-sol" {
+			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, "gpt-5.6-sol")
 		}
 		if opts.TaskReasoningEffort != "high" {
 			t.Fatalf("TaskReasoningEffort = %q, want %q", opts.TaskReasoningEffort, "high")
@@ -5713,11 +5713,11 @@ func TestNormalizeAndValidateRunOptions(t *testing.T) {
 }
 
 func TestDefaultConstants(t *testing.T) {
-	if config.DefaultTaskModel != "claude-opus-4.6" {
-		t.Fatalf("DefaultTaskModel = %q, want %q", config.DefaultTaskModel, "claude-opus-4.6")
+	if config.DefaultTaskModel != "claude-opus-5" {
+		t.Fatalf("DefaultTaskModel = %q, want %q", config.DefaultTaskModel, "claude-opus-5")
 	}
-	if config.DefaultReviewModel != "gpt-5.4" {
-		t.Fatalf("DefaultReviewModel = %q, want %q", config.DefaultReviewModel, "gpt-5.4")
+	if config.DefaultReviewModel != "gpt-5.6-sol" {
+		t.Fatalf("DefaultReviewModel = %q, want %q", config.DefaultReviewModel, "gpt-5.6-sol")
 	}
 	if config.DefaultReasoningEffort != "high" {
 		t.Fatalf("DefaultReasoningEffort = %q, want %q", config.DefaultReasoningEffort, "high")
@@ -5802,16 +5802,16 @@ func TestBuildEnvAndRunContext_CustomDockerImage(t *testing.T) {
 
 func TestBuildEnvAndRunContext_ModelOverrides(t *testing.T) {
 	tools := hostTools{homeDir: "/home/test", authEnv: []string{"GH_TOKEN=gh-token"}}
-	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-4", ReviewModel: "gpt-5.4", ReviewSessionResumeEnabled: false, TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour, Verbose: true})
+	env, run := buildEnvAndRunContext("main", tools, "a1", "n", "e", "/r", "/r/.mato", RunOptions{TaskModel: "claude-sonnet-5", ReviewModel: "gpt-5.6-sol", ReviewSessionResumeEnabled: false, TaskReasoningEffort: "medium", ReviewReasoningEffort: "xhigh", AgentTimeout: time.Hour, Verbose: true})
 
-	if run.model != "claude-sonnet-4" {
-		t.Fatalf("run.model = %q, want %q", run.model, "claude-sonnet-4")
+	if run.model != "claude-sonnet-5" {
+		t.Fatalf("run.model = %q, want %q", run.model, "claude-sonnet-5")
 	}
 	if run.reasoningEffort != "medium" {
 		t.Fatalf("run.reasoningEffort = %q, want %q", run.reasoningEffort, "medium")
 	}
-	if env.reviewModel != "gpt-5.4" {
-		t.Fatalf("env.reviewModel = %q, want %q", env.reviewModel, "gpt-5.4")
+	if env.reviewModel != "gpt-5.6-sol" {
+		t.Fatalf("env.reviewModel = %q, want %q", env.reviewModel, "gpt-5.6-sol")
 	}
 	if env.reviewReasoningEffort != "xhigh" {
 		t.Fatalf("env.reviewReasoningEffort = %q, want %q", env.reviewReasoningEffort, "xhigh")
@@ -5855,7 +5855,7 @@ func TestRunCopilotCommand_AuthEnvStaysOffCommandLine(t *testing.T) {
 	run := runContext{
 		agentID:         "agent-1",
 		prompt:          "test prompt",
-		model:           "gpt-5.4",
+		model:           "gpt-5.6-sol",
 		reasoningEffort: "low",
 		timeout:         time.Second,
 	}
@@ -5911,7 +5911,7 @@ func TestRunCopilotCommand_TTYUsesTerminalWriters(t *testing.T) {
 	run := runContext{
 		agentID:         "agent-1",
 		prompt:          "test prompt",
-		model:           "gpt-5.4",
+		model:           "gpt-5.6-sol",
 		reasoningEffort: "low",
 		timeout:         time.Second,
 	}
@@ -6613,8 +6613,8 @@ func TestDryRunRenderer_RenderResolvedSettings(t *testing.T) {
 	var buf bytes.Buffer
 	r := newTestRenderer(&buf)
 	opts := RunOptions{
-		TaskModel:             "claude-sonnet-4",
-		ReviewModel:           "gpt-5.4",
+		TaskModel:             "claude-sonnet-5",
+		ReviewModel:           "gpt-5.6-sol",
 		TaskReasoningEffort:   "high",
 		ReviewReasoningEffort: "medium",
 	}
@@ -6624,7 +6624,7 @@ func TestDryRunRenderer_RenderResolvedSettings(t *testing.T) {
 	if !strings.Contains(out, "=== Resolved Settings ===") {
 		t.Errorf("missing section header, got:\n%s", out)
 	}
-	for _, want := range []string{"claude-sonnet-4", "gpt-5.4", "high", "medium"} {
+	for _, want := range []string{"claude-sonnet-5", "gpt-5.6-sol", "high", "medium"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in output:\n%s", want, out)
 		}
@@ -6832,32 +6832,32 @@ func TestDryRun_NarrowWidthTruncatesViaCommandPath(t *testing.T) {
 }
 
 func TestDryRunRenderer_NarrowWidth_ResolvedSettings(t *testing.T) {
-	// At width 40 the label column (24) + indent (2) + separator (1) leaves
-	// only 13 chars for values. A model name like "claude-opus-4.6" (15 chars)
+	// At width 38 the label column (24) + indent (2) + separator (1) leaves
+	// only 11 chars for values. A model name like "claude-opus-5" (13 chars)
 	// should be truncated.
 	var buf bytes.Buffer
 	r := &DryRunRenderer{
 		W:     &buf,
 		Color: ui.NewColorSet(),
-		Width: 40,
+		Width: 38,
 	}
 	r.RenderResolvedSettings(RunOptions{
-		TaskModel:             "claude-opus-4.6",
-		ReviewModel:           "gpt-5.4",
+		TaskModel:             "claude-opus-5",
+		ReviewModel:           "gpt-5.6-sol",
 		TaskReasoningEffort:   "high",
 		ReviewReasoningEffort: "high",
 	})
 	out := buf.String()
 
-	// "claude-opus-4.6" is 15 chars but only 13 fit; should be truncated.
-	if strings.Contains(out, "claude-opus-4.6") {
-		t.Errorf("expected task model to be truncated at width 40, got:\n%s", out)
+	// "claude-opus-5" is 13 chars but only 11 fit; should be truncated.
+	if strings.Contains(out, "claude-opus-5") {
+		t.Errorf("expected task model to be truncated at width 38, got:\n%s", out)
 	}
 	if !strings.Contains(out, "…") {
 		t.Errorf("expected truncation marker in narrow Resolved Settings, got:\n%s", out)
 	}
-	// "gpt-5.4" (7 chars) fits in 13 columns and should appear in full.
-	if !strings.Contains(out, "gpt-5.4") {
+	// "gpt-5.6-sol" (11 chars) fits and should appear in full.
+	if !strings.Contains(out, "gpt-5.6-sol") {
 		t.Errorf("expected short model name to appear untruncated, got:\n%s", out)
 	}
 }
