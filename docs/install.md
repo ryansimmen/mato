@@ -60,7 +60,7 @@ rm -f "$HOME/.local/bin/mato"
 sudo rm -f /usr/local/bin/mato
 ```
 
-`gh skill` currently provides `install`, `preview`, `publish`, `search`, and `update`, but no uninstall/remove command. If you installed the bundled skill, remove its installed directory for your agent host. Common locations include:
+As of `gh` v2.96.0, `gh skill` has no uninstall/remove command. If you installed the bundled skill, remove its installed directory for your agent host. Common locations include:
 
 ```bash
 rm -rf "$HOME/.copilot/skills/mato"
