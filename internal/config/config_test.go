@@ -15,11 +15,11 @@ func TestDefaultConstants(t *testing.T) {
 	if DefaultDockerImage != "ubuntu:24.04" {
 		t.Fatalf("DefaultDockerImage = %q, want %q", DefaultDockerImage, "ubuntu:24.04")
 	}
-	if DefaultTaskModel != "claude-opus-4.6" {
-		t.Fatalf("DefaultTaskModel = %q, want %q", DefaultTaskModel, "claude-opus-4.6")
+	if DefaultTaskModel != "claude-opus-5" {
+		t.Fatalf("DefaultTaskModel = %q, want %q", DefaultTaskModel, "claude-opus-5")
 	}
-	if DefaultReviewModel != "gpt-5.4" {
-		t.Fatalf("DefaultReviewModel = %q, want %q", DefaultReviewModel, "gpt-5.4")
+	if DefaultReviewModel != "gpt-5.6-sol" {
+		t.Fatalf("DefaultReviewModel = %q, want %q", DefaultReviewModel, "gpt-5.6-sol")
 	}
 	if DefaultReasoningEffort != "high" {
 		t.Fatalf("DefaultReasoningEffort = %q, want %q", DefaultReasoningEffort, "high")
@@ -38,8 +38,8 @@ func TestLoad_AllFields(t *testing.T) {
 	content := strings.Join([]string{
 		"branch: main",
 		"docker_image: ubuntu:24.04",
-		"task_model: claude-sonnet-4",
-		"review_model: gpt-5.4",
+		"task_model: claude-sonnet-5",
+		"review_model: gpt-5.6-sol",
 		"review_session_resume_enabled: false",
 		"task_reasoning_effort: high",
 		"review_reasoning_effort: medium",
@@ -66,11 +66,11 @@ func TestLoad_AllFields(t *testing.T) {
 	if cfg.DockerImage == nil || *cfg.DockerImage != "ubuntu:24.04" {
 		t.Fatalf("DockerImage = %v, want %q", cfg.DockerImage, "ubuntu:24.04")
 	}
-	if cfg.TaskModel == nil || *cfg.TaskModel != "claude-sonnet-4" {
-		t.Fatalf("TaskModel = %v, want %q", cfg.TaskModel, "claude-sonnet-4")
+	if cfg.TaskModel == nil || *cfg.TaskModel != "claude-sonnet-5" {
+		t.Fatalf("TaskModel = %v, want %q", cfg.TaskModel, "claude-sonnet-5")
 	}
-	if cfg.ReviewModel == nil || *cfg.ReviewModel != "gpt-5.4" {
-		t.Fatalf("ReviewModel = %v, want %q", cfg.ReviewModel, "gpt-5.4")
+	if cfg.ReviewModel == nil || *cfg.ReviewModel != "gpt-5.6-sol" {
+		t.Fatalf("ReviewModel = %v, want %q", cfg.ReviewModel, "gpt-5.6-sol")
 	}
 	if cfg.ReviewSessionResume == nil || *cfg.ReviewSessionResume {
 		t.Fatalf("ReviewSessionResume = %v, want false", cfg.ReviewSessionResume)
@@ -225,7 +225,7 @@ func TestLoad_UnknownKeys(t *testing.T) {
 func TestLoad_DefaultModelRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".mato.yaml")
-	if err := os.WriteFile(path, []byte("default_model: claude-sonnet-4\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("default_model: claude-sonnet-5\n"), 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
 

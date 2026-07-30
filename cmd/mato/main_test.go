@@ -247,7 +247,7 @@ func TestRootCmd_PositionalArgsRejected(t *testing.T) {
 
 func TestRootCmd_DoubleDashRejected(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--", "--model", "gpt-5.4"})
+	cmd.SetArgs([]string{"--", "--model", "gpt-5.6-sol"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -259,7 +259,7 @@ func TestRootCmd_DoubleDashRejected(t *testing.T) {
 
 func TestRootCmd_UnknownRootFlagRejected(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--model", "gpt-5.4"})
+	cmd.SetArgs([]string{"--model", "gpt-5.6-sol"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -271,7 +271,7 @@ func TestRootCmd_UnknownRootFlagRejected(t *testing.T) {
 
 func TestRunCmd_DoubleDashRejected(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"run", "--", "--model", "gpt-5.4"})
+	cmd.SetArgs([]string{"run", "--", "--model", "gpt-5.6-sol"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -3022,12 +3022,12 @@ func TestResolveRunOptions(t *testing.T) {
 
 	t.Run("uses config values when env unset", func(t *testing.T) {
 		resumeDisabled := false
-		resolved, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-4"), stringPtr("gpt-5.4"), &resumeDisabled, stringPtr("medium"), stringPtr("xhigh"), stringPtr("45m"), stringPtr("5m"))})
+		resolved, err := configresolve.ResolveRunConfig(configresolve.RunFlags{}, config.LoadResult{Config: configFixtureWithValues(stringPtr("custom:latest"), stringPtr("claude-sonnet-5"), stringPtr("gpt-5.6-sol"), &resumeDisabled, stringPtr("medium"), stringPtr("xhigh"), stringPtr("45m"), stringPtr("5m"))})
 		if err != nil {
 			t.Fatalf("resolveRunOptions: %v", err)
 		}
 		opts := runOptionsFromResolvedConfig(resolved)
-		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-5" || opts.ReviewModel != "gpt-5.6-sol" || opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "xhigh" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
 	})
@@ -3387,8 +3387,8 @@ func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
 	writeRepoConfig(t, repoRoot, strings.Join([]string{
 		"docker_image: custom:latest",
-		"task_model: claude-sonnet-4",
-		"review_model: gpt-5.4",
+		"task_model: claude-sonnet-5",
+		"review_model: gpt-5.6-sol",
 		"task_reasoning_effort: medium",
 		"review_reasoning_effort: high",
 		"agent_timeout: 45m",
@@ -3400,7 +3400,7 @@ func TestConfigFile_RunOptionsFromConfig(t *testing.T) {
 	defer func() { runFn = origRunFn }()
 
 	runFn = func(_ string, _ string, opts runner.RunOptions) error {
-		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-4" || opts.ReviewModel != "gpt-5.4" || !opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "high" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
+		if opts.DockerImage != "custom:latest" || opts.TaskModel != "claude-sonnet-5" || opts.ReviewModel != "gpt-5.6-sol" || !opts.ReviewSessionResumeEnabled || opts.TaskReasoningEffort != "medium" || opts.ReviewReasoningEffort != "high" || opts.AgentTimeout != 45*time.Minute || opts.RetryCooldown != 5*time.Minute {
 			t.Fatalf("opts = %+v", opts)
 		}
 		return nil
@@ -3443,8 +3443,8 @@ func TestRunCmd_TaskModelFlagOverridesResolvedOptions(t *testing.T) {
 	defer func() { runFn = origRunFn }()
 
 	runFn = func(_ string, _ string, opts runner.RunOptions) error {
-		if opts.TaskModel != "claude-sonnet-4" {
-			t.Fatalf("TaskModel = %q, want %q", opts.TaskModel, "claude-sonnet-4")
+		if opts.TaskModel != "claude-sonnet-5" {
+			t.Fatalf("TaskModel = %q, want %q", opts.TaskModel, "claude-sonnet-5")
 		}
 		if opts.ReviewModel != config.DefaultReviewModel {
 			t.Fatalf("ReviewModel = %q, want %q", opts.ReviewModel, config.DefaultReviewModel)
@@ -3459,7 +3459,7 @@ func TestRunCmd_TaskModelFlagOverridesResolvedOptions(t *testing.T) {
 	}
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--task-model", "claude-sonnet-4"})
+	cmd.SetArgs([]string{"run", "--repo", repoRoot, "--task-model", "claude-sonnet-5"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -3738,13 +3738,13 @@ func resolvedRunConfigFixture(dockerImage, taskModel, reviewModel string, review
 }
 
 func TestRunOptionsFromResolvedConfig(t *testing.T) {
-	runCfg := resolvedRunConfigFixture("custom:latest", "claude-sonnet-4", "gpt-5.4", false, "medium", "xhigh", 45*time.Minute, 90*time.Second)
+	runCfg := resolvedRunConfigFixture("custom:latest", "claude-sonnet-5", "gpt-5.6-sol", false, "medium", "xhigh", 45*time.Minute, 90*time.Second)
 
 	got := runOptionsFromResolvedConfig(runCfg)
 	want := runner.RunOptions{
 		DockerImage:                "custom:latest",
-		TaskModel:                  "claude-sonnet-4",
-		ReviewModel:                "gpt-5.4",
+		TaskModel:                  "claude-sonnet-5",
+		ReviewModel:                "gpt-5.6-sol",
 		ReviewSessionResumeEnabled: false,
 		TaskReasoningEffort:        "medium",
 		ReviewReasoningEffort:      "xhigh",

@@ -80,8 +80,8 @@ func TestResolveRunConfig(t *testing.T) {
 	t.Run("config values", func(t *testing.T) {
 		resolved, err := ResolveRunConfig(RunFlags{}, config.LoadResult{Config: config.Config{
 			DockerImage:           stringPtr("custom:latest"),
-			TaskModel:             stringPtr("claude-sonnet-4"),
-			ReviewModel:           stringPtr("gpt-5.4"),
+			TaskModel:             stringPtr("claude-sonnet-5"),
+			ReviewModel:           stringPtr("gpt-5.6-sol"),
 			ReviewSessionResume:   boolPtr(false),
 			TaskReasoningEffort:   stringPtr("medium"),
 			ReviewReasoningEffort: stringPtr("xhigh"),
@@ -94,7 +94,7 @@ func TestResolveRunConfig(t *testing.T) {
 		if resolved.DockerImage.Source != SourceConfig || resolved.TaskModel.Source != SourceConfig || resolved.AgentTimeout.Source != SourceConfig {
 			t.Fatalf("unexpected sources: %+v", resolved)
 		}
-		if resolved.DockerImage.Value != "custom:latest" || resolved.TaskModel.Value != "claude-sonnet-4" || resolved.AgentTimeout.Value != 45*time.Minute || resolved.RetryCooldown.Value != 5*time.Minute {
+		if resolved.DockerImage.Value != "custom:latest" || resolved.TaskModel.Value != "claude-sonnet-5" || resolved.AgentTimeout.Value != 45*time.Minute || resolved.RetryCooldown.Value != 5*time.Minute {
 			t.Fatalf("resolved = %+v", resolved)
 		}
 	})
@@ -115,11 +115,11 @@ func TestResolveRunConfig(t *testing.T) {
 	})
 
 	t.Run("flag overrides only real run flags", func(t *testing.T) {
-		resolved, err := ResolveRunConfig(RunFlags{TaskModel: "claude-sonnet-4"}, config.LoadResult{})
+		resolved, err := ResolveRunConfig(RunFlags{TaskModel: "claude-sonnet-5"}, config.LoadResult{})
 		if err != nil {
 			t.Fatalf("ResolveRunConfig: %v", err)
 		}
-		if resolved.TaskModel.Source != SourceFlag || resolved.TaskModel.Value != "claude-sonnet-4" {
+		if resolved.TaskModel.Source != SourceFlag || resolved.TaskModel.Value != "claude-sonnet-5" {
 			t.Fatalf("TaskModel = %+v", resolved.TaskModel)
 		}
 		if resolved.DockerImage.Source != SourceDefault {

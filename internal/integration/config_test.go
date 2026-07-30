@@ -86,7 +86,7 @@ func TestConfigFile_DryRunInvalidBranchFromConfig(t *testing.T) {
 
 func TestConfigFile_DefaultModelRejected(t *testing.T) {
 	repoRoot := testutil.SetupRepo(t)
-	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yaml"), "default_model: claude-sonnet-4\n")
+	testutil.WriteFile(t, filepath.Join(repoRoot, ".mato.yaml"), "default_model: claude-sonnet-5\n")
 
 	out, err := runMatoCommand(t, "run", "--repo", repoRoot, "--dry-run")
 	if err == nil {

@@ -630,11 +630,11 @@ func TestBuildDockerArgs_ModelAndReasoningEffort(t *testing.T) {
 		image:   "ubuntu:24.04",
 		workdir: "/workspace",
 	}
-	run := runContext{prompt: "test", model: "claude-opus-4.6", reasoningEffort: "high"}
+	run := runContext{prompt: "test", model: "claude-opus-5", reasoningEffort: "high"}
 
 	args := buildDockerArgs(env, run, nil, nil)
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "--model claude-opus-4.6") {
+	if !strings.Contains(joined, "--model claude-opus-5") {
 		t.Fatalf("expected task model in docker args, got: %s", joined)
 	}
 	if !strings.Contains(joined, "--reasoning-effort high") {
@@ -648,7 +648,7 @@ func TestBuildDockerArgs_NarrowsCopilotPermissions(t *testing.T) {
 		image:   "ubuntu:24.04",
 		workdir: "/workspace",
 	}
-	run := runContext{prompt: "test", model: "claude-opus-4.6", reasoningEffort: "high"}
+	run := runContext{prompt: "test", model: "claude-opus-5", reasoningEffort: "high"}
 
 	args := buildDockerArgs(env, run, nil, nil)
 	joined := strings.Join(args, " ")
@@ -685,11 +685,11 @@ func TestBuildDockerArgs_PromptInArgs(t *testing.T) {
 
 func TestBuildDockerArgs_DifferentModelValues(t *testing.T) {
 	env := envConfig{homeDir: "/home/test", image: "ubuntu:24.04", workdir: "/workspace"}
-	run := runContext{prompt: "test", model: "gpt-5.4", reasoningEffort: "xhigh"}
+	run := runContext{prompt: "test", model: "gpt-5.6-sol", reasoningEffort: "xhigh"}
 
 	args := buildDockerArgs(env, run, nil, nil)
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "--model gpt-5.4") {
+	if !strings.Contains(joined, "--model gpt-5.6-sol") {
 		t.Fatalf("expected review model in docker args, got: %s", joined)
 	}
 	if !strings.Contains(joined, "--reasoning-effort xhigh") {
@@ -699,7 +699,7 @@ func TestBuildDockerArgs_DifferentModelValues(t *testing.T) {
 
 func TestBuildDockerArgs_AppendsResumeWhenSessionIDSet(t *testing.T) {
 	env := envConfig{homeDir: "/home/test", image: "ubuntu:24.04", workdir: "/workspace"}
-	run := runContext{prompt: "test", model: "gpt-5.4", reasoningEffort: "high", resumeSessionID: "session-123"}
+	run := runContext{prompt: "test", model: "gpt-5.6-sol", reasoningEffort: "high", resumeSessionID: "session-123"}
 
 	joined := strings.Join(buildDockerArgs(env, run, nil, nil), " ")
 	if !strings.Contains(joined, "copilot --resume=session-123 -p test") {
@@ -709,7 +709,7 @@ func TestBuildDockerArgs_AppendsResumeWhenSessionIDSet(t *testing.T) {
 
 func TestBuildDockerArgs_OmitsResumeWhenSessionIDEmpty(t *testing.T) {
 	env := envConfig{homeDir: "/home/test", image: "ubuntu:24.04", workdir: "/workspace"}
-	run := runContext{prompt: "test", model: "gpt-5.4", reasoningEffort: "high"}
+	run := runContext{prompt: "test", model: "gpt-5.6-sol", reasoningEffort: "high"}
 
 	joined := strings.Join(buildDockerArgs(env, run, nil, nil), " ")
 	if strings.Contains(joined, "--resume=") {

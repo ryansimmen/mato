@@ -398,8 +398,8 @@ package config
 const (
     DefaultBranch          = "mato"
     DefaultDockerImage     = "ubuntu:24.04"
-    DefaultTaskModel       = "claude-opus-4.6"
-    DefaultReviewModel     = "gpt-5.4"
+    DefaultTaskModel       = "claude-opus-5"
+    DefaultReviewModel     = "gpt-5.6-sol"
     DefaultReasoningEffort = "high"
 )
 

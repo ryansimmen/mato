@@ -30,7 +30,7 @@ Install the local checkout:
 make install
 ```
 
-`make install` builds and installs the `mato` binary into `GOBIN`. The bundled `mato` skill (`skills/mato/SKILL.md`) is published separately and installed via [`gh skill`](https://cli.github.com/manual/gh_skill) (requires `gh` v2.90.0 or later):
+`make install` builds and installs the `mato` binary into `GOBIN`. The bundled `mato` skill (`skills/mato/SKILL.md`) is published separately and installed via [`gh skill`](https://cli.github.com/manual/gh_skill) (requires `gh` v2.91.0 or later):
 
 ```bash
 # Install from the local checkout (handy while iterating on the skill)
@@ -38,6 +38,9 @@ gh skill install . mato --from-local --scope user
 
 # Or install the published version from GitHub
 gh skill install ryansimmen/mato mato --scope user
+
+# Target OpenCode explicitly
+gh skill install ryansimmen/mato mato --agent opencode --scope user
 ```
 
 After editing `skills/mato/SKILL.md`, validate against the [agentskills.io spec](https://agentskills.io/specification) before opening a PR:
