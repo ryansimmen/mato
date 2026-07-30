@@ -38,7 +38,7 @@ Runtime requirements for operators:
 
 - Linux
 - Docker
-- [GitHub CLI](https://github.com/cli/cli#installation) (`gh` v2.90.0 or later)
+- [GitHub CLI](https://github.com/cli/cli#installation) (`gh` v2.91.0 or later)
 - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli)
 
 Tooling for building from source or contributing is documented in [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
@@ -51,7 +51,7 @@ Tooling for building from source or contributing is documented in [CONTRIBUTING.
 curl -fsSL https://raw.githubusercontent.com/ryansimmen/mato/main/scripts/install.sh | bash
 ```
 
-Install the bundled task-planning skill with the [GitHub CLI](https://cli.github.com/) (`gh` v2.90.0 or later):
+Install the bundled task-planning skill with the [GitHub CLI](https://cli.github.com/) (`gh` v2.91.0 or later):
 
 ```bash
 gh skill install ryansimmen/mato mato --scope user
@@ -138,9 +138,11 @@ Next Up
 
 ## Skill Installation Notes
 
-`gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code). Use `--agent claude-code|cursor|codex|gemini|antigravity` to target a non-Copilot host. Run `gh skill update mato` to pick up changes after a new release.
+`gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code, or `~/.config/opencode/skills/mato/` for OpenCode). Use `--agent opencode --scope user` to install for OpenCode, or select another host listed by `gh skill install --help`. Run `gh skill update mato` to pick up changes after a new release.
 
-OpenCode is not yet a `gh skill`-supported host; install there with `gh skill install ryansimmen/mato mato --dir ~/.config/opencode/skills` as a workaround.
+```bash
+gh skill install ryansimmen/mato mato --agent opencode --scope user
+```
 
 See [Configuration](docs/configuration.md) for all flags, environment variables, and `.mato.yaml` options.
 

@@ -70,24 +70,24 @@ rm -rf "$HOME/.config/opencode/skills/mato"
 
 ## Bundled `mato` Skill
 
-Install the task-planning skill with the [GitHub CLI](https://cli.github.com/) (`gh` v2.90.0 or later):
+Install the task-planning skill with the [GitHub CLI](https://cli.github.com/) (`gh` v2.91.0 or later):
 
 ```bash
 gh skill install ryansimmen/mato mato --scope user
 ```
 
-`gh skill` writes to the appropriate per-host directory, such as `~/.copilot/skills/mato/` for GitHub Copilot or `~/.claude/skills/mato/` for Claude Code. To target another supported host, pass `--agent claude-code|cursor|codex|gemini|antigravity`.
+`gh skill` writes to the appropriate per-host directory, such as `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code, or `~/.config/opencode/skills/mato/` for OpenCode. To target a non-Copilot host, pass its identifier from `gh skill install --help`.
+
+For OpenCode, install at user scope with:
+
+```bash
+gh skill install ryansimmen/mato mato --agent opencode --scope user
+```
 
 Update the installed skill after new releases with:
 
 ```bash
 gh skill update mato
-```
-
-OpenCode is not yet a `gh skill`-supported host. Install there with an explicit directory as a workaround:
-
-```bash
-gh skill install ryansimmen/mato mato --dir ~/.config/opencode/skills
 ```
 
 ## Authentication
