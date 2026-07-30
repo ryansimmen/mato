@@ -24,7 +24,7 @@ Install `mato` from source with:
 go install github.com/ryansimmen/mato/cmd/mato@latest
 ```
 
-`make install` remains available for contributors and just builds and installs the `mato` binary. The bundled `mato` skill (`skills/mato/SKILL.md`) is published separately and installed via [`gh skill install ryansimmen/mato mato --scope user`](https://cli.github.com/manual/gh_skill_install) (requires `gh` v2.90.0 or later). `gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code) and tracks provenance in the installed SKILL.md frontmatter so `gh skill update mato` can pull in upstream changes.
+`make install` remains available for contributors and just builds and installs the `mato` binary. The bundled `mato` skill (`skills/mato/SKILL.md`) is published separately and installed via [`gh skill install ryansimmen/mato mato --scope user`](https://cli.github.com/manual/gh_skill_install) (requires `gh` v2.91.0 or later). `gh skill` writes to the appropriate per-host directory (e.g. `~/.copilot/skills/mato/` for GitHub Copilot, `~/.claude/skills/mato/` for Claude Code, or `~/.config/opencode/skills/mato/` with `--agent opencode`) and tracks provenance in the installed SKILL.md frontmatter so `gh skill update mato` can pull in upstream changes.
 
 ## CLI Usage
 ```text
