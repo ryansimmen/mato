@@ -1,7 +1,7 @@
 ---
-description: "Use when another agent needs a GPT-5.4 participant for feature research debates. Research the repo and the web, argue for high-impact features, critique alternatives, and return structured debate positions only."
-name: "feature-debate-gpt54"
-model: "GPT-5.4"
+description: "Use when another agent needs a GPT-5.6 Sol participant for feature research debates. Research the repo and the web, argue for high-impact features, critique alternatives, and return structured debate positions only."
+name: "feature-debate-gpt56-sol"
+model: "GPT-5.6 Sol"
 tools: [read, search, web]
 user-invocable: false
 ---

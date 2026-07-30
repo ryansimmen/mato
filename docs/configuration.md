@@ -77,8 +77,8 @@ All fields are optional:
 ```yaml
 branch: main
 docker_image: ubuntu:24.04
-task_model: claude-opus-4.6
-review_model: gpt-5.4
+task_model: claude-opus-5
+review_model: gpt-5.6-sol
 review_session_resume_enabled: true
 task_reasoning_effort: high
 review_reasoning_effort: high
@@ -128,8 +128,8 @@ frontmatter is authoritative over the injected `MATO_MAX_RETRIES` default.
 | branch | `mato run --branch`, `mato init --branch` | `MATO_BRANCH` | `branch` | `mato` |
 | run verbose diagnostics | `mato run --verbose` | — | — | `false` |
 | docker image | — | `MATO_DOCKER_IMAGE` | `docker_image` | `ubuntu:24.04` |
-| task model | `mato run --task-model` | `MATO_TASK_MODEL` | `task_model` | `claude-opus-4.6` |
-| review model | `mato run --review-model` | `MATO_REVIEW_MODEL` | `review_model` | `gpt-5.4` |
+| task model | `mato run --task-model` | `MATO_TASK_MODEL` | `task_model` | `claude-opus-5` |
+| review model | `mato run --review-model` | `MATO_REVIEW_MODEL` | `review_model` | `gpt-5.6-sol` |
 | review session resume | — | `MATO_REVIEW_SESSION_RESUME_ENABLED` | `review_session_resume_enabled` | `true` |
 | task reasoning effort | `mato run --task-reasoning-effort` | `MATO_TASK_REASONING_EFFORT` | `task_reasoning_effort` | `high` |
 | review reasoning effort | `mato run --review-reasoning-effort` | `MATO_REVIEW_REASONING_EFFORT` | `review_reasoning_effort` | `high` |
@@ -157,8 +157,8 @@ Long flags support both `--flag value` and `--flag=value` forms.
 | `--once` | `mato run` | `false` | Run exactly one host poll iteration, then exit. This can claim a task, process one existing review from the iteration snapshot, and merge ready tasks, but it does not keep polling to drain follow-on review or merge work. |
 | `--until-idle` | `mato run` | `false` | Keep polling until no immediately claimable backlog tasks remain, no review candidates remain, and no tasks remain in `ready-to-merge/`, then exit. A paused but otherwise empty queue is considered idle. |
 | `--verbose` | `mato run` | `false` | Write operator-oriented diagnostics to stderr. Live runs print one startup summary plus one concise poll summary per cycle; `--dry-run --verbose` only emits dry-run startup diagnostics. |
-| `--task-model <model>` | `mato run` | `claude-opus-4.6` | Copilot model used for task agents. |
-| `--review-model <model>` | `mato run` | `gpt-5.4` | Copilot model used for review agents. |
+| `--task-model <model>` | `mato run` | `claude-opus-5` | Copilot model used for task agents. |
+| `--review-model <model>` | `mato run` | `gpt-5.6-sol` | Copilot model used for review agents. |
 | `--task-reasoning-effort <level>` | `mato run` | `high` | Reasoning effort for task agents. Valid values: `low`, `medium`, `high`, `xhigh`. |
 | `--review-reasoning-effort <level>` | `mato run` | `high` | Reasoning effort for review agents. Valid values: `low`, `medium`, `high`, `xhigh`. |
 | `--help`, `-h` | all commands | none | Show help and exit. |
@@ -443,8 +443,8 @@ vars.
 | --- | --- | --- |
 | `MATO_BRANCH` | `mato` | Default target branch for `mato run` and `mato init` when `--branch` is not passed. Overrides `.mato.yaml` `branch`. Empty is treated as unset; whitespace-only values are rejected. |
 | `MATO_DOCKER_IMAGE` | `ubuntu:24.04` | Docker image used for agent containers. Overrides `.mato.yaml` `docker_image`. |
-| `MATO_TASK_MODEL` | `claude-opus-4.6` | Default Copilot model used for task agents. Overrides `.mato.yaml` `task_model`. |
-| `MATO_REVIEW_MODEL` | `gpt-5.4` | Default Copilot model used for review agents. Overrides `.mato.yaml` `review_model`. |
+| `MATO_TASK_MODEL` | `claude-opus-5` | Default Copilot model used for task agents. Overrides `.mato.yaml` `task_model`. |
+| `MATO_REVIEW_MODEL` | `gpt-5.6-sol` | Default Copilot model used for review agents. Overrides `.mato.yaml` `review_model`. |
 | `MATO_REVIEW_SESSION_RESUME_ENABLED` | `true` | Enables durable Copilot session resume for review agents. Accepts `true`/`false` style boolean values. Overrides `.mato.yaml` `review_session_resume_enabled`. There is intentionally no CLI flag for this setting. |
 | `MATO_TASK_REASONING_EFFORT` | `high` | Reasoning effort for task agents. Overrides `.mato.yaml` `task_reasoning_effort`. Valid values: `low`, `medium`, `high`, `xhigh`. |
 | `MATO_REVIEW_REASONING_EFFORT` | `high` | Reasoning effort for review agents. Overrides `.mato.yaml` `review_reasoning_effort`. Valid values: `low`, `medium`, `high`, `xhigh`. |

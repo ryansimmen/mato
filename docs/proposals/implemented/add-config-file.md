@@ -63,8 +63,8 @@ branch: main
 # Docker image for agent containers (default: ubuntu:24.04)
 docker_image: ubuntu:24.04
 
-# Default Copilot model (default: claude-opus-4.6)
-default_model: claude-sonnet-4
+# Default Copilot model (default: claude-opus-5)
+default_model: claude-sonnet-5
 
 # Maximum wall-clock time per agent run (default: 30m)
 # Accepts Go duration strings. Must be positive.
@@ -226,7 +226,7 @@ resolved repo root.
 - **docker_image**: Stored in `envConfig.image`. If `opts.DockerImage != ""`,
   use it; else `"ubuntu:24.04"`.
 - **default_model**: If `opts.DefaultModel != ""`, use it; else
-  `"claude-opus-4.6"`.
+  `"claude-opus-5"`.
 - **agent_timeout**: If `opts.AgentTimeout > 0`, use it; else
   `defaultAgentTimeout` (30m).
 - **retry_cooldown**: Passed to `queue.SelectAndClaimTask()` as a `cooldown`
@@ -329,7 +329,7 @@ it.
 | branch | `--branch` | — | `branch` | `"mato"` |
 | dry_run | `--dry-run` | — | — | `false` |
 | docker_image | — | `MATO_DOCKER_IMAGE` | `docker_image` | `ubuntu:24.04` |
-| default_model | `--model`* | `MATO_DEFAULT_MODEL` | `default_model` | `claude-opus-4.6` |
+| default_model | `--model`* | `MATO_DEFAULT_MODEL` | `default_model` | `claude-opus-5` |
 | agent_timeout | — | `MATO_AGENT_TIMEOUT` | `agent_timeout` | `30m` |
 | retry_cooldown | — | `MATO_RETRY_COOLDOWN` | `retry_cooldown` | `2m` |
 

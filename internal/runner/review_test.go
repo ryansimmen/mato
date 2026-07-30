@@ -1597,7 +1597,7 @@ func TestRunReview_UsesReviewModelAndReasoningEffort(t *testing.T) {
 	env := envConfig{
 		workdir:               "/workspace",
 		repoRoot:              repoRoot,
-		reviewModel:           "gpt-5.4",
+		reviewModel:           "gpt-5.6-sol",
 		reviewReasoningEffort: "xhigh",
 		homeDir:               "/home/test",
 		image:                 "ubuntu:24.04",
@@ -1613,7 +1613,7 @@ func TestRunReview_UsesReviewModelAndReasoningEffort(t *testing.T) {
 	}
 
 	joined := strings.Join(capturedArgs, " ")
-	if !strings.Contains(joined, "--model gpt-5.4") {
+	if !strings.Contains(joined, "--model gpt-5.6-sol") {
 		t.Fatalf("expected review model in docker args, got %s", joined)
 	}
 	if !strings.Contains(joined, "--reasoning-effort xhigh") {
@@ -1702,7 +1702,7 @@ func TestRunReview_InjectsReviewContextAndRecordsLaunchState(t *testing.T) {
 		workdir:                    "/workspace",
 		repoRoot:                   repoRoot,
 		tasksDir:                   tasksDir,
-		reviewModel:                "gpt-5.4",
+		reviewModel:                "gpt-5.6-sol",
 		reviewReasoningEffort:      "high",
 		reviewSessionResumeEnabled: true,
 		homeDir:                    "/home/test",
@@ -1785,7 +1785,7 @@ func TestRunReview_BranchChangeRotatesReviewSessionID(t *testing.T) {
 		workdir:                    "/workspace",
 		repoRoot:                   repoRoot,
 		tasksDir:                   tasksDir,
-		reviewModel:                "gpt-5.4",
+		reviewModel:                "gpt-5.6-sol",
 		reviewReasoningEffort:      "high",
 		reviewSessionResumeEnabled: true,
 		homeDir:                    "/home/test",
@@ -1929,7 +1929,7 @@ func TestRunReview_DisabledResumeSkipsSessionCreation(t *testing.T) {
 		workdir:                    "/workspace",
 		repoRoot:                   repoRoot,
 		tasksDir:                   tasksDir,
-		reviewModel:                "gpt-5.4",
+		reviewModel:                "gpt-5.6-sol",
 		reviewReasoningEffort:      "high",
 		reviewSessionResumeEnabled: false,
 		homeDir:                    "/home/test",
@@ -1970,7 +1970,7 @@ func TestRunReview_CloneFailureDoesNotCreateReviewSessionOrLaunchState(t *testin
 		workdir:                    "/workspace",
 		repoRoot:                   filepath.Join(t.TempDir(), "missing-repo"),
 		tasksDir:                   tasksDir,
-		reviewModel:                "gpt-5.4",
+		reviewModel:                "gpt-5.6-sol",
 		reviewReasoningEffort:      "high",
 		reviewSessionResumeEnabled: true,
 		homeDir:                    "/home/test",
@@ -2037,7 +2037,7 @@ func TestRunReview_UnwritableMessagesDirFailsBeforeDockerLaunch(t *testing.T) {
 		workdir:                    "/workspace",
 		repoRoot:                   repoRoot,
 		tasksDir:                   tasksDir,
-		reviewModel:                "gpt-5.4",
+		reviewModel:                "gpt-5.6-sol",
 		reviewReasoningEffort:      "high",
 		reviewSessionResumeEnabled: true,
 		homeDir:                    "/home/test",
@@ -2109,7 +2109,7 @@ func TestPollReview_PrelaunchFailureDoesNotFallThroughToMissingVerdict(t *testin
 		workdir:                    "/workspace",
 		repoRoot:                   repoRoot,
 		tasksDir:                   tasksDir,
-		reviewModel:                "gpt-5.4",
+		reviewModel:                "gpt-5.6-sol",
 		reviewReasoningEffort:      "high",
 		reviewSessionResumeEnabled: true,
 		homeDir:                    "/home/test",
